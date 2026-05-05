@@ -1,0 +1,12 @@
+*~
+__pycache__
+.idea
+.DS_Store
+.ipynb_checkpoints/
+config/
+data/
+images/sound*
+.venv/
+test-code/
+
+settings.toml
