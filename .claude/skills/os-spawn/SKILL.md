@@ -54,8 +54,8 @@ Spawn an Agent Orchestrator worker for a change.
 6. **Run ao spawn with prompt** (must run from `~/.agent-orchestrator`)
    ```bash
    cd ~/.agent-orchestrator
-   # ao spawn uses "owner/project/number" format
-   ao spawn "${OWNER}/${PROJECT}/${ISSUE_NUM}" --prompt "<full prompt from step 5>"
+   # Use "issue-{num}" format — agent derives branch name from issue number alone
+   ao spawn "issue-${ISSUE_NUM}" --prompt "<full prompt from step 5>"
    ```
 
 **Output**
