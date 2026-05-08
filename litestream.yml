@@ -1,0 +1,4 @@
+db: /app/db.sqlite
+
+replicas:
+  - url: ${LITESTREAM_URL}

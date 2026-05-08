@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block title %}Settings — Lindsay's Heart Admin{% endblock %}
+{% block body %}
+<h1>Settings</h1>
+
+<form method="post">
+
+  <h3>Sign</h3>
+  <div class="mb-3">
+    <label class="form-label">Sign Name</label>
+    <input type="text" name="sign_name" class="form-control" value="{{ config.sign.name }}">
+  </div>
+
+  <h3>Rendering Defaults</h3>
+  <div class="row mb-3">
+    <div class="col-md-4">
+      <label class="form-label">Mode</label>
+      <select name="rendering_mode" class="form-select">
+        {% for mode in rendering_modes %}
+        <option value="{{ mode }}" {% if config.rendering.mode == mode %}selected{% endif %}>{{ mode }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Speed (pixels/frame)</label>
+      <input type="number" step="0.001" name="rendering_speed" class="form-control" value="{{ config.rendering.speed }}">
+    </div>
+    <div class="col-md-4">
+      <label class="form-label">Color (int)</label>
+      <input type="number" name="rendering_color" class="form-control" value="{{ config.rendering.color }}">
+    </div>
+  </div>
+
+  <h3>Allowed Senders</h3>
+  <p class="text-muted small">Leave phone empty to remove a sender.</p>
+  <div id="senders">
+    {% for s in config.allowed_senders %}
+    <div class="row mb-2 sender-row">
+      <div class="col-md-4">
+        <input type="text" name="sender_name" class="form-control" placeholder="Name" value="{{ s.name }}">
+      </div>
+      <div class="col-md-4">
+        <input type="text" name="sender_phone" class="form-control" placeholder="+15551234567" value="{{ s.phone }}">
+      </div>
+    </div>
+    {% endfor %}
+    {% if not config.allowed_senders %}
+    <div class="row mb-2 sender-row">
+      <div class="col-md-4">
+        <input type="text" name="sender_name" class="form-control" placeholder="Name">
+      </div>
+      <div class="col-md-4">
+        <input type="text" name="sender_phone" class="form-control" placeholder="+15551234567">
+      </div>
+    </div>
+    {% endif %}
+  </div>
+  <button type="button" class="btn btn-sm btn-outline-secondary mb-3" onclick="addSender()">+ Add Sender</button>
+
+  <hr>
+  <button type="submit" class="btn btn-primary">Save Settings</button>
+</form>
+
+<script>
+function addSender() {
+  const div = document.createElement('div');
+  div.className = 'row mb-2 sender-row';
+  div.innerHTML = `
+    <div class="col-md-4"><input type="text" name="sender_name" class="form-control" placeholder="Name"></div>
+    <div class="col-md-4"><input type="text" name="sender_phone" class="form-control" placeholder="+15551234567"></div>
+  `;
+  document.getElementById('senders').appendChild(div);
+}
+</script>
+{% endblock %}

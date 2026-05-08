@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Preview — Lindsay's Heart Admin{% endblock %}
+{% block body %}
+<h1>Preview <small class="text-muted fs-6">— what ESP32 will display</small></h1>
+
+<p class="text-muted">Sign: <strong>{{ sign_name }}</strong></p>
+
+{% if messages %}
+<table class="table">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Time</th>
+      <th>From</th>
+      <th>Body</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for msg in messages %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td>{{ msg.received_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+      <td>{{ msg.sender }}</td>
+      <td>{{ msg.body }}</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+<p class="text-success mt-3">{{ messages|length }} message(s) visible on ESP32.</p>
+{% else %}
+<p class="text-muted">No messages would be displayed (all suppressed or none stored).</p>
+{% endif %}
+{% endblock %}

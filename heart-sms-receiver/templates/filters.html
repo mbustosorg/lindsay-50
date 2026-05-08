@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Filters — Lindsay's Heart Admin{% endblock %}
+{% block body %}
+<h1>Filter Rules</h1>
+
+<table class="table mt-3">
+  <thead>
+    <tr>
+      <th>Index</th>
+      <th>Type</th>
+      <th>Pattern</th>
+      <th>Action</th>
+      <th></th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in filters %}
+    <tr>
+      <td>{{ loop.index0 }}</td>
+      <td><span class="badge bg-info">{{ f.type }}</span></td>
+      <td><code>{{ f.pattern }}</code></td>
+      <td>{{ f.action }}</td>
+      <td>
+        <form method="post" action="{{ url_for('delete_filter', index=loop.index0) }}" style="display:inline">
+          <input type="hidden" name="_method" value="DELETE">
+          <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5" class="text-muted">No filter rules.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<hr>
+<h2>Add Filter Rule</h2>
+<form method="post" class="row g-3">
+  <div class="col-md-3">
+    <select name="type" class="form-select" required>
+      <option value="keyword">keyword (substring match)</option>
+      <option value="regex">regex (Python re)</option>
+      <option value="sender">sender (exact phone)</option>
+      <option value="message">message (exact UUID)</option>
+    </select>
+  </div>
+  <div class="col-md-6">
+    <input type="text" name="pattern" class="form-control" placeholder="Pattern" required>
+  </div>
+  <div class="col-md-3">
+    <button type="submit" class="btn btn-primary w-100">Add Rule</button>
+  </div>
+</form>
+{% endblock %}

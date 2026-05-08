@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Messages — Lindsay's Heart Admin{% endblock %}
+{% block body %}
+<h1>Messages <span class="text-muted fs-6">(page {{ page }}/{{ total_pages }})</span></h1>
+
+<nav>
+  {% if page > 1 %}
+  <a href="{{ url_for('messages_page', page=page-1) }}" class="btn btn-sm btn-outline-secondary">← Prev</a>
+  {% endif %}
+  {% if page < total_pages %}
+  <a href="{{ url_for('messages_page', page=page+1) }}" class="btn btn-sm btn-outline-secondary">Next →</a>
+  {% endif %}
+</nav>
+
+<table class="table table-sm mt-3">
+  <thead>
+    <tr>
+      <th>Status</th>
+      <th>Time</th>
+      <th>From</th>
+      <th>Body</th>
+      <th>Actions</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for msg, suppressed in msg_status %}
+    <tr>
+      <td>
+        {% if suppressed %}
+        <span class="badge bg-danger">Suppressed</span>
+        {% else %}
+        <span class="badge bg-success">Visible</span>
+        {% endif %}
+      </td>
+      <td>{{ msg.received_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+      <td>{{ msg.sender }}</td>
+      <td><span class="text-muted">{{ msg.body[:80] }}{% if msg.body|length > 80 %}…{% endif %}</span></td>
+      <td>
+        {% if suppressed %}
+        <form method="post" action="{{ url_for('unsuppress_message', message_id=msg.id) }}" style="display:inline">
+          <button type="submit" class="btn btn-sm btn-outline-success">Unsuppress</button>
+        </form>
+        {% else %}
+        <form method="post" action="{{ url_for('suppress_message', message_id=msg.id) }}" style="display:inline">
+          <button type="submit" class="btn btn-sm btn-outline-danger">Suppress</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

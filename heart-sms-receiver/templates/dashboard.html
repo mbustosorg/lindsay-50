@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — Lindsay's Heart Admin{% endblock %}
+{% block body %}
+<h1>Dashboard</h1>
+
+<div class="row mb-4">
+  <div class="col-md-4">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Total Messages</h5>
+        <p class="card-text display-4">{{ total }}</p>
+      </div>
+    </div>
+  </div>
+  {% for ftype, count in filter_counts.items() %}
+  <div class="col-md-4">
+    <div class="card">
+      <div class="card-body">
+        <h5 class="card-title">Suppressed ({{ ftype }})</h5>
+        <p class="card-text display-4">{{ count }}</p>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<h2>Recent Messages</h2>
+{% if recent %}
+<table class="table table-sm">
+  <thead>
+    <tr>
+      <th>Time</th>
+      <th>From</th>
+      <th>Body</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for msg in recent %}
+    <tr>
+      <td>{{ msg.received_at.strftime('%Y-%m-%d %H:%M:%S') }}</td>
+      <td>{{ msg.sender }}</td>
+      <td><span class="text-muted">{{ msg.body[:60] }}{% if msg.body|length > 60 %}…{% endif %}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<p class="text-muted">No messages yet.</p>
+{% endif %}
+{% endblock %}
