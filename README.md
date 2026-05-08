@@ -1,4 +1,4 @@
-# SMS → Microcontroller Bridge
+# Lindsay's 50th Heart Sign
 
 Send a text message to trigger actions on an ESP32 over the internet.
 

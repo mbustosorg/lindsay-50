@@ -2,7 +2,7 @@ import html
 import tomllib
 from pathlib import Path
 from flask import Flask, request, Response
-from Adafruit_IO import Client
+from adafruit_io import Client
 
 app = Flask(__name__)
 
