@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires gh CLI, openspec CLI.
 metadata:
   author: openspec-generic
-  version: "1.0"
+  version: "1.1"
 ---
 
 Start spec work on a GitHub issue.
@@ -52,22 +52,46 @@ Start spec work on a GitHub issue.
    - If change name found in step 3: pass the change name
    - Otherwise: pass the description from step 5
 
-7. **After openspec propose completes** (only for new changes)
-   - Find the created change directory (openspec status shows it)
+7. **Link and commit** (after openspec propose completes)
+   - Find the created change directory (`openspec status --change "<name>"`)
    - Get the change name from the directory
    - Update `.openspec.yaml` with `github_issue_url: https://github.com/{owner}/{repo}/issues/{number}`
    - Update GH issue body to include `openspec_change_name: {change-name}`
+   - `git add openspec/changes/<name>/ && git commit -m "propose: <name> specs"`
+
+8. **Human gate — confirm ao-ready**
+   Use **AskUserQuestion** to confirm:
+   > "Commit is ready. Mark as ao-ready for implementation?"
+
+   If yes:
+   - Remove `status:specifying`, add `status:ao-ready` label to the GH issue
+   - `git push`
+
+   If no:
+   - Do not push yet — issue stays `status:specifying`, user can push and flip label manually
 
 **Output**
 
+If human confirms:
 ```
-## Spec Work Started
+## Spec Work Ready
+
+**Issue:** #{number}
+**Status:** ao-ready
+**Change:** {change-name}
+
+Committed and pushed. Run /os-spawn when ready to implement.
+```
+
+If human declines:
+```
+## Spec Work Committed
 
 **Issue:** #{number}
 **Status:** specifying
 **Change:** {change-name}
 
-Run /os-spawn when ready to implement.
+Commit ready locally. Push and flip to ao-ready manually when ready.
 ```
 
 **Error: No todo issues found**

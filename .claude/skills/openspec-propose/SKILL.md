@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires openspec CLI.
 metadata:
   author: openspec
-  version: "1.0"
+  version: "1.1"
   generatedBy: "1.3.1"
 ---
 
@@ -84,13 +84,24 @@ When ready to implement, run /opsx:apply
    openspec status --change "<name>"
    ```
 
+6. **Human gate — confirm check-in**
+   Use **AskUserQuestion** to confirm:
+   > "All artifacts are ready. Ready to check in and mark as ao-ready? This will commit the specs and add the status:ao-ready label to the GitHub issue."
+
+   If yes:
+   - Update GitHub issue body with `openspec_change_name: <name>`
+   - Add `status:ao-ready` label to the GitHub issue
+   - `git add openspec/changes/<name>/ && git commit -m "propose: <name> specs"`
+   - If prompted, push
+
+   If no, leave artifacts on disk and issue in `status:specifying` — user can review and call `/os-spawn` later.
+
 **Output**
 
 After completing all artifacts, summarize:
 - Change name and location
 - List of artifacts created with brief descriptions
-- What's ready: "All artifacts created! Ready for implementation."
-- Prompt: "Run `/opsx:apply` or ask me to implement to start working on the tasks."
+- Prompt: "Run `/os-spawn` when ready to implement."
 
 **Artifact Creation Guidelines**
 
