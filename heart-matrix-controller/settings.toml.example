@@ -1,0 +1,15 @@
+# Wi-Fi credentials.
+WIFI_SSID = "YOUR_WIFI_SSID"
+WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
+
+# Adafruit IO over MQTT.
+# MQTT_USERNAME = your AIO username, MQTT_PASSWORD = your AIO key.
+# MQTT_TOPIC is the feed name (the device extracts the feed from "user/feeds/feed" if you give it the full path).
+MQTT_HOST = "io.adafruit.com"
+MQTT_PORT = 1883
+MQTT_TOPIC = "YOUR_AIO_FEED_NAME"
+MQTT_USERNAME = "YOUR_AIO_USERNAME"
+MQTT_PASSWORD = "YOUR_AIO_KEY"
+
+# DEBUG | INFO | WARNING | ERROR | CRITICAL
+LOG_LEVEL = "INFO"

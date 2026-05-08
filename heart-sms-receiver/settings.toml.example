@@ -1,0 +1,8 @@
+# Adafruit IO REST credentials.
+AIO_USERNAME = "YOUR_AIO_USERNAME"
+AIO_KEY = "YOUR_AIO_KEY"
+AIO_FEED = "YOUR_AIO_FEED_NAME"
+
+# Optional: comma-separated list of allowed sender phone numbers, e.g. "+15551234567,+15559876543".
+# Leave empty to accept any sender.
+ALLOWED_SENDERS = ""
