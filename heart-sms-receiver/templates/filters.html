@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Filters - Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<h1>Filter Rules</h1>
+
+<div class="row mt-4">
+    <div class="col-md-6">
+        <h3>Current Rules</h3>
+        {% if filters %}
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Index</th>
+                    <th>Type</th>
+                    <th>Pattern</th>
+                    <th>Action</th>
+                    <th>Delete</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for f in filters %}
+                <tr>
+                    <td>{{ loop.index0 }}</td>
+                    <td><span class="badge bg-info">{{ f.type }}</span></td>
+                    <td><code>{{ f.pattern }}</code></td>
+                    <td>{{ f.action }}</td>
+                    <td>
+                        <form method="POST">
+                            <input type="hidden" name="action" value="delete">
+                            <input type="hidden" name="index" value="{{ loop.index0 }}">
+                            <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p>No filter rules configured.</p>
+        {% endif %}
+    </div>
+    <div class="col-md-6">
+        <h3>Add Rule</h3>
+        <form method="POST">
+            <input type="hidden" name="action" value="add">
+            <div class="mb-3">
+                <label for="type" class="form-label">Type</label>
+                <select class="form-select" name="type" id="type">
+                    <option value="keyword">Keyword (case-insensitive substring)</option>
+                    <option value="regex">Regex (Python regex)</option>
+                    <option value="sender">Sender (exact E.164 phone number)</option>
+                    <option value="message">Message (exact UUID)</option>
+                </select>
+            </div>
+            <div class="mb-3">
+                <label for="pattern" class="form-label">Pattern</label>
+                <input type="text" class="form-control" name="pattern" id="pattern" required>
+            </div>
+            <button type="submit" class="btn btn-primary">Add Rule</button>
+        </form>
+    </div>
+</div>
+{% endblock %}

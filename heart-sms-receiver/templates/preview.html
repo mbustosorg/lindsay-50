@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Preview - Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<h1>Display Preview</h1>
+<p class="text-muted">This is exactly what the ESP32 will show using <code>filters.display_list()</code></p>
+
+<h3 class="mt-4">Sign: {{ config.sign.name }}</h3>
+<h4>Rendering: {{ config.rendering.mode }} (speed={{ config.rendering.speed }}, color=#{{ '%06x'|format(config.rendering.color) }})</h4>
+
+{% if messages %}
+<table class="table table-striped mt-4">
+    <thead>
+        <tr>
+            <th>#</th>
+            <th>Sender</th>
+            <th>Body</th>
+            <th>Received</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for msg in messages %}
+        <tr>
+            <td>{{ loop.index }}</td>
+            <td>{{ msg.sender }}</td>
+            <td>{{ msg.body }}</td>
+            <td>{{ msg.received_at }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="alert alert-info mt-4">No messages to display (all suppressed or no messages received).</div>
+{% endif %}
+
+<div class="mt-4">
+    <a href="{{ url_for('dashboard') }}" class="btn btn-outline-secondary">Back to Dashboard</a>
+</div>
+{% endblock %}

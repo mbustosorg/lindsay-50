@@ -1,0 +1,12 @@
+version: 1
+
+replicas:
+  - path: /app/db.sqlite
+    retention: 1h
+    sync-interval: 1s
+    flush-interval: 10
+    degradation-threshold: 100
+    oplog-size: 50000
+    db: /app/db.sqlite
+    endpoints:
+      - s3://${LINDSAY_R2_BUCKET}/?region=auto&endpoint-style=path&access-key-id=${LINDSAY_R2_ACCESS_KEY}&secret-access-key=${LINDSAY_R2_SECRET_KEY}

@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Settings - Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<h1>Settings</h1>
+
+<form method="POST" class="mt-4">
+    <h3>Sign Name</h3>
+    <div class="mb-3">
+        <label for="sign_name" class="form-label">Sign Name</label>
+        <input type="text" class="form-control" name="sign_name" id="sign_name" value="{{ config.sign.name }}">
+    </div>
+
+    <h3 class="mt-4">Rendering Defaults</h3>
+    <div class="row">
+        <div class="col-md-4 mb-3">
+            <label for="rendering_mode" class="form-label">Mode</label>
+            <select class="form-select" name="rendering_mode" id="rendering_mode">
+                <option value="scroll" {% if config.rendering.mode == 'scroll' %}selected{% endif %}>Scroll</option>
+                <option value="fireworks" {% if config.rendering.mode == 'fireworks' %}selected{% endif %}>Fireworks</option>
+                <option value="flame" {% if config.rendering.mode == 'flame' %}selected{% endif %}>Flame</option>
+            </select>
+        </div>
+        <div class="col-md-4 mb-3">
+            <label for="rendering_speed" class="form-label">Speed</label>
+            <input type="number" class="form-control" name="rendering_speed" id="rendering_speed" step="0.01" value="{{ config.rendering.speed }}">
+        </div>
+        <div class="col-md-4 mb-3">
+            <label for="rendering_color" class="form-label">Color (0xRRGGBB)</label>
+            <input type="text" class="form-control" name="rendering_color" id="rendering_color" value="{{ '#%06x'|format(config.rendering.color) }}">
+        </div>
+    </div>
+
+    <h3 class="mt-4">Allowed Senders</h3>
+    <div id="senders-list">
+        {% for sender in config.allowed_senders %}
+        <div class="row mb-2 sender-row">
+            <div class="col-md-5">
+                <input type="text" class="form-control" name="sender_name" placeholder="Name" value="{{ sender.name }}">
+            </div>
+            <div class="col-md-5">
+                <input type="text" class="form-control" name="sender_phone" placeholder="+15551234567" value="{{ sender.phone }}">
+            </div>
+            <div class="col-md-2">
+                <button type="button" class="btn btn-danger remove-sender">Remove</button>
+            </div>
+        </div>
+        {% endfor %}
+    </div>
+    <button type="button" class="btn btn-secondary mt-2" id="add-sender">Add Sender</button>
+
+    <div class="mt-4">
+        <button type="submit" class="btn btn-primary">Save Settings</button>
+    </div>
+</form>
+
+<script>
+document.getElementById('add-sender').addEventListener('click', function() {
+    const container = document.getElementById('senders-list');
+    const row = document.createElement('div');
+    row.className = 'row mb-2 sender-row';
+    row.innerHTML = `
+        <div class="col-md-5">
+            <input type="text" class="form-control" name="sender_name" placeholder="Name">
+        </div>
+        <div class="col-md-5">
+            <input type="text" class="form-control" name="sender_phone" placeholder="+15551234567">
+        </div>
+        <div class="col-md-2">
+            <button type="button" class="btn btn-danger remove-sender">Remove</button>
+        </div>
+    `;
+    container.appendChild(row);
+});
+
+document.getElementById('senders-list').addEventListener('click', function(e) {
+    if (e.target.classList.contains('remove-sender')) {
+        e.target.closest('.sender-row').remove();
+    }
+});
+</script>
+{% endblock %}
