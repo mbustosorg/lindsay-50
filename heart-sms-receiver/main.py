@@ -257,7 +257,7 @@ def api_live_messages():
     This shows what actually flowed through the MQTT broker, not just what
     Flask published — any publisher to the topic will be captured.
     """
-    limit = min(100, int(request.args.get("limit", 20)))
+    limit = min(100, int(request.args.get("limit", 100)))
     return jsonify(publish.get_live_messages(limit=limit))
 
 
