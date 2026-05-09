@@ -19,9 +19,7 @@
     <nav class="col-md-2 sidebar">
       <h5 class="mb-3">Lindsay's Heart</h5>
       <ul class="nav flex-column nav-pills">
-        <li class="nav-item"><a class="nav-link{% if request.endpoint == 'dashboard' %} active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a></li>
-        <li class="nav-item"><a class="nav-link{% if request.endpoint == 'message_list' %} active{% endif %}" href="{{ url_for('message_list') }}">Messages</a></li>
-        <li class="nav-item"><a class="nav-link{% if request.endpoint == 'filter_rules' %} active{% endif %}" href="{{ url_for('filter_rules') }}">Filter Rules</a></li>
+        <li class="nav-item"><a class="nav-link{% if request.endpoint == 'dashboard' %} active{% endif %}" href="{{ url_for('dashboard') }}">Messages</a></li>
         <li class="nav-item"><a class="nav-link{% if request.endpoint == 'settings' %} active{% endif %}" href="{{ url_for('settings') }}">Settings</a></li>
         <li class="nav-item"><a class="nav-link{% if request.endpoint == 'testing' %} active{% endif %}" href="{{ url_for('testing') }}">Testing</a></li>
       </ul>

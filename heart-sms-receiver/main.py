@@ -279,21 +279,21 @@ def api_live_messages_seed():
 
 
 # ---------------------------------------------------------------------------
-# Web-level suppress/unsuppress (redirects back to message list)
+# Web-level suppress/unsuppress (redirects back to dashboard)
 # ---------------------------------------------------------------------------
 
 @app.route("/messages/<msg_id>/suppress", methods=["POST"])
 def web_suppress(msg_id):
     """Web form handler for suppressing a message."""
     _suppress_message(msg_id)
-    return redirect(url_for("message_list"))
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/messages/<msg_id>/unsuppress", methods=["POST"])
 def web_unsuppress(msg_id):
     """Web form handler for unsuppressing a message."""
     _unsuppress_message(msg_id)
-    return redirect(url_for("message_list"))
+    return redirect(url_for("dashboard"))
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +342,11 @@ def _unsuppress_message(msg_id: str) -> bool:
 
 @app.route("/")
 def dashboard():
-    """Dashboard: recent messages and counts."""
+    """Dashboard with stat cards and full paginated message list."""
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = 50
+    hide_suppressed = request.args.get("hide_suppressed") == "1"
+
     all_msgs = storage.get_all_messages()
     cfg = storage.get_config()
     total = storage.message_count()
@@ -355,61 +359,14 @@ def dashboard():
     # Build sender name lookup
     sender_name_map = {s.phone: s.name for s in cfg.allowed_senders}
 
-    # Annotate first 20 messages
-    annotated = []
-    for m in all_msgs[:20]:
-        all_rules = filters.get_all_matches(m, cfg)
-        suppressed = bool(all_rules)
-        has_message_suppression = any(r.type == "message" and r.pattern == m.id for r in all_rules)
-        reasons = [f"{r.type}:{r.pattern}" for r in all_rules]
-        annotated.append({
-            "msg": m,
-            "suppressed": suppressed,
-            "suppressed_by": "; ".join(reasons) if reasons else None,
-            "suppressed_by_message": has_message_suppression,
-            "sender_name": sender_name_map.get(m.sender),
-        })
-
-    return render_template(
-        "dashboard.html",
-        messages=annotated,
-        total_count=total,
-        suppression_counts=suppression_counts,
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
-        has_more=len(all_msgs) > 20,
-    )
-
-
-@app.route("/messages")
-def message_list():
-    """Paginated message list with suppress/unsuppress buttons."""
-    page = max(1, int(request.args.get("page", 1)))
-    per_page = 50
-    hide_suppressed = request.args.get("hide_suppressed") == "1"
-
-    all_msgs = storage.get_all_messages()
-    cfg = storage.get_config()
-
-    # Build sender name lookup: phone -> name
-    sender_name_map: dict[str, str] = {}
-    for s in cfg.allowed_senders:
-        sender_name_map[s.phone] = s.name
-
-    # Annotate each message with suppression reasons and sender name
-    # (uses get_all_matches to report ALL matching rules, not just first)
-    # Checkbox is always visible — controls type=message rule for this message
+    # Annotate all messages with suppression info
     annotated = []
     for m in all_msgs:
         all_rules = filters.get_all_matches(m, cfg)
         suppressed = bool(all_rules)
-
-        # Check if this message has an explicit type=message suppression (checkbox state)
         has_message_suppression = any(r.type == "message" and r.pattern == m.id for r in all_rules)
-
-        # Build list of reason strings for the Reasons column
         reasons = [f"{r.type}:{r.pattern}" for r in all_rules]
 
-        # Filter if hide_suppressed is enabled
         if hide_suppressed and suppressed:
             continue
 
@@ -421,48 +378,43 @@ def message_list():
             "sender_name": sender_name_map.get(m.sender),
         })
 
-    total = len(annotated)
-    total_pages = max(1, (total + per_page - 1) // per_page)
-
+    total_count = len(annotated)
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
     start = (page - 1) * per_page
     end = start + per_page
     page_annotated = annotated[start:end]
 
     return render_template(
-        "messages.html",
+        "dashboard.html",
         messages=page_annotated,
+        total_count=total,
+        suppression_counts=suppression_counts,
+        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
         page=page,
         total_pages=total_pages,
-        cfg=cfg,
         hide_suppressed=hide_suppressed,
     )
 
 
-@app.route("/filters", methods=["GET", "POST"])
+@app.route("/filters", methods=["POST"])
 def filter_rules():
-    """List, add, and delete filter rules."""
+    """Handle filter add/delete from Settings. Always redirects to settings."""
     cfg = storage.get_config()
-    redirect_to = request.form.get("redirect_to", "")
 
-    if request.method == "POST":
-        action = request.form.get("action")
-        if action == "add":
-            ftype = request.form.get("type")
-            pattern = request.form.get("pattern", "").strip()
-            if ftype in ("keyword", "regex", "sender", "message") and pattern:
-                cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress"))
-                _save_and_publish(cfg)
-        elif action == "delete":
-            idx = int(request.form.get("index", -1))
-            if 0 <= idx < len(cfg.filters):
-                cfg.filters.pop(idx)
-                _save_and_publish(cfg)
+    action = request.form.get("action")
+    if action == "add":
+        ftype = request.form.get("type")
+        pattern = request.form.get("pattern", "").strip()
+        if ftype in ("keyword", "regex", "sender", "message") and pattern:
+            cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress"))
+            _save_and_publish(cfg)
+    elif action == "delete":
+        idx = int(request.form.get("index", -1))
+        if 0 <= idx < len(cfg.filters):
+            cfg.filters.pop(idx)
+            _save_and_publish(cfg)
 
-        if redirect_to == "settings":
-            return redirect(url_for("settings"))
-        return redirect(url_for("filter_rules"))
-
-    return render_template("filters.html", filters=cfg.filters)
+    return redirect(url_for("settings"))
 
 
 @app.route("/settings", methods=["GET", "POST"])
