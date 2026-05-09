@@ -176,7 +176,7 @@ class _MqttSubscriber:
     def _on_message(self, _client, _userdata, msg):
         body = msg.payload.decode(errors="replace")
         record_live_message(body, msg.topic)
-        logger.debug("MQTT subscriber received: %s [%s]", body, msg.topic)
+        logger.info("MQTT subscriber received: %s [%s]", body, msg.topic)
 
     def _on_disconnect(self, _client, _userdata, rc):
         if rc != 0:

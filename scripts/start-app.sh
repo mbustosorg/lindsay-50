@@ -78,4 +78,6 @@ fi
 echo "Starting Flask server on http://0.0.0.0:5001 ..."
 cd "$PROJECT_ROOT"
 export FLASK_APP=heart-sms-receiver/main.py
-exec flask run --host=0.0.0.0 --port=5001
+# Disable reloader to avoid double-subscriber issues in debug mode
+export FLASK_RUN_RELOAD=False
+exec flask run --host=0.0.0.0 --port=5001 --debug
