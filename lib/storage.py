@@ -147,9 +147,8 @@ def rebuild_from_s3(s3_loader) -> None:
     """Reload all messages from S3 into SQLite.
 
     Args:
-        s3_loader: A callable that returns an iterator of Message dicts,
-                   e.g. ``s3_loader() -> Iterator[dict]``.
+        s3_loader: A callable that returns an iterator of Message objects,
+                   e.g. ``s3_loader() -> Iterator[Message]``.
     """
-    for msg_dict in s3_loader():
-        msg = Message.from_dict(msg_dict)
+    for msg in s3_loader():
         put_message(msg)

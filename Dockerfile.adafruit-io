@@ -1,0 +1,18 @@
+# Adafruit IO local server
+# Node 10.x — last version that still has util.isDate / util.isRegExp
+# (the adafruit-io npm package was archived in 2021 and uses those deprecated APIs)
+FROM node:10.24.1-slim
+
+RUN npm install -g adafruit-io text-encoding
+
+# Polyfill TextEncoder (added in Node 11) for older Node versions
+RUN printf '%s\n' \
+  "if (!global.TextEncoder) { global.TextEncoder = require('/usr/local/lib/node_modules/text-encoding').TextEncoder; }" \
+  "if (!global.TextDecoder) { global.TextDecoder = require('/usr/local/lib/node_modules/text-encoding').TextDecoder; }" \
+  > /usr/local/bin/polyfill-text-encoder.js
+
+# Default port (can be overridden with AIO_SERVER_PORT env var)
+EXPOSE 8082
+
+# Run with polyfill loaded first via --require
+CMD ["node", "--require", "/usr/local/bin/polyfill-text-encoder.js", "/usr/local/lib/node_modules/adafruit-io/server/index.js"]

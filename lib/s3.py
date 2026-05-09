@@ -26,6 +26,12 @@ def _s3_client():
     kwargs: dict = {}
     if cfg.get("S3_ENDPOINT_URL"):
         kwargs["endpoint_url"] = cfg["S3_ENDPOINT_URL"]
+    # Fallback credentials from settings.toml for local dev without env vars
+    import os as _os
+    if not _os.environ.get("AWS_ACCESS_KEY_ID") and cfg.get("AWS_ACCESS_KEY_ID"):
+        kwargs["aws_access_key_id"] = cfg["AWS_ACCESS_KEY_ID"]
+    if not _os.environ.get("AWS_SECRET_ACCESS_KEY") and cfg.get("AWS_SECRET_ACCESS_KEY"):
+        kwargs["aws_secret_access_key"] = cfg["AWS_SECRET_ACCESS_KEY"]
     return boto3.client("s3", **kwargs)
 
 
