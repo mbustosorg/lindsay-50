@@ -1,6 +1,6 @@
 #!/bin/bash
 # Stop the Flask dev server and optionally local service containers.
-# Usage: ./stop.sh [--with-services]
+# Usage: ./stop-app.sh [--with-services]
 #   --with-services  Also stop MinIO and Mosquitto containers.
 set -e
 

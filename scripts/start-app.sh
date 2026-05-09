@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start the Flask dev server and optionally the local service containers.
-# Usage: ./start.sh [--with-services]
+# Usage: ./start-app.sh [--with-services]
 #   --with-services  Also start MinIO (S3) and Mosquitto (MQTT) if not already running.
 set -e
 
@@ -16,16 +16,17 @@ else
 fi
 
 # Check settings.toml exists
-if [ ! -f "$SCRIPT_DIR/settings.toml" ]; then
+SETTINGS_FILE="$PROJECT_ROOT/heart-sms-receiver/settings.toml"
+if [ ! -f "$SETTINGS_FILE" ]; then
     echo "Error: settings.toml not found. Copy settings.toml.example first:"
     echo "  cp heart-sms-receiver/settings.toml.example heart-sms-receiver/settings.toml"
     exit 1
 fi
 
 # Validate required settings
-python3 - <<'PYEOF'
-import tomllib, sys
-with open("heart-sms-receiver/settings.toml", "rb") as f:
+SETTINGS_PATH="$SETTINGS_FILE" python3 - <<PYEOF
+import tomllib, sys, os
+with open(os.environ["SETTINGS_PATH"], "rb") as f:
     cfg = tomllib.load(f)
 
 required = ["AIO_USERNAME", "AIO_KEY", "AIO_FEED", "S3_BUCKET"]
@@ -61,7 +62,6 @@ if [ "$START_SERVICES" = "true" ]; then
     # Mosquitto (MQTT broker)
     if ! docker ps --filter "name=mosquitto-local" --format "{{.Names}}" | grep -q mosquitto-local; then
         echo "Starting Mosquitto..."
-        # Create a temp config file for anonymous access
         MOSQUITTO_CONF=$(mktemp)
         printf 'listener 1883\nallow_anonymous true\n' > "$MOSQUITTO_CONF"
         docker run -d --name mosquitto-local \
