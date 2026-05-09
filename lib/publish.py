@@ -28,12 +28,19 @@ _LIVE_MESSAGES: deque = deque(maxlen=100)
 _LIVE_LOCK = threading.Lock()
 
 
-def record_live_message(body: str, topic: str) -> None:
-    """Record a message received from the MQTT broker, for the live feed display."""
+def record_live_message(body: str, topic: str, source: str = "mqtt") -> None:
+    """Record a message for the live feed display.
+
+    Args:
+        body:    The message body.
+        topic:   The MQTT topic it was received on (or the feed topic if published).
+        source:  Where this message came from: "mqtt" (from broker) or "rest" (from API back-populate).
+    """
     with _LIVE_LOCK:
         _LIVE_MESSAGES.append({
             "body": body,
             "topic": topic,
+            "source": source,
             "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
 
@@ -42,6 +49,21 @@ def get_live_messages(limit: int = 20) -> list[dict]:
     """Return the most recent N messages received from MQTT, newest first."""
     with _LIVE_LOCK:
         return list(reversed(list(_LIVE_MESSAGES)))[:limit]
+
+
+def seed_from_rest_messages(messages: list[dict], feed_topic: str) -> None:
+    """Seed the live message ring buffer from REST API messages.
+
+    Called when the Testing page loads to back-populate with messages already
+    in SQLite (simulating what MQTT would have delivered).
+    Each message is marked source="rest" so it's clear it came from the API.
+    """
+    for msg in reversed(messages):
+        record_live_message(
+            body=msg.get("body", ""),
+            topic=feed_topic,
+            source="rest",
+        )
 
 
 # ---------------------------------------------------------------------------

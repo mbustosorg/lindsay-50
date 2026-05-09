@@ -33,8 +33,11 @@
   <div class="col-md-8 mb-4">
     <div class="card">
       <div class="card-header fw-bold d-flex justify-content-between align-items-center">
-        <span>Messages Feed <small class="text-muted">(from /api/messages, live)</small></span>
-        <span class="badge bg-secondary" id="msg-count">0</span>
+        <span>Messages Feed <small class="text-muted">(via MQTT subscriber)</small></span>
+        <div>
+          <button class="btn btn-sm btn-outline-secondary" onclick="seedRest()">Seed from REST</button>
+          <span class="badge bg-secondary ms-2" id="msg-count">0</span>
+        </div>
       </div>
       <div class="card-body p-0">
         <div id="msg-list" style="max-height: 300px; overflow-y: auto;">
@@ -42,12 +45,13 @@
             <thead class="sticky-top bg-white">
               <tr>
                 <th>Time</th>
+                <th>Source</th>
                 <th>Topic</th>
                 <th>Body</th>
               </tr>
             </thead>
             <tbody id="msg-tbody">
-              <tr><td colspan="3" class="text-muted">Loading...</td></tr>
+              <tr><td colspan="4" class="text-muted">Loading...</td></tr>
             </tbody>
           </table>
         </div>
@@ -86,6 +90,18 @@
 
 {% block scripts %}
 <script>
+async function seedRest() {
+  try {
+    const res = await fetch('/api/live-messages/seed', { method: 'POST' });
+    const data = await res.json();
+    if (data.status === 'ok') {
+      fetchMessages();
+    }
+  } catch (e) {
+    console.error('Seed failed:', e);
+  }
+}
+
 async function fetchMessages() {
   try {
     const res = await fetch('/api/live-messages');
@@ -94,18 +110,23 @@ async function fetchMessages() {
     const count = document.getElementById('msg-count');
     count.textContent = msgs.length;
     if (msgs.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No messages received yet</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="4" class="text-muted">No messages received yet — click "Seed from REST" to load stored messages</td></tr>';
       return;
     }
     tbody.innerHTML = msgs.map(m => `
       <tr>
         <td class="mono" style="white-space:nowrap">${m.received_at ? m.received_at.slice(11, 19) : ''}</td>
+        <td style="white-space:nowrap">
+          ${m.source === 'mqtt'
+            ? '<span class="badge bg-success">mqtt</span>'
+            : '<span class="badge bg-warning text-dark">rest</span>'}
+        </td>
         <td class="mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.topic || '')}</td>
         <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.body || '')}</td>
       </tr>
     `).join('');
   } catch (e) {
-    document.getElementById('msg-tbody').innerHTML = '<tr><td colspan="3" class="text-danger">Error loading messages</td></tr>';
+    document.getElementById('msg-tbody').innerHTML = '<tr><td colspan="4" class="text-danger">Error loading messages</td></tr>';
   }
 }
 
@@ -115,7 +136,6 @@ async function fetchConfig() {
     const cfg = await res.json();
     document.getElementById('config-display').textContent = JSON.stringify(cfg, null, 2);
 
-    // Update filter list
     const list = document.getElementById('filter-list');
     const filters = cfg.filters || [];
     if (filters.length === 0) {
@@ -161,8 +181,8 @@ document.getElementById('inject-form').addEventListener('submit', async function
   }
 });
 
-// Poll
-fetchMessages();
+// Auto-seed from REST on page load, then poll for new MQTT messages
+seedRest();
 fetchConfig();
 setInterval(fetchMessages, 3000);
 setInterval(fetchConfig, 10000);

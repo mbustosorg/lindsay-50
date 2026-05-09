@@ -249,6 +249,23 @@ def api_live_messages():
     return jsonify(publish.get_live_messages(limit=limit))
 
 
+@app.route("/api/live-messages/seed", methods=["POST"])
+def api_live_messages_seed():
+    """Back-populate the live message ring buffer from SQLite messages.
+
+    Simulates what MQTT would have delivered by injecting all stored messages
+    into the ring buffer with source="rest". Subsequent real MQTT messages
+    will appear as source="mqtt".
+    """
+    msgs = storage.get_all_messages()
+    username = _cfg.get("AIO_USERNAME", "")
+    feed = _cfg.get("AIO_FEED", "")
+    topic = f"{username}/feeds/{feed}" if username and feed else "unknown/feeds/unknown"
+    # Only seed the most recent 50 to avoid flooding the buffer
+    publish.seed_from_rest_messages([m.to_dict() for m in msgs[:50]], topic)
+    return jsonify({"status": "ok", "seeded": min(50, len(msgs))})
+
+
 # ---------------------------------------------------------------------------
 # Web-level suppress/unsuppress (redirects back to message list)
 # ---------------------------------------------------------------------------
