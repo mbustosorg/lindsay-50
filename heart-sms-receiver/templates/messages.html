@@ -29,9 +29,10 @@
 <table class="table table-striped table-sm">
   <thead>
     <tr>
+      <th style="width: 40px;">S</th>
       <th>Sender</th>
       <th>Body</th>
-      <th style="width: 100px;">Actions</th>
+      <th>Suppression Reasons</th>
     </tr>
   </thead>
   <tbody>
@@ -42,11 +43,16 @@
     {% set suppressed_by_message = entry.suppressed_by_message %}
     {% set sender_name = entry.sender_name %}
     <tr class="{% if suppressed %}table-secondary{% endif %}">
+      {# --- Suppress checkbox (always available) --- #}
+      <td style="text-align: center;">
+        <input type="checkbox"
+               class="form-check-input"
+               {% if suppressed_by_message %}checked{% endif %}
+               onchange="handleSuppressToggle(this, '{{ msg.id }}')"
+               title="Toggle message-level suppression">
+      </td>
       {# --- Sender cell: name (large) + phone/id/time (small) --- #}
       <td>
-        {% if suppressed %}
-        <span class="badge bg-secondary me-1" title="Suppressed: {{ suppressed_by }}">S</span>
-        {% endif %}
         <span class="{% if suppressed %}text-muted text-decoration-line-through{% endif %}"
               style="font-size:1rem;">{{ sender_name if sender_name else msg.sender }}</span>
         {% if sender_name %}
@@ -57,29 +63,37 @@
         </small>
       </td>
       {# --- Body cell --- #}
-      <td class="{% if suppressed %}text-muted{% endif %}" style="max-width: 400px;">
+      <td class="{% if suppressed %}text-muted{% endif %}" style="max-width: 300px;">
         <span class="msg-body">{{ msg.body }}</span>
       </td>
-      {# --- Actions cell --- #}
+      {# --- Suppression Reasons cell --- #}
       <td>
-        {% if suppressed and suppressed_by_message %}
-        {# Message-level suppression: can unsuppress #}
-        <form method="POST" action="{{ url_for('web_unsuppress', msg_id=msg.id) }}" style="display:inline">
-          <button type="submit" class="btn btn-sm btn-success">Unsuppress</button>
-        </form>
-        {% elif suppressed %}
-        {# Other suppression types: cannot unsuppress via button #}
-        <span class="badge bg-light text-dark" title="{{ suppressed_by }}">keyword/sender filter</span>
+        {% if suppressed_by %}
+          {% for reason in suppressed_by.split('; ') %}
+          <span class="badge bg-secondary me-1">{{ reason }}</span>
+          {% endfor %}
         {% else %}
-        <form method="POST" action="{{ url_for('web_suppress', msg_id=msg.id) }}" style="display:inline">
-          <button type="submit" class="btn btn-sm btn-outline-danger">Suppress</button>
-        </form>
+        <span class="text-muted">—</span>
         {% endif %}
       </td>
     </tr>
     {% else %}
-    <tr><td colspan="3">No messages.</td></tr>
+    <tr><td colspan="4">No messages.</td></tr>
     {% endfor %}
   </tbody>
 </table>
+
+<script>
+function handleSuppressToggle(checkbox, msgId) {
+  if (checkbox.checked) {
+    fetch('/messages/' + msgId + '/suppress', { method: 'POST' })
+      .then(r => { if (!r.ok) checkbox.checked = false; })
+      .catch(() => { checkbox.checked = false; });
+  } else {
+    fetch('/messages/' + msgId + '/unsuppress', { method: 'POST' })
+      .then(r => { if (!r.ok) checkbox.checked = true; })
+      .catch(() => { checkbox.checked = true; });
+  }
+}
+</script>
 {% endblock %}

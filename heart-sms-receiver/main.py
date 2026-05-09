@@ -378,16 +378,17 @@ def message_list():
 
     # Annotate each message with suppression reasons and sender name
     # (uses get_all_matches to report ALL matching rules, not just first)
+    # Checkbox is always visible — controls type=message rule for this message
     annotated = []
     for m in all_msgs:
         all_rules = filters.get_all_matches(m, cfg)
         suppressed = bool(all_rules)
 
-        # Build list of reason strings for tooltip
-        reasons = [f"{r.type}:{r.pattern}" for r in all_rules]
+        # Check if this message has an explicit type=message suppression (checkbox state)
+        has_message_suppression = any(r.type == "message" and r.pattern == m.id for r in all_rules)
 
-        # Check if message has a type=message suppression (unsuppress-able)
-        has_message_suppression = any(r.type == "message" for r in all_rules)
+        # Build list of reason strings for the Reasons column
+        reasons = [f"{r.type}:{r.pattern}" for r in all_rules]
 
         # Filter if hide_suppressed is enabled
         if hide_suppressed and suppressed:
