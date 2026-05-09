@@ -7,9 +7,11 @@ S3_CONFIG_PREFIX = "config/config"
 S3_ENDPOINT_URL = ""
 
 # Adafruit IO REST credentials.
+# For local dev with AIO local server: AIO_BASE_URL=http://localhost:8082
 AIO_USERNAME = "YOUR_AIO_USERNAME"
 AIO_KEY = "YOUR_AIO_KEY"
 AIO_FEED = "YOUR_AIO_FEED_NAME"
+AIO_BASE_URL = ""
 
 # Optional: separate Adafruit IO feed for publishing config changes.
 # If not set, config publishing is skipped.

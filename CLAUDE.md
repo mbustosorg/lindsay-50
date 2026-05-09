@@ -98,20 +98,3 @@ Skip unless needed: `adafruit_esp32spi/` (only for non-S3 boards with an externa
 Files to copy onto `CIRCUITPY/`: `code.py`, `scroller.py`, `fireworks.py`, `flame.py`, `settings.toml`.
 
 To add a new visual effect, implement a class with the same surface as `Fireworks`/`Flame` (a `tilegrid` attribute that's hideable, a `tick()` method, and a `set_brightness(b)` method) and append it to the `effects` list passed to `EffectCoordinator` in `code.py`.
-
-## Testing
-
-**Always run tests before pushing.** Install dependencies and run:
-
-```bash
-source .venv/bin/activate
-pip install -r heart-sms-receiver/requirements.txt
-PYTHONPATH=. pytest tests/ -v
-```
-
-New features **must** include tests. When implementing a new function or module, write pytest tests in `tests/` covering:
-- Happy path
-- Edge cases (empty input, missing fields, boundary values)
-- Error conditions
-
-Run `PYTHONPATH=. pytest tests/` after any change and fix any failures before pushing.

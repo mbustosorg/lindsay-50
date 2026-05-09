@@ -44,8 +44,12 @@ AIO_USERNAME = _cfg["AIO_USERNAME"]
 AIO_KEY = _cfg["AIO_KEY"]
 AIO_FEED = _cfg["AIO_FEED"]
 AIO_CONFIG_FEED = _cfg.get("AIO_CONFIG_FEED", "")
+AIO_BASE_URL = _cfg.get("AIO_BASE_URL", "") or None
 
-aio = Client(AIO_USERNAME, AIO_KEY)
+aio_kwargs = {"username": AIO_USERNAME, "key": AIO_KEY}
+if AIO_BASE_URL:
+    aio_kwargs["base_url"] = AIO_BASE_URL
+aio = Client(**aio_kwargs)
 
 # ---------------------------------------------------------------------------
 # Startup connectivity checks
