@@ -59,6 +59,48 @@ if [ "$START_SERVICES" = "true" ]; then
         echo "MinIO already running"
     fi
 
+    # Wait for MinIO to be ready, then create the bucket
+    echo "Checking S3_BUCKET..."
+    SETTINGS_PATH="$SETTINGS_FILE" python3 - <<'PYEOF'
+import tomllib, sys, os
+with open(os.environ["SETTINGS_PATH"], "rb") as f:
+    cfg = tomllib.load(f)
+print(cfg.get("S3_BUCKET", ""))
+PYEOF
+    S3_BUCKET=$(SETTINGS_PATH="$SETTINGS_FILE" python3 - <<'PYEOF'
+import tomllib, sys, os
+with open(os.environ["SETTINGS_PATH"], "rb") as f:
+    cfg = tomllib.load(f)
+print(cfg.get("S3_BUCKET", ""))
+PYEOF
+)
+
+    if [ -z "$S3_BUCKET" ]; then
+        echo "S3_BUCKET not configured; skipping bucket creation"
+    else
+        # Install mc if needed
+        if ! command -v mc &> /dev/null; then
+            echo "Installing MinIO client (mc)..."
+            if [ "$(uname)" = "Darwin" ]; then
+                brew install minio/stable/mc 2>/dev/null || brew install minio-client
+            else
+                curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc && chmod +x /usr/local/bin/mc
+            fi
+        fi
+
+        # Configure mc alias for local MinIO
+        mc alias set local http://localhost:9000 minioadmin minioadmin 2>/dev/null || true
+
+        # Create bucket if it doesn't exist
+        if mc ls local/"$S3_BUCKET" &>/dev/null; then
+            echo "S3 bucket '$S3_BUCKET' already exists"
+        else
+            echo "Creating S3 bucket '$S3_BUCKET'..."
+            mc mb local/"$S3_BUCKET"
+            echo "Bucket '$S3_BUCKET' created"
+        fi
+    fi
+
     # Mosquitto (MQTT broker)
     if ! docker ps --filter "name=mosquitto-local" --format "{{.Names}}" | grep -q mosquitto-local; then
         echo "Starting Mosquitto..."

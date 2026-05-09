@@ -42,6 +42,11 @@ def record_live_message(body: str, topic: str, source: str = "mqtt",
         msg_id:      Optional message UUID for deduplication.
     """
     with _LIVE_LOCK:
+        # Skip if same msg_id already in buffer (prefer existing entry to avoid duplicates on re-seed)
+        if msg_id:
+            for existing in _LIVE_MESSAGES:
+                if existing.get("msg_id") == msg_id:
+                    return
         _LIVE_MESSAGES.append({
             "body": body,
             "topic": topic,
@@ -58,15 +63,13 @@ def get_live_messages(limit: int = 20) -> list[dict]:
 
 
 def seed_from_rest_messages(messages: list[dict], feed_topic: str) -> None:
-    """Seed the live message ring buffer from REST API messages.
+    """Merge REST API messages into the live ring buffer.
 
-    Clears the ring buffer first, then back-populates with messages already
-    in SQLite (simulating what MQTT would have delivered).
-    Each message is marked source="rest" so it's clear it came from the API.
-    Uses message UUID for deduplication when called multiple times.
+    Does NOT clear the buffer — existing MQTT entries are preserved.
+    Entries are marked source="rest". If a message with the same msg_id
+    already exists (e.g., from a previous seed), it is skipped.
+    Subsequent real MQTT messages will overwrite with source="mqtt".
     """
-    with _LIVE_LOCK:
-        _LIVE_MESSAGES.clear()
     for msg in reversed(messages):
         record_live_message(
             body=msg.get("body", ""),

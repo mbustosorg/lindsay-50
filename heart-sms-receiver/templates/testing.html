@@ -64,9 +64,20 @@
         <button class="btn btn-sm btn-outline-secondary" onclick="fetchS3Objects()">Refresh</button>
       </div>
       <div class="card-body p-0">
-        <ul class="list-group list-group-flush small" id="s3-list" style="max-height: 240px; overflow-y: auto;">
-          <li class="list-group-item text-muted">Loading...</li>
-        </ul>
+        <div style="max-height: 240px; overflow-y: auto;">
+          <table class="table table-striped table-sm mb-0 msg-table">
+            <thead class="sticky-top bg-white">
+              <tr>
+                <th>Key</th>
+                <th>Size</th>
+                <th>Modified</th>
+              </tr>
+            </thead>
+            <tbody id="s3-tbody">
+              <tr><td colspan="3" class="text-muted">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   </div>
@@ -244,31 +255,42 @@ async function fetchS3Objects() {
   try {
     const res = await fetch('/api/admin/s3-objects');
     const data = await res.json();
-    const list = document.getElementById('s3-list');
+    const tbody = document.getElementById('s3-tbody');
     if (data.error) {
-      list.innerHTML = `<li class="list-group-item text-danger small">${escapeHtml(data.error)}</li>`;
+      tbody.innerHTML = `<tr><td colspan="3" class="text-danger small">${escapeHtml(data.error)}</td></tr>`;
       return;
     }
     const objects = data.objects || [];
     if (objects.length === 0) {
-      list.innerHTML = '<li class="list-group-item text-muted small">Empty bucket</li>';
+      tbody.innerHTML = '<tr><td colspan="3" class="text-muted small">Empty bucket</td></tr>';
       return;
     }
-    list.innerHTML = objects.slice(0, 20).map(obj => {
+    tbody.innerHTML = objects.slice(0, 20).map(obj => {
       const date = obj.last_modified ? obj.last_modified.slice(0, 19).replace('T', ' ') : '—';
       const size = obj.size < 1024 ? obj.size + 'B' : (obj.size < 1048576 ? (obj.size / 1024).toFixed(1) + 'KB' : (obj.size / 1048576).toFixed(1) + 'MB');
       const key = obj.key.length > 40 ? obj.key.slice(0, 37) + '...' : obj.key;
-      return `<li class="list-group-item small" title="${escapeHtml(obj.key)}">
-        <div class="fw-normal">${escapeHtml(key)}</div>
-        <div class="text-muted" style="font-size:0.7rem;">${date} &middot; ${size}</div>
-      </li>`;
+      return `<tr>
+        <td class="msg-body" title="${escapeHtml(obj.key)}">${escapeHtml(key)}</td>
+        <td class="msg-id text-muted">${size}</td>
+        <td class="msg-id text-muted" data-utc="${obj.last_modified || ''}"></td>
+      </tr>`;
     }).join('');
     if (objects.length > 20) {
-      list.innerHTML += `<li class="list-group-item text-muted small">+${objects.length - 20} more objects</li>`;
+      tbody.innerHTML += `<tr><td colspan="3" class="text-muted small">+${objects.length - 20} more objects</td></tr>`;
     }
+    // Convert UTC to local time
+    tbody.querySelectorAll('td[data-utc]').forEach(function(cell) {
+      const utc = cell.getAttribute('data-utc');
+      if (utc) {
+        try {
+          const d = new Date(utc);
+          cell.textContent = d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+        } catch(e) { cell.textContent = utc.slice(5, 16); }
+      }
+    });
   } catch (e) {
-    document.getElementById('s3-list').innerHTML =
-      '<li class="list-group-item text-danger small">Error loading S3 objects</li>';
+    document.getElementById('s3-tbody').innerHTML =
+      '<tr><td colspan="3" class="text-danger small">Error loading S3 objects</td></tr>';
   }
 }
 
@@ -304,7 +326,7 @@ document.getElementById('inject-form').addEventListener('submit', async function
   }
 });
 
-refreshFeed();
+fetchMessages();
 fetchConfig();
 fetchS3Objects();
 setInterval(fetchMessages, 3000);
