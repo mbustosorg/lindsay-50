@@ -3,16 +3,25 @@
 {% block content %}
 <h2>Messages <small class="text-muted fs-6">page {{ page }} of {{ total_pages }}</small></h2>
 
+<div class="mb-3">
+  <a href="{{ url_for('message_list', page=1) }}{% if hide_suppressed %}?hide_suppressed=1{% endif %}" class="btn btn-sm{% if not hide_suppressed %} btn-outline-secondary{% else %} btn-secondary{% endif %}">
+    Show All
+  </a>
+  <a href="{{ url_for('message_list', page=1) }}?hide_suppressed=1" class="btn btn-sm{% if hide_suppressed %} btn-primary{% else %} btn-outline-primary{% endif %}">
+    Hide Suppressed
+  </a>
+</div>
+
 <nav>
   <ul class="pagination">
     {% if page > 1 %}
-    <li class="page-item"><a class="page-link" href="{{ url_for('message_list', page=page-1) }}">Previous</a></li>
+    <li class="page-item"><a class="page-link" href="{{ url_for('message_list', page=page-1, hide_suppressed=1 if hide_suppressed else none) }}">Previous</a></li>
     {% endif %}
     {% for p in range(1, total_pages + 1) %}
-    <li class="page-item{% if p == page %} active{% endif %}"><a class="page-link" href="{{ url_for('message_list', page=p) }}">{{ p }}</a></li>
+    <li class="page-item{% if p == page %} active{% endif %}"><a class="page-link" href="{{ url_for('message_list', page=p, hide_suppressed=1 if hide_suppressed else none) }}">{{ p }}</a></li>
     {% endfor %}
     {% if page < total_pages %}
-    <li class="page-item"><a class="page-link" href="{{ url_for('message_list', page=page+1) }}">Next</a></li>
+    <li class="page-item"><a class="page-link" href="{{ url_for('message_list', page=page+1, hide_suppressed=1 if hide_suppressed else none) }}">Next</a></li>
     {% endif %}
   </ul>
 </nav>
@@ -30,6 +39,7 @@
   <tbody>
     {% for msg in messages %}
     {% set is_suppressed = cfg.filters|selectattr('type', 'equalto', 'message')|selectattr('pattern', 'equalto', msg.id)|list %}
+    {% if not hide_suppressed or not is_suppressed %}
     <tr class="{% if is_suppressed %}suppressed-row{% endif %}">
       <td class="mono small" style="max-width: 150px; word-break: break-all;">{{ msg.id }}</td>
       <td class="mono small">{{ msg.received_at }}</td>
@@ -47,6 +57,7 @@
         {% endif %}
       </td>
     </tr>
+    {% endif %}
     {% else %}
     <tr><td colspan="5">No messages.</td></tr>
     {% endfor %}

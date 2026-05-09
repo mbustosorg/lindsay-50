@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Testing — Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<h2>Testing</h2>
+
+<div class="row">
+  {# --- Inject Message --- #}
+  <div class="col-md-4 mb-4">
+    <div class="card">
+      <div class="card-header fw-bold">Inject Test Message</div>
+      <div class="card-body">
+        <form id="inject-form">
+          <div class="mb-2">
+            <label class="form-label small">From (phone)</label>
+            <input type="text" class="form-control" name="From" value="+15551234567" required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">Body</label>
+            <input type="text" class="form-control" name="Body" placeholder="Test message..." required>
+          </div>
+          <div class="mb-2">
+            <label class="form-label small">To</label>
+            <input type="text" class="form-control" name="To" value="+15559999999">
+          </div>
+          <button type="submit" class="btn btn-primary w-100">Send Webhook</button>
+        </form>
+        <div id="inject-result" class="mt-2 small text-muted"></div>
+      </div>
+    </div>
+  </div>
+
+  {# --- Live Messages --- #}
+  <div class="col-md-8 mb-4">
+    <div class="card">
+      <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span>Messages Feed <small class="text-muted">(from /api/messages, live)</small></span>
+        <span class="badge bg-secondary" id="msg-count">0</span>
+      </div>
+      <div class="card-body p-0">
+        <div id="msg-list" style="max-height: 300px; overflow-y: auto;">
+          <table class="table table-striped table-sm mb-0">
+            <thead class="sticky-top bg-white">
+              <tr>
+                <th>Time</th>
+                <th>Sender</th>
+                <th>Body</th>
+              </tr>
+            </thead>
+            <tbody id="msg-tbody">
+              <tr><td colspan="3" class="text-muted">Loading...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="row">
+  {# --- Config --- #}
+  <div class="col-md-6 mb-4">
+    <div class="card">
+      <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span>Current Config <small class="text-muted">(from /api/config)</small></span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="fetchConfig()">Refresh</button>
+      </div>
+      <div class="card-body">
+        <pre id="config-display" class="small mb-0" style="white-space: pre-wrap; word-break: break-all;">Loading...</pre>
+      </div>
+    </div>
+  </div>
+
+  {# --- Filter Rules --- #}
+  <div class="col-md-6 mb-4">
+    <div class="card">
+      <div class="card-header fw-bold">Active Filters</div>
+      <div class="card-body p-0">
+        <ul class="list-group list-group-flush small" id="filter-list">
+          <li class="list-group-item text-muted">Loading...</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function fetchMessages() {
+  try {
+    const res = await fetch('/api/messages');
+    const msgs = await res.json();
+    const tbody = document.getElementById('msg-tbody');
+    const count = document.getElementById('msg-count');
+    count.textContent = msgs.length;
+    if (msgs.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No messages</td></tr>';
+      return;
+    }
+    tbody.innerHTML = msgs.slice(0, 20).map(m => `
+      <tr>
+        <td class="mono" style="white-space:nowrap">${m.received_at ? m.received_at.slice(11, 19) : ''}</td>
+        <td class="mono">${escapeHtml(m.sender || '')}</td>
+        <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.body || '')}</td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    document.getElementById('msg-tbody').innerHTML = '<tr><td colspan="3" class="text-danger">Error loading messages</td></tr>';
+  }
+}
+
+async function fetchConfig() {
+  try {
+    const res = await fetch('/api/config');
+    const cfg = await res.json();
+    document.getElementById('config-display').textContent = JSON.stringify(cfg, null, 2);
+
+    // Update filter list
+    const list = document.getElementById('filter-list');
+    const filters = cfg.filters || [];
+    if (filters.length === 0) {
+      list.innerHTML = '<li class="list-group-item text-muted">No filters</li>';
+    } else {
+      list.innerHTML = filters.map(f => `
+        <li class="list-group-item">
+          <span class="badge bg-danger">${f.type}</span>
+          ${escapeHtml(f.pattern)}
+        </li>
+      `).join('');
+    }
+  } catch (e) {
+    document.getElementById('config-display').textContent = 'Error loading config';
+  }
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+document.getElementById('inject-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const form = e.target;
+  const data = new FormData(form);
+  const result = document.getElementById('inject-result');
+  result.textContent = 'Sending...';
+  try {
+    const res = await fetch('/api/messages', { method: 'POST', body: data });
+    const text = await res.text();
+    if (res.ok) {
+      result.innerHTML = '<span class="text-success">OK — ' + escapeHtml(text.slice(0, 100)) + '</span>';
+      fetchMessages();
+      fetchConfig();
+      form.Body.value = '';
+    } else {
+      result.innerHTML = '<span class="text-danger">Error ' + res.status + '</span>';
+    }
+  } catch (e) {
+    result.innerHTML = '<span class="text-danger">Network error</span>';
+  }
+});
+
+// Poll
+fetchMessages();
+fetchConfig();
+setInterval(fetchMessages, 3000);
+setInterval(fetchConfig, 10000);
+</script>
+{% endblock %}

@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import tomllib
 
-from lib import storage, filters, s3, publish
+from lib import storage, s3, publish
 from lib.models import Config, FilterRule, Message, AllowedSender
 
 # ---------------------------------------------------------------------------
@@ -325,16 +325,26 @@ def message_list():
     """Paginated message list with suppress/unsuppress buttons."""
     page = max(1, int(request.args.get("page", 1)))
     per_page = 50
+    hide_suppressed = request.args.get("hide_suppressed") == "1"
 
     all_msgs = storage.get_all_messages()
-    total = len(all_msgs)
+    cfg = storage.get_config()
+
+    # Build set of suppressed message IDs for quick lookup
+    suppressed_ids = {f.pattern for f in cfg.filters if f.type == "message"}
+
+    # Filter if hide_suppressed is enabled
+    if hide_suppressed:
+        filtered_msgs = [m for m in all_msgs if m.id not in suppressed_ids]
+    else:
+        filtered_msgs = all_msgs
+
+    total = len(filtered_msgs)
     total_pages = max(1, (total + per_page - 1) // per_page)
 
     start = (page - 1) * per_page
     end = start + per_page
-    page_msgs = all_msgs[start:end]
-
-    cfg = storage.get_config()
+    page_msgs = filtered_msgs[start:end]
 
     return render_template(
         "messages.html",
@@ -342,6 +352,7 @@ def message_list():
         page=page,
         total_pages=total_pages,
         cfg=cfg,
+        hide_suppressed=hide_suppressed,
     )
 
 
@@ -410,21 +421,16 @@ def settings():
     )
 
 
+@app.route("/testing")
+def testing():
+    """Testing page: inject test messages and monitor live feed + config."""
+    return render_template("testing.html")
+
+
 @app.route("/preview")
 def preview():
-    """Preview: show what display_list() returns, with toggle for include_filtered."""
-    include_filtered = request.args.get("include_filtered", "false") == "true"
-    cfg = storage.get_config()
-    all_msgs = storage.get_all_messages()
-
-    result = filters.display_list(all_msgs, cfg, include_filtered=include_filtered)
-
-    return render_template(
-        "preview.html",
-        result=result,
-        include_filtered=include_filtered,
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
-    )
+    """Redirect legacy Preview route to Testing."""
+    return redirect(url_for("testing"))
 
 
 # ---------------------------------------------------------------------------
