@@ -384,12 +384,18 @@ def message_list():
     end = start + per_page
     page_msgs = filtered_msgs[start:end]
 
-    # Annotate each message with its suppression reason
+    # Build sender name lookup: phone -> name
+    sender_name_map: dict[str, str] = {}
+    for s in cfg.allowed_senders:
+        sender_name_map[s.phone] = s.name
+
+    # Annotate each message with its suppression reason and sender name
     annotated = []
     for m in page_msgs:
         annotated.append({
             "msg": m,
             "suppressed_by": suppression_map.get(m.id),
+            "sender_name": sender_name_map.get(m.sender),
         })
 
     return render_template(
