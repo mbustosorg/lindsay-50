@@ -427,12 +427,6 @@ def testing():
     return render_template("testing.html")
 
 
-@app.route("/preview")
-def preview():
-    """Redirect legacy Preview route to Testing."""
-    return redirect(url_for("testing"))
-
-
 # ---------------------------------------------------------------------------
 # Health check (for Render)
 # ---------------------------------------------------------------------------
