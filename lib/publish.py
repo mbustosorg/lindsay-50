@@ -29,20 +29,22 @@ _LIVE_MESSAGES: deque = deque(maxlen=100)
 _LIVE_LOCK = threading.Lock()
 
 
-def record_live_message(body: str, topic: str, source: str = "mqtt") -> None:
+def record_live_message(body: str, topic: str, source: str = "mqtt",
+                          received_at: str | None = None) -> None:
     """Record a message for the live feed display.
 
     Args:
-        body:    The message body.
-        topic:   The MQTT topic it was received on (or the feed topic if published).
-        source:  Where this message came from: "mqtt" (from broker) or "rest" (from API back-populate).
+        body:        The message body.
+        topic:       The MQTT topic it was received on (or the feed topic if published).
+        source:      Where this message came from: "mqtt" (from broker) or "rest" (from API back-populate).
+        received_at:  ISO8601 timestamp string. Defaults to now UTC.
     """
     with _LIVE_LOCK:
         _LIVE_MESSAGES.append({
             "body": body,
             "topic": topic,
             "source": source,
-            "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "received_at": received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         })
 
 
@@ -64,6 +66,7 @@ def seed_from_rest_messages(messages: list[dict], feed_topic: str) -> None:
             body=msg.get("body", ""),
             topic=feed_topic,
             source="rest",
+            received_at=msg.get("received_at"),
         )
 
 
