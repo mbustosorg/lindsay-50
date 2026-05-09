@@ -6,27 +6,39 @@
 
 #### Scenario: Valid SMS received
 - **WHEN** Twilio POSTs `From=+15551234567&Body=hello&To=+15559999999`
-- **THEN** the system stores the message and returns TwiML with a confirmation reply
+- **THEN** the system logs to S3, responds to Twilio with TwiML, then stores to SQLite and publishes to Adafruit IO
 
 #### Scenario: Empty body is ignored
 - **WHEN** Twilio POSTs with `Body=` (empty)
 - **THEN** the system returns HTTP 204 No Content without storing
 
-### Requirement: Webhook stores before responding
+### Requirement: S3 is the source of truth for messages
 
-The system SHALL store the message to SQLite before returning the TwiML response to Twilio.
+The system SHALL append every inbound message to S3 before responding to Twilio. Flask rebuilds SQLite from S3 on restart.
 
-#### Scenario: Storage completes before TwiML response
+#### Scenario: Message logged to S3 before response
 - **WHEN** Twilio POSTs a valid SMS
-- **THEN** the message is committed to SQLite, then the TwiML response is returned (not the other way around)
+- **THEN** the message is appended to the S3 log, then the TwiML response is returned
 
-### Requirement: Sender allowlist is enforced at storage time
+#### Scenario: Flask rebuilds SQLite from S3 on startup
+- **WHEN** Flask starts
+- **THEN** it reads all messages from S3 and repopulates SQLite
 
-If `config.allowed_senders` is non-empty, messages from phone numbers not in the list SHALL still be stored but marked as suppressed by a sender rule.
+### Requirement: Webhook stores to SQLite and publishes to Adafruit after responding
 
-#### Scenario: Non-allowed sender
-- **WHEN** `config.allowed_senders` is `[{phone: "+15551234567"}]` and a message from `+15550001111` arrives
-- **THEN** the message is stored to SQLite AND a `type=sender` suppress rule for `+15550001111` is added to config
+The system SHALL store the message to SQLite and publish to Adafruit IO only after responding to Twilio (to minimize webhook response latency).
+
+#### Scenario: Storage and publish after response
+- **WHEN** Twilio POSTs a valid SMS
+- **THEN** after returning TwiML, the message is stored to SQLite and published to Adafruit IO MQTT
+
+### Requirement: All messages are stored regardless of sender
+
+All inbound messages are stored to SQLite and S3. The allowed_senders config is used by the filter engine, not at storage time.
+
+#### Scenario: Message from unknown sender is stored
+- **WHEN** a message arrives from a phone number not in `config.allowed_senders`
+- **THEN** the message is still stored to SQLite and S3
 
 ### Requirement: TwiML reply is personalized
 

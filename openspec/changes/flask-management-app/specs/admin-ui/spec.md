@@ -54,16 +54,24 @@
 
 ### Requirement: Preview page shows filtered display list
 
-`GET /preview` SHALL call `filters.display_list()` with all messages and the current config, and display the result.
+`GET /preview` SHALL call `filters.display_list()` with all messages and the current config, and display the result. The page SHALL have a toggle to show/hide filtered (suppressed) messages. Suppressed messages SHALL indicate which filter rule excluded them.
 
 #### Scenario: Preview matches ESP32 output
 - **WHEN** a user visits `/preview`
 - **THEN** the displayed message list matches exactly what `filters.display_list(storage.get_all_messages(), storage.get_config())` returns
 
-### Requirement: Config changes are published
+#### Scenario: Toggle shows suppressed messages
+- **WHEN** a user toggles "show suppressed" on the preview page
+- **THEN** messages that would be filtered by the current config are shown, each labeled with the filter rule that suppressed it (e.g., "suppressed by keyword:badword")
 
-When config is changed via the admin UI (settings, filters, suppress), the system SHALL publish the updated config JSON to the ESP32 communication layer.
+#### Scenario: Allowed sender historical messages
+- **WHEN** a sender is added to allowed_senders
+- **THEN** toggling "show suppressed" on the preview page reveals their historical messages that were previously filtered
 
-#### Scenario: Filter change triggers publish
+### Requirement: Config changes are saved and published
+
+When config is changed via the admin UI (settings, filters, suppress), the system SHALL save to SQLite, snapshot to S3, and publish to Adafruit IO for the ESP32.
+
+#### Scenario: Filter change triggers save and publish
 - **WHEN** a user adds a filter rule via `/filters`
-- **THEN** the new config JSON is published to the ESP32 (via MQTT or HTTP, depending on the communication decision)
+- **THEN** the new config is saved to SQLite, snapshot saved to S3, and published to Adafruit IO

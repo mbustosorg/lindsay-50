@@ -28,17 +28,21 @@ The system SHALL evaluate filter rules against a message in the order they appea
 - **WHEN** `filters.apply(message, config)` is called and no filter rule matches
 - **THEN** the message is NOT suppressed
 
-### Requirement: display_list returns filtered messages in order
+### Requirement: get_messages returns filtered messages with optional status
 
-`filters.display_list(messages, config)` SHALL return all messages where `apply()` returned False, ordered by `received_at` ascending.
+`filters.get_messages(messages, config, include_filtered=False, since=None)` SHALL return messages filtered by the current config, ordered by `received_at` descending (most recent first).
 
-#### Scenario: Only non-suppressed returned
-- **WHEN** `filters.display_list([msg1, msg2, msg3], config)` is called where msg2 is suppressed
-- **THEN** the result is `[msg1, msg3]`
+#### Scenario: Only non-suppressed returned by default
+- **WHEN** `filters.get_messages([msg1, msg2, msg3], config)` is called where msg2 is suppressed
+- **THEN** the result is `[msg3, msg1]` (descending order)
 
-#### Scenario: Ordered by received_at ascending
-- **WHEN** messages arrive out of order
-- **THEN** `display_list` returns them sorted by `received_at` ascending
+#### Scenario: Filtered messages included when requested
+- **WHEN** `filters.get_messages([msg1, msg2], config, include_filtered=True)` is called where msg2 is suppressed by a keyword rule
+- **THEN** the result is `[{message: msg2, suppressed: true, rule: {type: "keyword", pattern: "badword"}}, {message: msg1, suppressed: false}]` (descending order)
+
+#### Scenario: Since parameter filters by time
+- **WHEN** `filters.get_messages([msg1, msg2], config, since="2026-05-08T12:00:00Z")` is called
+- **THEN** only messages with `received_at` strictly after the timestamp are returned
 
 ### Requirement: Filter logic is identical on Flask and ESP32
 

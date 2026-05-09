@@ -26,7 +26,7 @@ The config JSON SHALL contain a top-level integer `version` field. The value sta
 
 ### Requirement: Config supports allowed_senders
 
-The config JSON SHALL contain an `allowed_senders` array of objects with `name` (string) and `phone` (string, E.164) fields.
+The config JSON SHALL contain an `allowed_senders` array of objects with `name` (string) and `phone` (string, E.164) fields. This is informational only — all messages are stored; allowed_senders is used by the filter engine to suppress messages.
 
 #### Scenario: Sender lookup by phone
 - **WHEN** `config["allowed_senders"]` is a list of `{name, phone}` objects
@@ -55,3 +55,15 @@ The config JSON SHALL contain a `sign` object with at least a `name` (string) fi
 #### Scenario: Sign name is stored
 - **WHEN** `config.sign.name` is set to `"Lindsay's Heart"`
 - **THEN** it is preserved in SQLite and retrievable
+
+### Requirement: Config changes are backed up to S3
+
+On every config save, a timestamped snapshot is saved to S3. Old snapshots are pruned (keep most recent 10).
+
+#### Scenario: Config snapshot saved on change
+- **WHEN** `storage.put_config()` is called
+- **THEN** a timestamped config snapshot is saved to S3 (e.g., `config/config-2026-05-08T120000.json`)
+
+#### Scenario: Config snapshots are pruned
+- **WHEN** more than 10 config snapshots exist in S3
+- **THEN** the oldest snapshots are deleted (keep most recent 10)

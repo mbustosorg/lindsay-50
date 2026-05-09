@@ -2,49 +2,54 @@
 
 ## Overview
 
-An ESP32-based programmable LED matrix sign (64x64, 2-tile HUB75) that displays SMS messages sent by visitors. A Twilio webhook receiver (Flask on Render) processes incoming SMS and stores it to SQLite (replicated to Cloudflare R2 via Litestream). The ESP32 long-polls Flask via HTTP to receive messages and config, filters them, and renders animated effects on the LED matrix.
+An ESP32-based programmable LED matrix sign (64x64, 2-tile HUB75) that displays SMS messages sent by visitors. A Twilio webhook receiver (Flask on Heroku) processes incoming SMS, stores it to SQLite, logs to S3, and publishes to Adafruit IO via MQTT. The ESP32 subscribes to Adafruit IO MQTT for real-time messages, fetches config via HTTP, stores messages locally with UUID deduplication, filters them, and renders animated effects on the LED matrix.
 
 ---
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                                           CLOUD                                          │
-│                                                                                         │
-│  ┌──────────┐      ┌─────────────────┐      ┌────────────────┐                        │
-│  │  Twilio  │─────▶│  Flask/Render  │      │  Cloudflare   │                        │
-│  │  (SMS)   │      │  (web service) │      │      R2       │                        │
-│  └──────────┘      └────────┬────────┘      └───────┬────────┘                        │
-│                               │                       │                                 │
-│                               │  SQLite               │  Litestream WAL                │
-│                               │  (lib/)               └─────────────────────────────────┤
-│                               └─────────────────────────────────────────────────────────┘
-│                                                                                          │
-│                               HTTP API (Flask):                                           │
-│                               • GET  /api/messages?since={t}  (long-poll)                 │
-│                               • GET  /api/config                                          │
-│                               • PUT  /api/config                                          │
-│                               • POST /api/messages/{id}/suppress                          │
-│                                                                                          │
-│                               ──────────────────────────────────────────────────────────
-│                                                  │ HTTP (WiFi)
-│                                                  ▼
-│                                       ┌─────────────────────┐
-│                                       │   ESP32 + HUB75    │
-│                                       │   LED Matrix        │
-│                                       │   (CircuitPython)   │
-│                                       └─────────────────────┘
-│                                                                                          │
-│                                       Local storage (SQLite):                              │
-│                                       • messages.db    • config.db                         │
+                        ┌──────────────────────────────────────────┐
+                        │                    CLOUD                 │
+                        │                                          │
+   ┌────────┐           │  ┌────────────┐    ┌──────────┐          │
+   │ Twilio │──────────▶│  │ Flask/     │────│   AWS    │          │
+   │  SMS   │           │  │ Heroku     │    │    S3    │          │
+   └────────┘           │  │            │────│ (logs)   │          │
+                        │  └─────┬──────┘    └──────────┘          │
+                        │        │                                 │
+                        │        │ SQLite                          │
+                        │        ▼                                 │
+                        │  ┌────────────┐                          │
+                        │  │   lib/     │                          │
+                        │  └────────────┘                          │
+                        │        │                                 │
+                        │        │ publishes                       │
+                        │        ▼                                 │
+                        │  ┌────────────────────┐    ┌───────────┐ │
+                        │  │    Adafruit IO     │◀───│  ESP32    │ │
+                        │  │  (transport only)  │    │  Matrix   │ │
+                        │  └────────────────────┘    └───────────┘ │
+                        │        ▲                                 │
+                        │        │ MQTT + HTTP                     │
+                        └────────┼─────────────────────────────────┘
+                                 │
+                       ┌─────────┴─────────────────────────────────┐
+                       │   ESP32 (CircuitPython)                   │
+                       │   • MQTT subscribe (realtime).            │
+                       │   • HTTP fetch history + config.          │
+                       │   • In-memory dict (UUID dedup).          │
+                       │   • Rebuilds from Adafruit IO on boot.    │
+                       └───────────────────────────────────────────┘
 ```
 
-### Changes from prior design
+### Communication Architecture
 
-- **No Adafruit IO MQTT**. Adafruit IO does not support retained messages, so any message published while the ESP32 was offline would be permanently lost. HTTP long-polling fixes this — the server is the source of truth and the ESP32 can always catch up on reconnect.
-- **Flask is the sole API** for both admin UI and ESP32 communication.
-- **Shared `lib/`** is still the right structure — both sides run SQLite and the same filter logic.
+- **Flask**: S3 is the ultimate source of truth. On restart, Flask seeds SQLite from S3. For normal operation, Flask uses its local SQLite.
+- **ESP32**: Adafruit IO is the source of truth. ESP32 subscribes to Adafruit IO MQTT for real-time messages, stores them in an in-memory dict (UUID deduplication), and applies filters at render time. On boot, ESP32 fetches message history from Adafruit IO via HTTP to warm its in-memory store.
+- **S3 message logging**: All inbound messages are logged to S3 as a durable backup. Flask rebuilds from S3 on restart.
+- **Adafruit IO as transport**: MQTT carries real-time messages to ESP32; HTTP carries message history and config fetches.
+- **Shared `filters.py`**: Both sides use the same filter logic for consistency between admin UI preview and ESP32 rendering.
 
 ---
 
@@ -53,45 +58,38 @@ An ESP32-based programmable LED matrix sign (64x64, 2-tile HUB75) that displays 
 | Layer | Technology | Responsibility |
 |-------|------------|----------------|
 | SMS | Twilio | Receives SMS from visitors, sends webhook to Flask |
-| Webhook Receiver | Flask (Python) on Render | Validates sender, stores to SQLite, serves HTTP API, returns TwiML |
-| Database | SQLite + Litestream | Persistent message storage, replicated to R2 |
-| Object Storage | Cloudflare R2 | Offsite replica of SQLite (Litestream) |
-| Sign Controller | ESP32 (CircuitPython) | Long-polls Flask for messages and config, stores locally, filters at read time, renders |
+| Webhook Receiver | Flask (Python) on Heroku | Receives webhook, logs to S3, stores to SQLite, publishes to Adafruit IO |
+| Database | SQLite | Local message/config storage on Flask |
+| Object Storage | AWS S3 | Durable message log, Flask rebuilds from S3 on restart |
+| Sign Controller | ESP32 (CircuitPython) | Subscribes to Adafruit IO MQTT, HTTP fetch for history/config, in-memory message store, filters at render time |
 | Display | 64x64 HUB75 matrix (2× 64x32 tiles) | Physical LED display |
-| Keep-alive | UptimeRobot | Pings Render every 5 min to prevent cold start |
 
 ### Hosting Details
 
-| Component | Choice | Why |
-|-----------|--------|-----|
-| Web host | Render free tier | 750 hrs/month, git-push deploys, managed TLS |
-| Database | SQLite + Litestream | Zero-cost, no separate service, minimal ops |
-| Object storage | Cloudflare R2 | 10 GB free, 1M writes/month free — better than S3/GCS for Litestream |
-| Keep-alive | UptimeRobot free | Prevents Render's 15-min idle spin-down (Twilio webhook timeout is 15s) |
-| Total cost | **$0/month** | |
+| Component | Choice |
+|-----------|--------|
+| Web host | Heroku |
+| Database | SQLite |
+| Object storage | AWS S3 |
 
 ---
 
-## HTTP API (Flask ↔ ESP32)
+## HTTP API (Flask)
 
-### Why HTTP over MQTT
-
-Adafruit IO MQTT has no retained messages, no offline queuing. Any message published while the ESP32 is offline is permanently lost. The ESP32 cannot maintain a message buffer because it has no reliable way to know what it missed.
-
-HTTP long-polling solves this: the server holds the connection open until there are new messages (or a timeout). When the ESP32 reconnects after being offline, it sends `?since=<last_seen_timestamp>` and the server returns all messages it missed.
+Flask serves HTTP endpoints for the admin UI and for Twilio webhooks. ESP32 does not communicate with Flask over HTTP — it uses Adafruit IO MQTT (real-time) and Adafruit IO HTTP (message history and config).
 
 ### Endpoints
 
 #### `GET /api/messages`
 
-Long-poll for new messages. Returns all messages with `received_at` strictly after `since`.
+Fetch messages for the admin UI. Returns all messages with `received_at` strictly after `since`, ordered by `received_at` descending (most recent first).
 
 **Request:**
 ```
 GET /api/messages?since=2026-05-08T12:00:00Z
 ```
 
-**Response** (200, held open until a message arrives or timeout):
+**Response** (200):
 
 ```json
 {
@@ -106,15 +104,11 @@ GET /api/messages?since=2026-05-08T12:00:00Z
 }
 ```
 
-**Timeout behavior:**
-- If no messages arrive before the timeout (~30s), return `{"messages": []}` with HTTP 200.
-- ESP32 treats empty array as "no new messages, retry".
-
 **Parameters:**
 
 | Param | Type | Description |
 |-------|------|-------------|
-| `since` | ISO 8601 timestamp | Return only messages strictly after this time. Omit to get all messages (used on initial fetch). |
+| `since` | ISO 8601 timestamp | Return only messages strictly after this time. Omit to get all messages. |
 
 #### `GET /api/config`
 
@@ -179,24 +173,17 @@ Add a `type=message` filter rule for the given message UUID. Used by admin UI to
 
 ### Boot
 
-1. Load config from local SQLite (if any)
-2. Connect to WiFi
-3. `GET /api/config` → overwrite local config
-4. Record `last_seen_at = max(message.received_at)` from config response's messages (or current time if none)
+1. Connect to WiFi
+2. Fetch message history from Adafruit IO HTTP API → populate in-memory message dict (UUID dedup)
+3. Fetch config from Adafruit IO HTTP API → store in memory
+4. Subscribe to Adafruit IO MQTT for real-time messages
 
 ### Main Loop
 
-1. `GET /api/messages?since={last_seen_at}` (long-poll, ~30s timeout)
-2. On response with messages: insert each into local SQLite, update `last_seen_at`
-3. On response with empty array: no new messages, retry poll immediately
-4. On network error: retry with backoff
-5. `filters.display_list()` is called by the render loop to get the current queue
-
-### On Config Change (polling-based detection)
-
-Every long-poll response includes the current config (or the ESP32 can re-poll `GET /api/config` periodically, e.g. every 60s). If config has changed (compare `version` or hash), overwrite local config SQLite.
-
-> A push-based alternative (e.g. Server-Sent Events) would require Flask to hold a connection open indefinitely, complicating Render deployment. Polling is simpler and sufficient at low message rates.
+1. MQTT subscription receives new messages in real-time
+2. On MQTT message: add to in-memory dict (UUID dedup), update `last_seen_at`
+3. On config change: re-fetch config from Adafruit IO HTTP
+4. `filters.display_list()` is called by the render loop to get the current queue
 
 ---
 
@@ -267,28 +254,29 @@ The `config` table holds a single row with `key = "current"` and `value = <confi
 3. Flask generates UUID, stores message to SQLite with `received_at`
 4. Flask returns 200 TwiML with confirmation reply
 
-### ESP32 Long-Poll
+### ESP32 Message Retrieval
 
-1. ESP32 sends `GET /api/messages?since={last_seen_at}`
-2. If no new messages: Flask holds connection open (~30s timeout)
-3. When Flask receives an SMS: it stores to SQLite, then returns the new message(s) to the waiting ESP32
-4. ESP32 inserts into local SQLite, updates `last_seen_at`, continues polling
+1. ESP32 fetches message history from Adafruit IO HTTP on boot
+2. ESP32 subscribes to Adafruit IO MQTT for real-time messages
+3. Messages are stored in an in-memory dict with UUID deduplication
 
 ---
 
 ## Shared Architecture
 
-Both Flask and ESP32 share code from a `lib/` directory:
+Both Flask and ESP32 share `lib/filters.py`:
 
 ```
 lib/
 ├── __init__.py
-├── models.py       # SQLite schema, Message + Config data classes
-├── storage.py      # put_message(), get_messages(), put_config(), get_config()
-└── filters.py      # apply_filters(), display_list() — applied identically by both
+├── models.py       # Message and Config dataclasses
+├── storage.py      # Flask storage implementation (SQLite)
+└── filters.py      # apply(), display_list() — same filter logic on both sides
 ```
 
 **Why share filters.py?** The Flask admin UI preview page shows "what the sign will display" by running the exact same filter logic the ESP32 uses. Both sides must agree on which messages pass the filter rules.
+
+**Storage:** Flask uses SQLite via `lib/storage.py`. ESP32 uses an in-memory dict for messages and stores config in memory.
 
 ---
 
@@ -330,24 +318,23 @@ lib/
 ```
 lindsay-50/
 ├── SPEC.md
-├── Procfile                        # Render startup
-├── litestream.yml                  # Litestream → R2 config
-├── lib/                           # Shared code (Flask + CircuitPython)
+├── Procfile                        # Heroku startup
+├── lib/                           # Shared code (Flask)
 │   ├── __init__.py
-│   ├── models.py                  # SQLite schema, Message/Config dataclasses
-│   ├── storage.py                 # put_message(), get_messages_since(), put_config(), get_config()
-│   └── filters.py                # apply_filters(), display_list()
+│   ├── models.py                  # Message/Config dataclasses
+│   ├── storage.py                 # Flask SQLite storage
+│   └── filters.py                # apply(), display_list()
 ├── heart-sms-receiver/
 │   ├── __init__.py
-│   ├── main.py                   # Flask app (HTTP API + admin UI)
+│   ├── main.py                   # Flask app (Twilio webhook, admin UI)
 │   └── requirements.txt
 └── heart-matrix-controller/
-    ├── code.py                   # CircuitPython firmware (HTTP long-poll loop)
+    ├── code.py                   # CircuitPython firmware (MQTT + HTTP via Adafruit IO)
     ├── scroller.py               # Text scroll effect
     ├── fireworks.py              # Firework particle effect
     ├── flame.py                  # Flame effect (hidden)
     ├── settings.toml.example     # Config template
-    └── db.py                    # ESP32 DB init (imports lib/, uses adafruit_sqlite)
+    └── filters.py               # Same filter logic as Flask lib/filters.py
 ```
 
 ---
@@ -361,22 +348,22 @@ lindsay-50/
 
 ## TODO
 
-- [ ] **SQLite + Litestream + R2**: Flask stores messages in SQLite, Litestream replicates to R2
-- [ ] **Render deployment**: Procfile, litestream.yml, UptimeRobot setup
-- [ ] **`lib/` shared code**: models.py, storage.py, filters.py for both Flask and ESP32
-- [ ] **ESP32 HTTP long-poll**: Replace MQTT with `adafruit_requests` long-poll loop
-- [ ] **ESP32 SQLite**: Local SQLite via `adafruit_sqlite` (or similar CircuitPython SQLite library)
+- [ ] **Flask SQLite + S3 logging**: Flask stores messages in SQLite, logs to S3, rebuilds from S3 on restart
+- [ ] **Heroku deployment**: Procfile, config vars setup
+- [ ] **`lib/` shared code**: models.py, storage.py, filters.py for Flask
+- [ ] **ESP32 MQTT subscribe**: Subscribe to Adafruit IO MQTT for real-time messages
+- [ ] **ESP32 in-memory store**: Message dict with UUID deduplication, fixed-size retention
+- [ ] **ESP32 history fetch**: Fetch message history from Adafruit IO HTTP on boot
 - [ ] **`type=message` filter**: Suppress specific message by UUID
 - [ ] **Flask admin UI**: Five pages — Dashboard, Messages, Filters, Settings, Preview
-- [ ] **ESP32 config polling**: Re-poll `GET /api/config` periodically to detect changes
+- [ ] **Adafruit IO auth delegation**: Allow Lindsay to log in with Adafruit IO credentials to modify config
 
 ---
 
 ## Open Questions
 
-1. **ESP32 SQLite library**: Does CircuitPython have a viable SQLite library for ESP32? (`adafruit_sqlite` is in beta; alternatives?)
-2. **ESP32 message pruning**: SQLite grows indefinitely on the ESP32 — when and how to prune old messages?
-3. **Render cold start**: UptimeRobot pings every 5 min — Twilio times out at 15s; acceptable risk?
-4. **Litestream sync interval**: 5 min default — R2 write budget is 1M/month, is this a real concern at low traffic?
-5. **Config push vs. poll**: Should ESP32 detect config changes via periodic `GET /api/config` polling, or is version-checking in each long-poll response sufficient?
-6. **Long-poll timeout**: Render's idle timeout may be shorter than our desired long-poll duration — what is the practical limit?
+1. **ESP32 message pruning**: In-memory dict grows indefinitely — when and how to prune old messages?
+2. **Adafruit IO rate limits**: How does fetching message history work — any rate limits or pagination?
+3. **Config change detection**: ESP32 polls Adafruit IO HTTP for config changes. How often should it poll?
+4. **S3 log format**: JSONL per message, or something else? How to handle rebuild from S3?
+5. **Weekly re-publish**: How to implement periodic re-publish of messages to Adafruit IO to prevent aging?
