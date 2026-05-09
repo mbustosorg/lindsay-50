@@ -31,6 +31,15 @@ def apply(msg: Message, cfg: Config) -> tuple[bool, Optional[FilterRule]]:
     return False, None
 
 
+def get_all_matches(msg: Message, cfg: Config) -> list[FilterRule]:
+    """Return ALL filter rules that suppress this message (not just the first).
+
+    Multiple rules can suppress the same message (e.g. both keyword and sender).
+    """
+    return [r for r in cfg.filters
+            if r.action == "suppress" and _matches(msg, r)]
+
+
 def _matches(msg: Message, rule: FilterRule) -> bool:
     """Return True if the message matches the given filter rule."""
     if rule.type == "keyword":
@@ -72,10 +81,10 @@ def get_messages(
     filtered.sort(key=lambda m: m.received_at, reverse=True)
 
     # Apply filter rules in order
-    suppressed_map: dict[str, tuple[bool, Optional[FilterRule]]] = {}
+    suppressed_map: dict[str, tuple[bool, list[FilterRule]]] = {}
     for msg in filtered:
-        suppressed, rule = apply(msg, cfg)
-        suppressed_map[msg.id] = (suppressed, rule)
+        all_rules = get_all_matches(msg, cfg)
+        suppressed_map[msg.id] = (bool(all_rules), all_rules)
 
     # Build result in descending order
     if not include_filtered:
@@ -83,13 +92,13 @@ def get_messages(
     else:
         result = []
         for msg in filtered:
-            supp, rule = suppressed_map[msg.id]
+            supp, rules = suppressed_map[msg.id]
             entry = {
                 "message": msg,
                 "suppressed": supp,
             }
-            if supp and rule:
-                entry["rule"] = rule.to_dict()
+            if supp and rules:
+                entry["rules"] = [r.to_dict() for r in rules]
             result.append(entry)
         return result
 

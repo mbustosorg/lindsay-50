@@ -37,15 +37,17 @@
   <tbody>
     {% for entry in messages %}
     {% set msg = entry.msg %}
+    {% set suppressed = entry.suppressed %}
     {% set suppressed_by = entry.suppressed_by %}
+    {% set suppressed_by_message = entry.suppressed_by_message %}
     {% set sender_name = entry.sender_name %}
-    <tr class="{% if suppressed_by %}table-secondary{% endif %}">
+    <tr class="{% if suppressed %}table-secondary{% endif %}">
       {# --- Sender cell: name (large) + phone/id/time (small) --- #}
       <td>
-        {% if suppressed_by %}
-        <span class="badge bg-secondary me-1" title="Suppressed by: {{ suppressed_by }}">S</span>
+        {% if suppressed %}
+        <span class="badge bg-secondary me-1" title="Suppressed: {{ suppressed_by }}">S</span>
         {% endif %}
-        <span class="{% if suppressed_by %}text-muted text-decoration-line-through{% endif %}"
+        <span class="{% if suppressed %}text-muted text-decoration-line-through{% endif %}"
               style="font-size:1rem;">{{ sender_name if sender_name else msg.sender }}</span>
         {% if sender_name %}
         <br><small class="text-muted mono">{{ msg.sender }}</small>
@@ -55,15 +57,19 @@
         </small>
       </td>
       {# --- Body cell --- #}
-      <td class="{% if suppressed_by %}text-muted{% endif %}" style="max-width: 400px;">
+      <td class="{% if suppressed %}text-muted{% endif %}" style="max-width: 400px;">
         <span class="msg-body">{{ msg.body }}</span>
       </td>
       {# --- Actions cell --- #}
       <td>
-        {% if suppressed_by %}
+        {% if suppressed and suppressed_by_message %}
+        {# Message-level suppression: can unsuppress #}
         <form method="POST" action="{{ url_for('web_unsuppress', msg_id=msg.id) }}" style="display:inline">
           <button type="submit" class="btn btn-sm btn-success">Unsuppress</button>
         </form>
+        {% elif suppressed %}
+        {# Other suppression types: cannot unsuppress via button #}
+        <span class="badge bg-light text-dark" title="{{ suppressed_by }}">keyword/sender filter</span>
         {% else %}
         <form method="POST" action="{{ url_for('web_suppress', msg_id=msg.id) }}" style="display:inline">
           <button type="submit" class="btn btn-sm btn-outline-danger">Suppress</button>

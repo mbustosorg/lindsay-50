@@ -191,17 +191,16 @@ def api_get_messages():
         all_msgs = storage.get_messages_since(since)
     else:
         all_msgs = storage.get_all_messages()
-    # Return all messages with suppression metadata (ESP32 applies filters client-side)
+    # Return all messages with all matched suppression rules (ESP32 applies filters client-side)
     raw = filters.get_messages(all_msgs, cfg, include_filtered=True)
-    # Serialize Message objects to dicts
     result = []
     for entry in raw:
         item = {
             "message": entry["message"].to_dict(),
             "suppressed": entry["suppressed"],
         }
-        if entry.get("rule"):
-            item["rule"] = entry["rule"]
+        if entry.get("rules"):
+            item["rules"] = entry["rules"]
         result.append(item)
     return jsonify(result)
 
@@ -377,17 +376,18 @@ def message_list():
     for s in cfg.allowed_senders:
         sender_name_map[s.phone] = s.name
 
-    # Annotate each message with suppression reason and sender name
-    # (applies keyword/regex/sender/message rules correctly per-message)
+    # Annotate each message with suppression reasons and sender name
+    # (uses get_all_matches to report ALL matching rules, not just first)
     annotated = []
     for m in all_msgs:
-        suppressed, rule = filters.apply(m, cfg)
-        if suppressed and rule:
-            reason = f"{rule.type}:{rule.pattern}"
-        elif suppressed:
-            reason = "suppressed"
-        else:
-            reason = None
+        all_rules = filters.get_all_matches(m, cfg)
+        suppressed = bool(all_rules)
+
+        # Build list of reason strings for tooltip
+        reasons = [f"{r.type}:{r.pattern}" for r in all_rules]
+
+        # Check if message has a type=message suppression (unsuppress-able)
+        has_message_suppression = any(r.type == "message" for r in all_rules)
 
         # Filter if hide_suppressed is enabled
         if hide_suppressed and suppressed:
@@ -395,7 +395,9 @@ def message_list():
 
         annotated.append({
             "msg": m,
-            "suppressed_by": reason,
+            "suppressed": suppressed,
+            "suppressed_by": "; ".join(reasons) if reasons else None,
+            "suppressed_by_message": has_message_suppression,
             "sender_name": sender_name_map.get(m.sender),
         })
 

@@ -106,7 +106,7 @@ class TestGetMessages:
         suppressed_entries = [r for r in result if r["suppressed"]]
         assert len(suppressed_entries) == 1
         assert suppressed_entries[0]["message"].id == "msg-002"
-        assert suppressed_entries[0]["rule"]["type"] == "keyword"
+        assert suppressed_entries[0]["rules"][0]["type"] == "keyword"
 
     def test_since_filters_by_timestamp(self, sample_messages, default_config):
         # sample_messages: msg-001=T10, msg-002=T11, msg-003=T12 (descending: msg-003, msg-002, msg-001)

@@ -86,6 +86,32 @@
     </div>
   </div>
 </div>
+
+{# --- Message Preview (what ESP32 would see, via client-side filtering) --- #}
+<div class="card mb-4">
+  <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+    <span>Message Preview <small class="text-muted">(client-side filtering, what ESP32 receives)</small></span>
+    <div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="fetchPreviewMessages()">Refresh</button>
+      <span class="badge bg-secondary ms-2" id="preview-count">0</span>
+    </div>
+  </div>
+  <div class="card-body p-0">
+    <div style="max-height: 400px; overflow-y: auto;">
+      <table class="table table-striped table-sm mb-0">
+        <thead class="sticky-top bg-white">
+          <tr>
+            <th>Sender</th>
+            <th>Body</th>
+          </tr>
+        </thead>
+        <tbody id="preview-tbody">
+          <tr><td colspan="2" class="text-muted">Loading... (calls /api/messages for raw data, filters client-side)</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -148,8 +174,101 @@ async function fetchConfig() {
         </li>
       `).join('');
     }
+    return cfg;
   } catch (e) {
     document.getElementById('config-display').textContent = 'Error loading config';
+    return null;
+  }
+}
+
+// -----------------------------------------------------------------------
+// Client-side filtering (mirrors lib/filters.py)
+// -----------------------------------------------------------------------
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function _msgMatches(msg, rule) {
+  const body = msg.body || '';
+  if (rule.type === 'keyword') {
+    return body.toLowerCase().includes(rule.pattern.toLowerCase());
+  }
+  if (rule.type === 'regex') {
+    try {
+      return new RegExp(rule.pattern).test(body);
+    } catch {
+      return false;
+    }
+  }
+  if (rule.type === 'sender') {
+    return msg.sender === rule.pattern;
+  }
+  if (rule.type === 'message') {
+    return msg.id === rule.pattern;
+  }
+  return false;
+}
+
+function _getAllMatches(msg, filters) {
+  return filters.filter(f => f.action === 'suppress' && _msgMatches(msg, f));
+}
+
+async function fetchPreviewMessages() {
+  try {
+    // Fetch messages (unfiltered) and config concurrently
+    const [msgsRes, cfgRes] = await Promise.all([
+      fetch('/api/messages'),
+      fetch('/api/config'),
+    ]);
+    const rawMsgs = await msgsRes.json();
+    const cfg = await cfgRes.json();
+    const filters = cfg.filters || [];
+
+    const tbody = document.getElementById('preview-tbody');
+    const count = document.getElementById('preview-count');
+
+    // rawMsgs entries have {message, suppressed, rules?}
+    // We use the server-provided suppression info to show what the ESP32 sees
+    // but also show the reason (all rules that matched)
+    if (rawMsgs.length === 0) {
+      count.textContent = '0';
+      tbody.innerHTML = '<tr><td colspan="2" class="text-muted">No messages.</td></tr>';
+      return;
+    }
+
+    // Show newest first
+    const entries = [...rawMsgs].reverse();
+    count.textContent = entries.length;
+
+    tbody.innerHTML = entries.map(entry => {
+      const msg = entry.message;
+      const suppressed = entry.suppressed;
+      const rules = entry.rules || [];
+      const reasons = rules.map(r => `${r.type}:${r.pattern}`).join('; ');
+      return `
+        <tr class="${suppressed ? 'table-secondary' : ''}">
+          <td>
+            ${suppressed ? `<span class="badge bg-secondary me-1" title="Suppressed: ${escapeHtml(reasons)}">S</span>` : ''}
+            <span class="${suppressed ? 'text-muted text-decoration-line-through' : ''}" style="font-size:1rem;">
+              ${escapeHtml(msg.sender)}
+            </span>
+            <br><small class="text-muted mono" style="font-size:0.65rem;">
+              ${msg.id.slice(0, 8)}&nbsp;&middot;&nbsp;${msg.received_at ? msg.received_at.slice(11, 19) : ''}
+            </small>
+          </td>
+          <td class="${suppressed ? 'text-muted' : ''}" style="max-width: 500px;">
+            <span class="msg-body">${escapeHtml(msg.body)}</span>
+          </td>
+        </tr>
+      `;
+    }).join('');
+  } catch (e) {
+    console.error('Preview fetch failed:', e);
+    document.getElementById('preview-tbody').innerHTML =
+      '<tr><td colspan="2" class="text-danger">Error loading preview</td></tr>';
   }
 }
 
@@ -172,6 +291,7 @@ document.getElementById('inject-form').addEventListener('submit', async function
       result.innerHTML = '<span class="text-success">OK — ' + escapeHtml(text.slice(0, 100)) + '</span>';
       fetchMessages();
       fetchConfig();
+      fetchPreviewMessages();
       form.Body.value = '';
     } else {
       result.innerHTML = '<span class="text-danger">Error ' + res.status + '</span>';
@@ -184,7 +304,9 @@ document.getElementById('inject-form').addEventListener('submit', async function
 // Auto-seed from REST on page load, then poll for new MQTT messages
 seedRest();
 fetchConfig();
+fetchPreviewMessages();
 setInterval(fetchMessages, 3000);
 setInterval(fetchConfig, 10000);
+setInterval(fetchPreviewMessages, 10000);
 </script>
 {% endblock %}
