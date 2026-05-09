@@ -82,7 +82,7 @@ PYEOF
         if ! command -v mc &> /dev/null; then
             echo "Installing MinIO client (mc)..."
             if [ "$(uname)" = "Darwin" ]; then
-                brew install minio/stable/mc 2>/dev/null || brew install minio-client
+                brew install minio-mc 2>/dev/null || brew install minio-client
             else
                 curl -fsSL https://dl.min.io/client/mc/release/linux-amd64/mc -o /usr/local/bin/mc && chmod +x /usr/local/bin/mc
             fi
