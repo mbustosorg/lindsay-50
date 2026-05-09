@@ -1,5 +1,5 @@
 flask>=3.0
-adafruit-io
+paho-mqtt>=2.0
 boto3>=1.34
 requests>=2.31
 cryptography>=42.0

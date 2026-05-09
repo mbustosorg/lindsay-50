@@ -6,13 +6,22 @@ S3_MESSAGE_LOG_KEY = "messages/messages.jsonl"
 S3_CONFIG_PREFIX = "config/config"
 S3_ENDPOINT_URL = ""
 
-# Adafruit IO REST credentials.
-# For local dev with AIO local server: AIO_BASE_URL=http://localhost:8082
+# Adafruit IO credentials (used for MQTT publishing).
+# For local dev with Mosquitto: set MQTT_HOST=localhost, MQTT_PORT=1883
+# and use dummy MQTT_USERNAME/MQTT_PASSWORD (auth is ignored by local broker).
 AIO_USERNAME = "YOUR_AIO_USERNAME"
 AIO_KEY = "YOUR_AIO_KEY"
 AIO_FEED = "YOUR_AIO_FEED_NAME"
-AIO_BASE_URL = ""
 
 # Optional: separate Adafruit IO feed for publishing config changes.
 # If not set, config publishing is skipped.
 AIO_CONFIG_FEED = ""
+
+# MQTT settings for publishing messages and config.
+# Production: use io.adafruit.com:8883 with TLS (MQTT_PORT=8883).
+# Local dev: use a local Mosquitto broker on port 1883 (no TLS).
+MQTT_HOST = "io.adafruit.com"
+MQTT_PORT = 8883
+# MQTT_USERNAME and MQTT_PASSWORD default to AIO_USERNAME/AIO_KEY if not set.
+# MQTT_USERNAME = "YOUR_AIO_USERNAME"
+# MQTT_PASSWORD = "YOUR_AIO_KEY"

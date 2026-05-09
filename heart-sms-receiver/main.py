@@ -15,7 +15,6 @@ from flask import Flask, Response, jsonify, redirect, render_template, request, 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from Adafruit_IO import Client
 import tomllib
 
 from lib import storage, filters, s3, publish
@@ -44,27 +43,30 @@ AIO_USERNAME = _cfg["AIO_USERNAME"]
 AIO_KEY = _cfg["AIO_KEY"]
 AIO_FEED = _cfg["AIO_FEED"]
 AIO_CONFIG_FEED = _cfg.get("AIO_CONFIG_FEED", "")
-AIO_BASE_URL = _cfg.get("AIO_BASE_URL", "") or None
-
-aio_kwargs = {"username": AIO_USERNAME, "key": AIO_KEY}
-if AIO_BASE_URL:
-    aio_kwargs["base_url"] = AIO_BASE_URL
-aio = Client(**aio_kwargs)
 
 # ---------------------------------------------------------------------------
 # Startup connectivity checks
 # ---------------------------------------------------------------------------
 
 def _check_connectivity() -> None:
-    """Verify AIO and S3 are reachable. Exits on failure."""
+    """Verify MQTT broker and S3 are reachable. Logs warnings on failure."""
     import boto3
 
-    # AIO: send a no-op request to verify credentials
+    # MQTT: try to connect to the broker
     try:
-        aio._get("/api/v2/user")  # internal method to verify auth
-        logger.info("AIO connectivity OK")
+        import paho.mqtt.client as mqtt
+        cfg = _cfg
+        host = cfg.get("MQTT_HOST", "io.adafruit.com")
+        port = int(cfg.get("MQTT_PORT", 8883))
+        client = mqtt.Client()
+        username = cfg.get("MQTT_USERNAME")
+        if username:
+            client.username_pw_set(username, cfg.get("MQTT_PASSWORD"))
+        client.connect(host, port, keepalive=5)
+        client.disconnect()
+        logger.info("MQTT connectivity OK (%s:%d)", host, port)
     except Exception as e:
-        logger.warning("AIO unreachable: %s (messages will not be published)", e)
+        logger.warning("MQTT unreachable: %s (messages will not be published)", e)
 
     # S3: try head_bucket to verify bucket + credentials
     try:
@@ -167,9 +169,8 @@ def api_messages():
         # 3. Store to SQLite
         storage.put_message(msg)
 
-        # 4. Publish to Adafruit IO
-        aio.send_data(AIO_FEED, body)
-        logger.info("Published to feed %s: %s", AIO_FEED, body)
+        # 4. Publish to Adafruit IO via MQTT
+        publish.publish_message(body)
     except Exception as e:
         logger.error("Post-webhook processing failed: %s", e)
 
