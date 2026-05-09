@@ -42,11 +42,12 @@
     {% set suppressed_by = entry.suppressed_by %}
     {% set suppressed_by_message = entry.suppressed_by_message %}
     {% set sender_name = entry.sender_name %}
-    <tr class="{% if suppressed %}table-secondary{% endif %}">
+    <tr class="{% if suppressed %}table-secondary{% endif %}" id="row-{{ msg.id }}">
       {# --- Suppress checkbox (always available) --- #}
       <td style="text-align: center;">
         <input type="checkbox"
                class="form-check-input"
+               id="cb-{{ msg.id }}"
                {% if suppressed_by_message %}checked{% endif %}
                onchange="handleSuppressToggle(this, '{{ msg.id }}')"
                title="Toggle message-level suppression">
@@ -66,11 +67,11 @@
       <td class="{% if suppressed %}text-muted{% endif %}" style="max-width: 300px;">
         <span class="msg-body">{{ msg.body }}</span>
       </td>
-      {# --- Suppression Reasons cell --- #}
-      <td>
+      {# --- Suppression Reasons cell (stacked badges) --- #}
+      <td id="reasons-{{ msg.id }}">
         {% if suppressed_by %}
           {% for reason in suppressed_by.split('; ') %}
-          <span class="badge bg-secondary me-1">{{ reason }}</span>
+          <div data-reason="{{ reason }}"><span class="badge bg-secondary">{{ reason }}</span></div>
           {% endfor %}
         {% else %}
         <span class="text-muted">—</span>
@@ -85,13 +86,36 @@
 
 <script>
 function handleSuppressToggle(checkbox, msgId) {
+  const reasonsCell = document.getElementById('reasons-' + msgId);
+  const dashSpan = reasonsCell.querySelector('.text-muted');
+
   if (checkbox.checked) {
     fetch('/messages/' + msgId + '/suppress', { method: 'POST' })
-      .then(r => { if (!r.ok) checkbox.checked = false; })
+      .then(r => {
+        if (!r.ok) { checkbox.checked = false; return; }
+        // Add message:<uuid> badge if not already present
+        const existing = reasonsCell.querySelector('[data-reason^="message:"]');
+        if (!existing) {
+          if (dashSpan) dashSpan.remove();
+          const badge = document.createElement('div');
+          badge.setAttribute('data-reason', 'message:' + msgId);
+          badge.innerHTML = '<span class="badge bg-secondary">message:' + msgId + '</span>';
+          reasonsCell.appendChild(badge);
+        }
+      })
       .catch(() => { checkbox.checked = false; });
   } else {
     fetch('/messages/' + msgId + '/unsuppress', { method: 'POST' })
-      .then(r => { if (!r.ok) checkbox.checked = true; })
+      .then(r => {
+        if (!r.ok) { checkbox.checked = true; return; }
+        // Remove message:<uuid> badge
+        const badge = reasonsCell.querySelector('[data-reason^="message:"]');
+        if (badge) badge.remove();
+        // If no badges remain, show dash
+        if (!reasonsCell.querySelector('.badge')) {
+          reasonsCell.innerHTML = '<span class="text-muted">—</span>';
+        }
+      })
       .catch(() => { checkbox.checked = true; });
   }
 }
