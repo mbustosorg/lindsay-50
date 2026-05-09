@@ -1,13 +1,15 @@
+# AWS S3 for message logging and config snapshots.
+# For local dev with MinIO: S3_ENDPOINT_URL=http://localhost:9000
+# On Heroku: leave S3_ENDPOINT_URL empty, use IAM role attached to dyno.
+S3_BUCKET = "YOUR_S3_BUCKET_NAME"
+S3_MESSAGE_LOG_KEY = "messages/messages.jsonl"
+S3_CONFIG_PREFIX = "config/config"
+S3_ENDPOINT_URL = ""
+
 # Adafruit IO REST credentials.
 AIO_USERNAME = "YOUR_AIO_USERNAME"
 AIO_KEY = "YOUR_AIO_KEY"
 AIO_FEED = "YOUR_AIO_FEED_NAME"
-
-# AWS S3 for message logging and config snapshots.
-# Bucket must exist and have appropriate read/write permissions.
-S3_BUCKET = "YOUR_S3_BUCKET_NAME"
-S3_MESSAGE_LOG_KEY = "messages/messages.jsonl"
-S3_CONFIG_PREFIX = "config/config"
 
 # Optional: separate Adafruit IO feed for publishing config changes.
 # If not set, config publishing is skipped.

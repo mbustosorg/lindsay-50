@@ -22,7 +22,11 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _s3_client():
-    return boto3.client("s3")
+    cfg = _load_s3_config()
+    kwargs: dict = {}
+    if cfg.get("S3_ENDPOINT_URL"):
+        kwargs["endpoint_url"] = cfg["S3_ENDPOINT_URL"]
+    return boto3.client("s3", **kwargs)
 
 
 # ---------------------------------------------------------------------------

@@ -48,10 +48,39 @@ AIO_CONFIG_FEED = _cfg.get("AIO_CONFIG_FEED", "")
 aio = Client(AIO_USERNAME, AIO_KEY)
 
 # ---------------------------------------------------------------------------
+# Startup connectivity checks
+# ---------------------------------------------------------------------------
+
+def _check_connectivity() -> None:
+    """Verify AIO and S3 are reachable. Exits on failure."""
+    import boto3
+
+    # AIO: send a no-op request to verify credentials
+    try:
+        aio._get("/api/v2/user")  # internal method to verify auth
+        logger.info("AIO connectivity OK")
+    except Exception as e:
+        logger.warning("AIO unreachable: %s (messages will not be published)", e)
+
+    # S3: try head_bucket to verify bucket + credentials
+    try:
+        bucket = _cfg.get("S3_BUCKET", "")
+        if bucket:
+            client = s3._s3_client()
+            client.head_bucket(Bucket=bucket)
+            logger.info("S3 connectivity OK (bucket: %s)", bucket)
+        else:
+            logger.warning("S3_BUCKET not set; S3 logging disabled")
+    except Exception as e:
+        logger.warning("S3 unreachable: %s (messages will not be logged to S3)", e)
+
+
+# ---------------------------------------------------------------------------
 # Startup: init SQLite and rebuild from S3
 # ---------------------------------------------------------------------------
 
 storage.init_db()
+_check_connectivity()
 
 # Rebuild SQLite from S3 on startup
 try:
