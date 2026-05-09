@@ -68,13 +68,16 @@ def get_messages(
     else:
         filtered = list(messages)
 
+    # Ensure descending order (spec requires this regardless of input order)
+    filtered.sort(key=lambda m: m.received_at, reverse=True)
+
     # Apply filter rules in order
     suppressed_map: dict[str, tuple[bool, Optional[FilterRule]]] = {}
     for msg in filtered:
         suppressed, rule = apply(msg, cfg)
         suppressed_map[msg.id] = (suppressed, rule)
 
-    # Build result in descending order (messages are already descending)
+    # Build result in descending order
     if not include_filtered:
         return [m for m in filtered if not suppressed_map[m.id][0]]
     else:
