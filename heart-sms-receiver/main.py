@@ -359,12 +359,21 @@ def message_list():
     all_msgs = storage.get_all_messages()
     cfg = storage.get_config()
 
-    # Build set of suppressed message IDs for quick lookup
-    suppressed_ids = {f.pattern for f in cfg.filters if f.type == "message"}
+    # Build map of suppressed message ID -> rule (for tooltip)
+    suppression_map: dict[str, str] = {}
+    for f in cfg.filters:
+        if f.type == "message":
+            suppression_map[f.pattern] = f"message:{f.pattern}"
+        elif f.type == "sender":
+            suppression_map[f.pattern] = f"sender filter"
+        elif f.type == "keyword":
+            suppression_map[f.pattern] = f"keyword:{f.pattern}"
+        elif f.type == "regex":
+            suppression_map[f.pattern] = f"regex:{f.pattern}"
 
     # Filter if hide_suppressed is enabled
     if hide_suppressed:
-        filtered_msgs = [m for m in all_msgs if m.id not in suppressed_ids]
+        filtered_msgs = [m for m in all_msgs if m.id not in suppression_map]
     else:
         filtered_msgs = all_msgs
 
@@ -375,9 +384,17 @@ def message_list():
     end = start + per_page
     page_msgs = filtered_msgs[start:end]
 
+    # Annotate each message with its suppression reason
+    annotated = []
+    for m in page_msgs:
+        annotated.append({
+            "msg": m,
+            "suppressed_by": suppression_map.get(m.id),
+        })
+
     return render_template(
         "messages.html",
-        messages=page_msgs,
+        messages=annotated,
         page=page,
         total_pages=total_pages,
         cfg=cfg,

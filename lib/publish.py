@@ -9,6 +9,7 @@ via its existing MQTT subscription.
 
 import json
 import logging
+import os
 import threading
 import time
 import tomllib
@@ -93,7 +94,10 @@ def _mqtt_client(for_subscribe: bool = False) -> mqtt.Client:
     username = cfg.get("MQTT_USERNAME") or cfg.get("AIO_USERNAME", "")
     password = cfg.get("MQTT_PASSWORD") or cfg.get("AIO_KEY", "")
 
-    client = mqtt.Client(clean_session=for_subscribe)
+    client = mqtt.Client(
+        client_id=f"lindsay-flask-{os.getpid()}",
+        clean_session=for_subscribe,
+    )
     if username:
         client.username_pw_set(username, password)
     return client
