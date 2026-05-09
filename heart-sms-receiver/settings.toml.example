@@ -3,10 +3,6 @@ AIO_USERNAME = "YOUR_AIO_USERNAME"
 AIO_KEY = "YOUR_AIO_KEY"
 AIO_FEED = "YOUR_AIO_FEED_NAME"
 
-# Optional: comma-separated list of allowed sender phone numbers, e.g. "+15551234567,+15559876543".
-# Leave empty to accept any sender.
-ALLOWED_SENDERS = ""
-
 # AWS S3 for message logging and config snapshots.
 # Bucket must exist and have appropriate read/write permissions.
 S3_BUCKET = "YOUR_S3_BUCKET_NAME"
