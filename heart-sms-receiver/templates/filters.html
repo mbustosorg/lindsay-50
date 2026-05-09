@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block title %}Filter Rules — Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<h2>Filter Rules</h2>
+
+<table class="table">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Type</th>
+      <th>Pattern</th>
+      <th>Action</th>
+      <th>Remove</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for f in filters %}
+    <tr>
+      <td>{{ loop.index0 }}</td>
+      <td><span class="badge bg-info">{{ f.type }}</span></td>
+      <td class="mono">{{ f.pattern }}</td>
+      <td>{{ f.action }}</td>
+      <td>
+        <form method="POST">
+          <input type="hidden" name="action" value="delete">
+          <input type="hidden" name="index" value="{{ loop.index0 }}">
+          <button type="submit" class="btn btn-sm btn-danger">Delete</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="5">No filter rules. All messages will be displayed.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h4 class="mt-4">Add Filter Rule</h4>
+<form method="POST" class="row g-3">
+  <input type="hidden" name="action" value="add">
+  <div class="col-md-2">
+    <select name="type" class="form-select">
+      <option value="keyword">keyword</option>
+      <option value="regex">regex</option>
+      <option value="sender">sender</option>
+      <option value="message">message</option>
+    </select>
+  </div>
+  <div class="col-md-6">
+    <input type="text" name="pattern" class="form-control" placeholder="Pattern" required>
+  </div>
+  <div class="col-md-2">
+    <select name="action" class="form-select">
+      <option value="suppress">suppress</option>
+    </select>
+  </div>
+  <div class="col-md-2">
+    <button type="submit" class="btn btn-primary">Add Rule</button>
+  </div>
+</form>
+{% endblock %}

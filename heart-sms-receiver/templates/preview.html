@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Preview — Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<h2>Preview <small class="text-muted fs-6">What ESP32 will display</small></h2>
+
+<div class="mb-3">
+  <a href="{{ url_for('preview', include_filtered='false') }}" class="btn btn-sm{% if not include_filtered %} btn-primary{% else %} btn-outline-primary{% endif %}">Show Only Visible</a>
+  <a href="{{ url_for('preview', include_filtered='true') }}" class="btn btn-sm{% if include_filtered %} btn-primary{% else %} btn-outline-primary{% endif %}">Show All (with suppressed)</a>
+</div>
+
+<table class="table table-striped">
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Received</th>
+      <th>Sender</th>
+      <th>Body</th>
+      <th>Status</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for entry in result %}
+    {% if include_filtered %}
+    <tr class="{% if entry.suppressed %}table-danger{% endif %}">
+      <td>{{ loop.index }}</td>
+      <td class="mono small">{{ entry.message.received_at }}</td>
+      <td class="mono">{{ entry.message.sender }}</td>
+      <td class="msg-body">{{ entry.message.body }}</td>
+      <td>
+        {% if entry.suppressed %}
+        <span class="badge bg-danger">suppressed</span>
+        {% if entry.rule %}<small class="text-muted">by {{ entry.rule.type }}:{{ entry.rule.pattern }}</small>{% endif %}
+        {% else %}
+        <span class="badge bg-success">visible</span>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr>
+      <td>{{ loop.index }}</td>
+      <td class="mono small">{{ entry.received_at }}</td>
+      <td class="mono">{{ entry.sender }}</td>
+      <td class="msg-body">{{ entry.body }}</td>
+      <td><span class="badge bg-success">visible</span></td>
+    </tr>
+    {% endif %}
+    {% else %}
+    <tr><td colspan="5">No messages to display.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
