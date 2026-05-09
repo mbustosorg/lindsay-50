@@ -17,7 +17,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import tomllib
 
-from lib import storage, s3, publish
+from lib import filters, storage, s3, publish
 from lib.models import Config, FilterRule, Message, AllowedSender
 
 # ---------------------------------------------------------------------------
@@ -184,12 +184,15 @@ def api_messages():
 
 @app.route("/api/messages", methods=["GET"])
 def api_get_messages():
-    """GET /api/messages?since=<timestamp> — return messages as JSON."""
+    """GET /api/messages?since=<timestamp> — return messages as JSON, filtered."""
+    cfg = storage.get_config()
     since = request.args.get("since")
     if since:
-        msgs = storage.get_messages_since(since)
+        all_msgs = storage.get_messages_since(since)
     else:
-        msgs = storage.get_all_messages()
+        all_msgs = storage.get_all_messages()
+    # Apply filter rules so ESP32 only receives non-suppressed messages
+    msgs = filters.get_messages(all_msgs, cfg)
     return jsonify([m.to_dict() for m in msgs])
 
 
