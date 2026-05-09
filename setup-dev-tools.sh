@@ -16,6 +16,74 @@ cd "$PROJECT_ROOT"
 
 echo "=== Seeding project with dev tools ==="
 
+# --- Python venv + deps ---
+echo ""
+echo "--- Python venv + deps ---"
+if [ ! -d ".venv" ]; then
+  python3 -m venv .venv
+  echo "Created .venv"
+else
+  echo "Using existing .venv"
+fi
+
+# shellcheck disable=SC1091
+. .venv/bin/activate
+pip install -q --upgrade pip
+
+if [ -f "heart-sms-receiver/requirements.txt" ]; then
+  pip install -q -r heart-sms-receiver/requirements.txt
+  echo "Installed heart-sms-receiver deps"
+fi
+
+if [ -d "tests" ]; then
+  pip install -q pytest
+  echo "Installed pytest"
+fi
+
+# --- VS Code + Pyright LSP ---
+echo ""
+echo "--- VS Code LSP setup ---"
+mkdir -p .vscode
+cat > .vscode/settings.json <<'VSCODE'
+{
+  "python.analysis.extraPaths": ["."],
+  "python.analysis.pythonVersion": "3.12",
+  "python.analysis.typeCheckingMode": "basic",
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv/bin/python"
+}
+VSCODE
+echo "Created .vscode/settings.json"
+
+if ! command -v pyright &> /dev/null && ! python -m pyright --version &> /dev/null; then
+  pip install -q pyright
+fi
+echo "Pyright available in .venv"
+
+# --- OpenSpec project rules ---
+echo ""
+echo "--- OpenSpec project rules ---"
+if [ -f "openspec/config.yaml" ]; then
+  # Ensure rules.tasks and rules.test are present
+  if ! grep -q "rules:" openspec/config.yaml; then
+    cat >> openspec/config.yaml <<'OPENSPEC'
+
+# Per-artifact rules
+rules:
+  tasks:
+    - Every feature task must have a corresponding test task
+    - Mark each task done in tasks.md with `- [x]` when complete
+  test:
+    - New functions/modules must have pytest tests covering happy path, edge cases, and errors
+    - Run `PYTHONPATH=. pytest tests/ -v` before pushing; fix all failures first
+OPENSPEC
+    echo "Added rules to openspec/config.yaml"
+  else
+    echo "OpenSpec rules already present"
+  fi
+fi
+
+echo ""
+
 # --- Node.js ---
 if ! command -v node &> /dev/null; then
   echo "Installing Node.js..."
