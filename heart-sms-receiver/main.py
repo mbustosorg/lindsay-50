@@ -483,4 +483,8 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    import os
+    # Respect FLASK_DEBUG env var so reloader is controlled externally.
+    debug = os.environ.get("FLASK_DEBUG", "0") != "0"
+    port = int(os.environ.get("FLASK_RUN_PORT", 5001))
+    app.run(host="0.0.0.0", port=port, debug=debug)

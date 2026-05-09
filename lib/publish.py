@@ -98,7 +98,7 @@ def _mqtt_client(for_subscribe: bool = False) -> mqtt.Client:
     password = cfg.get("MQTT_PASSWORD") or cfg.get("AIO_KEY", "")
 
     client = mqtt.Client(
-        client_id=f"lindsay-flask-{os.getpid()}",
+        client_id=f"lindsay-flask-{os.getpid()}-{'sub' if for_subscribe else 'pub'}",
         clean_session=for_subscribe,
     )
     if username:
