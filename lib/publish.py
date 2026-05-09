@@ -9,12 +9,40 @@ via its existing MQTT subscription.
 
 import json
 import logging
+import threading
+import time
 import tomllib
+from collections import deque
+from datetime import datetime, timezone
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Live message ring buffer (last N messages received from MQTT subscriber)
+# ---------------------------------------------------------------------------
+
+_LIVE_MESSAGES: deque = deque(maxlen=100)
+_LIVE_LOCK = threading.Lock()
+
+
+def record_live_message(body: str, topic: str) -> None:
+    """Record a message received from the MQTT broker, for the live feed display."""
+    with _LIVE_LOCK:
+        _LIVE_MESSAGES.append({
+            "body": body,
+            "topic": topic,
+            "received_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+
+
+def get_live_messages(limit: int = 20) -> list[dict]:
+    """Return the most recent N messages received from MQTT, newest first."""
+    with _LIVE_LOCK:
+        return list(reversed(list(_LIVE_MESSAGES)))[:limit]
+
 
 # ---------------------------------------------------------------------------
 # Config (loaded from settings.toml)
@@ -33,14 +61,17 @@ def _mqtt_config() -> dict:
 # MQTT client factory
 # ---------------------------------------------------------------------------
 
-def _mqtt_client() -> mqtt.Client:
-    """Build an MQTT client from settings.toml (credentials only)."""
+def _mqtt_client(for_subscribe: bool = False) -> mqtt.Client:
+    """Build an MQTT client from settings.toml.
+
+    Args:
+        for_subscribe: if True, enable auto-reconnect and set a clean session.
+    """
     cfg = _mqtt_config()
-    # Fall back to AIO_USERNAME/AIO_KEY if MQTT_USERNAME/PASSWORD not set
     username = cfg.get("MQTT_USERNAME") or cfg.get("AIO_USERNAME", "")
     password = cfg.get("MQTT_PASSWORD") or cfg.get("AIO_KEY", "")
 
-    client = mqtt.Client()
+    client = mqtt.Client(clean_session=for_subscribe)
     if username:
         client.username_pw_set(username, password)
     return client
@@ -59,6 +90,82 @@ def _feed_topic(feed: str, username: str) -> str:
     if "/feeds/" in feed:
         return feed
     return f"{username}/feeds/{feed}"
+
+
+# ---------------------------------------------------------------------------
+# Background MQTT subscriber
+# ---------------------------------------------------------------------------
+
+class _MqttSubscriber:
+    """Long-lived MQTT subscriber that records all messages received to the ring buffer."""
+
+    def __init__(self):
+        self._thread: threading.Thread | None = None
+        self._stop = threading.Event()
+
+    def start(self) -> None:
+        cfg = _mqtt_config()
+        feed = cfg.get("AIO_FEED", "")
+        username = cfg.get("AIO_USERNAME", "")
+        if not feed or not username:
+            logger.warning("MQTT subscriber not started: AIO_FEED or AIO_USERNAME not configured")
+            return
+
+        self._topic = _feed_topic(feed, username)
+        self._thread = threading.Thread(target=self._run, name="mqtt-subscriber", daemon=True)
+        self._thread.start()
+        logger.info("MQTT subscriber started on topic: %s", self._topic)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            client = _mqtt_client(for_subscribe=True)
+            client.on_connect = self._on_connect
+            client.on_message = self._on_message
+            client.on_disconnect = self._on_disconnect
+
+            cfg = _mqtt_config()
+            host = cfg.get("MQTT_HOST", "io.adafruit.com")
+            port = int(cfg.get("MQTT_PORT", 8883))
+
+            try:
+                logger.info("MQTT subscriber connecting to %s:%d...", host, port)
+                client.connect(host, port, keepalive=60)
+                client.loop_forever()
+            except Exception as e:
+                if not self._stop.is_set():
+                    logger.warning("MQTT subscriber error: %s. Reconnecting in 5s...", e)
+                    time.sleep(5)
+
+    def _on_connect(self, _client, _userdata, _flags, rc):
+        if rc == 0:
+            logger.info("MQTT subscriber connected")
+            _client.subscribe(self._topic)
+            logger.info("MQTT subscriber subscribed to %s", self._topic)
+        else:
+            logger.warning("MQTT subscriber connection failed: rc=%s", rc)
+
+    def _on_message(self, _client, _userdata, msg):
+        body = msg.payload.decode(errors="replace")
+        record_live_message(body, msg.topic)
+        logger.debug("MQTT subscriber received: %s [%s]", body, msg.topic)
+
+    def _on_disconnect(self, _client, _userdata, rc):
+        if rc != 0:
+            logger.warning("MQTT subscriber disconnected unexpectedly: rc=%s", rc)
+
+    def stop(self) -> None:
+        self._stop.set()
+
+
+# Singleton subscriber instance
+_mqtt_subscriber: _MqttSubscriber | None = None
+
+
+def start_mqtt_subscriber() -> None:
+    """Start the background MQTT subscriber. Call once from Flask app startup."""
+    global _mqtt_subscriber
+    _mqtt_subscriber = _MqttSubscriber()
+    _mqtt_subscriber.start()
 
 
 # ---------------------------------------------------------------------------

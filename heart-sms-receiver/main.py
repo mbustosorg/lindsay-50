@@ -87,6 +87,7 @@ def _check_connectivity() -> None:
 
 storage.init_db()
 _check_connectivity()
+publish.start_mqtt_subscriber()
 
 # Rebuild SQLite from S3 on startup
 try:
@@ -235,6 +236,17 @@ def api_put_config():
     cfg = Config.from_dict(data)
     _save_and_publish(cfg)
     return jsonify({"status": "ok"})
+
+
+@app.route("/api/live-messages", methods=["GET"])
+def api_live_messages():
+    """Return messages received by the MQTT subscriber, newest first.
+
+    This shows what actually flowed through the MQTT broker, not just what
+    Flask published — any publisher to the topic will be captured.
+    """
+    limit = min(100, int(request.args.get("limit", 20)))
+    return jsonify(publish.get_live_messages(limit=limit))
 
 
 # ---------------------------------------------------------------------------

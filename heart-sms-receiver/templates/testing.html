@@ -42,7 +42,7 @@
             <thead class="sticky-top bg-white">
               <tr>
                 <th>Time</th>
-                <th>Sender</th>
+                <th>Topic</th>
                 <th>Body</th>
               </tr>
             </thead>
@@ -88,19 +88,19 @@
 <script>
 async function fetchMessages() {
   try {
-    const res = await fetch('/api/messages');
+    const res = await fetch('/api/live-messages');
     const msgs = await res.json();
     const tbody = document.getElementById('msg-tbody');
     const count = document.getElementById('msg-count');
     count.textContent = msgs.length;
     if (msgs.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No messages</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No messages received yet</td></tr>';
       return;
     }
-    tbody.innerHTML = msgs.slice(0, 20).map(m => `
+    tbody.innerHTML = msgs.map(m => `
       <tr>
         <td class="mono" style="white-space:nowrap">${m.received_at ? m.received_at.slice(11, 19) : ''}</td>
-        <td class="mono">${escapeHtml(m.sender || '')}</td>
+        <td class="mono" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.topic || '')}</td>
         <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${escapeHtml(m.body || '')}</td>
       </tr>
     `).join('');
