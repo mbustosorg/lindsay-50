@@ -15,7 +15,7 @@ from flask import Flask, Response, jsonify, redirect, render_template, request, 
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from adafruit_io import Client
+from Adafruit_IO import Client
 import tomllib
 
 from lib import storage, filters, s3, publish
