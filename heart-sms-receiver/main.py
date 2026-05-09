@@ -372,48 +372,43 @@ def message_list():
     all_msgs = storage.get_all_messages()
     cfg = storage.get_config()
 
-    # Build map of suppressed message ID -> rule (for tooltip)
-    suppression_map: dict[str, str] = {}
-    for f in cfg.filters:
-        if f.type == "message":
-            suppression_map[f.pattern] = f"message:{f.pattern}"
-        elif f.type == "sender":
-            suppression_map[f.pattern] = f"sender filter"
-        elif f.type == "keyword":
-            suppression_map[f.pattern] = f"keyword:{f.pattern}"
-        elif f.type == "regex":
-            suppression_map[f.pattern] = f"regex:{f.pattern}"
-
-    # Filter if hide_suppressed is enabled
-    if hide_suppressed:
-        filtered_msgs = [m for m in all_msgs if m.id not in suppression_map]
-    else:
-        filtered_msgs = all_msgs
-
-    total = len(filtered_msgs)
-    total_pages = max(1, (total + per_page - 1) // per_page)
-
-    start = (page - 1) * per_page
-    end = start + per_page
-    page_msgs = filtered_msgs[start:end]
-
     # Build sender name lookup: phone -> name
     sender_name_map: dict[str, str] = {}
     for s in cfg.allowed_senders:
         sender_name_map[s.phone] = s.name
 
-    # Annotate each message with its suppression reason and sender name
+    # Annotate each message with suppression reason and sender name
+    # (applies keyword/regex/sender/message rules correctly per-message)
     annotated = []
-    for m in page_msgs:
+    for m in all_msgs:
+        suppressed, rule = filters.apply(m, cfg)
+        if suppressed and rule:
+            reason = f"{rule.type}:{rule.pattern}"
+        elif suppressed:
+            reason = "suppressed"
+        else:
+            reason = None
+
+        # Filter if hide_suppressed is enabled
+        if hide_suppressed and suppressed:
+            continue
+
         annotated.append({
             "msg": m,
-            "suppressed_by": suppression_map.get(m.id),
+            "suppressed_by": reason,
             "sender_name": sender_name_map.get(m.sender),
         })
 
+    total = len(annotated)
+    total_pages = max(1, (total + per_page - 1) // per_page)
+
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_annotated = annotated[start:end]
+
     return render_template(
         "messages.html",
-        messages=annotated,
+        messages=page_annotated,
         page=page,
         total_pages=total_pages,
         cfg=cfg,
