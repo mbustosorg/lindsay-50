@@ -36,25 +36,83 @@
   </div>
 </div>
 
-<h4 class="mt-4">Recent Messages</h4>
-<table class="table table-striped">
-  <thead>
-    <tr>
-      <th>Time</th>
-      <th>Sender</th>
-      <th>Body</th>
-    </tr>
-  </thead>
-  <tbody>
-    {% for msg in messages %}
-    <tr>
-      <td class="mono small">{{ msg.received_at }}</td>
-      <td class="mono">{{ msg.sender }}</td>
-      <td class="msg-body">{{ msg.body }}</td>
-    </tr>
-    {% else %}
-    <tr><td colspan="3">No messages yet.</td></tr>
-    {% endfor %}
-  </tbody>
-</table>
+<h4 class="mt-4 mb-2">Recent Messages</h4>
+<div style="max-height: 500px; overflow-y: auto;" class="mb-2">
+  <table class="table table-striped table-sm mb-0">
+    <thead class="sticky-top bg-white">
+      <tr>
+        <th style="width: 40px;">S</th>
+        <th>Sender</th>
+        <th>Body</th>
+        <th>Suppression Reasons</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in messages %}
+      {% set msg = entry.msg %}
+      {% set suppressed = entry.suppressed %}
+      {% set suppressed_by = entry.suppressed_by %}
+      {% set suppressed_by_message = entry.suppressed_by_message %}
+      {% set sender_name = entry.sender_name %}
+      <tr class="{% if suppressed %}table-secondary{% endif %}">
+        <td style="text-align: center;">
+          <input type="checkbox" class="form-check-input" id="cb-{{ msg.id }}"
+                 {% if suppressed_by_message %}checked{% endif %}
+                 onchange="handleSuppressToggle(this, '{{ msg.id }}')">
+        </td>
+        <td>
+          <span class="{% if suppressed %}text-muted text-decoration-line-through{% endif %}"
+                style="font-size:1rem;">{{ sender_name if sender_name else msg.sender }}</span>
+          {% if sender_name %}
+          <br><small class="text-muted mono">{{ msg.sender }}</small>
+          {% endif %}
+          <br><small class="text-muted mono" style="font-size:0.65rem;">
+            {{ msg.id[:8] }}&nbsp;&middot;&nbsp;{{ msg.received_at[11:19] }}
+          </small>
+        </td>
+        <td class="{% if suppressed %}text-muted{% endif %}" style="max-width: 300px;">
+          <span class="msg-body">{{ msg.body }}</span>
+        </td>
+        <td id="reasons-{{ msg.id }}">
+          {% if suppressed_by %}
+            {% for reason in suppressed_by.split('; ') %}
+            <div data-reason="{{ reason }}"><span class="badge bg-secondary">{{ reason }}</span></div>
+            {% endfor %}
+          {% else %}
+          <span class="text-muted">—</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4">No messages yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% if has_more %}
+<p class="text-muted small"><a href="{{ url_for('message_list') }}">View all messages →</a></p>
+{% endif %}
+
+<script>
+function handleSuppressToggle(checkbox, msgId) {
+  const reasonsCell = document.getElementById('reasons-' + msgId);
+  const dashSpan = reasonsCell.querySelector('.text-muted');
+  if (checkbox.checked) {
+    fetch('/messages/' + msgId + '/suppress', { method: 'POST' })
+      .then(r => { if (!r.ok) checkbox.checked = false; })
+      .catch(() => { checkbox.checked = false; });
+  } else {
+    fetch('/messages/' + msgId + '/unsuppress', { method: 'POST' })
+      .then(r => {
+        if (!r.ok) { checkbox.checked = true; return; }
+        const badge = reasonsCell.querySelector('[data-reason^="message:"]');
+        if (badge) badge.remove();
+        if (!reasonsCell.querySelector('.badge')) {
+          reasonsCell.innerHTML = '<span class="text-muted">—</span>';
+        }
+      })
+      .catch(() => { checkbox.checked = true; });
+  }
+}
+</script>
 {% endblock %}

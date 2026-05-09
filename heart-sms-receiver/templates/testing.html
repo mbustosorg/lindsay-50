@@ -3,11 +3,11 @@
 {% block content %}
 <h2>Testing</h2>
 
-{# --- Row 1: Inject + Config + Filters --- #}
-<div class="row mb-3">
+{# --- Row 1: Inject + Config + Filters (equal height) --- #}
+<div class="row align-items-stretch mb-3">
   {# --- Inject Test Message (left) --- #}
-  <div class="col-md-4">
-    <div class="card">
+  <div class="col-md-4 d-flex">
+    <div class="card w-100">
       <div class="card-header fw-bold">Inject Test Message</div>
       <div class="card-body">
         <form id="inject-form">
@@ -31,24 +31,25 @@
   </div>
 
   {# --- Current Config (center) --- #}
-  <div class="col-md-4">
-    <div class="card">
+  <div class="col-md-4 d-flex">
+    <div class="card w-100">
       <div class="card-header fw-bold d-flex justify-content-between align-items-center">
         <span>Current Config</span>
         <button class="btn btn-sm btn-outline-secondary" onclick="fetchConfig()">Refresh</button>
       </div>
-      <div class="card-body">
-        <pre id="config-display" class="small mb-0" style="white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto;">Loading...</pre>
+      <div class="card-body d-flex flex-column">
+        <pre id="config-display" class="small mb-0 flex-grow-1"
+             style="white-space: pre-wrap; word-break: break-all; overflow-y: auto;">Loading...</pre>
       </div>
     </div>
   </div>
 
   {# --- Active Filters (right) --- #}
-  <div class="col-md-4">
-    <div class="card">
+  <div class="col-md-4 d-flex">
+    <div class="card w-100">
       <div class="card-header fw-bold">Active Filters</div>
-      <div class="card-body p-0">
-        <ul class="list-group list-group-flush small" id="filter-list" style="max-height: 230px; overflow-y: auto;">
+      <div class="card-body d-flex flex-column overflow-hidden">
+        <ul class="list-group list-group-flush small flex-grow-1 overflow-auto" id="filter-list" style="max-height: 180px;">
           <li class="list-group-item text-muted">Loading...</li>
         </ul>
       </div>
@@ -59,7 +60,7 @@
 {# --- Feed Messages (full width, bottom) --- #}
 <div class="card mb-4">
   <div class="card-header fw-bold d-flex justify-content-between align-items-center">
-    <span>Messages Feed <small class="text-muted">(via MQTT, with client-side filter preview)</small></span>
+    <span>Messages Feed <small class="text-muted">(via MQTT, with suppression preview)</small></span>
     <div>
       <button class="btn btn-sm btn-outline-secondary" onclick="seedRest()">Seed from REST</button>
       <span class="badge bg-secondary ms-2" id="msg-count">0</span>
@@ -71,7 +72,7 @@
         <thead class="sticky-top bg-white">
           <tr>
             <th>Time</th>
-            <th>S</th>
+            <th>Source</th>
             <th>Sender</th>
             <th>Body</th>
             <th>Suppression Reasons</th>
@@ -110,21 +111,25 @@ async function fetchMessages() {
     const live = await liveRes.json();
     const rawMsgs = await msgsRes.json();
     const cfg = await cfgRes.json();
-    const filters = cfg.filters || [];
-    const tbody = document.getElementById('msg-tbody');
-    const count = document.getElementById('msg-count');
 
-    // Build map of raw message id -> suppressed info
+    // Build sender name lookup
+    const senderNameMap = {};
+    for (const s of cfg.allowed_senders || []) {
+      senderNameMap[s.phone] = s.name;
+    }
+
+    // Map of raw message id -> suppression info
     const suppressedMap = {};
     for (const entry of rawMsgs) {
       suppressedMap[entry.message.id] = {
         suppressed: entry.suppressed,
         rules: entry.rules || [],
+        sender: entry.message.sender,
       };
     }
 
-    // live items: {body, topic, source, received_at}
-    // Match by body+received_at to link to raw messages
+    const tbody = document.getElementById('msg-tbody');
+    const count = document.getElementById('msg-count');
     const entries = [...live].reverse();
     count.textContent = entries.length;
 
@@ -134,7 +139,7 @@ async function fetchMessages() {
     }
 
     tbody.innerHTML = entries.map(item => {
-      // Find matching raw message by body and received_at
+      // Find matching raw message
       const match = rawMsgs.find(m =>
         m.message.body === item.body && m.message.received_at === item.received_at
       );
@@ -142,6 +147,7 @@ async function fetchMessages() {
       const suppressed = info ? info.suppressed : false;
       const rules = info ? info.rules : [];
       const reasons = rules.map(r => `${r.type}:${r.pattern}`);
+      const senderName = info ? senderNameMap[info.sender] || info.sender : item.body.slice(0, 20);
 
       const time = item.received_at ? item.received_at.slice(11, 19) : '';
       const source = item.source === 'mqtt'
@@ -151,11 +157,11 @@ async function fetchMessages() {
       return `
         <tr class="${suppressed ? 'table-secondary' : ''}">
           <td class="mono" style="white-space:nowrap">${time}</td>
-          <td style="text-align:center;">
-            ${suppressed ? '<span class="badge bg-secondary">S</span>' : ''}
+          <td>${source}</td>
+          <td class="mono" style="font-size:0.85rem;">
+            ${info ? (senderNameMap[info.sender] ? senderNameMap[info.sender] + '<br><small class="text-muted">' + info.sender + '</small>' : info.sender) : '—'}
           </td>
-          <td class="mono" style="font-size:0.85rem;">${item.topic ? item.topic.split('/').pop() : '—'}</td>
-          <td class="${suppressed ? 'text-muted' : ''}" style="max-width:250px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(item.body || '')}</td>
+          <td class="${suppressed ? 'text-muted' : ''}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(item.body || '')}</td>
           <td>
             ${reasons.length > 0
               ? reasons.map(r => `<div><span class="badge bg-secondary">${escapeHtml(r)}</span></div>`).join('')

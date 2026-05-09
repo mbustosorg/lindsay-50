@@ -68,6 +68,66 @@
   </div>
 </form>
 
+{# --- Filter Rules (posts to /filters for add/delete, redirects back here) --- #}
+<div class="card mt-4">
+  <div class="card-header fw-bold">Filter Rules</div>
+  <div class="card-body">
+    {# Add new rule #}
+    <form method="POST" action="{{ url_for('filter_rules') }}" class="row g-2 mb-3 align-items-end">
+      <input type="hidden" name="action" value="add">
+      <input type="hidden" name="redirect_to" value="settings">
+      <div class="col-auto">
+        <label class="form-label small">Type</label>
+        <select name="type" class="form-select">
+          <option value="keyword">keyword</option>
+          <option value="regex">regex</option>
+          <option value="sender">sender</option>
+          <option value="message">message</option>
+        </select>
+      </div>
+      <div class="col-auto flex-grow-1">
+        <label class="form-label small">Pattern</label>
+        <input type="text" name="pattern" class="form-control" placeholder="e.g. badword or +15551234567" required>
+      </div>
+      <div class="col-auto">
+        <button type="submit" class="btn btn-primary">Add Rule</button>
+      </div>
+    </form>
+
+    {# Existing rules #}
+    {% set filters = cfg.filters %}
+    {% if filters %}
+    <table class="table table-sm">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Pattern</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for rule in filters %}
+        <tr>
+          <td><span class="badge bg-danger">{{ rule.type }}</span></td>
+          <td class="mono">{{ rule.pattern }}</td>
+          <td>
+            <form method="POST" action="{{ url_for('filter_rules') }}" style="display:inline">
+              <input type="hidden" name="action" value="delete">
+              <input type="hidden" name="index" value="{{ loop.index0 }}">
+              <input type="hidden" name="redirect_to" value="settings">
+              <button type="submit" class="btn btn-sm btn-outline-danger">Remove</button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% else %}
+    <p class="text-muted small mb-0">No filter rules defined.</p>
+    {% endif %}
+  </div>
+</div>
+
 <script>
 function addSenderRow() {
   const tbody = document.querySelector('#senders-table tbody');

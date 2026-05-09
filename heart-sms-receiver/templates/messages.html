@@ -3,13 +3,11 @@
 {% block content %}
 <h2>Messages <small class="text-muted fs-6">page {{ page }} of {{ total_pages }}</small></h2>
 
-<div class="mb-3">
-  <a href="{{ url_for('message_list', hide_suppressed='') }}" class="btn btn-sm{% if not hide_suppressed %} btn-outline-secondary{% else %} btn-secondary{% endif %}">
-    Show All
-  </a>
-  <a href="{{ url_for('message_list', hide_suppressed='1') }}" class="btn btn-sm{% if hide_suppressed %} btn-primary{% else %} btn-outline-primary{% endif %}">
-    Hide Suppressed
-  </a>
+<div class="mb-3 form-check">
+  <input type="checkbox" class="form-check-input" id="hide-suppressed"
+         {% if hide_suppressed %}checked{% endif %}
+         onchange="toggleHideSuppressed(this.checked)">
+  <label class="form-check-label" for="hide-suppressed">Hide Suppressed</label>
 </div>
 
 <nav>
@@ -85,6 +83,16 @@
 </table>
 
 <script>
+function toggleHideSuppressed(checked) {
+  const url = new URL(window.location.href);
+  if (checked) {
+    url.searchParams.set('hide_suppressed', '1');
+  } else {
+    url.searchParams.delete('hide_suppressed');
+  }
+  window.location.href = url.toString();
+}
+
 function handleSuppressToggle(checkbox, msgId) {
   const reasonsCell = document.getElementById('reasons-' + msgId);
   const dashSpan = reasonsCell.querySelector('.text-muted');

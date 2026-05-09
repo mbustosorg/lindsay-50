@@ -343,7 +343,7 @@ def _unsuppress_message(msg_id: str) -> bool:
 @app.route("/")
 def dashboard():
     """Dashboard: recent messages and counts."""
-    msgs = storage.get_all_messages()[:20]
+    all_msgs = storage.get_all_messages()
     cfg = storage.get_config()
     total = storage.message_count()
 
@@ -352,12 +352,31 @@ def dashboard():
     for f in cfg.filters:
         suppression_counts[f.type] = suppression_counts.get(f.type, 0) + 1
 
+    # Build sender name lookup
+    sender_name_map = {s.phone: s.name for s in cfg.allowed_senders}
+
+    # Annotate first 20 messages
+    annotated = []
+    for m in all_msgs[:20]:
+        all_rules = filters.get_all_matches(m, cfg)
+        suppressed = bool(all_rules)
+        has_message_suppression = any(r.type == "message" and r.pattern == m.id for r in all_rules)
+        reasons = [f"{r.type}:{r.pattern}" for r in all_rules]
+        annotated.append({
+            "msg": m,
+            "suppressed": suppressed,
+            "suppressed_by": "; ".join(reasons) if reasons else None,
+            "suppressed_by_message": has_message_suppression,
+            "sender_name": sender_name_map.get(m.sender),
+        })
+
     return render_template(
         "dashboard.html",
-        messages=msgs[:20],
+        messages=annotated,
         total_count=total,
         suppression_counts=suppression_counts,
         sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
+        has_more=len(all_msgs) > 20,
     )
 
 
@@ -423,6 +442,7 @@ def message_list():
 def filter_rules():
     """List, add, and delete filter rules."""
     cfg = storage.get_config()
+    redirect_to = request.form.get("redirect_to", "")
 
     if request.method == "POST":
         action = request.form.get("action")
@@ -437,6 +457,9 @@ def filter_rules():
             if 0 <= idx < len(cfg.filters):
                 cfg.filters.pop(idx)
                 _save_and_publish(cfg)
+
+        if redirect_to == "settings":
+            return redirect(url_for("settings"))
         return redirect(url_for("filter_rules"))
 
     return render_template("filters.html", filters=cfg.filters)
