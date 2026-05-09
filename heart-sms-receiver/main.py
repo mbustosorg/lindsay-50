@@ -184,16 +184,26 @@ def api_messages():
 
 @app.route("/api/messages", methods=["GET"])
 def api_get_messages():
-    """GET /api/messages?since=<timestamp> — return messages as JSON, filtered."""
+    """GET /api/messages?since=<timestamp> — return all messages with suppression info."""
     cfg = storage.get_config()
     since = request.args.get("since")
     if since:
         all_msgs = storage.get_messages_since(since)
     else:
         all_msgs = storage.get_all_messages()
-    # Apply filter rules so ESP32 only receives non-suppressed messages
-    msgs = filters.get_messages(all_msgs, cfg)
-    return jsonify([m.to_dict() for m in msgs])
+    # Return all messages with suppression metadata (ESP32 applies filters client-side)
+    raw = filters.get_messages(all_msgs, cfg, include_filtered=True)
+    # Serialize Message objects to dicts
+    result = []
+    for entry in raw:
+        item = {
+            "message": entry["message"].to_dict(),
+            "suppressed": entry["suppressed"],
+        }
+        if entry.get("rule"):
+            item["rule"] = entry["rule"]
+        result.append(item)
+    return jsonify(result)
 
 
 @app.route("/api/messages/<msg_id>/suppress", methods=["POST"])
