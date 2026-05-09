@@ -30,7 +30,8 @@ _LIVE_LOCK = threading.Lock()
 
 
 def record_live_message(body: str, topic: str, source: str = "mqtt",
-                          received_at: str | None = None) -> None:
+                          received_at: str | None = None,
+                          msg_id: str | None = None) -> None:
     """Record a message for the live feed display.
 
     Args:
@@ -38,6 +39,7 @@ def record_live_message(body: str, topic: str, source: str = "mqtt",
         topic:       The MQTT topic it was received on (or the feed topic if published).
         source:      Where this message came from: "mqtt" (from broker) or "rest" (from API back-populate).
         received_at:  ISO8601 timestamp string. Defaults to now UTC.
+        msg_id:      Optional message UUID for deduplication.
     """
     with _LIVE_LOCK:
         _LIVE_MESSAGES.append({
@@ -45,6 +47,7 @@ def record_live_message(body: str, topic: str, source: str = "mqtt",
             "topic": topic,
             "source": source,
             "received_at": received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "msg_id": msg_id,
         })
 
 
@@ -57,16 +60,20 @@ def get_live_messages(limit: int = 20) -> list[dict]:
 def seed_from_rest_messages(messages: list[dict], feed_topic: str) -> None:
     """Seed the live message ring buffer from REST API messages.
 
-    Called when the Testing page loads to back-populate with messages already
+    Clears the ring buffer first, then back-populates with messages already
     in SQLite (simulating what MQTT would have delivered).
     Each message is marked source="rest" so it's clear it came from the API.
+    Uses message UUID for deduplication when called multiple times.
     """
+    with _LIVE_LOCK:
+        _LIVE_MESSAGES.clear()
     for msg in reversed(messages):
         record_live_message(
             body=msg.get("body", ""),
             topic=feed_topic,
             source="rest",
             received_at=msg.get("received_at"),
+            msg_id=msg.get("id"),
         )
 
 

@@ -77,13 +77,12 @@
   <div class="card-header fw-bold d-flex justify-content-between align-items-center">
     <span>Messages Feed <small class="text-muted">(via MQTT, with suppression preview)</small></span>
     <div class="d-flex align-items-center gap-2">
-      <select class="form-select form-select-sm" style="width:auto;" id="feed-limit" onchange="fetchMessages()">
+      <select class="form-select form-select-sm" style="width:auto;" id="feed-limit" onchange="refreshFeed()">
         <option value="20">20</option>
         <option value="50">50</option>
         <option value="100" selected>100</option>
       </select>
-      <button class="btn btn-sm btn-outline-secondary" onclick="seedRest()">Seed from REST</button>
-      <button class="btn btn-sm btn-outline-secondary" onclick="fetchMessages()">Refresh</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="refreshFeed()">Refresh</button>
       <span class="badge bg-secondary" id="msg-count">0</span>
     </div>
   </div>
@@ -92,9 +91,9 @@
       <table class="table table-striped table-sm mb-0">
         <thead class="sticky-top bg-white">
           <tr>
-            <th>Time</th>
             <th>Source</th>
             <th>Sender</th>
+            <th>Time</th>
             <th>Body</th>
             <th>Suppression Reasons</th>
           </tr>
@@ -111,15 +110,14 @@
 {% block scripts %}
 <script>
 // -----------------------------------------------------------------------
-// Seed + fetch
+// Refresh (clears ring buffer, reseeds from REST, then fetches)
 // -----------------------------------------------------------------------
 
-async function seedRest() {
+async function refreshFeed() {
   try {
-    const res = await fetch('/api/live-messages/seed', { method: 'POST' });
-    const data = await res.json();
-    if (data.status === 'ok') fetchMessages();
+    await fetch('/api/live-messages/seed', { method: 'POST' });
   } catch (e) { console.error('Seed failed:', e); }
+  fetchMessages();
 }
 
 async function fetchMessages() {
@@ -140,7 +138,7 @@ async function fetchMessages() {
       senderNameMap[s.phone] = s.name;
     }
 
-    // Map of raw message id -> suppression info
+    // Map of message id -> suppression info (deduplicate by msg_id)
     const suppressedMap = {};
     for (const entry of rawMsgs) {
       suppressedMap[entry.message.id] = {
@@ -152,48 +150,66 @@ async function fetchMessages() {
 
     const tbody = document.getElementById('msg-tbody');
     const count = document.getElementById('msg-count');
-    const entries = [...live].reverse();
+    // Sort descending by received_at (newest first)
+    const entries = [...live].sort((a, b) => (a.received_at > b.received_at ? -1 : 1));
     count.textContent = entries.length;
 
     if (entries.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No messages — click "Seed from REST" to load stored messages</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No messages — click Refresh to load stored messages</td></tr>';
       return;
     }
 
     tbody.innerHTML = entries.map(item => {
-      // Find matching raw message by body+received_at
-      const match = rawMsgs.find(m =>
-        m.message.body === item.body && m.message.received_at === item.received_at
-      );
-      const info = match ? suppressedMap[match.message.id] : null;
+      // Deduplicate: find matching raw message by msg_id or body+received_at
+      let info = null;
+      if (item.msg_id && suppressedMap[item.msg_id]) {
+        info = suppressedMap[item.msg_id];
+      } else {
+        const match = rawMsgs.find(m =>
+          m.message.body === item.body && m.message.received_at === item.received_at
+        );
+        if (match) info = suppressedMap[match.message.id];
+      }
       const suppressed = info ? info.suppressed : false;
       const rules = info ? info.rules : [];
       const reasons = rules.map(r => `${r.type}:${r.pattern}`);
       const senderPhone = info ? info.sender : '—';
       const senderDisplay = senderNameMap[senderPhone]
-        ? `${senderNameMap[senderPhone]}<br><small class="text-muted">${senderPhone}</small>`
+        ? `${senderNameMap[senderPhone]}<br><small class="text-muted mono">${senderPhone}</small>`
         : senderPhone;
 
-      const time = item.received_at ? item.received_at.slice(11, 19) : '';
       const source = item.source === 'mqtt'
         ? '<span class="badge bg-success">mqtt</span>'
         : '<span class="badge bg-warning text-dark">rest</span>';
 
       return `
         <tr class="${suppressed ? 'table-secondary' : ''}">
-          <td class="mono" style="white-space:nowrap">${time}</td>
           <td>${source}</td>
-          <td class="msg-sender${suppressed ? ' text-muted' : ''}">${senderDisplay}</td>
-          <td class="msg-body${suppressed ? ' text-muted' : ''}">${escapeHtml(item.body || '')}</td>
+          <td><span class="msg-sender${suppressed ? ' text-muted text-decoration-line-through' : ''}">${senderDisplay}</span></td>
+          <td class="msg-id text-muted" data-utc="${item.received_at || ''}"></td>
+          <td class="${suppressed ? 'text-muted' : ''}"><span class="msg-body">${escapeHtml(item.body || '')}</span></td>
           <td>
             ${reasons.length > 0
-              ? reasons.map(r => `<div><span class="badge bg-secondary">${escapeHtml(r)}</span></div>`).join('')
+              ? reasons.map(r => `<div data-reason="${escapeHtml(r)}"><span class="badge bg-secondary">${escapeHtml(r)}</span></div>`).join('')
               : '<span class="text-muted">—</span>'
             }
           </td>
         </tr>
       `;
     }).join('');
+
+    // Convert UTC timestamps to local time
+    tbody.querySelectorAll('td[data-utc]').forEach(function(cell) {
+      const utc = cell.getAttribute('data-utc');
+      if (utc) {
+        try {
+          const d = new Date(utc);
+          cell.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+        } catch(e) {
+          cell.textContent = utc.slice(11, 19);
+        }
+      }
+    });
   } catch (e) {
     console.error('Fetch failed:', e);
     document.getElementById('msg-tbody').innerHTML =
@@ -288,9 +304,8 @@ document.getElementById('inject-form').addEventListener('submit', async function
   }
 });
 
-seedRest();
+refreshFeed();
 fetchConfig();
-fetchMessages();
 fetchS3Objects();
 setInterval(fetchMessages, 3000);
 setInterval(fetchConfig, 10000);
