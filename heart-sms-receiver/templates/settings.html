@@ -3,76 +3,82 @@
 {% block content %}
 <h2>Settings</h2>
 
-<form method="POST" class="row g-3">
+<div class="row g-3">
 
-  {# --- Sign + Rendering (no separate title card) --- #}
+  {# --- Sign + Rendering (col-left) --- #}
   <div class="col-md-6">
-    <div class="card h-100">
+    <div class="card">
+      <div class="card-header">Sign & Rendering</div>
       <div class="card-body">
-        <h6 class="card-title text-muted mb-3">Sign</h6>
-        <div class="mb-3">
-          <label class="form-label">Sign Name</label>
-          <input type="text" name="sign_name" class="form-control" value="{{ cfg.sign.name }}">
-        </div>
-        <h6 class="card-title text-muted mb-3 mt-4">Rendering Defaults</h6>
-        <div class="row g-2">
-          <div class="col-4">
-            <label class="form-label small">Mode</label>
-            <select name="rendering_mode" class="form-select">
-              <option value="scroll"{% if cfg.rendering.mode == 'scroll' %} selected{% endif %}>scroll</option>
-              <option value="static"{% if cfg.rendering.mode == 'static' %} selected{% endif %}>static</option>
-            </select>
+        <form method="POST" action="{{ url_for('settings') }}" id="settings-form">
+          <h6 class="text-muted mb-3">Sign</h6>
+          <div class="mb-3">
+            <label class="form-label">Sign Name</label>
+            <input type="text" name="sign_name" class="form-control" value="{{ cfg.sign.name }}">
           </div>
-          <div class="col-4">
-            <label class="form-label small">Speed (0.01–1.0)</label>
-            <input type="number" name="rendering_speed" class="form-control" step="0.001" min="0.01" max="1.0" value="{{ cfg.rendering.speed }}">
+          <h6 class="text-muted mb-3 mt-4">Rendering Defaults</h6>
+          <div class="row g-2">
+            <div class="col-4">
+              <label class="form-label small">Mode</label>
+              <select name="rendering_mode" class="form-select">
+                <option value="scroll"{% if cfg.rendering.mode == 'scroll' %} selected{% endif %}>scroll</option>
+                <option value="static"{% if cfg.rendering.mode == 'static' %} selected{% endif %}>static</option>
+              </select>
+            </div>
+            <div class="col-4">
+              <label class="form-label small">Speed (0.01–1.0)</label>
+              <input type="number" name="rendering_speed" class="form-control" step="0.001" min="0.01" max="1.0" value="{{ cfg.rendering.speed }}">
+            </div>
+            <div class="col-4">
+              <label class="form-label small">Color (hex)</label>
+              <input type="text" name="rendering_color" class="form-control" value="{{ '#%06x'|format(cfg.rendering.color) }}">
+            </div>
           </div>
-          <div class="col-4">
-            <label class="form-label small">Color (hex)</label>
-            <input type="text" name="rendering_color" class="form-control" value="{{ '#%06x'|format(cfg.rendering.color) }}">
-          </div>
-        </div>
+        </form>
       </div>
     </div>
   </div>
 
+  {# --- Allowed Senders (col-right) --- #}
   <div class="col-md-6">
-    <div class="card h-100">
+    <div class="card">
       <div class="card-header">Allowed Senders</div>
       <div class="card-body">
-        <p class="text-muted small mb-3">These are informational only. All messages are stored regardless of sender.</p>
-        <table class="table table-sm" id="senders-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Phone (E.164)</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {% for sender in cfg.allowed_senders %}
-            <tr>
-              <td><input type="text" name="sender_name" class="form-control" value="{{ sender.name }}"></td>
-              <td><input type="text" name="sender_phone" class="form-control" value="{{ sender.phone }}"></td>
-              <td><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">Remove</button></td>
-            </tr>
-            {% endfor %}
-            <tr>
-              <td><input type="text" name="sender_name" class="form-control" placeholder="Name"></td>
-              <td><input type="text" name="sender_phone" class="form-control" placeholder="+15551234567"></td>
-              <td><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest('tr').remove()">Remove</button></td>
-            </tr>
-          </tbody>
-        </table>
-        <button type="button" class="btn btn-sm btn-outline-primary" onclick="addSenderRow()">+ Add Sender</button>
+        <p class="text-muted small mb-3">Informational only — all messages are stored regardless of sender.</p>
+        <form method="POST" action="{{ url_for('settings') }}" id="senders-form">
+          <table class="table table-sm" id="senders-table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Phone (E.164)</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for sender in cfg.allowed_senders %}
+              <tr>
+                <td><input type="text" name="sender_name" class="form-control" value="{{ sender.name }}"></td>
+                <td><input type="text" name="sender_phone" class="form-control" value="{{ sender.phone }}"></td>
+                <td><button type="button" class="btn btn-sm btn-outline-danger" onclick="removeSenderRow(this)">Remove</button></td>
+              </tr>
+              {% endfor %}
+              <tr>
+                <td><input type="text" name="sender_name" class="form-control" placeholder="Name"></td>
+                <td><input type="text" name="sender_phone" class="form-control" placeholder="+15551234567"></td>
+                <td><button type="button" class="btn btn-sm btn-outline-danger" onclick="removeSenderRow(this)">Remove</button></td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="d-flex justify-content-between align-items-center">
+            <button type="button" class="btn btn-sm btn-outline-primary" onclick="addSenderRow()">+ Add Sender</button>
+            <button type="submit" class="btn btn-primary">Save Senders</button>
+          </div>
+        </form>
       </div>
     </div>
   </div>
 
-  <div class="col-12">
-    <button type="submit" class="btn btn-primary">Save Settings</button>
-  </div>
-</form>
+</div>
 
 {# --- Filter Rules --- #}
 <div class="card mt-4">
@@ -136,8 +142,15 @@
 function addSenderRow() {
   const tbody = document.querySelector('#senders-table tbody');
   const tr = document.createElement('tr');
-  tr.innerHTML = '<td><input type="text" name="sender_name" class="form-control" placeholder="Name"></td><td><input type="text" name="sender_phone" class="form-control" placeholder="+15551234567"></td><td><button type="button" class="btn btn-sm btn-outline-danger" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
+  tr.innerHTML = '<td><input type="text" name="sender_name" class="form-control" placeholder="Name"></td><td><input type="text" name="sender_phone" class="form-control" placeholder="+15551234567"></td><td><button type="button" class="btn btn-sm btn-outline-danger" onclick="removeSenderRow(this)">Remove</button></td>';
   tbody.appendChild(tr);
+}
+
+function removeSenderRow(btn) {
+  const tbody = document.querySelector('#senders-table tbody');
+  if (tbody.querySelectorAll('tr').length > 1) {
+    btn.closest('tr').remove();
+  }
 }
 </script>
 {% endblock %}

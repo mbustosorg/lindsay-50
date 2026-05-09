@@ -3,7 +3,7 @@
 {% block content %}
 <h2>Testing</h2>
 
-{# --- Row 1: Inject + Config + Filters --- #}
+{# --- Row 1: Inject + Config + Filters (auto height) --- #}
 <div class="row mb-3">
   {# --- Inject Test Message (left) --- #}
   <div class="col-md-4">
@@ -39,7 +39,7 @@
       </div>
       <div class="card-body">
         <pre id="config-display" class="small mb-0"
-             style="white-space: pre-wrap; word-break: break-all; overflow-y: auto; max-height: 180px;">Loading...</pre>
+             style="white-space: pre-wrap; word-break: break-all; overflow-y: auto; max-height: 200px;">Loading...</pre>
       </div>
     </div>
   </div>
@@ -49,7 +49,7 @@
     <div class="card">
       <div class="card-header fw-bold">Active Filters</div>
       <div class="card-body p-0">
-        <ul class="list-group list-group-flush small" id="filter-list" style="max-height: 180px; overflow-y: auto;">
+        <ul class="list-group list-group-flush small" id="filter-list" style="max-height: 240px; overflow-y: auto;">
           <li class="list-group-item text-muted">Loading...</li>
         </ul>
       </div>
@@ -63,6 +63,7 @@
     <span>Messages Feed <small class="text-muted">(via MQTT, with suppression preview)</small></span>
     <div>
       <button class="btn btn-sm btn-outline-secondary" onclick="seedRest()">Seed from REST</button>
+      <button class="btn btn-sm btn-outline-secondary" onclick="fetchMessages()">Refresh</button>
       <span class="badge bg-secondary ms-2" id="msg-count">0</span>
     </div>
   </div>
@@ -112,7 +113,7 @@ async function fetchMessages() {
     const rawMsgs = await msgsRes.json();
     const cfg = await cfgRes.json();
 
-    // Build sender name lookup
+    // Build sender name lookup from config
     const senderNameMap = {};
     for (const s of cfg.allowed_senders || []) {
       senderNameMap[s.phone] = s.name;
@@ -139,7 +140,7 @@ async function fetchMessages() {
     }
 
     tbody.innerHTML = entries.map(item => {
-      // Find matching raw message
+      // Find matching raw message by body+received_at
       const match = rawMsgs.find(m =>
         m.message.body === item.body && m.message.received_at === item.received_at
       );
@@ -147,7 +148,10 @@ async function fetchMessages() {
       const suppressed = info ? info.suppressed : false;
       const rules = info ? info.rules : [];
       const reasons = rules.map(r => `${r.type}:${r.pattern}`);
-      const senderName = info ? senderNameMap[info.sender] || info.sender : item.body.slice(0, 20);
+      const senderPhone = info ? info.sender : '—';
+      const senderDisplay = senderNameMap[senderPhone]
+        ? `${senderNameMap[senderPhone]}<br><small class="text-muted">${senderPhone}</small>`
+        : senderPhone;
 
       const time = item.received_at ? item.received_at.slice(11, 19) : '';
       const source = item.source === 'mqtt'
@@ -158,9 +162,7 @@ async function fetchMessages() {
         <tr class="${suppressed ? 'table-secondary' : ''}">
           <td class="mono" style="white-space:nowrap">${time}</td>
           <td>${source}</td>
-          <td class="mono" style="font-size:0.85rem;">
-            ${info ? (senderNameMap[info.sender] ? senderNameMap[info.sender] + '<br><small class="text-muted">' + info.sender + '</small>' : info.sender) : '—'}
-          </td>
+          <td class="mono" style="font-size:0.85rem;">${senderDisplay}</td>
           <td class="${suppressed ? 'text-muted' : ''}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(item.body || '')}</td>
           <td>
             ${reasons.length > 0

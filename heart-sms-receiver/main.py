@@ -423,32 +423,37 @@ def settings():
     cfg = storage.get_config()
 
     if request.method == "POST":
-        # Sign name
-        sign_name = request.form.get("sign_name", "").strip()
-        if sign_name:
-            cfg.sign.name = sign_name
+        # Sign name — only update if non-empty; missing fields keep current value
+        if "sign_name" in request.form:
+            sign_name = request.form.get("sign_name", "").strip()
+            if sign_name:
+                cfg.sign.name = sign_name
 
-        # Rendering
-        cfg.rendering.mode = request.form.get("rendering_mode", cfg.rendering.mode)
-        try:
-            cfg.rendering.speed = float(request.form.get("rendering_speed", cfg.rendering.speed))
-        except ValueError:
-            pass
-        try:
-            cfg.rendering.color = int(request.form.get("rendering_color", cfg.rendering.color), 0)
-        except ValueError:
-            pass
+        # Rendering — only update if present; missing fields keep current value
+        if "rendering_mode" in request.form:
+            cfg.rendering.mode = request.form.get("rendering_mode", cfg.rendering.mode)
+        if "rendering_speed" in request.form:
+            try:
+                cfg.rendering.speed = float(request.form.get("rendering_speed", cfg.rendering.speed))
+            except ValueError:
+                pass
+        if "rendering_color" in request.form:
+            try:
+                cfg.rendering.color = int(request.form.get("rendering_color", cfg.rendering.color), 0)
+            except ValueError:
+                pass
 
-        # Allowed senders — replace list
-        new_senders = []
-        names = request.form.getlist("sender_name")
-        phones = request.form.getlist("sender_phone")
-        for name, phone in zip(names, phones):
-            name = name.strip()
-            phone = phone.strip()
-            if phone:
-                new_senders.append(AllowedSender(name=name or phone, phone=phone))
-        cfg.allowed_senders = new_senders
+        # Allowed senders — replace list (senders form submitted independently)
+        if "sender_name" in request.form:
+            new_senders = []
+            names = request.form.getlist("sender_name")
+            phones = request.form.getlist("sender_phone")
+            for name, phone in zip(names, phones):
+                name = name.strip()
+                phone = phone.strip()
+                if phone:
+                    new_senders.append(AllowedSender(name=name or phone, phone=phone))
+            cfg.allowed_senders = new_senders
 
         _save_and_publish(cfg)
         return redirect(url_for("settings"))

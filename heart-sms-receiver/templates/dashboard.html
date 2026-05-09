@@ -126,19 +126,29 @@ function toggleHideSuppressed(checked) {
 
 function handleSuppressToggle(checkbox, msgId) {
   const reasonsCell = document.getElementById('reasons-' + msgId);
-  const dashSpan = reasonsCell.querySelector('.text-muted');
   if (checkbox.checked) {
+    // Optimistically add the badge
+    if (reasonsCell) {
+      const dash = reasonsCell.querySelector('.text-muted');
+      if (dash) dash.remove();
+      const badge = document.createElement('div');
+      badge.setAttribute('data-reason', 'message:' + msgId);
+      badge.innerHTML = '<span class="badge bg-secondary">message:' + msgId + '</span>';
+      reasonsCell.appendChild(badge);
+    }
     fetch('/messages/' + msgId + '/suppress', { method: 'POST' })
-      .then(r => { if (!r.ok) checkbox.checked = false; })
-      .catch(() => { checkbox.checked = false; });
+      .then(r => { if (!r.ok) { checkbox.checked = false; if (reasonsCell) location.reload(); } })
+      .catch(() => { checkbox.checked = false; if (reasonsCell) location.reload(); });
   } else {
     fetch('/messages/' + msgId + '/unsuppress', { method: 'POST' })
       .then(r => {
         if (!r.ok) { checkbox.checked = true; return; }
-        const badge = reasonsCell.querySelector('[data-reason^="message:"]');
-        if (badge) badge.remove();
-        if (!reasonsCell.querySelector('.badge')) {
-          reasonsCell.innerHTML = '<span class="text-muted">—</span>';
+        if (reasonsCell) {
+          const badge = reasonsCell.querySelector('[data-reason^="message:"]');
+          if (badge) badge.remove();
+          if (!reasonsCell.querySelector('.badge')) {
+            reasonsCell.innerHTML = '<span class="text-muted">—</span>';
+          }
         }
       })
       .catch(() => { checkbox.checked = true; });
