@@ -3,11 +3,11 @@
 {% block content %}
 <h2>Testing</h2>
 
-{# --- Row 1: Inject + Config + Filters (equal height) --- #}
-<div class="row align-items-stretch mb-3">
+{# --- Row 1: Inject + Config + Filters --- #}
+<div class="row mb-3">
   {# --- Inject Test Message (left) --- #}
-  <div class="col-md-4 d-flex">
-    <div class="card w-100">
+  <div class="col-md-4">
+    <div class="card">
       <div class="card-header fw-bold">Inject Test Message</div>
       <div class="card-body">
         <form id="inject-form">
@@ -31,25 +31,25 @@
   </div>
 
   {# --- Current Config (center) --- #}
-  <div class="col-md-4 d-flex">
-    <div class="card w-100">
+  <div class="col-md-4">
+    <div class="card">
       <div class="card-header fw-bold d-flex justify-content-between align-items-center">
         <span>Current Config</span>
         <button class="btn btn-sm btn-outline-secondary" onclick="fetchConfig()">Refresh</button>
       </div>
-      <div class="card-body d-flex flex-column">
-        <pre id="config-display" class="small mb-0 flex-grow-1"
-             style="white-space: pre-wrap; word-break: break-all; overflow-y: auto;">Loading...</pre>
+      <div class="card-body">
+        <pre id="config-display" class="small mb-0"
+             style="white-space: pre-wrap; word-break: break-all; overflow-y: auto; max-height: 180px;">Loading...</pre>
       </div>
     </div>
   </div>
 
   {# --- Active Filters (right) --- #}
-  <div class="col-md-4 d-flex">
-    <div class="card w-100">
+  <div class="col-md-4">
+    <div class="card">
       <div class="card-header fw-bold">Active Filters</div>
-      <div class="card-body d-flex flex-column overflow-hidden">
-        <ul class="list-group list-group-flush small flex-grow-1 overflow-auto" id="filter-list" style="max-height: 180px;">
+      <div class="card-body p-0">
+        <ul class="list-group list-group-flush small" id="filter-list" style="max-height: 180px; overflow-y: auto;">
           <li class="list-group-item text-muted">Loading...</li>
         </ul>
       </div>
