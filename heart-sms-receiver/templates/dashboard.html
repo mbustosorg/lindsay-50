@@ -84,12 +84,13 @@
                  onchange="handleSuppressToggle(this, '{{ msg.id }}')">
         </td>
         <td>
-          <span class="{% if suppressed %}text-muted text-decoration-line-through{% endif %}"
-                style="font-size:1rem;">{{ sender_name if sender_name else msg.sender }}</span>
+          <span class="msg-sender{% if suppressed %} text-muted text-decoration-line-through{% endif %}">
+            {{ sender_name if sender_name else msg.sender }}
+          </span>
           {% if sender_name %}
           <br><small class="text-muted mono">{{ msg.sender }}</small>
           {% endif %}
-          <br><small class="text-muted mono" style="font-size:0.65rem;">
+          <br><small class="msg-id text-muted">
             {{ msg.id[:8] }}&nbsp;&middot;&nbsp;{{ msg.received_at[11:19] }}
           </small>
         </td>

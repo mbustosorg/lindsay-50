@@ -55,6 +55,21 @@
       </div>
     </div>
   </div>
+
+  {# --- S3 Bucket Viewer (far right) --- #}
+  <div class="col-md-4">
+    <div class="card">
+      <div class="card-header fw-bold d-flex justify-content-between align-items-center">
+        <span>S3 Bucket</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="fetchS3Objects()">Refresh</button>
+      </div>
+      <div class="card-body p-0">
+        <ul class="list-group list-group-flush small" id="s3-list" style="max-height: 240px; overflow-y: auto;">
+          <li class="list-group-item text-muted">Loading...</li>
+        </ul>
+      </div>
+    </div>
+  </div>
 </div>
 
 {# --- Feed Messages (full width, bottom) --- #}
@@ -168,8 +183,8 @@ async function fetchMessages() {
         <tr class="${suppressed ? 'table-secondary' : ''}">
           <td class="mono" style="white-space:nowrap">${time}</td>
           <td>${source}</td>
-          <td class="mono" style="font-size:0.85rem;">${senderDisplay}</td>
-          <td class="${suppressed ? 'text-muted' : ''}" style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(item.body || '')}</td>
+          <td class="msg-sender${suppressed ? ' text-muted' : ''}">${senderDisplay}</td>
+          <td class="msg-body${suppressed ? ' text-muted' : ''}">${escapeHtml(item.body || '')}</td>
           <td>
             ${reasons.length > 0
               ? reasons.map(r => `<div><span class="badge bg-secondary">${escapeHtml(r)}</span></div>`).join('')
@@ -209,6 +224,38 @@ async function fetchConfig() {
   }
 }
 
+async function fetchS3Objects() {
+  try {
+    const res = await fetch('/api/admin/s3-objects');
+    const data = await res.json();
+    const list = document.getElementById('s3-list');
+    if (data.error) {
+      list.innerHTML = `<li class="list-group-item text-danger small">${escapeHtml(data.error)}</li>`;
+      return;
+    }
+    const objects = data.objects || [];
+    if (objects.length === 0) {
+      list.innerHTML = '<li class="list-group-item text-muted small">Empty bucket</li>';
+      return;
+    }
+    list.innerHTML = objects.slice(0, 20).map(obj => {
+      const date = obj.last_modified ? obj.last_modified.slice(0, 19).replace('T', ' ') : '—';
+      const size = obj.size < 1024 ? obj.size + 'B' : (obj.size < 1048576 ? (obj.size / 1024).toFixed(1) + 'KB' : (obj.size / 1048576).toFixed(1) + 'MB');
+      const key = obj.key.length > 40 ? obj.key.slice(0, 37) + '...' : obj.key;
+      return `<li class="list-group-item small" title="${escapeHtml(obj.key)}">
+        <div class="fw-normal">${escapeHtml(key)}</div>
+        <div class="text-muted" style="font-size:0.7rem;">${date} &middot; ${size}</div>
+      </li>`;
+    }).join('');
+    if (objects.length > 20) {
+      list.innerHTML += `<li class="list-group-item text-muted small">+${objects.length - 20} more objects</li>`;
+    }
+  } catch (e) {
+    document.getElementById('s3-list').innerHTML =
+      '<li class="list-group-item text-danger small">Error loading S3 objects</li>';
+  }
+}
+
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
@@ -244,7 +291,9 @@ document.getElementById('inject-form').addEventListener('submit', async function
 seedRest();
 fetchConfig();
 fetchMessages();
+fetchS3Objects();
 setInterval(fetchMessages, 3000);
 setInterval(fetchConfig, 10000);
+setInterval(fetchS3Objects, 30000);
 </script>
 {% endblock %}

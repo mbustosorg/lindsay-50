@@ -471,6 +471,34 @@ def testing():
 
 
 # ---------------------------------------------------------------------------
+# S3 browser (admin UI)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/admin/s3-objects")
+def api_s3_objects():
+    """Return a list of objects in the configured S3 bucket."""
+    try:
+        bucket = s3._message_log_bucket()
+        client = s3._s3_client()
+        response = client.list_objects_v2(Bucket=bucket)
+
+        objects = []
+        for obj in response.get("Contents", []):
+            objects.append({
+                "key": obj["Key"],
+                "size": obj["Size"],
+                "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
+            })
+
+        # Sort newest first
+        objects.sort(key=lambda o: o["last_modified"] or "", reverse=True)
+        return jsonify({"bucket": bucket, "objects": objects})
+    except Exception as e:
+        logger.warning("S3 list failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
 # Health check (for Render)
 # ---------------------------------------------------------------------------
 
