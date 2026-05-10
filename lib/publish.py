@@ -185,8 +185,18 @@ class _MqttSubscriber:
 
     def _on_message(self, _client, _userdata, msg):
         body = msg.payload.decode(errors="replace")
-        record_live_message(body, msg.topic)
-        logger.info("MQTT subscriber received: %s [%s]", body, msg.topic)
+        # Try to parse as JSON (our format), fall back to raw text
+        msg_id = None
+        received_at = None
+        try:
+            data = json.loads(body)
+            msg_id = data.get("id")
+            received_at = data.get("received_at")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            pass
+        record_live_message(body=body, topic=msg.topic, source="mqtt",
+                            received_at=received_at, msg_id=msg_id)
+        logger.info("MQTT subscriber received: %s [%s]", body[:80], msg.topic)
 
     def _on_disconnect(self, _client, _userdata, rc):
         if rc != 0:
@@ -211,12 +221,20 @@ def start_mqtt_subscriber() -> None:
 # Publish message (called by Flask on each inbound SMS)
 # ---------------------------------------------------------------------------
 
-def publish_message(body: str, feed: str | None = None) -> bool:
-    """Publish a message body to the AIO feed over MQTT.
+def publish_message(body: str, feed: str | None = None,
+                      msg_id: str | None = None,
+                      sender: str | None = None,
+                      received_at: str | None = None,
+                      sender_name: str | None = None) -> bool:
+    """Publish a message JSON to the AIO feed over MQTT.
 
     Args:
-        body:     The SMS message text.
-        feed:     Feed name. If None, loaded from settings.toml as AIO_FEED.
+        body:        The SMS message text.
+        feed:        Feed name. If None, loaded from settings.toml as AIO_FEED.
+        msg_id:      Our generated UUID for this message.
+        sender:      Sender phone number (E.164).
+        received_at: ISO8601 timestamp.
+        sender_name: Optional sender name from allowed_senders lookup.
 
     Returns:
         True on success, False on failure.
@@ -233,11 +251,19 @@ def publish_message(body: str, feed: str | None = None) -> bool:
     port = int(cfg.get("MQTT_PORT", 8883))
     topic = _feed_topic(feed, username)
 
+    payload = json.dumps({
+        "id": msg_id,
+        "sender": sender,
+        "sender_name": sender_name,
+        "body": body,
+        "received_at": received_at,
+    }, separators=(",", ":"))
+
     client = _mqtt_client()
     try:
         client.connect(host, port, keepalive=30)
         client.loop_start()
-        result = client.publish(topic, body.encode(), qos=0)
+        result = client.publish(topic, payload.encode(), qos=0)
         client.loop_stop()
         client.disconnect()
         if result.rc != mqtt.MQTT_ERR_SUCCESS:

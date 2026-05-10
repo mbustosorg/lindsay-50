@@ -53,23 +53,31 @@ def _load_s3_config() -> dict:
 # Message log (JSONL, one message per line)
 # ---------------------------------------------------------------------------
 
-def _message_log_key() -> str:
-    cfg = _load_s3_config()
-    return cfg.get("S3_MESSAGE_LOG_KEY", "messages/messages.jsonl")
-
-
 def _message_log_bucket() -> str:
     cfg = _load_s3_config()
     return cfg["S3_BUCKET"]
 
 
-def log_message(msg: Message, sender_name: Optional[str] = None) -> None:
-    """Append a message to the S3 JSONL log.
+def log_message(msg: Message, sender_name: Optional[str] = None,
+                  extra_fields: Optional[dict] = None) -> None:
+    """Write one S3 object per message under a monthly folder.
+
+    Key format: messages/{YYYY-MM}/{received_at}_{uuid}.json
+    The ISO timestamp uses underscores instead of colons for filesystem compatibility.
 
     Args:
-        msg:         The message to log.
-        sender_name: Optional sender name from allowed_senders lookup.
+        msg:          The message to log.
+        sender_name:  Optional sender name from allowed_senders lookup.
+        extra_fields: Optional dict of additional fields to include (e.g. Twilio webhook fields).
     """
+    # Parse year-month from received_at for folder structure
+    # received_at format: "2026-05-10T20:35:17Z"
+    year_month = msg.received_at[:7]  # "2026-05"
+
+    # Replace colons in time portion for safe key
+    safe_ts = msg.received_at.replace(":", "_")
+    key = f"messages/{year_month}/{safe_ts}_{msg.id}.json"
+
     entry = {
         "id": msg.id,
         "sender_number": msg.sender,
@@ -77,40 +85,40 @@ def log_message(msg: Message, sender_name: Optional[str] = None) -> None:
         "body": msg.body,
         "received_at": msg.received_at,
     }
-    body = json.dumps(entry) + "\n"
+    if extra_fields:
+        entry.update(extra_fields)
 
     bucket = _message_log_bucket()
-    key = _message_log_key()
-
-    # Read existing content, append new line, write back (S3 doesn't support append)
-    try:
-        existing = _s3_client().get_object(Bucket=bucket, Key=key)["Body"].read().decode()
-    except _s3_client().exceptions.NoSuchKey:
-        existing = ""
-
-    _s3_client().put_object(Bucket=bucket, Key=key, Body=(existing + body).encode())
+    _s3_client().put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=json.dumps(entry, separators=(",", ":")).encode(),
+        ContentType="application/json",
+    )
+    logger.info("Logged message to s3://%s/%s", bucket, key)
 
 
 def load_messages_from_s3() -> Iterator[Message]:
-    """Yield all messages from the S3 JSONL log.
+    """Yield all messages from S3, reading one object per message.
 
     Used by Flask on startup to rebuild SQLite.
     """
     bucket = _message_log_bucket()
-    key = _message_log_key()
+    prefix = "messages/"
 
     try:
-        response = _s3_client().get_object(Bucket=bucket, Key=key)
-        content = response["Body"].read().decode()
-    except _s3_client().exceptions.NoSuchKey:
+        client = _s3_client()
+        response = client.list_objects_v2(Bucket=bucket, Prefix=prefix)
+    except Exception:
         return
 
-    for line in content.splitlines():
-        line = line.strip()
-        if not line:
+    for obj in response.get("Contents", []):
+        key = obj["Key"]
+        if not key.endswith(".json"):
             continue
         try:
-            d = json.loads(line)
+            data = client.get_object(Bucket=bucket, Key=key)["Body"].read().decode()
+            d = json.loads(data)
             yield Message(
                 id=d["id"],
                 sender=d["sender_number"],
@@ -118,7 +126,9 @@ def load_messages_from_s3() -> Iterator[Message]:
                 received_at=d["received_at"],
             )
         except (KeyError, json.JSONDecodeError) as e:
-            logger.warning("Skipping malformed S3 log line: %s (%s)", line[:100], e)
+            logger.warning("Skipping malformed S3 object %s: %s", key, e)
+        except Exception as e:
+            logger.warning("Error reading S3 object %s: %s", key, e)
 
 
 # ---------------------------------------------------------------------------

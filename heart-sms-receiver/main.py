@@ -137,20 +137,23 @@ def api_messages():
         return Response("", status=204)
 
     # Build message
+    msg_id = str(uuid.uuid4())
+    received_at = _now_iso()
+
     msg = Message(
-        id=str(uuid.uuid4()),
+        id=msg_id,
         sender=sender,
         body=body,
-        received_at=_now_iso(),
+        received_at=received_at,
     )
 
     # Get current config for allowed_senders lookup
     cfg = storage.get_config()
     sname = _sender_name(sender, cfg)
 
-    # 1. Log to S3 BEFORE responding (source of truth)
+    # 1. Log full Twilio webhook fields to S3 (one object per message)
     try:
-        s3.log_message(msg, sender_name=sname)
+        s3.log_message(msg, sender_name=sname, extra_fields=dict(request.form))
     except Exception as e:
         logger.warning("S3 logging failed (will continue): %s", e)
 
@@ -164,14 +167,18 @@ def api_messages():
     )
 
     # Return response first, then do background work
-    # We return the response but the caller won't see this due to how
-    # we're structured (synchronous for simplicity)
     try:
         # 3. Store to SQLite
         storage.put_message(msg)
 
-        # 4. Publish to Adafruit IO via MQTT
-        publish.publish_message(body)
+        # 4. Publish to Adafruit IO via MQTT (full JSON with id, sender, etc.)
+        publish.publish_message(
+            body=body,
+            msg_id=msg_id,
+            sender=sender,
+            received_at=received_at,
+            sender_name=sname,
+        )
     except Exception as e:
         logger.error("Post-webhook processing failed: %s", e)
 
