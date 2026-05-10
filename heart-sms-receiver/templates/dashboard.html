@@ -40,22 +40,12 @@
   <label class="form-check-label" for="hide-suppressed">Hide Suppressed</label>
 </div>
 
-{# --- Messages table --- #}
+{# --- Messages table (populated by JS) --- #}
 <div style="max-height: 600px; overflow-y: auto;">
-  <table class="table table-striped table-sm mb-0 msg-table">
-    <thead class="sticky-top bg-white">
-      <tr>
-        <th style="width: 40px;">S</th>
-        <th>Sender</th>
-        <th>Time</th>
-        <th>Body</th>
-        <th>Suppression Reasons</th>
-      </tr>
-    </thead>
-    <tbody id="msg-tbody">
-    </tbody>
+  <table class="table table-striped table-sm mb-0 msg-table" id="msg-table">
+    {# header + body injected by renderMsgTable() #}
   </table>
-  <div id="load-sentinel" style="height: 1px;"></div>
+  <div id="load-sentinel" style="height:1px;"></div>
   <div id="load-status" class="text-center text-muted small py-2"></div>
 </div>
 
@@ -64,76 +54,80 @@ var _currentPage = 1;
 var _hasMore = true;
 var _loading = false;
 var _hideSuppressed = false;
+var _senderNameMap = {};
+var _cfg = null;
 
 async function loadMessages(page) {
   try {
     var params = 'page=' + page + '&per_page=50';
-    if (_hideSuppressed) params += '&hide_suppressed=1';
     var [msgsRes, cfgRes] = await Promise.all([
       fetch('/api/messages?' + params),
       fetch('/api/config'),
     ]);
     var data = await msgsRes.json();
-    var cfg = await cfgRes.json();
+    _cfg = await cfgRes.json();
+
+    // Build sender name map
+    _senderNameMap = {};
+    for (var i = 0; i < (_cfg.allowed_senders || []).length; i++) {
+      var s = _cfg.allowed_senders[i];
+      _senderNameMap[s.phone] = s.name;
+    }
 
     // Update stat cards on first load
     if (page === 1) {
       document.getElementById('total-count').textContent = data.total || 0;
-      document.getElementById('sign-name').textContent = (cfg.sign && cfg.sign.name) || "Lindsay's Heart";
+      document.getElementById('sign-name').textContent = (_cfg.sign && _cfg.sign.name) || "Lindsay's Heart";
       document.getElementById('total-label').textContent = data.total + ' messages';
 
-      // Suppression rules
       var counts = {};
-      for (var i = 0; i < (cfg.filters || []).length; i++) {
-        var f = cfg.filters[i];
+      for (var i = 0; i < (_cfg.filters || []).length; i++) {
+        var f = _cfg.filters[i];
         counts[f.type] = (counts[f.type] || 0) + 1;
       }
-      var rulesEl = document.getElementById('suppression-rules');
       var ruleKeys = Object.keys(counts);
-      if (ruleKeys.length === 0) {
-        rulesEl.innerHTML = '<li class="text-muted">No rules</li>';
-      } else {
-        rulesEl.innerHTML = ruleKeys.map(function(k) {
-          return '<li>' + k + ': ' + counts[k] + '</li>';
-        }).join('');
-      }
+      var rulesEl = document.getElementById('suppression-rules');
+      rulesEl.innerHTML = ruleKeys.length
+        ? ruleKeys.map(function(k) { return '<li>' + k + ': ' + counts[k] + '</li>'; }).join('')
+        : '<li class="text-muted">No rules</li>';
     }
 
     _hasMore = data.has_more;
     _currentPage = data.page;
 
-    // Build sender name map
-    var senderNameMap = {};
-    for (var i = 0; i < (cfg.allowed_senders || []).length; i++) {
-      var s = cfg.allowed_senders[i];
-      senderNameMap[s.phone] = s.name;
+    // Enrich entries with sender_name
+    var entries = (data.messages || []).map(function(e) {
+      e.sender_name = _senderNameMap[e.message.sender] || null;
+      return e;
+    });
+
+    var tableEl = document.getElementById('msg-table');
+    if (page === 1) {
+      tableEl.innerHTML = renderMsgTable({
+        entries: entries,
+        showCheckbox: true,
+        showSource: false,
+        tbodyId: 'msg-tbody',
+      });
+    } else {
+      var tbody = document.getElementById('msg-tbody');
+      entries.forEach(function(entry) {
+        tbody.insertAdjacentHTML('beforeend', renderMsgRow(entry, {showCheckbox: true, showSource: false}));
+      });
     }
 
-    // Render rows
-    var tbody = document.getElementById('msg-tbody');
-    for (var i = 0; i < data.messages.length; i++) {
-      var entry = data.messages[i];
-      entry.sender_name = senderNameMap[entry.message.sender] || null;
-      tbody.insertAdjacentHTML('beforeend', renderMsgRow(entry, { showSource: false, showCheckbox: true }));
-    }
-
-    // Convert UTC timestamps
-    tbody.querySelectorAll('td[data-utc]').forEach(function(cell) {
+    // Convert UTC timestamps to local time
+    document.querySelectorAll('#msg-tbody td[data-utc]').forEach(function(cell) {
       var utc = cell.getAttribute('data-utc');
       if (utc) {
         try {
           var d = new Date(utc);
-          cell.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-        } catch(e) { cell.textContent = utc.slice(11, 19); }
+          cell.textContent = d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
+        } catch(ex) { cell.textContent = utc.slice(11,19); }
       }
     });
 
-    var status = document.getElementById('load-status');
-    if (!_hasMore) {
-      status.textContent = 'All messages loaded';
-    } else {
-      status.textContent = '';
-    }
+    document.getElementById('load-status').textContent = _hasMore ? '' : 'All messages loaded';
   } catch(e) {
     console.error('loadMessages failed:', e);
     document.getElementById('load-status').textContent = 'Error loading messages';
@@ -143,28 +137,23 @@ async function loadMessages(page) {
 }
 
 function toggleHideSuppressed(checked) {
-  _hideSuppressed = checked;
   var url = new URL(window.location.href);
-  if (checked) {
-    url.searchParams.set('hide_suppressed', '1');
-  } else {
-    url.searchParams.delete('hide_suppressed');
-  }
+  if (checked) url.searchParams.set('hide_suppressed', '1');
+  else url.searchParams.delete('hide_suppressed');
   window.location.href = url.toString();
 }
 
-// IntersectionObserver for infinite scroll
+// Infinite scroll
 var sentinel = document.getElementById('load-sentinel');
-var observer = new IntersectionObserver(function(entries) {
+new IntersectionObserver(function(entries) {
   if (entries[0].isIntersecting && _hasMore && !_loading) {
     _loading = true;
     document.getElementById('load-status').textContent = 'Loading...';
     loadMessages(_currentPage + 1);
   }
-}, { rootMargin: '100px' });
-observer.observe(sentinel);
+}, {rootMargin:'100px'}).observe(sentinel);
 
-// Initial load
+// Init
 var hideParam = new URLSearchParams(window.location.search).get('hide_suppressed');
 _hideSuppressed = hideParam === '1';
 document.getElementById('hide-suppressed').checked = _hideSuppressed;
@@ -173,7 +162,6 @@ loadMessages(1);
 function handleSuppressToggle(checkbox, msgId) {
   var reasonsCell = document.getElementById('reasons-' + msgId);
   if (checkbox.checked) {
-    // Optimistically add the badge
     if (reasonsCell) {
       var dash = reasonsCell.querySelector('.text-muted');
       if (dash) dash.remove();
