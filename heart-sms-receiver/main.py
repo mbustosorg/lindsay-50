@@ -503,11 +503,11 @@ def api_s3_objects():
         for cp in response.get("CommonPrefixes", []):
             folder = cp["Prefix"].rstrip("/")  # e.g. "messages" or "messages/2026-05"
             name = folder.split("/")[-1]
-            # Keep trailing slash on id so we can identify folders client-side
+            # Keep trailing slash on id so client can identify folders; text is just the name
             folder_id = cp["Prefix"].rstrip("/") + "/"
             nodes.append({
                 "id": folder_id,
-                "text": name + "/",
+                "text": name,
                 "icon": "jstree-folder",
                 "children": True,
                 "state": {"opened": False},

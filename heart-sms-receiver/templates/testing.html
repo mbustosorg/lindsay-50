@@ -316,12 +316,12 @@ async function fetchS3Objects() {
       },
       plugins: [],
     }).on('click.jstree', function(event, data) {
-      // Toggle folder expand/collapse when clicking the text part of a folder anchor
-      // Skip if clicking the expander icon (jstree handles it via select_node)
-      const node = data.node;
-      if (!node.id.endsWith('/')) return;
+      // Toggle folder expand/collapse on single click
+      const nodeId = data.node.id;
+      if (!nodeId.endsWith('/')) return;
+      // Don't toggle if clicking the expander icon
       if ($(event.target).closest('.jstree-ocl').length) return;
-      $(treeEl).jstree('toggle_node', node);
+      this.toggle_node(nodeId);
     }).on('select_node.jstree', function(event, data) {
       // Only fetch leaf nodes (files). Folders are handled by jstree default toggle.
       const key = data.node.id;
