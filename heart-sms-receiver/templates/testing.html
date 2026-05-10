@@ -193,12 +193,19 @@ async function fetchMessages() {
         ? '<span class="badge bg-success">mqtt</span>'
         : '<span class="badge bg-warning text-dark">rest</span>';
 
+      // Extract body from JSON payload (our MQTT format) or use raw body
+      let msgBody = item.body || '';
+      try {
+        const parsed = JSON.parse(item.body);
+        if (parsed.body !== undefined) msgBody = parsed.body;
+      } catch(e) {}
+
       return `
         <tr class="${suppressed ? 'table-secondary' : ''}">
           <td>${source}</td>
           <td><span class="msg-sender${suppressed ? ' text-muted text-decoration-line-through' : ''}">${senderDisplay}</span></td>
           <td class="msg-id text-muted" data-utc="${item.received_at || ''}"></td>
-          <td class="${suppressed ? 'text-muted' : ''}"><span class="msg-body">${escapeHtml(item.body || '')}</span></td>
+          <td class="${suppressed ? 'text-muted' : ''}"><span class="msg-body">${escapeHtml(msgBody)}</span></td>
           <td>
             ${reasons.length > 0
               ? reasons.map(r => `<div data-reason="${escapeHtml(r)}"><span class="badge bg-secondary">${escapeHtml(r)}</span></div>`).join('')

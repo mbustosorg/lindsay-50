@@ -65,19 +65,40 @@ def get_live_messages(limit: int = 20) -> list[dict]:
 def seed_from_rest_messages(messages: list[dict], feed_topic: str) -> None:
     """Merge REST API messages into the live ring buffer.
 
-    Does NOT clear the buffer — existing MQTT entries are preserved.
-    Entries are marked source="rest". If a message with the same msg_id
-    already exists (e.g., from a previous seed), it is skipped.
-    Subsequent real MQTT messages will overwrite with source="mqtt".
+    Does NOT clear the buffer. For each REST message:
+    - If msg_id not in buffer: append with source="rest"
+    - If msg_id already in buffer (MQTT entry): update source to "rest"
+      (represents what ESP32 would see after receiving via REST fallback)
     """
     for msg in reversed(messages):
-        record_live_message(
-            body=msg.get("body", ""),
-            topic=feed_topic,
-            source="rest",
-            received_at=msg.get("received_at"),
-            msg_id=msg.get("id"),
-        )
+        msg_id = msg.get("id")
+        body = msg.get("body", "")
+        received_at = msg.get("received_at")
+
+        with _LIVE_LOCK:
+            # Check if already present — update source to "rest"
+            if msg_id:
+                for entry in _LIVE_MESSAGES:
+                    if entry.get("msg_id") == msg_id:
+                        entry["source"] = "rest"
+                        break
+                else:
+                    _LIVE_MESSAGES.append({
+                        "body": body,
+                        "topic": feed_topic,
+                        "source": "rest",
+                        "received_at": received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        "msg_id": msg_id,
+                    })
+            else:
+                # No msg_id: always append
+                _LIVE_MESSAGES.append({
+                    "body": body,
+                    "topic": feed_topic,
+                    "source": "rest",
+                    "received_at": received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                    "msg_id": msg_id,
+                })
 
 
 # ---------------------------------------------------------------------------

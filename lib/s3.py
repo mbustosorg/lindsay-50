@@ -76,7 +76,7 @@ def log_message(msg: Message, sender_name: Optional[str] = None,
 
     # Replace colons in time portion for safe key
     safe_ts = msg.received_at.replace(":", "_")
-    key = f"messages/{year_month}/{safe_ts}_{msg.id}.json"
+    key = f"messages/{year_month}/msg-{safe_ts}_{msg.id}.json"
 
     entry = {
         "id": msg.id,
@@ -135,21 +135,17 @@ def load_messages_from_s3() -> Iterator[Message]:
 # Config snapshots
 # ---------------------------------------------------------------------------
 
-def _config_snapshot_prefix() -> str:
-    cfg = _load_s3_config()
-    return cfg.get("S3_CONFIG_PREFIX", "config/config")
-
-
-def _config_snapshot_key(timestamp: str) -> str:
-    return f"{_config_snapshot_prefix()}-{timestamp}.json"
-
-
 def save_config_snapshot(config_dict: dict) -> None:
-    """Save a timestamped config snapshot to S3 and prune old snapshots (keep 10)."""
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S")
-    bucket = _config_snapshot_bucket()
-    key = _config_snapshot_key(timestamp)
+    """Save latest config snapshot to S3 under monthly folder.
 
+    Key format: config/{YYYY-MM}/cfg-{timestamp}.json
+    One snapshot per month (overwrites within the month).
+    """
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M%S")
+    year_month = timestamp[:7]  # "2026-05"
+    key = f"config/{year_month}/cfg-{timestamp}.json"
+
+    bucket = _config_snapshot_bucket()
     _s3_client().put_object(
         Bucket=bucket,
         Key=key,
@@ -158,45 +154,34 @@ def save_config_snapshot(config_dict: dict) -> None:
     )
     logger.info("Saved config snapshot to s3://%s/%s", bucket, key)
 
-    _prune_config_snapshots(bucket)
-
 
 def _config_snapshot_bucket() -> str:
     cfg = _load_s3_config()
     return cfg["S3_BUCKET"]
 
 
-def _prune_config_snapshots(bucket: str) -> None:
-    """Delete oldest config snapshots, keeping the 10 most recent."""
-    prefix = _config_snapshot_prefix()
-    response = _s3_client().list_objects_v2(Bucket=bucket, Prefix=prefix)
-
-    keys = [obj["Key"] for obj in response.get("Contents", [])]
-    if len(keys) <= 10:
-        return
-
-    # Sort by key (timestamp is in the key) and delete oldest
-    keys.sort()
-    for old_key in keys[: -10]:
-        _s3_client().delete_object(Bucket=bucket, Key=old_key)
-        logger.info("Pruned old config snapshot: s3://%s/%s", bucket, old_key)
-
-
 def load_latest_config() -> Optional[dict]:
     """Load the most recent config snapshot from S3.
 
-    Returns the parsed JSON dict, or None if no snapshot exists.
+    Lists all config objects, sorts by key descending, returns latest.
     """
     bucket = _config_snapshot_bucket()
-    prefix = _config_snapshot_prefix()
+    prefix = "config/"
 
-    response = _s3_client().list_objects_v2(Bucket=bucket, Prefix=prefix)
-    keys = [obj["Key"] for obj in response.get("Contents", [])]
+    try:
+        response = _s3_client().list_objects_v2(Bucket=bucket, Prefix=prefix)
+    except Exception:
+        return None
+
+    keys = [obj["Key"] for obj in response.get("Contents", []) if obj["Key"].endswith(".json")]
     if not keys:
         return None
 
-    # Most recent is the last in sorted order (timestamp in key)
+    # Sort descending — latest key last in sorted order
     latest_key = sorted(keys)[-1]
-    response = _s3_client().get_object(Bucket=bucket, Key=latest_key)
-    content = response["Body"].read().decode()
-    return json.loads(content)
+    try:
+        response = _s3_client().get_object(Bucket=bucket, Key=latest_key)
+        content = response["Body"].read().decode()
+        return json.loads(content)
+    except Exception:
+        return None
