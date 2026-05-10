@@ -10,6 +10,7 @@ from adafruit_matrixportal.matrix import Matrix
 from scroller import Scroller
 from fireworks import Fireworks
 from flame import Flame
+from nightsky import NightSky
 
 # Credentials are loaded from settings.toml
 SSID = os.getenv("WIFI_SSID")
@@ -38,30 +39,39 @@ connect_wifi()
 pool = socketpool.SocketPool(wifi.radio)
 ssl_context = adafruit_connection_manager.get_radio_ssl_context(wifi.radio)
 
-matrix = Matrix(width=64, height=64, serpentine=True, tile_rows=2)
+matrix = Matrix(width=64, height=64, serpentine=True, tile_rows=2, bit_depth=5)
 scroller = Scroller(matrix)
 fireworks = Fireworks(matrix.display, scroller.group)
 flame = Flame(matrix.display, scroller.group)
 flame.tilegrid.hidden = True
+nightsky = NightSky(matrix.display, scroller.group)
+nightsky.tilegrid.hidden = True
 
 
 class EffectCoordinator:
     """Toggles between effects and fades the display when a new message arrives."""
 
-    def __init__(self, display, scroller, effects, fade_seconds=0.5):
+    def __init__(self, display, scroller, effects, fade_seconds=0.5, fade_step=0.04, gamma=2.2):
         self.display = display
         self.scroller = scroller
         self.effects = effects
         self.idx = 0
         self.fade_seconds = fade_seconds
+        # Throttles palette writes during a fade. Without this, a fast main loop
+        # saturates the displayio compositor and the fade visually freezes.
+        self.fade_step = fade_step
+        # Gamma correction: linear time → perceptually linear brightness.
+        self.gamma = gamma
         self.mode = "idle"  # idle | out | in
         self.fade_start = 0.0
+        self.last_step = 0.0
         self.pending_text = None
 
     def request_message(self, text):
         self.pending_text = text
         self.mode = "out"
         self.fade_start = time.monotonic()
+        self.last_step = 0.0
 
     def tick(self):
         now = time.monotonic()
@@ -69,11 +79,17 @@ class EffectCoordinator:
             progress = (now - self.fade_start) / self.fade_seconds
             if progress > 1.0:
                 progress = 1.0
-            if self.mode == "out":
-                b = 1.0 - progress
+
+            if now - self.last_step >= self.fade_step or progress >= 1.0:
+                self.last_step = now
+                linear = 1.0 - progress if self.mode == "out" else progress
+                b = linear ** self.gamma
                 self.effects[self.idx].set_brightness(b)
                 self.scroller.set_brightness(b)
-                if progress >= 1.0:
+                log.info("fade %s linear=%.3f b=%.3f", self.mode, linear, b)
+
+            if progress >= 1.0:
+                if self.mode == "out":
                     self.effects[self.idx].tilegrid.hidden = True
                     self.idx = (self.idx + 1) % len(self.effects)
                     self.effects[self.idx].set_brightness(0.0)
@@ -82,18 +98,17 @@ class EffectCoordinator:
                     self.pending_text = None
                     self.mode = "in"
                     self.fade_start = now
-            else:  # "in"
-                self.effects[self.idx].set_brightness(progress)
-                self.scroller.set_brightness(progress)
-                if progress >= 1.0:
+                    self.last_step = 0.0
+                else:  # "in" complete
                     self.effects[self.idx].set_brightness(1.0)
                     self.scroller.set_brightness(1.0)
                     self.mode = "idle"
+
         self.effects[self.idx].tick()
         self.scroller.tick()
 
 
-coordinator = EffectCoordinator(matrix.display, scroller, [fireworks, flame], fade_sec=2.2)
+coordinator = EffectCoordinator(matrix.display, scroller, [fireworks, flame, nightsky], fade_seconds=5.2)
 
 
 def connected(client):
@@ -121,7 +136,7 @@ mqtt = MQTT.MQTT(
     is_ssl=(MQTT_PORT == 8883),
     socket_pool=pool,
     ssl_context=ssl_context,
-    socket_timeout=0.01,
+    socket_timeout=0.001,
 )
 
 io = IO_MQTT(mqtt)
@@ -135,7 +150,7 @@ io.connect()
 
 while True:
     try:
-        io.loop(timeout=0.01)
+        io.loop(timeout=0.001)
     except Exception as e:
         log.error("MQTT error: %s — reconnecting...", e)
         try:

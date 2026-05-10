@@ -5,16 +5,38 @@ import bitmaptools
 
 _PALETTE_SIZE = 32
 
+# Piecewise-linear keypoints for the heat → color ramp.  Adjust freely; each
+# entry is (t in [0,1], R, G, B).  Order matters and t must be ascending.
+_HEAT_KEYPOINTS = (
+    (0.00, 0, 0, 0),         # black (no heat)
+    (0.10, 30, 0, 30),        # deep purple (almost-extinguished embers)
+    (0.22, 110, 0, 30),       # plum red
+    (0.35, 220, 20, 0),       # bright red
+    (0.50, 255, 100, 0),      # orange
+    (0.65, 255, 200, 0),      # yellow-orange
+    (0.80, 255, 255, 90),     # bright yellow
+    (0.92, 220, 255, 230),    # near-white
+    (1.00, 180, 220, 255),    # cyan-white (hottest core)
+)
+
 
 def _heat_color(t):
-    """t in [0,1] mapped through black -> red -> orange -> yellow -> white."""
-    if t < 0.25:
-        return int(255 * t / 0.25) << 16
-    if t < 0.5:
-        return (255 << 16) | (int(128 * (t - 0.25) / 0.25) << 8)
-    if t < 0.75:
-        return (255 << 16) | (int(128 + 127 * (t - 0.5) / 0.25) << 8)
-    return (255 << 16) | (255 << 8) | int(255 * (t - 0.75) / 0.25)
+    """Piecewise-linear interpolation across _HEAT_KEYPOINTS."""
+    if t <= 0:
+        return 0
+    if t >= 1:
+        _, r, g, b = _HEAT_KEYPOINTS[-1]
+        return (r << 16) | (g << 8) | b
+    for i in range(len(_HEAT_KEYPOINTS) - 1):
+        t1, r1, g1, b1 = _HEAT_KEYPOINTS[i]
+        t2, r2, g2, b2 = _HEAT_KEYPOINTS[i + 1]
+        if t <= t2:
+            u = (t - t1) / (t2 - t1)
+            r = int(r1 + (r2 - r1) * u)
+            g = int(g1 + (g2 - g1) * u)
+            b = int(b1 + (b2 - b1) * u)
+            return (r << 16) | (g << 8) | b
+    return 0
 
 
 class Flame:
