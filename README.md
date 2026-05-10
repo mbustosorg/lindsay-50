@@ -1,92 +1,130 @@
 # Lindsay's 50th Heart Sign
 
-Send a text message to trigger actions on an ESP32 over the internet.
+SMS → Twilio webhook → Flask server → MQTT broker → ESP32 (CircuitPython)
+
+Send a text message to a Twilio phone number. The ESP32 displays it on the LED matrix.
+
+## Architecture
 
 ```
-SMS → Twilio → Flask server → MQTT broker → ESP32 (CircuitPython)
+SMS → Twilio → POST /api/messages → Flask
+                                      │
+                                      ├─→ SQLite (persistent storage)
+                                      ├─→ S3 (source of truth backup)
+                                      └─→ MQTT broker ──→ ESP32 subscribes
 ```
 
-## How it works
-
-1. You send an SMS to a Twilio phone number
-2. Twilio forwards it to the Flask server via webhook
-3. The server publishes the message body to an MQTT topic
-4. The ESP32 receives it and runs your custom logic
-
-## Requirements
-
-- Python 3.11+
-- A [Twilio](https://twilio.com) account with a phone number
-- An MQTT broker (e.g. [HiveMQ Cloud](https://www.hivemq.com/cloud/) free tier)
-- ESP32 with [CircuitPython](https://circuitpython.org) installed
-- [Adafruit CircuitPython Bundle](https://circuitpython.org/libraries) (`adafruit_minimqtt`)
+ESP32 subscribes to `username/feeds/feedname` on the MQTT broker and renders incoming messages on a 64×64 HUB75 LED panel.
 
 ## Setup
 
-### 1. Configuration
+### 1. Install dependencies
 
-Edit `heart-matrix-controller/settings.toml` with your credentials — both the server and the ESP32 read from this file:
+```bash
+git clone https://github.com/mbustosorg/lindsay-50
+cd lindsay-50
+./scripts/setup-dev-tools.sh
+```
+
+### 2. Configure
+
+```bash
+cp heart-sms-receiver/settings.toml.example heart-sms-receiver/settings.toml
+# Edit settings.toml with your credentials
+```
+
+Required credentials:
 
 ```toml
-WIFI_SSID = "your-wifi"
-WIFI_PASSWORD = "your-password"
+# Adafruit IO (for MQTT broker)
+AIO_USERNAME = "your-aio-username"
+AIO_KEY = "your-aio-key"
+AIO_FEED = "your-feed-name"
 
-MQTT_HOST = "your-broker-host"
+# AWS S3 (for message logging — use MinIO locally)
+S3_BUCKET = "your-bucket"
+S3_ENDPOINT_URL = ""  # leave empty for real AWS, set for MinIO
+
+# MQTT (usually same as AIO credentials)
+MQTT_HOST = "io.adafruit.com"
 MQTT_PORT = 8883
-MQTT_TOPIC = "sms/incoming"
-MQTT_USERNAME = "username"
-MQTT_PASSWORD = "password"
-
-# Optional: only allow messages from these numbers (comma-separated)
-# ALLOWED_SENDERS = "+15551234567,+15559876543"
 ```
 
-### 2. Flask server
+### 3. Local development
+
+Start Flask with local MinIO + Mosquitto:
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate
-pip install -r heart-sms-receiver/requirements.txt
-python heart-sms-receiver/main.py
+./scripts/start-app.sh --with-services
 ```
 
-### 3. Expose to Twilio
+Or without local services (uses real S3/AIO):
 
 ```bash
-ngrok http 5000
+./scripts/start-app.sh
 ```
 
-Copy the `https://....ngrok-free.app` URL.
+Flask runs at **http://localhost:5001**
 
-### 4. Configure Twilio
+Stop:
 
-In the Twilio Console → your phone number → **Messaging**:
+```bash
+./scripts/stop-app.sh --with-services
+```
+
+### 4. Expose to Twilio (for local dev)
+
+```bash
+ngrok http 5001
+```
+
+In Twilio Console → your phone number → **Messaging**:
 - **A message comes in**: Webhook, `POST`
-- URL: `https://your-ngrok-url/sms`
+- URL: `https://your-ngrok-url/api/messages`
 
-### 5. ESP32
+## Admin UI
 
-Copy these files to your `CIRCUITPY/` drive:
-- `heart-matrix-controller/code.py` → `CIRCUITPY/code.py`
-- `heart-matrix-controller/settings.toml` → `CIRCUITPY/settings.toml`
+Flask serves an admin UI at:
 
-Copy `adafruit_minimqtt/` from the Adafruit CircuitPython Bundle to `CIRCUITPY/lib/`.
+| Page | Route | Purpose |
+|------|-------|---------|
+| Dashboard | `/` | Recent messages, counts |
+| Messages | `/messages` | Paginated list with suppress/unsuppress |
+| Filter Rules | `/filters` | Add/delete suppression rules |
+| Settings | `/settings` | Allowed senders, rendering defaults, sign name |
+| Testing | `/testing` | Inject test messages, live MQTT feed, config viewer |
 
-## Adding device logic
+## Message Filtering
 
-Edit the `on_message()` function in `heart-matrix-controller/code.py`:
+Filter rules suppress messages by:
 
-```python
-def on_message(client, topic, message):
-    if message.strip().lower() == "on":
-        led.value = True
-    elif message.strip().lower() == "off":
-        led.value = False
-```
+| Type | Matches |
+|------|---------|
+| `keyword` | Case-insensitive substring in body |
+| `regex` | Python regex on body |
+| `sender` | Exact E.164 phone number |
+| `message` | Exact message UUID |
 
-## Testing
+## Running Tests
 
 ```bash
-curl -X POST http://localhost:5000/sms \
-  -d "From=%2B15551234567&Body=hello+world&To=%2B15559999999"
+source .venv/bin/activate
+PYTHONPATH=. pytest tests/ -v
 ```
+
+## ESP32 Setup
+
+Copy to `CIRCUITPY/`:
+
+- `heart-matrix-controller/code.py`
+- `heart-matrix-controller/settings.toml`
+
+Required CircuitPython libraries (from Adafruit Bundle):
+
+- `adafruit_minimqtt/`
+- `adafruit_io/`
+- `adafruit_matrixportal/`
+- `adafruit_connection_manager/`
+- `adafruit_ticks.mpy`
+- `adafruit_requests.mpy`
+- `adafruit_logging.mpy`

@@ -1,20 +1,18 @@
 schema: spec-driven
 
-# Project context (optional)
-# This is shown to AI when creating artifacts.
-# Add your tech stack, conventions, style guides, domain knowledge, etc.
-# Example:
-#   context: |
-#     Tech stack: TypeScript, React, Node.js
-#     We use conventional commits
-#     Domain: e-commerce platform
+# Project context — shown when creating artifacts
+context: |
+  Tech stack: Python/Flask (server), CircuitPython/ESP32 (device), Twilio, Adafruit IO, AWS S3
+  Server: Flask + SQLite (source of truth on S3) + Adafruit IO for ESP32 communication
+  Testing: pytest; run with `PYTHONPATH=. pytest tests/ -v`
+  Conventions: conventional commits (feat:, fix:, test:, etc.)
 
-# Per-artifact rules (optional)
-# Add custom rules for specific artifacts.
-# Example:
-#   rules:
-#     proposal:
-#       - Keep proposals under 500 words
-#       - Always include a "Non-goals" section
-#     tasks:
-#       - Break tasks into chunks of max 2 hours
+# Per-artifact rules
+rules:
+  tasks:
+    - Every feature task must have a corresponding test task
+    - Break tasks into chunks of max 2 hours
+    - Mark each task done in tasks.md with `- [x]` when complete
+  test:
+    - New functions/modules must have pytest tests covering happy path, edge cases, and errors
+    - Run `PYTHONPATH=. pytest tests/ -v` before pushing; fix all failures first

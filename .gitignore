@@ -10,3 +10,5 @@ images/sound*
 test-code/
 
 settings.toml
+heart-sms-receiver/db.sqlite
+heart-sms-receiver/secret_key

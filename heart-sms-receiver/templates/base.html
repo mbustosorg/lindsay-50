@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Lindsay's Heart Admin{% endblock %}</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/jquery@3.7.1/dist/jquery.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/jstree@3.3.16/dist/themes/default/style.min.css">
+  <style>
+    body { padding-top: 1rem; }
+    .sidebar { position: sticky; top: 1rem; }
+    .mono { font-family: monospace; }
+    .msg-body { max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .suppressed-row { opacity: 0.5; }
+    .msg-sender { font-size: 1rem; }
+    .msg-id { font-size: 0.65rem; font-family: monospace; }
+    .msg-table td { vertical-align: middle; }
+  </style>
+</head>
+<body>
+<div class="container-fluid">
+  <div class="row">
+    <nav class="col-md-2 sidebar">
+      <h5 class="mb-3">Lindsay's Heart</h5>
+      <ul class="nav flex-column nav-pills">
+        <li class="nav-item"><a class="nav-link{% if request.endpoint == 'dashboard' %} active{% endif %}" href="{{ url_for('dashboard') }}">Dashboard</a></li>
+        <li class="nav-item"><a class="nav-link{% if request.endpoint == 'testing' %} active{% endif %}" href="{{ url_for('testing') }}">Testing</a></li>
+        <li class="nav-item"><a class="nav-link{% if request.endpoint == 'settings' %} active{% endif %}" href="{{ url_for('settings') }}">Settings</a></li>
+      </ul>
+    </nav>
+    <main class="col-md-10">
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jstree@3.3.16/dist/jstree.min.js"></script>
+<script>
+// Shared message row renderer for both dashboard and testing pages.
+// Renders a single <tr> for a message entry.
+function renderMsgRow(entry, options) {
+  options = options || {};
+  var showSource = !!options.showSource;
+  var showCheckbox = !!options.showCheckbox;
+  var suppressed = !!entry.suppressed;
+  var msg = entry.message || entry;
+  var rules = entry.rules || [];
+  var reasons = rules.map(function(r) { return r.type + ':' + r.pattern; });
+  var senderName = entry.sender_name;
+  var senderPhone = msg.sender || '—';
+  var senderDisplay = senderName
+    ? '<span class="msg-sender' + (suppressed ? ' text-muted' : '') + '">' + escapeHtml(senderName) + '<br><small class="text-muted mono">' + escapeHtml(senderPhone) + '</small></span>'
+    : '<span class="msg-sender' + (suppressed ? ' text-muted' : '') + '">' + escapeHtml(senderPhone) + '</span>';
+  var sourceHtml = '';
+  if (showSource) {
+    var src = entry.source || 'rest';
+    var badge = src === 'mqtt'
+      ? '<span class="badge bg-success">mqtt</span>'
+      : '<span class="badge bg-warning text-dark">rest</span>';
+    sourceHtml = '<td>' + badge + '</td>';
+  }
+  var checkboxHtml = '';
+  if (showCheckbox) {
+    var checked = entry.suppressed_by_message ? 'checked' : '';
+    checkboxHtml = '<td style="text-align:center;"><input type="checkbox" class="form-check-input"' +
+      ' id="cb-' + msg.id + '" ' + checked +
+      ' onchange="handleSuppressToggle(this, \'' + msg.id + '\')"></td>';
+  }
+  var reasonHtml = reasons.length > 0
+    ? reasons.map(function(r) {
+        return '<div data-reason="' + escapeHtml(r) + '"><span class="badge bg-secondary">' + escapeHtml(r) + '</span></div>';
+      }).join('')
+    : '<span class="text-muted">—</span>';
+  return '<tr class="' + (suppressed ? 'table-secondary' : '') + '">' +
+    checkboxHtml +
+    sourceHtml +
+    '<td>' + senderDisplay + '</td>' +
+    '<td class="msg-id text-muted" data-utc="' + (msg.received_at || '') + '"></td>' +
+    '<td class="' + (suppressed ? 'text-muted' : '') + '"><span class="msg-body">' + escapeHtml(msg.body || '') + '</span></td>' +
+    '<td id="reasons-' + msg.id + '">' + reasonHtml + '</td>' +
+    '</tr>';
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  var d = document.createElement('div');
+  d.textContent = String(s);
+  return d.innerHTML;
+}
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

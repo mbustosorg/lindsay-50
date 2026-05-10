@@ -1,51 +1,600 @@
+"""Flask app for heart-sms-receiver.
+
+Handles Twilio webhooks, stores messages to SQLite (with S3 backup),
+publishes to Adafruit IO, and serves the admin UI.
+"""
+
 import html
-import tomllib
+import logging
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
-from flask import Flask, request, Response
-from adafruit_io import Client
+
+from flask import Flask, Response, jsonify, redirect, render_template, request, url_for
+
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+import tomllib
+
+from lib import filters, storage, s3, publish
+from lib.models import Config, FilterRule, Message, AllowedSender
+
+# ---------------------------------------------------------------------------
+# App setup
+# ---------------------------------------------------------------------------
 
 app = Flask(__name__)
+app.secret_key = Path(__file__).parent / "secret_key"
+if not app.secret_key.exists():
+    app.secret_key.write_text(uuid.uuid4().hex)
 
-with open(Path(__file__).parent / "settings.toml", "rb") as f:
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Load settings
+_settings_path = Path(__file__).parent / "settings.toml"
+if not _settings_path.exists():
+    raise RuntimeError("settings.toml not found; copy settings.toml.example first")
+with open(_settings_path, "rb") as f:
     _cfg = tomllib.load(f)
 
 AIO_USERNAME = _cfg["AIO_USERNAME"]
 AIO_KEY = _cfg["AIO_KEY"]
 AIO_FEED = _cfg["AIO_FEED"]
+AIO_CONFIG_FEED = _cfg.get("AIO_CONFIG_FEED", "")
 
-ALLOWED_SENDERS = [s.strip() for s in _cfg.get("ALLOWED_SENDERS", "").split(",") if s.strip()]
+# ---------------------------------------------------------------------------
+# Startup connectivity checks
+# ---------------------------------------------------------------------------
 
-aio = Client(AIO_USERNAME, AIO_KEY)
+def _check_connectivity() -> None:
+    """Verify MQTT broker and S3 are reachable. Logs warnings on failure."""
+    import boto3
+
+    # MQTT: try to connect to the broker
+    try:
+        import paho.mqtt.client as mqtt
+        cfg = _cfg
+        host = cfg.get("MQTT_HOST", "io.adafruit.com")
+        port = int(cfg.get("MQTT_PORT", 8883))
+        client = mqtt.Client()
+        username = cfg.get("MQTT_USERNAME")
+        if username:
+            client.username_pw_set(username, cfg.get("MQTT_PASSWORD"))
+        client.connect(host, port, keepalive=5)
+        client.disconnect()
+        logger.info("MQTT connectivity OK (%s:%d)", host, port)
+    except Exception as e:
+        logger.warning("MQTT unreachable: %s (messages will not be published)", e)
+
+    # S3: try head_bucket to verify bucket + credentials
+    try:
+        bucket = _cfg.get("S3_BUCKET", "")
+        if bucket:
+            client = s3._s3_client()
+            client.head_bucket(Bucket=bucket)
+            logger.info("S3 connectivity OK (bucket: %s)", bucket)
+        else:
+            logger.warning("S3_BUCKET not set; S3 logging disabled")
+    except Exception as e:
+        logger.warning("S3 unreachable: %s (messages will not be logged to S3)", e)
 
 
-@app.route("/sms", methods=["POST"])
-def sms_webhook():
+# ---------------------------------------------------------------------------
+# Startup: init SQLite and rebuild from S3
+# ---------------------------------------------------------------------------
+
+storage.init_db()
+_check_connectivity()
+publish.start_mqtt_subscriber()
+
+# Rebuild SQLite from S3 on startup
+try:
+    storage.rebuild_from_s3(s3.load_messages_from_s3)
+    logger.info("Rebuilt SQLite from S3")
+except Exception as e:
+    logger.warning("Could not rebuild from S3 (S3 may not be configured): %s", e)
+
+# Load latest config from S3 if SQLite is empty
+cfg = storage.get_config()
+if cfg.version == 1 and not any(f.type for f in cfg.filters):
+    latest = None
+    try:
+        latest = s3.load_latest_config()
+    except Exception:
+        pass
+    if latest:
+        cfg = Config.from_dict(latest)
+        storage.put_config(cfg)
+        logger.info("Loaded config from S3 snapshot")
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _sender_name(phone: str, cfg: Config) -> str | None:
+    for s in cfg.allowed_senders:
+        if s.phone == phone:
+            return s.name
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Twilio webhook
+# ---------------------------------------------------------------------------
+
+@app.route("/api/messages", methods=["POST"])
+def api_messages():
+    """Receive Twilio webhook: log to S3 → respond → store → publish."""
     sender = request.form.get("From", "")
     body = request.form.get("Body", "").strip()
 
-    app.logger.info("From=%r Body=%r", sender, body)
-
-    if ALLOWED_SENDERS and sender not in ALLOWED_SENDERS:
-        app.logger.warning("Rejected SMS from %s", sender)
-        return Response("Forbidden", status=403)
+    logger.info("From=%r Body=%r", sender, body)
 
     if not body:
         return Response("", status=204)
 
-    try:
-        aio.send_data(AIO_FEED, body)
-        app.logger.info("Published to feed %s: %s", AIO_FEED, body)
-    except Exception as e:
-        app.logger.error("Adafruit IO publish failed: %s", e)
-        return Response("Internal Server Error", status=500)
+    # Build message
+    msg_id = str(uuid.uuid4())
+    received_at = _now_iso()
 
-    reply = f"Lindsay's Heart got your message: {html.escape(body)}"
-    return Response(
+    msg = Message(
+        id=msg_id,
+        sender=sender,
+        body=body,
+        received_at=received_at,
+    )
+
+    # Get current config for allowed_senders lookup
+    cfg = storage.get_config()
+    sname = _sender_name(sender, cfg)
+
+    # 1. Log full Twilio webhook fields to S3 (one object per message)
+    try:
+        s3.log_message(msg, sender_name=sname, extra_fields=dict(request.form))
+    except Exception as e:
+        logger.warning("S3 logging failed (will continue): %s", e)
+
+    # 2. Respond to Twilio immediately
+    sign_name = cfg.sign.name if cfg.sign else "Lindsay's Heart"
+    reply = f"{sign_name} got your message: {html.escape(body)}"
+    twiml = Response(
         f"<Response><Message>{reply}</Message></Response>",
         status=200,
         mimetype="text/xml",
     )
 
+    # Return response first, then do background work
+    try:
+        # 3. Store to SQLite
+        storage.put_message(msg)
+
+        # 4. Publish to Adafruit IO via MQTT (full JSON with id, sender, etc.)
+        publish.publish_message(
+            body=body,
+            msg_id=msg_id,
+            sender=sender,
+            received_at=received_at,
+            sender_name=sname,
+        )
+    except Exception as e:
+        logger.error("Post-webhook processing failed: %s", e)
+
+    return twiml
+
+
+# ---------------------------------------------------------------------------
+# API endpoints
+# ---------------------------------------------------------------------------
+
+@app.route("/api/messages", methods=["GET"])
+def api_get_messages():
+    """GET /api/messages — return messages with suppression info, paginated.
+
+    Query params:
+      page:    1-based page number (default 1)
+      per_page: messages per page (default 50, max 200)
+      since:   ISO timestamp — return messages after this time (no pagination when set)
+    Returns: {"messages": [...], "has_more": bool, "total": int, "page": int}
+    """
+    cfg = storage.get_config()
+    since = request.args.get("since")
+
+    if since:
+        all_msgs = storage.get_messages_since(since)
+        raw = filters.get_messages(all_msgs, cfg, include_filtered=True)
+        result = []
+        for entry in raw:
+            item = {
+                "message": entry["message"].to_dict(),
+                "suppressed": entry["suppressed"],
+            }
+            if entry.get("rules"):
+                item["rules"] = entry["rules"]
+        return jsonify({"messages": result, "has_more": False, "total": len(result), "page": 1})
+
+    # Paginated
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = min(200, max(1, int(request.args.get("per_page", 50))))
+    all_msgs = storage.get_all_messages()
+    raw = filters.get_messages(all_msgs, cfg, include_filtered=True)
+    total = len(raw)
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_msgs = raw[start:end]
+
+    result = []
+    for entry in page_msgs:
+        item = {
+            "message": entry["message"].to_dict(),
+            "suppressed": entry["suppressed"],
+        }
+        if entry.get("rules"):
+            item["rules"] = entry["rules"]
+        result.append(item)
+
+    return jsonify({
+        "messages": result,
+        "has_more": end < total,
+        "total": total,
+        "page": page,
+    })
+
+
+@app.route("/api/messages/<msg_id>/suppress", methods=["POST"])
+def api_suppress(msg_id):
+    """Add a type=message filter rule to suppress the given message (JSON API)."""
+    msg = storage.get_message(msg_id)
+    if msg is None:
+        return jsonify({"error": "message not found"}), 404
+
+    added = _suppress_message(msg_id)
+    if not added:
+        return jsonify({"status": "already suppressed"})
+    return jsonify({"status": "ok", "filter_added": {"type": "message", "pattern": msg_id, "action": "suppress"}})
+
+
+@app.route("/api/messages/<msg_id>/unsuppress", methods=["POST"])
+def api_unsuppress(msg_id):
+    """Remove type=message filter rule for the given message (JSON API)."""
+    removed = _unsuppress_message(msg_id)
+    if not removed:
+        return jsonify({"status": "not found"}), 404
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/config", methods=["GET"])
+def api_get_config():
+    """Return current config as JSON."""
+    cfg = storage.get_config()
+    return jsonify(cfg.to_dict())
+
+
+@app.route("/api/config", methods=["PUT"])
+def api_put_config():
+    """Accept full config JSON, store to SQLite, snapshot S3, publish to Adafruit IO."""
+    try:
+        data = request.get_json()
+    except Exception:
+        return jsonify({"error": "invalid JSON"}), 400
+
+    if not isinstance(data, dict):
+        return jsonify({"error": "expected JSON object"}), 400
+
+    cfg = Config.from_dict(data)
+    _save_and_publish(cfg)
+    return jsonify({"status": "ok"})
+
+
+@app.route("/api/live-messages", methods=["GET"])
+def api_live_messages():
+    """Return messages received by the MQTT subscriber, newest first.
+
+    This shows what actually flowed through the MQTT broker, not just what
+    Flask published — any publisher to the topic will be captured.
+    """
+    limit = min(100, int(request.args.get("limit", 100)))
+    return jsonify(publish.get_live_messages(limit=limit))
+
+
+@app.route("/api/live-messages/seed", methods=["POST"])
+def api_live_messages_seed():
+    """Back-populate the live message ring buffer from SQLite messages.
+
+    Simulates what MQTT would have delivered by injecting all stored messages
+    into the ring buffer with source="rest". Subsequent real MQTT messages
+    will appear as source="mqtt".
+    """
+    msgs = storage.get_all_messages()
+    username = _cfg.get("AIO_USERNAME", "")
+    feed = _cfg.get("AIO_FEED", "")
+    topic = f"{username}/feeds/{feed}" if username and feed else "unknown/feeds/unknown"
+    # Only seed the most recent 50 to avoid flooding the buffer
+    publish.seed_from_rest_messages([m.to_dict() for m in msgs[:50]], topic)
+    return jsonify({"status": "ok", "seeded": min(50, len(msgs))})
+
+
+# ---------------------------------------------------------------------------
+# Web-level suppress/unsuppress (redirects back to dashboard)
+# ---------------------------------------------------------------------------
+
+@app.route("/messages/<msg_id>/suppress", methods=["POST"])
+def web_suppress(msg_id):
+    """Web form handler for suppressing a message."""
+    _suppress_message(msg_id)
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/messages/<msg_id>/unsuppress", methods=["POST"])
+def web_unsuppress(msg_id):
+    """Web form handler for unsuppressing a message."""
+    _unsuppress_message(msg_id)
+    return redirect(url_for("dashboard"))
+
+
+# ---------------------------------------------------------------------------
+# Admin UI helpers
+# ---------------------------------------------------------------------------
+
+def _save_and_publish(cfg: Config) -> None:
+    """Save config to SQLite, snapshot S3, publish to Adafruit IO."""
+    storage.put_config(cfg)
+    try:
+        s3.save_config_snapshot(cfg.to_dict())
+    except Exception as e:
+        logger.warning("Config S3 snapshot failed: %s", e)
+    if AIO_CONFIG_FEED:
+        publish.publish_config(cfg.to_dict())
+
+
+def _suppress_message(msg_id: str) -> bool:
+    """Add type=message filter rule. Returns True if newly added."""
+    msg = storage.get_message(msg_id)
+    if msg is None:
+        return False
+    cfg = storage.get_config()
+    for f in cfg.filters:
+        if f.type == "message" and f.pattern == msg_id:
+            return False
+    cfg.filters.append(FilterRule(type="message", pattern=msg_id, action="suppress"))
+    _save_and_publish(cfg)
+    return True
+
+
+def _unsuppress_message(msg_id: str) -> bool:
+    """Remove type=message filter rule. Returns True if found and removed."""
+    cfg = storage.get_config()
+    original_len = len(cfg.filters)
+    cfg.filters = [f for f in cfg.filters if not (f.type == "message" and f.pattern == msg_id)]
+    if len(cfg.filters) == original_len:
+        return False
+    _save_and_publish(cfg)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Admin UI
+# ---------------------------------------------------------------------------
+
+@app.route("/")
+def dashboard():
+    """Dashboard with stat cards and full paginated message list."""
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = 50
+    hide_suppressed = request.args.get("hide_suppressed") == "1"
+
+    all_msgs = storage.get_all_messages()
+    cfg = storage.get_config()
+    total = storage.message_count()
+
+    # Count suppressions per filter type
+    suppression_counts = {}
+    for f in cfg.filters:
+        suppression_counts[f.type] = suppression_counts.get(f.type, 0) + 1
+
+    # Build sender name lookup
+    sender_name_map = {s.phone: s.name for s in cfg.allowed_senders}
+
+    # Annotate all messages with suppression info
+    annotated = []
+    for m in all_msgs:
+        all_rules = filters.get_all_matches(m, cfg)
+        suppressed = bool(all_rules)
+        has_message_suppression = any(r.type == "message" and r.pattern == m.id for r in all_rules)
+        reasons = [f"{r.type}:{r.pattern}" for r in all_rules]
+
+        if hide_suppressed and suppressed:
+            continue
+
+        annotated.append({
+            "msg": m,
+            "suppressed": suppressed,
+            "suppressed_by": "; ".join(reasons) if reasons else None,
+            "suppressed_by_message": has_message_suppression,
+            "sender_name": sender_name_map.get(m.sender),
+        })
+
+    total_count = len(annotated)
+    total_pages = max(1, (total_count + per_page - 1) // per_page)
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_annotated = annotated[start:end]
+
+    return render_template(
+        "dashboard.html",
+        messages=page_annotated,
+        total_count=total,
+        suppression_counts=suppression_counts,
+        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
+        page=page,
+        total_pages=total_pages,
+        hide_suppressed=hide_suppressed,
+    )
+
+
+@app.route("/filters", methods=["POST"])
+def filter_rules():
+    """Handle filter add/delete from Settings. Always redirects to settings."""
+    cfg = storage.get_config()
+
+    action = request.form.get("action")
+    if action == "add":
+        ftype = request.form.get("type")
+        pattern = request.form.get("pattern", "").strip()
+        if ftype in ("keyword", "regex", "sender", "message") and pattern:
+            cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress"))
+            _save_and_publish(cfg)
+    elif action == "delete":
+        idx = int(request.form.get("index", -1))
+        if 0 <= idx < len(cfg.filters):
+            cfg.filters.pop(idx)
+            _save_and_publish(cfg)
+
+    return redirect(url_for("settings"))
+
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    """Allowed senders, rendering defaults, sign name."""
+    cfg = storage.get_config()
+
+    if request.method == "POST":
+        # Sign name — only update if non-empty; missing fields keep current value
+        if "sign_name" in request.form:
+            sign_name = request.form.get("sign_name", "").strip()
+            if sign_name:
+                cfg.sign.name = sign_name
+
+        # Rendering — only update if present; missing fields keep current value
+        if "rendering_mode" in request.form:
+            cfg.rendering.mode = request.form.get("rendering_mode", cfg.rendering.mode)
+        if "rendering_speed" in request.form:
+            try:
+                cfg.rendering.speed = float(request.form.get("rendering_speed", cfg.rendering.speed))
+            except ValueError:
+                pass
+        if "rendering_color" in request.form:
+            try:
+                cfg.rendering.color = int(request.form.get("rendering_color", cfg.rendering.color), 0)
+            except ValueError:
+                pass
+
+        # Allowed senders — replace list (senders form submitted independently)
+        if "sender_name" in request.form:
+            new_senders = []
+            names = request.form.getlist("sender_name")
+            phones = request.form.getlist("sender_phone")
+            for name, phone in zip(names, phones):
+                name = name.strip()
+                phone = phone.strip()
+                if phone:
+                    new_senders.append(AllowedSender(name=name or phone, phone=phone))
+            cfg.allowed_senders = new_senders
+
+        _save_and_publish(cfg)
+        return redirect(url_for("settings"))
+
+    return render_template(
+        "settings.html",
+        cfg=cfg,
+    )
+
+
+@app.route("/testing")
+def testing():
+    """Testing page: inject test messages and monitor live feed + config."""
+    return render_template("testing.html")
+
+
+# ---------------------------------------------------------------------------
+# S3 browser (admin UI)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/admin/s3-objects")
+def api_s3_objects():
+    """Return S3 objects under a prefix as a jstree-compatible node list.
+
+    Query params:
+      prefix: directory prefix to list (default "" = root) e.g. "messages/2026-05/"
+    Returns: {"bucket": str, "prefix": str, "nodes": [{id, text, icon, children}]}
+    """
+    try:
+        bucket = s3._message_log_bucket()
+        if not bucket:
+            return jsonify({"error": "S3_BUCKET not configured"}), 500
+        client = s3._s3_client()
+        prefix = request.args.get("prefix", "")
+        response = client.list_objects_v2(Bucket=bucket, Prefix=prefix, Delimiter="/")
+
+        nodes = []
+
+        # Folders (common prefixes)
+        for cp in response.get("CommonPrefixes", []):
+            folder = cp["Prefix"].rstrip("/")  # e.g. "messages" or "messages/2026-05"
+            name = folder.split("/")[-1]
+            # Keep trailing slash on id so client can identify folders; text is just the name
+            folder_id = cp["Prefix"].rstrip("/") + "/"
+            nodes.append({
+                "id": folder_id,
+                "text": name,
+                "icon": "jstree-folder",
+                "children": True,
+                "state": {"opened": False},
+            })
+
+        # Files
+        for obj in response.get("Contents", []):
+            key = obj["Key"]
+            name = key.split("/")[-1]
+            size = obj["Size"]
+            size_str = str(size) if size < 1024 else f"{size / 1024:.1f}KB"
+            nodes.append({
+                "id": key,
+                "text": f"{name} <small class='text-muted'>({size_str})</small>",
+                "icon": "jstree-file",
+                "children": False,
+            })
+
+        return jsonify({"bucket": bucket, "prefix": prefix, "nodes": nodes})
+    except Exception as e:
+        logger.warning("S3 list failed: %s", e)
+        err_str = str(e)
+        if "NoSuchBucket" in err_str:
+            return jsonify({"error": "Bucket does not exist. Create it in MinIO console (mc alias/heart-sms-receiver)."}), 500
+        return jsonify({"error": err_str}), 500
+
+
+@app.route("/api/admin/s3-object")
+def api_s3_object():
+    """Fetch and return the content of a specific S3 object (JSON)."""
+    key = request.args.get("key", "")
+    if not key:
+        return jsonify({"error": "key parameter required"}), 400
+    try:
+        bucket = s3._message_log_bucket()
+        client = s3._s3_client()
+        response = client.get_object(Bucket=bucket, Key=key)
+        content = response["Body"].read().decode()
+        return jsonify({"key": key, "content": content})
+    except Exception as e:
+        logger.warning("S3 get failed: %s", e)
+        return jsonify({"error": str(e)}), 500
+
+
+# ---------------------------------------------------------------------------
+# Health check (for Render)
+# ---------------------------------------------------------------------------
+
+@app.route("/health")
+def health():
+    return "ok"
+
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    import os
+    # Respect FLASK_DEBUG env var so reloader is controlled externally.
+    debug = os.environ.get("FLASK_DEBUG", "0") != "0"
+    port = int(os.environ.get("FLASK_RUN_PORT", 5001))
+    app.run(host="0.0.0.0", port=port, debug=debug)
