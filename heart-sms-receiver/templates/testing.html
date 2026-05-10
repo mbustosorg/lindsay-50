@@ -102,19 +102,7 @@
   </div>
   <div class="card-body p-0">
     <div style="max-height: 400px; overflow-y: auto;">
-      <table class="table table-striped table-sm mb-0">
-        <thead class="sticky-top bg-white">
-          <tr>
-            <th>Source</th>
-            <th>Sender</th>
-            <th>Time</th>
-            <th>Body</th>
-            <th>Suppression Reasons</th>
-          </tr>
-        </thead>
-        <tbody id="msg-tbody">
-          <tr><td colspan="5" class="text-muted">Loading...</td></tr>
-        </tbody>
+      <table class="table table-striped table-sm mb-0 msg-table" id="feed-table">
       </table>
     </div>
   </div>
@@ -149,8 +137,7 @@ async function refreshFeed() {
   fetchMessages();
 }
 
-async function fetchMessages(append) {
-  append = !!append;
+async function fetchMessages() {
   try {
     const limit = document.getElementById('feed-limit').value;
     const [liveRes, msgsRes, cfgRes] = await Promise.all([
@@ -163,69 +150,75 @@ async function fetchMessages(append) {
     const rawMsgs = msgsData.messages || [];
     const cfg = await cfgRes.json();
 
-    // Build sender name lookup from config
     const senderNameMap = {};
     for (const s of cfg.allowed_senders || []) {
       senderNameMap[s.phone] = s.name;
     }
 
-    // Map of message id -> suppression info
+    // Map of message id -> full entry for suppression lookup
     const suppressedMap = {};
     for (const entry of rawMsgs) {
-      suppressedMap[entry.message.id] = {
-        suppressed: entry.suppressed,
-        rules: entry.rules || [],
-        sender: entry.message.sender,
-      };
+      suppressedMap[entry.message.id] = entry;
     }
 
-    const tbody = document.getElementById('msg-tbody');
-    const count = document.getElementById('msg-count');
     // Sort descending by received_at (newest first)
-    const entries = [...live].sort((a, b) => (a.received_at > b.received_at ? -1 : 1));
-    count.textContent = entries.length;
+    const entries = [].slice.call(live).sort(function(a, b) {
+      return (a.received_at > b.received_at ? -1 : 1);
+    });
+
+    document.getElementById('msg-count').textContent = entries.length;
 
     if (entries.length === 0) {
-      if (!append) tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No messages — click Refresh to load stored messages</td></tr>';
+      document.getElementById('feed-table').innerHTML = renderMsgTable({
+        entries: [],
+        showCheckbox: false,
+        showSource: true,
+        tbodyId: 'msg-tbody',
+      });
+      document.getElementById('msg-tbody').innerHTML =
+        '<tr><td colspan="5" class="text-muted">No messages — click Refresh to load stored messages</td></tr>';
       return;
     }
 
-    // Build rows using shared renderer (show Source col, no checkbox)
-    var html = entries.map(function(item) {
-      // Enrich with suppression info
-      var entry = { message: {}, suppressed: false, rules: [], source: item.source || 'rest' };
-      var info = null;
-      if (item.msg_id && suppressedMap[item.msg_id]) {
-        info = suppressedMap[item.msg_id];
-      } else {
-        var match = rawMsgs.find(function(m) {
+    // Enrich live entries with suppression info then render
+    const enriched = entries.map(function(item) {
+      const entry = { source: item.source || 'rest' };
+      let info = suppressedMap[item.msg_id] || null;
+      if (!info) {
+        const match = rawMsgs.find(function(m) {
           return m.message.body === item.body && m.message.received_at === item.received_at;
         });
-        if (match) info = suppressedMap[match.message.id];
+        if (match) info = match;
       }
-      // Extract body from JSON payload or use raw
-      var body = item.body || '';
-      try { var p = JSON.parse(item.body); if (p.body !== undefined) body = p.body; } catch(e) {}
-      entry.message = { id: item.msg_id || '', sender: info ? info.sender : '—', body: body, received_at: item.received_at };
+      // Extract body from JSON payload
+      let body = item.body || '';
+      try { const p = JSON.parse(item.body); if (p.body !== undefined) body = p.body; } catch(e) {}
+      entry.message = {
+        id: item.msg_id || '',
+        sender: info ? info.message.sender : '—',
+        body: body,
+        received_at: item.received_at,
+      };
       entry.suppressed = info ? info.suppressed : false;
-      entry.rules = info ? info.rules : [];
-      entry.sender_name = info ? senderNameMap[info.sender] : null;
-      return renderMsgRow(entry, { showSource: true, showCheckbox: false });
-    }).join('');
+      entry.rules = info ? (info.rules || []) : [];
+      entry.sender_name = info ? senderNameMap[info.message.sender] : null;
+      return entry;
+    });
 
-    if (!append) {
-      tbody.innerHTML = html;
-    } else {
-      tbody.insertAdjacentHTML('beforeend', html);
-    }
+    document.getElementById('feed-table').innerHTML = renderMsgTable({
+      entries: enriched,
+      showCheckbox: false,
+      showSource: true,
+      tbodyId: 'msg-tbody',
+    });
 
     // Convert UTC timestamps to local time
-    tbody.querySelectorAll('td[data-utc]').forEach(function(cell) {
-      var utc = cell.getAttribute('data-utc');
+    document.querySelectorAll('#msg-tbody td[data-utc]').forEach(function(cell) {
+      const utc = cell.getAttribute('data-utc');
       if (utc) {
         try {
-          var d = new Date(utc);
-          cell.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+          const d = new Date(utc);
+          cell.textContent = d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:false});
         } catch(e) { cell.textContent = utc.slice(11, 19); }
       }
     });
