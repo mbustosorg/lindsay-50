@@ -303,9 +303,9 @@ async function fetchS3Objects() {
           if (node.id === '#') {
             cb.call(this, data.nodes);
           } else {
-            // Folder node — lazy load children
-            const prefix = node.id + '/';
-            $.get('/api/admin/s3-objects?prefix=' + encodeURIComponent(prefix))
+            // Lazy load children for folder node
+            const prefix = encodeURIComponent(node.id);
+            $.get('/api/admin/s3-objects?prefix=' + prefix)
               .done(function(childData) {
                 cb.call(this, childData.nodes || []);
               })
@@ -314,11 +314,9 @@ async function fetchS3Objects() {
         },
         themes: { name: 'default', dots: true, icons: true },
       },
-      plugins: ['types'],
-      types: {
-        default: { icon: 'jstree-file' },
-        folder: { icon: 'jstree-folder' },
-      },
+      plugins: [],
+    }).on('open_node.jstree', function(_, node) {
+      console.log('open_node:', node.node.id);
     }).on('select_node.jstree', function(event, data) {
       // Only fetch leaf nodes (files). Folders are handled by jstree default toggle.
       const key = data.node.id;
