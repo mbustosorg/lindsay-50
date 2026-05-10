@@ -330,13 +330,6 @@ async function fetchS3Objects() {
         fetchS3File(key);
       }
     });
-      // Only fetch leaf nodes (files). Folders are handled by jstree default toggle.
-      const key = data.node.id;
-      if (!key || key.endsWith('/')) return;
-      // Deselect immediately to prevent persistent highlight and prevent re-entrant events
-      $(treeEl).jstree('deselect_node', data.node);
-      fetchS3File(key);
-    });
   } catch (e) {
     document.getElementById('s3-tree').innerHTML =
       '<div class="text-danger small p-2">Error loading S3 objects</div>';
