@@ -63,42 +63,22 @@ def get_live_messages(limit: int = 20) -> list[dict]:
 
 
 def seed_from_rest_messages(messages: list[dict], feed_topic: str) -> None:
-    """Merge REST API messages into the live ring buffer.
+    """Backfill the ring buffer from REST messages (after clearing it).
 
-    Does NOT clear the buffer. For each REST message:
-    - If msg_id not in buffer: append with source="rest"
-    - If msg_id already in buffer (MQTT entry): update source to "rest"
-      (represents what ESP32 would see after receiving via REST fallback)
+    Clears the buffer first, then appends REST messages marked source="rest".
+    The MQTT subscriber will repopulate naturally as new messages arrive.
     """
-    for msg in reversed(messages):
-        msg_id = msg.get("id")
-        body = msg.get("body", "")
-        received_at = msg.get("received_at")
+    with _LIVE_LOCK:
+        _LIVE_MESSAGES.clear()
 
-        with _LIVE_LOCK:
-            # Check if already present — update source to "rest"
-            if msg_id:
-                for entry in _LIVE_MESSAGES:
-                    if entry.get("msg_id") == msg_id:
-                        entry["source"] = "rest"
-                        break
-                else:
-                    _LIVE_MESSAGES.append({
-                        "body": body,
-                        "topic": feed_topic,
-                        "source": "rest",
-                        "received_at": received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                        "msg_id": msg_id,
-                    })
-            else:
-                # No msg_id: always append
-                _LIVE_MESSAGES.append({
-                    "body": body,
-                    "topic": feed_topic,
-                    "source": "rest",
-                    "received_at": received_at or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-                    "msg_id": msg_id,
-                })
+    for msg in reversed(messages):
+        record_live_message(
+            body=msg.get("body", ""),
+            topic=feed_topic,
+            source="rest",
+            received_at=msg.get("received_at"),
+            msg_id=msg.get("id"),
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -205,19 +185,21 @@ class _MqttSubscriber:
             logger.warning("MQTT subscriber connection failed: rc=%s", rc)
 
     def _on_message(self, _client, _userdata, msg):
-        body = msg.payload.decode(errors="replace")
+        raw = msg.payload.decode(errors="replace")
         # Try to parse as JSON (our format), fall back to raw text
         msg_id = None
         received_at = None
+        display_body = raw
         try:
-            data = json.loads(body)
+            data = json.loads(raw)
             msg_id = data.get("id")
             received_at = data.get("received_at")
+            display_body = data.get("body", raw)
         except (json.JSONDecodeError, UnicodeDecodeError):
             pass
-        record_live_message(body=body, topic=msg.topic, source="mqtt",
+        record_live_message(body=display_body, topic=msg.topic, source="mqtt",
                             received_at=received_at, msg_id=msg_id)
-        logger.info("MQTT subscriber received: %s [%s]", body[:80], msg.topic)
+        logger.info("MQTT subscriber received: %s [%s]", display_body[:80], msg.topic)
 
     def _on_disconnect(self, _client, _userdata, rc):
         if rc != 0:
