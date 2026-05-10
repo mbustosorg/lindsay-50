@@ -319,10 +319,12 @@ async function fetchS3Objects() {
         default: { icon: 'jstree-file' },
         folder: { icon: 'jstree-folder' },
       },
-    }).on('click.jstree', function(event, data) {
-      // Only open files — folders toggle expand via jstree default behavior
+    }).on('select_node.jstree', function(event, data) {
+      // Only fetch leaf nodes (files). Folders are handled by jstree default toggle.
       const key = data.node.id;
       if (!key || key.endsWith('/')) return;
+      // Deselect immediately to prevent persistent highlight and prevent re-entrant events
+      $(treeEl).jstree('deselect_node', data.node);
       fetchS3File(key);
     });
   } catch (e) {
