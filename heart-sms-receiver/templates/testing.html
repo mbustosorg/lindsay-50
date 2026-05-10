@@ -149,7 +149,8 @@ async function refreshFeed() {
   fetchMessages();
 }
 
-async function fetchMessages() {
+async function fetchMessages(append) {
+  append = !!append;
   try {
     const limit = document.getElementById('feed-limit').value;
     const [liveRes, msgsRes, cfgRes] = await Promise.all([
@@ -158,7 +159,8 @@ async function fetchMessages() {
       fetch('/api/config'),
     ]);
     const live = await liveRes.json();
-    const rawMsgs = await msgsRes.json();
+    const msgsData = await msgsRes.json();
+    const rawMsgs = msgsData.messages || [];
     const cfg = await cfgRes.json();
 
     // Build sender name lookup from config
@@ -167,7 +169,7 @@ async function fetchMessages() {
       senderNameMap[s.phone] = s.name;
     }
 
-    // Map of message id -> suppression info (deduplicate by msg_id)
+    // Map of message id -> suppression info
     const suppressedMap = {};
     for (const entry of rawMsgs) {
       suppressedMap[entry.message.id] = {
@@ -184,72 +186,51 @@ async function fetchMessages() {
     count.textContent = entries.length;
 
     if (entries.length === 0) {
-      tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No messages — click Refresh to load stored messages</td></tr>';
+      if (!append) tbody.innerHTML = '<tr><td colspan="5" class="text-muted">No messages — click Refresh to load stored messages</td></tr>';
       return;
     }
 
-    tbody.innerHTML = entries.map(item => {
-      // Deduplicate: find matching raw message by msg_id or body+received_at
-      let info = null;
+    // Build rows using shared renderer (show Source col, no checkbox)
+    var html = entries.map(function(item) {
+      // Enrich with suppression info
+      var entry = { message: {}, suppressed: false, rules: [], source: item.source || 'rest' };
+      var info = null;
       if (item.msg_id && suppressedMap[item.msg_id]) {
         info = suppressedMap[item.msg_id];
       } else {
-        const match = rawMsgs.find(m =>
-          m.message.body === item.body && m.message.received_at === item.received_at
-        );
+        var match = rawMsgs.find(function(m) {
+          return m.message.body === item.body && m.message.received_at === item.received_at;
+        });
         if (match) info = suppressedMap[match.message.id];
       }
-      const suppressed = info ? info.suppressed : false;
-      const rules = info ? info.rules : [];
-      const reasons = rules.map(r => `${r.type}:${r.pattern}`);
-      const senderPhone = info ? info.sender : '—';
-      const senderDisplay = senderNameMap[senderPhone]
-        ? `${senderNameMap[senderPhone]}<br><small class="text-muted mono">${senderPhone}</small>`
-        : senderPhone;
-
-      const source = item.source === 'mqtt'
-        ? '<span class="badge bg-success">mqtt</span>'
-        : '<span class="badge bg-warning text-dark">rest</span>';
-
-      // Extract body from JSON payload (our MQTT format) or use raw body
-      let msgBody = item.body || '';
-      try {
-        const parsed = JSON.parse(item.body);
-        if (parsed.body !== undefined) msgBody = parsed.body;
-      } catch(e) {}
-
-      return `
-        <tr class="${suppressed ? 'table-secondary' : ''}">
-          <td>${source}</td>
-          <td><span class="msg-sender${suppressed ? ' text-muted text-decoration-line-through' : ''}">${senderDisplay}</span></td>
-          <td class="msg-id text-muted" data-utc="${item.received_at || ''}"></td>
-          <td class="${suppressed ? 'text-muted' : ''}"><span class="msg-body">${escapeHtml(msgBody)}</span></td>
-          <td>
-            ${reasons.length > 0
-              ? reasons.map(r => `<div data-reason="${escapeHtml(r)}"><span class="badge bg-secondary">${escapeHtml(r)}</span></div>`).join('')
-              : '<span class="text-muted">—</span>'
-            }
-          </td>
-        </tr>
-      `;
+      // Extract body from JSON payload or use raw
+      var body = item.body || '';
+      try { var p = JSON.parse(item.body); if (p.body !== undefined) body = p.body; } catch(e) {}
+      entry.message = { id: item.msg_id || '', sender: info ? info.sender : '—', body: body, received_at: item.received_at };
+      entry.suppressed = info ? info.suppressed : false;
+      entry.rules = info ? info.rules : [];
+      entry.sender_name = info ? senderNameMap[info.sender] : null;
+      return renderMsgRow(entry, { showSource: true, showCheckbox: false });
     }).join('');
+
+    if (!append) {
+      tbody.innerHTML = html;
+    } else {
+      tbody.insertAdjacentHTML('beforeend', html);
+    }
 
     // Convert UTC timestamps to local time
     tbody.querySelectorAll('td[data-utc]').forEach(function(cell) {
-      const utc = cell.getAttribute('data-utc');
+      var utc = cell.getAttribute('data-utc');
       if (utc) {
         try {
-          const d = new Date(utc);
+          var d = new Date(utc);
           cell.textContent = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-        } catch(e) {
-          cell.textContent = utc.slice(11, 19);
-        }
+        } catch(e) { cell.textContent = utc.slice(11, 19); }
       }
     });
   } catch (e) {
     console.error('Fetch failed:', e);
-    document.getElementById('msg-tbody').innerHTML =
-      '<tr><td colspan="5" class="text-danger">Error loading messages</td></tr>';
   }
 }
 

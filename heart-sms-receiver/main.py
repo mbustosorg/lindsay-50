@@ -191,17 +191,42 @@ def api_messages():
 
 @app.route("/api/messages", methods=["GET"])
 def api_get_messages():
-    """GET /api/messages?since=<timestamp> — return all messages with suppression info."""
+    """GET /api/messages — return messages with suppression info, paginated.
+
+    Query params:
+      page:    1-based page number (default 1)
+      per_page: messages per page (default 50, max 200)
+      since:   ISO timestamp — return messages after this time (no pagination when set)
+    Returns: {"messages": [...], "has_more": bool, "total": int, "page": int}
+    """
     cfg = storage.get_config()
     since = request.args.get("since")
+
     if since:
         all_msgs = storage.get_messages_since(since)
-    else:
-        all_msgs = storage.get_all_messages()
-    # Return all messages with all matched suppression rules (ESP32 applies filters client-side)
+        raw = filters.get_messages(all_msgs, cfg, include_filtered=True)
+        result = []
+        for entry in raw:
+            item = {
+                "message": entry["message"].to_dict(),
+                "suppressed": entry["suppressed"],
+            }
+            if entry.get("rules"):
+                item["rules"] = entry["rules"]
+        return jsonify({"messages": result, "has_more": False, "total": len(result), "page": 1})
+
+    # Paginated
+    page = max(1, int(request.args.get("page", 1)))
+    per_page = min(200, max(1, int(request.args.get("per_page", 50))))
+    all_msgs = storage.get_all_messages()
     raw = filters.get_messages(all_msgs, cfg, include_filtered=True)
+    total = len(raw)
+    start = (page - 1) * per_page
+    end = start + per_page
+    page_msgs = raw[start:end]
+
     result = []
-    for entry in raw:
+    for entry in page_msgs:
         item = {
             "message": entry["message"].to_dict(),
             "suppressed": entry["suppressed"],
@@ -209,7 +234,13 @@ def api_get_messages():
         if entry.get("rules"):
             item["rules"] = entry["rules"]
         result.append(item)
-    return jsonify(result)
+
+    return jsonify({
+        "messages": result,
+        "has_more": end < total,
+        "total": total,
+        "page": page,
+    })
 
 
 @app.route("/api/messages/<msg_id>/suppress", methods=["POST"])
