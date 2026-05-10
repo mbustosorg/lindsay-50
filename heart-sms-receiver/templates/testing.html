@@ -316,6 +316,7 @@ async function fetchS3Objects() {
       },
       plugins: [],
     }).on('click.jstree', function(event, data) {
+      if (!data || !data.node) return;
       console.log('click.jstree fired', data.node.id, event.target);
       // Toggle folder expand/collapse on single click
       const nodeId = data.node.id;
