@@ -483,32 +483,71 @@ def testing():
 
 @app.route("/api/admin/s3-objects")
 def api_s3_objects():
-    """Return a list of objects in the configured S3 bucket."""
+    """Return S3 objects under a prefix as a jstree-compatible node list.
+
+    Query params:
+      prefix: directory prefix to list (default "" = root) e.g. "messages/2026-05/"
+    Returns: {"bucket": str, "prefix": str, "nodes": [{id, text, icon, children}]}
+    """
     try:
         bucket = s3._message_log_bucket()
         if not bucket:
             return jsonify({"error": "S3_BUCKET not configured"}), 500
         client = s3._s3_client()
-        response = client.list_objects_v2(Bucket=bucket)
+        prefix = request.args.get("prefix", "")
+        response = client.list_objects_v2(Bucket=bucket, Prefix=prefix, Delimiter="/")
 
-        objects = []
-        for obj in response.get("Contents", []):
-            objects.append({
-                "key": obj["Key"],
-                "size": obj["Size"],
-                "last_modified": obj["LastModified"].isoformat() if obj.get("LastModified") else None,
+        nodes = []
+
+        # Folders (common prefixes)
+        for cp in response.get("CommonPrefixes", []):
+            folder = cp["Prefix"].rstrip("/")
+            name = folder.split("/")[-1]
+            nodes.append({
+                "id": folder,
+                "text": name + "/",
+                "icon": "jstree-folder",
+                "children": True,
+                "state": {"opened": False},
             })
 
-        # Sort newest first
-        objects.sort(key=lambda o: o["last_modified"] or "", reverse=True)
-        return jsonify({"bucket": bucket, "objects": objects})
+        # Files
+        for obj in response.get("Contents", []):
+            key = obj["Key"]
+            name = key.split("/")[-1]
+            size = obj["Size"]
+            size_str = str(size) if size < 1024 else f"{size / 1024:.1f}KB"
+            nodes.append({
+                "id": key,
+                "text": f"{name} <small class='text-muted'>({size_str})</small>",
+                "icon": "jstree-file",
+                "children": False,
+            })
+
+        return jsonify({"bucket": bucket, "prefix": prefix, "nodes": nodes})
     except Exception as e:
         logger.warning("S3 list failed: %s", e)
         err_str = str(e)
         if "NoSuchBucket" in err_str:
-            # Best-effort bucket name from error message
             return jsonify({"error": "Bucket does not exist. Create it in MinIO console (mc alias/heart-sms-receiver)."}), 500
         return jsonify({"error": err_str}), 500
+
+
+@app.route("/api/admin/s3-object")
+def api_s3_object():
+    """Fetch and return the content of a specific S3 object (JSON)."""
+    key = request.args.get("key", "")
+    if not key:
+        return jsonify({"error": "key parameter required"}), 400
+    try:
+        bucket = s3._message_log_bucket()
+        client = s3._s3_client()
+        response = client.get_object(Bucket=bucket, Key=key)
+        content = response["Body"].read().decode()
+        return jsonify({"key": key, "content": content})
+    except Exception as e:
+        logger.warning("S3 get failed: %s", e)
+        return jsonify({"error": str(e)}), 500
 
 
 # ---------------------------------------------------------------------------
