@@ -317,25 +317,28 @@ async function fetchS3Objects() {
       plugins: [],
     }).on('select_node.jstree', async function(_, node) {
       const key = node.node.id;
-      if (!key.endsWith('/')) {
-        try {
-          const res = await fetch('/api/admin/s3-object?key=' + encodeURIComponent(key));
-          const obj = await res.json();
-          if (obj.error) {
-            showJsonModal(key, obj.error, true);
-          } else {
-            try {
-              const formatted = JSON.stringify(JSON.parse(obj.content), null, 2);
-              showJsonModal(key, formatted, false);
-            } catch(_) {
-              showJsonModal(key, obj.content, false);
-            }
-          }
-        } catch(e) {
-          showJsonModal(key, 'Error fetching object', true);
-        }
+      // Only fetch files, not folders (keys ending with /)
+      if (!key || key.endsWith('/')) {
         $(treeEl).jstree('deselect_node', node.node);
+        return;
       }
+      try {
+        const res = await fetch('/api/admin/s3-object?key=' + encodeURIComponent(key));
+        const obj = await res.json();
+        if (obj.error) {
+          showJsonModal(key, obj.error, true);
+        } else {
+          try {
+            const formatted = JSON.stringify(JSON.parse(obj.content), null, 2);
+            showJsonModal(key, formatted, false);
+          } catch(_) {
+            showJsonModal(key, obj.content, false);
+          }
+        }
+      } catch(e) {
+        showJsonModal(key, 'Error fetching object', true);
+      }
+      $(treeEl).jstree('deselect_node', node.node);
     });
   } catch (e) {
     document.getElementById('s3-tree').innerHTML =
