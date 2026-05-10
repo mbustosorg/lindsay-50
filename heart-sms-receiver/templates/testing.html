@@ -315,15 +315,21 @@ async function fetchS3Objects() {
         themes: { name: 'default', dots: true, icons: true },
       },
       plugins: [],
-    }).on('click.jstree', function(event, data) {
-      if (!data || !data.node) return;
-      const nodeId = data.node.id;
-      if (!nodeId.endsWith('/')) return;
-      // Don't toggle if clicking the expander icon
-      if ($(event.target).closest('.jstree-ocl').length) return;
-      var instance = $.jstree.reference(treeEl);
-      if (instance) instance.toggle_node(nodeId);
     }).on('select_node.jstree', function(event, data) {
+      // On single click: folders toggle expand, files fetch content
+      const key = data.node.id;
+      if (!key) return;
+
+      if (key.endsWith('/')) {
+        // Folder: toggle expand and deselect (no persistent highlight)
+        $(treeEl).jstree('toggle_node', data.node);
+        $(treeEl).jstree('deselect_node', data.node);
+      } else {
+        // File: fetch and show
+        $(treeEl).jstree('deselect_node', data.node);
+        fetchS3File(key);
+      }
+    });
       // Only fetch leaf nodes (files). Folders are handled by jstree default toggle.
       const key = data.node.id;
       if (!key || key.endsWith('/')) return;
