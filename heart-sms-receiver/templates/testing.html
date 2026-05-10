@@ -314,31 +314,39 @@ async function fetchS3Objects() {
         },
         themes: { name: 'default', dots: true, icons: true },
       },
-      plugins: [],
-    }).on('activate_node.jstree', async function(_, node) {
-      const key = node.node.id;
-      // Only fetch files, not folders
+      plugins: ['types'],
+      types: {
+        default: { icon: 'jstree-file' },
+        folder: { icon: 'jstree-folder' },
+      },
+    }).on('click.jstree', function(event, data) {
+      // Only open files — folders toggle expand via jstree default behavior
+      const key = data.node.id;
       if (!key || key.endsWith('/')) return;
-      try {
-        const res = await fetch('/api/admin/s3-object?key=' + encodeURIComponent(key));
-        const obj = await res.json();
-        if (obj.error) {
-          showJsonModal(key, obj.error, true);
-        } else {
-          try {
-            const formatted = JSON.stringify(JSON.parse(obj.content), null, 2);
-            showJsonModal(key, formatted, false);
-          } catch(_) {
-            showJsonModal(key, obj.content, false);
-          }
-        }
-      } catch(e) {
-        showJsonModal(key, 'Error fetching object', true);
-      }
+      fetchS3File(key);
     });
   } catch (e) {
     document.getElementById('s3-tree').innerHTML =
       '<div class="text-danger small p-2">Error loading S3 objects</div>';
+  }
+}
+
+async function fetchS3File(key) {
+  try {
+    const res = await fetch('/api/admin/s3-object?key=' + encodeURIComponent(key));
+    const obj = await res.json();
+    if (obj.error) {
+      showJsonModal(key, obj.error, true);
+    } else {
+      try {
+        const formatted = JSON.stringify(JSON.parse(obj.content), null, 2);
+        showJsonModal(key, formatted, false);
+      } catch(_) {
+        showJsonModal(key, obj.content, false);
+      }
+    }
+  } catch(e) {
+    showJsonModal(key, 'Error fetching object', true);
   }
 }
 
