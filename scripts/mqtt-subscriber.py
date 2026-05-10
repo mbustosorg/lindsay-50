@@ -13,6 +13,7 @@ Configure via settings.toml in the project root:
   AIO_FEED      - feed name to subscribe to (default: test-feed)
 """
 
+import json
 import sys
 import tomllib
 from pathlib import Path
@@ -59,8 +60,19 @@ def main() -> None:
             print(f"Connection failed: rc={rc}", file=sys.stderr)
 
     def on_message(_client, _userdata, msg):
-        payload = msg.payload.decode(errors="replace")
-        print(f"[{msg.topic}] {payload}")
+        raw = msg.payload.decode(errors="replace")
+        try:
+            data = json.loads(raw)
+            msg_id = data.get("id", "?")
+            sender = data.get("sender", "?")
+            sender_name = data.get("sender_name")
+            body = data.get("body", "")
+            received_at = data.get("received_at", "?")
+            sn = f" ({sender_name})" if sender_name else ""
+            print(f"[{msg.topic}] id={msg_id} from={sender}{sn} at={received_at}")
+            print(f"         body={body!r}")
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            print(f"[{msg.topic}] (raw) {raw}")
 
     def on_disconnect(_client, _userdata, rc):
         print(f"Disconnected: rc={rc}")
