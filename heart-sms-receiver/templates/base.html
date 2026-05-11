@@ -82,6 +82,35 @@ function renderMsgRow(entry, options) {
     '</tr>';
 }
 
+// Render the full <table> (header + body) for the messages table.
+// Both pages use this so the table structure is always identical.
+// options.showCheckbox: show S column (dashboard)
+// options.showSource: show Source column (testing)
+// options.getExtraAttrs(entry): optional fn to enrich entry before rendering
+function renderMsgTable(options) {
+  var entries = options.entries || [];
+  var showCheckbox = !!options.showCheckbox;
+  var showSource = !!options.showSource;
+  var tbodyId = options.tbodyId || 'msg-tbody';
+  var getExtraAttrs = options.getExtraAttrs;
+
+  var header = '<thead class="sticky-top bg-white"><tr>' +
+    (showCheckbox ? '<th style="width:40px;">S</th>' : '') +
+    (showSource   ? '<th>Source</th>' : '') +
+    '<th>Sender</th><th>Time</th><th>Body</th><th>Suppression Reasons</th>' +
+    '</tr></thead>';
+
+  var rows = entries.map(function(entry) {
+    if (getExtraAttrs) {
+      var extra = getExtraAttrs(entry);
+      for (var k in extra) entry[k] = extra[k];
+    }
+    return renderMsgRow(entry, {showCheckbox: showCheckbox, showSource: showSource});
+  }).join('');
+
+  return header + '<tbody id="' + tbodyId + '">' + rows + '</tbody>';
+}
+
 function escapeHtml(s) {
   if (s === null || s === undefined) return '';
   var d = document.createElement('div');
