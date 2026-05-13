@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Messages — Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h2 class="text-3xl font-bold font-heading text-dark">Messages</h2>
+    <p class="text-slate-500 mt-1">Page {{ page }} of {{ total_pages }}</p>
+  </div>
+</div>
+
+<!-- Pagination -->
+{% if total_pages > 1 %}
+<nav class="flex items-center gap-2 mb-6">
+  {% if page > 1 %}
+  <a href="{{ url_for('message_list', page=page-1) }}" class="px-4 py-2 rounded-xl bg-white shadow-sm text-slate-600 hover:bg-indigo-50 hover:text-primary transition-all font-medium">← Previous</a>
+  {% endif %}
+  {% for p in range(1, total_pages + 1) %}
+    {% if p >= page - 2 and p <= page + 2 %}
+  <a href="{{ url_for('message_list', page=p) }}" class="px-4 py-2 rounded-xl {% if p == page %}bg-primary text-white shadow-lg{% else %}bg-white text-slate-600 hover:bg-indigo-50{% endif %} transition-all font-medium">{{ p }}</a>
+    {% endif %}
+  {% endfor %}
+  {% if page < total_pages %}
+  <a href="{{ url_for('message_list', page=page+1) }}" class="px-4 py-2 rounded-xl bg-white shadow-sm text-slate-600 hover:bg-indigo-50 hover:text-primary transition-all font-medium">Next →</a>
+  {% endif %}
+</nav>
+{% endif %}
+
+<!-- Messages Table -->
+<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 overflow-hidden">
+  <table class="w-full">
+    <thead>
+      <tr class="bg-indigo-50">
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Time</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Sender</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Body</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Actions</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-indigo-50">
+      {% for msg in messages %}
+      {% set is_suppressed = cfg.filters|selectattr('type', 'equalto', 'message')|selectattr('pattern', 'equalto', msg.id)|list %}
+      <tr class="hover:bg-indigo-50/30 transition-colors {% if is_suppressed %}opacity-50{% endif %}">
+        <td class="px-6 py-4 text-sm text-slate-500 font-mono whitespace-nowrap">{{ msg.format_received_at(cfg.timezone) }}</td>
+        <td class="px-6 py-4 text-sm text-dark font-medium">{{ msg.sender }}</td>
+        <td class="px-6 py-4 text-sm text-slate-600 truncate max-w-md">{{ msg.body }}</td>
+        <td class="px-6 py-4">
+          {% if is_suppressed %}
+          <form method="POST" action="{{ url_for('web_unsuppress', msg_id=msg.id) }}" class="inline">
+            <button type="submit" class="px-3 py-1.5 rounded-lg bg-green-100 text-green-700 text-sm font-semibold hover:bg-green-200 transition-colors cursor-pointer">Unsuppress</button>
+          </form>
+          {% else %}
+          <form method="POST" action="{{ url_for('web_suppress', msg_id=msg.id) }}" class="inline">
+            <button type="submit" class="px-3 py-1.5 rounded-lg bg-amber-100 text-amber-700 text-sm font-semibold hover:bg-amber-200 transition-colors cursor-pointer">Suppress</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4" class="px-6 py-12 text-center text-slate-500">
+          <span class="text-4xl">📭</span>
+          <p class="mt-2">No messages yet.</p>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

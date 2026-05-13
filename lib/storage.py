@@ -9,11 +9,11 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from .models import Config, Message
+from lib_shared.models import Config, Message
 
 
 def _db_path() -> Path:
-    return Path(__file__).parent.parent / "heart-sms-receiver" / "db.sqlite"
+    return Path(__file__).parent.parent / "heart-message-manager" / "db.sqlite"
 
 
 def _json_dumps(cfg: Config) -> str:

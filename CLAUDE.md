@@ -4,32 +4,54 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-SMS → microcontroller bridge. A Twilio webhook posts an incoming SMS to a Flask server (`heart-sms-receiver/main.py`), which publishes the body to an Adafruit IO feed via the REST API. An ESP32 running CircuitPython (`heart-matrix-controller/code.py`) subscribes to that feed over MQTT and renders the message as scrolling text on a 64×64 HUB75 LED panel (two stacked 64×32 panels, serpentine wired) over a fireworks- or flame-effect background that toggles on each new message.
+SMS → microcontroller bridge. A Twilio webhook posts an incoming SMS to a Flask server (`heart-message-manager/main.py`), which publishes the body to an Adafruit IO feed via the REST API. An ESP32 running CircuitPython (`heart-matrix-controller/code.py`) subscribes to that feed over MQTT and renders the message as scrolling text on a 64×64 HUB75 LED panel (two stacked 64×32 panels, serpentine wired) over a fireworks- or flame-effect background that toggles on each new message.
+
+## Project structure
+
+```
+lindsay-50/
+├── heart-message-manager/     # Flask server (SMS receiver + admin UI)
+│   ├── main.py
+│   ├── templates/            # Jinja2 templates
+│   │   ├── base.html        # Original Bootstrap 5 UI
+│   │   ├── base-playful.html # Redesigned playful UI
+│   │   └── *-playful.html   # Playful variants of each page
+│   ├── settings.toml         # Local config (gitignored)
+│   └── settings.toml.example
+├── heart-matrix-controller/   # CircuitPython device code
+│   ├── code.py
+│   ├── scroller.py
+│   ├── fireworks.py
+│   ├── flame.py
+│   └── settings.toml         # Local config (gitignored)
+├── lib/                     # Shared server-side Python modules
+│   ├── storage.py           # SQLite + S3 backup
+│   ├── filters.py           # Message filtering logic
+│   ├── s3.py               # AWS S3 operations
+│   ├── publish.py           # Adafruit IO publishing
+│   └── models.py            # Data models
+├── requirements.txt          # Server dependencies
+└── .venv/                   # Python venv (created on setup)
+```
 
 ## First-time setup
 
-Each subdirectory has a committed `settings.toml.example`; copy it to `settings.toml` and fill in real values. The bare filename `settings.toml` is in `.gitignore` (matches at any depth) so secrets stay local.
-
 ```bash
-cp heart-sms-receiver/settings.toml.example heart-sms-receiver/settings.toml
+# Create venv and install dependencies
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# Copy settings files and fill in values
+cp heart-message-manager/settings.toml.example heart-message-manager/settings.toml
 cp heart-matrix-controller/settings.toml.example heart-matrix-controller/settings.toml
 ```
-
-Server-side dependencies:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r heart-sms-receiver/requirements.txt
-```
-
-Device-side dependencies and copy targets: see "ESP32 / CircuitPython setup" below.
 
 ## Running the server
 
 ```bash
 source .venv/bin/activate
-python heart-sms-receiver/main.py
+python heart-message-manager/main.py
 ```
 
 Runs on `http://0.0.0.0:5000`. Twilio webhook URL: `POST /sms`.
@@ -41,11 +63,20 @@ curl -X POST http://localhost:5000/sms \
   -d "From=%2B15551234567&Body=hello+world&To=%2B15559999999"
 ```
 
+## Admin UI
+
+Two UI variants available:
+
+- **Original**: `http://localhost:5000/` (Bootstrap 5, functional)
+- **Playful redesign**: `http://localhost:5000/playful` (Tailwind, Fredoka/Nunito fonts, indigo/pink gradient)
+
+Both share the same functionality. The playful variant is served from `*-playful.html` templates at matching routes (`/playful`, `/playful/messages`, etc.).
+
 ## Configuration
 
 The two `settings.toml` files use different keys because the server and device use different APIs:
 
-`heart-sms-receiver/settings.toml` — Adafruit IO REST publish:
+`heart-message-manager/settings.toml` — Adafruit IO REST publish:
 - `AIO_USERNAME`, `AIO_KEY`, `AIO_FEED`
 - `ALLOWED_SENDERS` (optional comma-separated phone-number allow-list; empty = accept all)
 
@@ -68,7 +99,7 @@ SMS → Twilio → POST /sms (main.py) → Adafruit IO REST → AIO feed
                               fade out → toggle effect → set scroll text → fade in
 ```
 
-- `heart-sms-receiver/main.py` — Flask app, single `/sms` route, publishes via `Adafruit_IO.Client.send_data`.
+- `heart-message-manager/main.py` — Flask app, single `/sms` route, publishes via `Adafruit_IO.Client.send_data`.
 - `heart-matrix-controller/code.py` — CircuitPython entrypoint; runs `io.loop()` and `EffectCoordinator.tick()` in a tight loop.
 - `heart-matrix-controller/scroller.py` — `Scroller`: two `Label`s scrolling right-to-left, top panel and bottom panel offset by 1s, time-based pixel advance.
 - `heart-matrix-controller/fireworks.py` — `Fireworks`: rocket → apex-explode → spark physics on a 64×64 bitmap.
@@ -76,7 +107,7 @@ SMS → Twilio → POST /sms (main.py) → Adafruit IO REST → AIO feed
 
 ## ESP32 / CircuitPython setup
 
-Copy the following from the Adafruit CircuitPython Bundle (matching your CircuitPython major version) into `CIRCUITPY/lib/`:
+Download the Adafruit CircuitPython Bundle matching your CircuitPython version, then copy files to `CIRCUITPY/lib/`:
 
 Single files:
 - `adafruit_logging.mpy`

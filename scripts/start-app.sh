@@ -1,7 +1,7 @@
 #!/bin/bash
 # Start the Flask dev server and optionally the local service containers.
-# Usage: ./start-app.sh [--with-services]
-#   --with-services  Also start MinIO (S3) and Mosquitto (MQTT) if not already running.
+# Usage: ./start-app.sh [--flask-only]
+#   --flask-only  Skip MinIO (S3) and Mosquitto (MQTT) containers.
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -11,15 +11,15 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 if [ -d "$PROJECT_ROOT/.venv" ]; then
     source "$PROJECT_ROOT/.venv/bin/activate"
 else
-    echo "Error: .venv not found. Run: python -m venv .venv && pip install -r heart-sms-receiver/requirements.txt"
+    echo "Error: .venv not found. Run: python -m venv .venv && pip install -r requirements.txt"
     exit 1
 fi
 
 # Check settings.toml exists
-SETTINGS_FILE="$PROJECT_ROOT/heart-sms-receiver/settings.toml"
+SETTINGS_FILE="$PROJECT_ROOT/heart-message-manager/settings.toml"
 if [ ! -f "$SETTINGS_FILE" ]; then
     echo "Error: settings.toml not found. Copy settings.toml.example first:"
-    echo "  cp heart-sms-receiver/settings.toml.example heart-sms-receiver/settings.toml"
+    echo "  cp heart-message-manager/settings.toml.example heart-message-manager/settings.toml"
     exit 1
 fi
 
@@ -29,7 +29,7 @@ import tomllib, sys, os
 with open(os.environ["SETTINGS_PATH"], "rb") as f:
     cfg = tomllib.load(f)
 
-required = ["AIO_USERNAME", "AIO_KEY", "AIO_FEED", "S3_BUCKET"]
+required = ["AIO_USERNAME", "AIO_KEY", "AIO_FEED", "AWS_S3_BUCKET"]
 missing = [k for k in required if not cfg.get(k)]
 if missing:
     print(f"Error: missing required settings: {', '.join(missing)}", file=sys.stderr)
@@ -37,11 +37,11 @@ if missing:
 print("Config validated OK")
 PYEOF
 
-# Optionally start Docker services
-START_SERVICES=false
+# Optionally start Docker services (enabled by default)
+START_SERVICES=true
 for arg in "$@"; do
-    if [ "$arg" = "--with-services" ]; then
-        START_SERVICES=true
+    if [ "$arg" = "--flask-only" ]; then
+        START_SERVICES=false
     fi
 done
 
@@ -60,23 +60,23 @@ if [ "$START_SERVICES" = "true" ]; then
     fi
 
     # Wait for MinIO to be ready, then create the bucket
-    echo "Checking S3_BUCKET..."
+    echo "Checking AWS_S3_BUCKET..."
     SETTINGS_PATH="$SETTINGS_FILE" python3 - <<'PYEOF'
 import tomllib, sys, os
 with open(os.environ["SETTINGS_PATH"], "rb") as f:
     cfg = tomllib.load(f)
-print(cfg.get("S3_BUCKET", ""))
+print(cfg.get("AWS_S3_BUCKET", ""))
 PYEOF
-    S3_BUCKET=$(SETTINGS_PATH="$SETTINGS_FILE" python3 - <<'PYEOF'
+    AWS_S3_BUCKET=$(SETTINGS_PATH="$SETTINGS_FILE" python3 - <<'PYEOF'
 import tomllib, sys, os
 with open(os.environ["SETTINGS_PATH"], "rb") as f:
     cfg = tomllib.load(f)
-print(cfg.get("S3_BUCKET", ""))
+print(cfg.get("AWS_S3_BUCKET", ""))
 PYEOF
 )
 
-    if [ -z "$S3_BUCKET" ]; then
-        echo "S3_BUCKET not configured; skipping bucket creation"
+    if [ -z "$AWS_S3_BUCKET" ]; then
+        echo "AWS_S3_BUCKET not configured; skipping bucket creation"
     else
         # Install mc if needed
         if ! command -v mc &> /dev/null; then
@@ -92,12 +92,12 @@ PYEOF
         mc alias set local http://localhost:9000 minioadmin minioadmin 2>/dev/null || true
 
         # Create bucket if it doesn't exist
-        if mc ls local/"$S3_BUCKET" &>/dev/null; then
-            echo "S3 bucket '$S3_BUCKET' already exists"
+        if mc ls local/"$AWS_S3_BUCKET" &>/dev/null; then
+            echo "S3 bucket '$AWS_S3_BUCKET' already exists"
         else
-            echo "Creating S3 bucket '$S3_BUCKET'..."
-            mc mb local/"$S3_BUCKET"
-            echo "Bucket '$S3_BUCKET' created"
+            echo "Creating S3 bucket '$AWS_S3_BUCKET'..."
+            mc mb local/"$AWS_S3_BUCKET"
+            echo "Bucket '$AWS_S3_BUCKET' created"
         fi
     fi
 
@@ -117,10 +117,19 @@ PYEOF
     fi
 fi
 
-echo "Starting Flask server on http://0.0.0.0:5001 ..."
+# Get port from settings.toml (default 6000)
+SERVER_PORT=$(SETTINGS_PATH="$SETTINGS_FILE" python3 - <<'PYEOF'
+import tomllib, sys, os
+with open(os.environ["SETTINGS_PATH"], "rb") as f:
+    cfg = tomllib.load(f)
+print(cfg.get("PORT", 6000))
+PYEOF
+)
+
+echo "Starting Flask server on http://0.0.0.0:$SERVER_PORT ..."
 cd "$PROJECT_ROOT"
-export FLASK_APP=heart-sms-receiver/main.py
+export FLASK_APP=heart-message-manager/main.py
 # Disable Werkzeug reloader to prevent duplicate MQTT subscribers
 export FLASK_DEBUG=0
 export FLASK_RUN_RELOAD=0
-exec flask run --host=0.0.0.0 --port=5001
+exec flask run --host=0.0.0.0 --port="$SERVER_PORT"

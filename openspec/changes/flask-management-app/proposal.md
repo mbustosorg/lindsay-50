@@ -23,6 +23,6 @@ The heart sign project needs a persistent backend: inbound SMS must be stored an
 ## Impact
 
 - New files: `lib/models.py`, `lib/storage.py`, `lib/filters.py`, `Procfile`, admin UI templates
-- Modified: `heart-sms-receiver/main.py` refactored to use `lib/storage`
+- Modified: `heart-message-manager/main.py` refactored to use `lib/storage`
 - Dependencies: AWS S3 bucket configured for message logging
 - ESP32: ESP32 uses Adafruit IO for message history and real-time delivery; shared `filters.py` provides identical filter logic
