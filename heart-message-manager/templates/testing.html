@@ -1,0 +1,376 @@
+{% extends "base.html" %}
+{% block title %}Testing — Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-8">
+  <div>
+    <h2 class="text-4xl font-bold font-heading text-dark">Testing</h2>
+    <p class="text-slate-500 mt-1">Inject messages and inspect system state</p>
+  </div>
+</div>
+
+{# --- Row 1: Inject + Info Cards --- #}
+<div class="grid grid-cols-12 gap-6 mb-6">
+  {# --- Inject Test Message (left) --- #}
+  <div class="col-span-12 lg:col-span-4">
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
+      <h3 class="font-semibold font-heading text-dark text-lg mb-4 flex items-center gap-2">
+        <span class="w-8 h-8 bg-gradient-to-br from-green-400 to-emerald-500 rounded-lg flex items-center justify-center text-white text-sm">+</span>
+        Inject Test Message
+      </h3>
+      <form id="inject-form" class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1">From (phone)</label>
+          <input type="text" name="From" value="+15551234567" required
+                 class="w-full px-4 py-2 rounded-xl border border-indigo-100 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1">Body</label>
+          <input type="text" name="Body" placeholder="Test message..." required
+                 class="w-full px-4 py-2 rounded-xl border border-indigo-100 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-1">To</label>
+          <input type="text" name="To" value="+15559999999"
+                 class="w-full px-4 py-2 rounded-xl border border-indigo-100 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none transition-all">
+        </div>
+        <button type="submit"
+                class="w-full px-4 py-3 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 hover:shadow-xl hover:scale-[1.02] transition-all cursor-pointer">
+          Send Webhook
+        </button>
+      </form>
+      <div id="inject-result" class="mt-4 text-sm text-slate-500"></div>
+    </div>
+  </div>
+
+  {# --- Right-side info cards --- #}
+  <div class="col-span-12 lg:col-span-8 space-y-4">
+    {# --- Current Config --- #}
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 overflow-hidden">
+      <button class="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-indigo-50/50 transition-colors"
+              onclick="toggleSection('cfg')">
+        <span class="font-semibold font-heading text-dark">Current Config</span>
+        <svg id="cfg-chevron" class="w-5 h-5 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <div id="cfg-section" class="hidden px-6 pb-4">
+        <pre id="config-display" class="text-xs text-slate-600 bg-slate-50 rounded-xl p-4 overflow-auto max-h-48">Loading...</pre>
+      </div>
+    </div>
+
+    {# --- Active Filters --- #}
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 overflow-hidden">
+      <button class="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-indigo-50/50 transition-colors"
+              onclick="toggleSection('filters')">
+        <span class="font-semibold font-heading text-dark">Active Filters</span>
+        <svg id="filters-chevron" class="w-5 h-5 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <div id="filters-section" class="hidden px-6 pb-4">
+        <ul id="filter-list" class="space-y-2 max-h-48 overflow-auto">
+          <li class="text-slate-400 text-sm">Loading...</li>
+        </ul>
+      </div>
+    </div>
+
+    {# --- S3 Bucket --- #}
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 overflow-hidden">
+      <button class="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-indigo-50/50 transition-colors"
+              onclick="toggleSection('s3'); if (!s3Loaded) { s3Loaded=true; fetchS3Objects(); }">
+        <span class="font-semibold font-heading text-dark">S3 Bucket</span>
+        <svg id="s3-chevron" class="w-5 h-5 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <div id="s3-section" class="hidden px-6 pb-4">
+        <div id="s3-tree" class="text-sm max-h-60 overflow-auto"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# --- Messages Feed --- #}
+<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 overflow-hidden">
+  <div class="flex items-center justify-between p-6 border-b border-indigo-50">
+    <div>
+      <h3 class="font-semibold font-heading text-dark flex items-center gap-2">
+        <span class="text-xl">📡</span> Messages Feed
+      </h3>
+      <p class="text-slate-500 text-sm mt-1">Live view via REST, with suppression preview</p>
+    </div>
+    <div class="flex items-center gap-3">
+      <select id="feed-limit" onchange="refreshFeed()"
+              class="px-3 py-2 rounded-xl border border-indigo-100 text-sm focus:border-primary outline-none">
+        <option value="20">20</option>
+        <option value="50">50</option>
+        <option value="100" selected>100</option>
+      </select>
+      <button onclick="refreshFeed()"
+              class="px-4 py-2 rounded-xl bg-indigo-100 text-indigo-700 font-semibold text-sm hover:bg-indigo-200 transition-colors cursor-pointer">
+        Refresh
+      </button>
+      <span id="msg-count" class="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-sm font-medium">0</span>
+    </div>
+  </div>
+  <div class="max-h-96 overflow-auto">
+    <table class="w-full">
+      <thead class="bg-indigo-50 sticky top-0">
+        <tr>
+          <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Source</th>
+          <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Sender</th>
+          <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Body</th>
+          <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Time</th>
+          <th class="px-6 py-3 text-left text-xs font-semibold text-slate-600 uppercase tracking-wider">Status</th>
+        </tr>
+      </thead>
+      <tbody id="feed-tbody" class="divide-y divide-indigo-50">
+        <tr>
+          <td colspan="5" class="px-6 py-12 text-center text-slate-400">
+            No messages yet — click Refresh to load
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# --- JSON Viewer Modal --- #}
+<div id="json-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between p-6 border-b border-indigo-100">
+      <h3 id="json-modal-title" class="font-semibold font-heading text-dark">Message</h3>
+      <button onclick="closeJsonModal()" class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center cursor-pointer">
+        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-auto p-6">
+      <pre id="json-modal-body" class="text-xs text-slate-600 bg-slate-50 rounded-xl p-4 overflow-auto whitespace-pre-wrap break-all"></pre>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let s3Loaded = false;
+
+function toggleSection(name) {
+  const section = document.getElementById(name + '-section');
+  const chevron = document.getElementById(name + '-chevron');
+  section.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+
+function escapeHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+async function refreshFeed() {
+  // Seed ring buffer from REST messages so live feed shows everything
+  try {
+    await fetch('/api/live-messages/seed', { method: 'POST' });
+  } catch (e) { console.error('Seed failed:', e); }
+  fetchMessages();
+}
+
+async function fetchMessages() {
+  try {
+    const limit = document.getElementById('feed-limit').value;
+    const liveRes = await fetch('/api/live-messages?limit=' + limit);
+    const live = await liveRes.json();
+
+    // Match ring buffer entries to SQLite messages for sender info
+    const entries = [].slice.call(live).sort(function(a, b) {
+      return (a.received_at > b.received_at ? -1 : 1);
+    });
+
+    document.getElementById('msg-count').textContent = entries.length;
+
+    if (entries.length === 0) {
+      document.getElementById('feed-tbody').innerHTML =
+        '<tr><td colspan="5" class="px-6 py-12 text-center text-slate-400">No messages — click Refresh to seed from REST</td></tr>';
+      return;
+    }
+
+    document.getElementById('feed-tbody').innerHTML = entries.map(function(item) {
+      const time = item.received_at
+        ? new Date(item.received_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false})
+        : '—';
+      const sourceColor = item.source === 'mqtt' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
+      const sourceIcon = item.source === 'mqtt' ? '📡' : '💾';
+      const body = item.body || '';
+      const sender = item.sender || '—';
+      const senderName = item.sender_name;
+      const senderDisplay = senderName
+        ? '<div class="font-medium">' + escapeHtml(senderName) + '</div><div class="text-xs text-slate-400">' + escapeHtml(sender) + '</div>'
+        : '<div>' + escapeHtml(sender) + '</div>';
+      const rules = item.rules || [];
+      const statusLabel = item.suppressed ? 'suppressed' : 'visible';
+      const statusReason = item.suppressed && rules.length > 0 ? '<div class="text-xs text-red-500 mt-0.5">' + rules.map(function(r) { return r.type; }).join(', ') + '</div>' : '';
+      return '<tr class="hover:bg-indigo-50/30 transition-colors cursor-pointer" onclick="showMessageModal(' + btoa(JSON.stringify(item)).replace(/'/g, "\\'") + ')">' +
+        '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-medium ' + sourceColor + '">' + sourceIcon + ' ' + item.source + '</span></td>' +
+        '<td class="px-6 py-4 text-sm">' + senderDisplay + '</td>' +
+        '<td class="px-6 py-4 text-sm text-slate-600 max-w-xs truncate">' + escapeHtml(body) + '</td>' +
+        '<td class="px-6 py-4 text-sm text-slate-500 font-mono">' + time + '</td>' +
+        '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-semibold ' + (item.suppressed ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700') + '">' + statusLabel + '</span>' + statusReason + '</td>' +
+        '</tr>';
+    }).join('');
+  } catch (e) {
+    console.error('Fetch failed:', e);
+  }
+}
+
+async function fetchConfig() {
+  try {
+    const res = await fetch('/api/live-config');
+    const cfg = await res.json();
+    document.getElementById('config-display').textContent = JSON.stringify(cfg, null, 2);
+
+    const list = document.getElementById('filter-list');
+    const filters = cfg.filters || [];
+    if (filters.length === 0) {
+      list.innerHTML = '<li class="text-slate-400 text-sm">No filters</li>';
+    } else {
+      list.innerHTML = filters.map(f =>
+        '<li class="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-50">' +
+          '<span class="px-2 py-1 rounded-lg bg-red-100 text-red-700 text-xs font-semibold">' + f.type + '</span>' +
+          '<code class="text-sm text-slate-600">' + escapeHtml(f.pattern) + '</code>' +
+        '</li>'
+      ).join('');
+    }
+  } catch (e) {
+    document.getElementById('config-display').textContent = 'Error loading config';
+  }
+}
+
+async function fetchS3Objects() {
+  try {
+    const res = await fetch('/api/admin/s3-objects');
+    const data = await res.json();
+    const treeEl = document.getElementById('s3-tree');
+    if (data.error) {
+      treeEl.innerHTML = '<div class="text-red-500 text-sm p-2">' + escapeHtml(data.error) + '</div>';
+      return;
+    }
+    if (data.nodes.length === 0) {
+      treeEl.innerHTML = '<div class="text-slate-400 text-sm p-2">Empty bucket</div>';
+      return;
+    }
+
+    treeEl.innerHTML = '<ul class="space-y-1">' +
+      data.nodes.map(function(node) {
+        if (node.id.endsWith('/')) {
+          return '<li><button onclick="loadS3Children(this)" data-prefix="' + escapeHtml(node.id) + '" class="flex items-center gap-2 px-2 py-1 rounded hover:bg-indigo-50 text-sm cursor-pointer"><span class="text-slate-400">📁</span>' + escapeHtml(node.text) + '</button><ul class="ml-4 hidden" id="children-' + btoa(node.id).replace(/=/g,'') + '"></ul></li>';
+        } else {
+          return '<li><button onclick="fetchS3File(\'' + escapeHtml(node.id) + '\')" class="flex items-center gap-2 px-2 py-1 rounded hover:bg-indigo-50 text-sm cursor-pointer"><span class="text-slate-400">📄</span>' + escapeHtml(node.text) + '</button></li>';
+        }
+      }).join('') + '</ul>';
+  } catch (e) {
+    document.getElementById('s3-tree').innerHTML = '<div class="text-red-500 text-sm p-2">Error loading S3 objects</div>';
+  }
+}
+
+async function loadS3Children(btn) {
+  const prefix = btn.getAttribute('data-prefix');
+  const childId = 'children-' + btoa(prefix).replace(/=/g,'');
+  const childList = document.getElementById(childId);
+  if (childList.classList.contains('hidden')) {
+    childList.classList.remove('hidden');
+    if (childList.innerHTML.trim() === '') {
+      try {
+        const res = await fetch('/api/admin/s3-objects?prefix=' + encodeURIComponent(prefix));
+        const data = await res.json();
+        childList.innerHTML = (data.nodes || []).map(function(node) {
+          if (node.id.endsWith('/')) {
+            return '<li><button onclick="loadS3Children(this)" data-prefix="' + escapeHtml(node.id) + '" class="flex items-center gap-2 px-2 py-1 rounded hover:bg-indigo-50 text-sm cursor-pointer"><span class="text-slate-400">📁</span>' + escapeHtml(node.text) + '</button><ul class="ml-4 hidden" id="children-' + btoa(node.id).replace(/=/g,'') + '"></ul></li>';
+          } else {
+            return '<li><button onclick="fetchS3File(\'' + escapeHtml(node.id) + '\')" class="flex items-center gap-2 px-2 py-1 rounded hover:bg-indigo-50 text-sm cursor-pointer"><span class="text-slate-400">📄</span>' + escapeHtml(node.text) + '</button></li>';
+          }
+        }).join('');
+      } catch (e) {
+        childList.innerHTML = '<li class="text-red-500 text-xs p-2">Error loading</li>';
+      }
+    }
+  } else {
+    childList.classList.add('hidden');
+  }
+}
+
+async function fetchS3File(key) {
+  try {
+    const res = await fetch('/api/admin/s3-object?key=' + encodeURIComponent(key));
+    const obj = await res.json();
+    if (obj.error) {
+      showJsonModal(key, obj.error, true);
+    } else {
+      try {
+        const formatted = JSON.stringify(JSON.parse(obj.content), null, 2);
+        showJsonModal(key, formatted, false);
+      } catch(_) {
+        showJsonModal(key, obj.content, false);
+      }
+    }
+  } catch(e) {
+    showJsonModal(key, 'Error fetching object', true);
+  }
+}
+
+function showJsonModal(title, content, isError) {
+  document.getElementById('json-modal-title').textContent = title;
+  document.getElementById('json-modal-body').textContent = content;
+  document.getElementById('json-modal').classList.remove('hidden');
+  document.getElementById('json-modal').classList.add('flex');
+}
+
+function closeJsonModal() {
+  document.getElementById('json-modal').classList.add('hidden');
+  document.getElementById('json-modal').classList.remove('flex');
+}
+
+function showMessageModal(itemBase64) {
+  const item = JSON.parse(atob(itemBase64));
+  document.getElementById('json-modal-title').textContent = 'Message ' + item.id;
+  document.getElementById('json-modal-body').textContent = JSON.stringify(item, null, 2);
+  document.getElementById('json-modal').classList.remove('hidden');
+  document.getElementById('json-modal').classList.add('flex');
+}
+
+// Close modal on background click
+document.getElementById('json-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeJsonModal();
+});
+
+// Inject form
+document.getElementById('inject-form').addEventListener('submit', async function(e) {
+  e.preventDefault();
+  const form = e.target;
+  const data = new FormData(form);
+  const result = document.getElementById('inject-result');
+  result.textContent = 'Sending...';
+  try {
+    const res = await fetch('/api/messages', { method: 'POST', body: data });
+    const text = await res.text();
+    if (res.ok) {
+      result.innerHTML = '<span class="text-green-600 font-medium">OK — ' + escapeHtml(text.slice(0, 100)) + '</span>';
+      fetchMessages();
+      fetchConfig();
+      form.Body.value = '';
+    } else {
+      result.innerHTML = '<span class="text-red-500 font-medium">Error ' + res.status + '</span>';
+    }
+  } catch (e) {
+    result.innerHTML = '<span class="text-red-500 font-medium">Network error</span>';
+  }
+});
+
+// Init
+fetchMessages();
+fetchConfig();
+setInterval(fetchMessages, 3000);
+</script>
+{% endblock %}

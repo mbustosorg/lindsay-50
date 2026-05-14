@@ -324,10 +324,10 @@ lindsay-50/
 │   ├── models.py                  # Message/Config dataclasses
 │   ├── storage.py                 # Flask SQLite storage
 │   └── filters.py                # apply(), display_list()
-├── heart-sms-receiver/
+├── heart-message-manager/
 │   ├── __init__.py
 │   ├── main.py                   # Flask app (Twilio webhook, admin UI)
-│   └── requirements.txt
+│   └── settings.toml.example
 └── heart-matrix-controller/
     ├── code.py                   # CircuitPython firmware (MQTT + HTTP via Adafruit IO)
     ├── scroller.py               # Text scroll effect

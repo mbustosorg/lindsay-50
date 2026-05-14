@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Preview — Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h2 class="text-3xl font-bold font-heading text-dark">Preview</h2>
+    <p class="text-slate-500 mt-1">What ESP32 will display</p>
+  </div>
+  <div class="flex items-center gap-2">
+    <a href="{{ url_for('preview', include_filtered='false') }}" class="px-4 py-2 rounded-xl font-semibold transition-all cursor-pointer {% if not include_filtered %}bg-gradient-to-r from-primary to-secondary text-white shadow-lg{% else %}bg-white text-slate-600 hover:bg-indigo-50{% endif %}">Visible Only</a>
+    <a href="{{ url_for('preview', include_filtered='true') }}" class="px-4 py-2 rounded-xl font-semibold transition-all cursor-pointer {% if include_filtered %}bg-gradient-to-r from-primary to-secondary text-white shadow-lg{% else %}bg-white text-slate-600 hover:bg-indigo-50{% endif %}">Show All</a>
+  </div>
+</div>
+
+<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 overflow-hidden">
+  <table class="w-full">
+    <thead>
+      <tr class="bg-indigo-50">
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">#</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Received</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Sender</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Body</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Status</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-indigo-50">
+      {% for entry in result %}
+      <tr class="hover:bg-indigo-50/30 transition-colors {% if include_filtered and entry.suppressed %}bg-red-50/50{% endif %}">
+        <td class="px-6 py-4 text-sm text-slate-500">{{ loop.index }}</td>
+        <td class="px-6 py-4 text-sm text-slate-500 font-mono whitespace-nowrap">{{ entry.message.format_received_at(timezone) if include_filtered and entry.message else entry.format_received_at(timezone) }}</td>
+        <td class="px-6 py-4 text-sm text-dark font-medium">{{ entry.message.sender if include_filtered and entry.message else entry.sender }}</td>
+        <td class="px-6 py-4 text-sm text-slate-600 truncate max-w-md">{{ entry.message.body if include_filtered and entry.message else entry.body }}</td>
+        <td class="px-6 py-4">
+          {% if include_filtered and entry.suppressed %}
+          <span class="px-3 py-1 rounded-lg bg-red-100 text-red-700 text-xs font-semibold">suppressed</span>
+          {% if entry.rule %}<small class="text-slate-400 ml-1">by {{ entry.rule.type }}:{{ entry.rule.pattern }}</small>{% endif %}
+          {% else %}
+          <span class="px-3 py-1 rounded-lg bg-green-100 text-green-700 text-xs font-semibold">visible</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5" class="px-6 py-12 text-center text-slate-500">
+          <span class="text-4xl">📭</span>
+          <p class="mt-2">No messages to display.</p>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

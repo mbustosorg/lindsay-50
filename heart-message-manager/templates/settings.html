@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block title %}Settings — Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h2 class="text-3xl font-bold font-heading text-dark">Settings</h2>
+    <p class="text-slate-500 mt-1">Configure your heart display</p>
+  </div>
+</div>
+
+<form method="POST">
+  <!-- Sign Settings -->
+  <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
+    <h3 class="font-heading font-semibold text-dark text-lg mb-4 flex items-center gap-2">
+      <span>❤️</span> Sign Settings
+    </h3>
+    <div class="grid grid-cols-2 gap-6">
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-2">Sign Name</label>
+        <input type="text" name="sign_name" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ cfg.sign.name }}">
+      </div>
+    </div>
+  </div>
+
+  <!-- Rendering Defaults -->
+  <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
+    <h3 class="font-heading font-semibold text-dark text-lg mb-4 flex items-center gap-2">
+      <span>🎨</span> Rendering Defaults
+    </h3>
+    <div class="grid grid-cols-3 gap-6">
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-2">Mode</label>
+        <select name="rendering_mode" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
+          <option value="scroll"{% if cfg.rendering.mode == 'scroll' %} selected{% endif %}>scroll</option>
+          <option value="static"{% if cfg.rendering.mode == 'static' %} selected{% endif %}>static</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-2">Speed (0.01–1.0)</label>
+        <input type="number" name="rendering_speed" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.001" min="0.01" max="1.0" value="{{ cfg.rendering.speed }}">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-2">Color (hex)</label>
+        <input type="text" name="rendering_color" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ '#%06x'|format(cfg.rendering.color) }}">
+      </div>
+    </div>
+  </div>
+
+  <!-- Allowed Senders -->
+  <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
+    <h3 class="font-heading font-semibold text-dark text-lg mb-2 flex items-center gap-2">
+      <span>📱</span> Allowed Senders
+    </h3>
+    <p class="text-sm text-slate-500 mb-4">These are informational only. All messages are stored regardless of sender.</p>
+    <div class="overflow-x-auto">
+      <table class="w-full" id="senders-table">
+        <thead>
+          <tr class="bg-indigo-50">
+            <th class="text-left px-4 py-3 font-heading font-semibold text-dark text-sm">Name</th>
+            <th class="text-left px-4 py-3 font-heading font-semibold text-dark text-sm">Phone (E.164)</th>
+            <th class="w-20"></th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-indigo-50">
+          {% for sender in cfg.allowed_senders %}
+          <tr>
+            <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ sender.name }}"></td>
+            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ sender.phone }}"></td>
+            <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
+          </tr>
+          {% endfor %}
+          <tr>
+            <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td>
+            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td>
+            <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    <button type="button" class="mt-4 px-4 py-2 rounded-xl bg-indigo-50 text-primary font-semibold hover:bg-indigo-100 transition-colors cursor-pointer" onclick="addSenderRow()">+ Add Sender</button>
+  </div>
+
+  <button type="submit" class="px-8 py-3 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 hover:shadow-xl transition-all text-lg cursor-pointer">Save Settings</button>
+</form>
+
+<script>
+function addSenderRow() {
+  const tbody = document.querySelector('#senders-table tbody');
+  const tr = document.createElement('tr');
+  tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
+  tbody.appendChild(tr);
+}
+</script>
+{% endblock %}

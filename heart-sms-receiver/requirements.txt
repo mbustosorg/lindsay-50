@@ -1,6 +1,0 @@
-flask>=3.0
-paho-mqtt>=2.0
-boto3>=1.34
-requests>=2.31
-cryptography>=42.0
-pytest>=8.0

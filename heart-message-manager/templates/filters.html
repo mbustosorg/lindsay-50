@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+{% block title %}Filter Rules — Lindsay's Heart Admin{% endblock %}
+{% block content %}
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h2 class="text-3xl font-bold font-heading text-dark">Filter Rules</h2>
+    <p class="text-slate-500 mt-1">Control which messages appear on the display</p>
+  </div>
+</div>
+
+<!-- Rules Table -->
+<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 overflow-hidden mb-8">
+  <table class="w-full">
+    <thead>
+      <tr class="bg-indigo-50">
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">#</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Type</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Pattern</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Action</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Remove</th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-indigo-50">
+      {% for f in filters %}
+      <tr class="hover:bg-indigo-50/30 transition-colors">
+        <td class="px-6 py-4 text-sm text-slate-500">{{ loop.index0 }}</td>
+        <td class="px-6 py-4">
+          <span class="px-3 py-1 rounded-lg bg-purple-100 text-purple-700 text-sm font-semibold">{{ f.type }}</span>
+        </td>
+        <td class="px-6 py-4 text-sm text-dark font-mono">{{ f.pattern }}</td>
+        <td class="px-6 py-4 text-sm text-slate-600">{{ f.action }}</td>
+        <td class="px-6 py-4">
+          <form method="POST">
+            <input type="hidden" name="action" value="delete">
+            <input type="hidden" name="index" value="{{ loop.index0 }}">
+            <button type="submit" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5" class="px-6 py-12 text-center text-slate-500">
+          <span class="text-4xl">✨</span>
+          <p class="mt-2">No filter rules. All messages will be displayed.</p>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<!-- Add Rule Form -->
+<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
+  <h3 class="font-heading font-semibold text-dark text-lg mb-4 flex items-center gap-2">
+    <span>➕</span> Add Filter Rule
+  </h3>
+  <form method="POST" class="flex items-end gap-4">
+    <input type="hidden" name="action" value="add">
+    <div>
+      <label class="block text-sm font-medium text-slate-600 mb-1">Type</label>
+      <select name="type" class="px-4 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none min-w-[120px]">
+        <option value="keyword">keyword</option>
+        <option value="regex">regex</option>
+        <option value="sender">sender</option>
+        <option value="message">message</option>
+      </select>
+    </div>
+    <div class="flex-1">
+      <label class="block text-sm font-medium text-slate-600 mb-1">Pattern</label>
+      <input type="text" name="pattern" class="w-full px-4 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Enter pattern..." required>
+    </div>
+    <div>
+      <label class="block text-sm font-medium text-slate-600 mb-1">Action</label>
+      <select name="action" class="px-4 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none min-w-[120px]">
+        <option value="suppress">suppress</option>
+      </select>
+    </div>
+    <button type="submit" class="px-6 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 hover:shadow-xl transition-all cursor-pointer">Add Rule</button>
+  </form>
+</div>
+{% endblock %}
