@@ -2,6 +2,7 @@ import math
 import random
 import time
 import displayio
+import bitmaptools
 
 _PALETTE_SIZE = 32
 
@@ -9,14 +10,14 @@ _PALETTE_SIZE = 32
 class NightSky:
     def __init__(self, display, group, frame_delay=0.05, num_stars=45,
                  shoot_min=5.0, shoot_max=15.0, sky_color=0x000000,
-                 twinkle_period=12.0, twinkle_duration=0.5):
+                 twinkle_period=3.0, twinkle_fraction=0.20):
         self.display = display
         self.frame_delay = frame_delay
         self.shoot_min = shoot_min
         self.shoot_max = shoot_max
-        # Mean seconds between twinkles per star, expressed as a per-tick chance.
-        self._twinkle_prob = frame_delay / twinkle_period
-        self._twinkle_duration = twinkle_duration
+        self.twinkle_period = twinkle_period
+        # How many stars should be actively twinkling at any moment.
+        self.target_twinkling = max(1, int(num_stars * twinkle_fraction))
         self.last_frame = 0.0
 
         self.w = display.width
@@ -38,23 +39,41 @@ class NightSky:
 
         self._original_palette = [self.palette[i] for i in range(_PALETTE_SIZE)]
 
-        # Star = [x, y, base, amp, twinkle_start, twinkle_duration]
-        # twinkle_start < 0 means the star is idle; otherwise it's the wall-clock
-        # time the current pulse began and twinkle_duration is its length.
+        # Render into a bytearray and push the whole frame to the bitmap in
+        # one arrayblit call.  Per-pixel bitmap writes interleaved with the
+        # displayio compositor read are what produces visible tearing/flicker.
+        self._buf = bytearray(self.w * self.h)
+        self._zero_buf = bytes(self.w * self.h)
+
+        # Star = [x, y, base, amp, twinkle_start]
+        # twinkle_start < 0  → star is idle (rendered at base intensity).
+        # twinkle_start >= 0 → wall-clock time when this twinkle began.
+        # `base` is kept above the bit_depth=5 PWM-flicker floor (index ~12)
+        # so calm stars render solid.  `amp` is the extra brightness added at
+        # the start of a twinkle, which then fades back to `base`; combined
+        # peak (base+amp) tops out near the palette max, so the active fade
+        # also stays in the stable region the whole way.
         self.stars = []
         for _ in range(num_stars):
             self.stars.append([
                 random.randint(0, self.w - 1),
                 random.randint(0, self.h - 1),
-                random.randint(4, 10),
-                random.randint(12, 20),
+                random.randint(12, 18),
+                random.randint(10, 14),
                 -1.0,
-                twinkle_duration,
             ])
+
+        # Seed the initial active set with phases offset across [0, period) so
+        # they aren't all peaking simultaneously on the first frame.
+        now = time.monotonic()
+        idle = list(range(num_stars))
+        for _ in range(self.target_twinkling):
+            j = random.randrange(len(idle))
+            self.stars[idle.pop(j)][4] = now - random.uniform(0, twinkle_period)
 
         # Shoot = [x, y, vx, vy, trail_len, head_intensity]  (None = idle)
         self.shoot = None
-        self.next_shoot = time.monotonic() + random.uniform(shoot_min, shoot_max)
+        self.next_shoot = now + random.uniform(shoot_min, shoot_max)
 
     def set_brightness(self, b):
         for i, c in enumerate(self._original_palette):
@@ -85,31 +104,41 @@ class NightSky:
             return
         self.last_frame = now
 
-        self.bitmap.fill(0)
+        # Clear the off-screen render buffer (single memcpy).
+        self._buf[:] = self._zero_buf
 
-        # Twinkle each star: idle stars sit at base intensity; with low per-tick
-        # probability, an idle star starts a half-second sin-shaped pulse that
-        # rises to base+amp and returns.  Already-pulsing stars advance through
-        # their pulse and clear themselves when done.
+        # End any twinkle that has completed a full cycle.
+        for s in self.stars:
+            if s[4] >= 0 and now - s[4] >= self.twinkle_period:
+                s[4] = -1.0
+
+        # Top up the active set: pick random idle stars and start them now.
+        # Each new star begins at the current wall-clock, so its phase is
+        # naturally offset from already-running twinkles.
+        active = sum(1 for s in self.stars if s[4] >= 0)
+        if active < self.target_twinkling:
+            idle = [i for i, s in enumerate(self.stars) if s[4] < 0]
+            for _ in range(min(self.target_twinkling - active, len(idle))):
+                j = random.randrange(len(idle))
+                self.stars[idle.pop(j)][4] = now
+
+        # Render every star into the buffer.  Idle stars sit at their calm
+        # base intensity.  Active stars start at base+amp and smoothly fade
+        # back to base over twinkle_period (cosine half-cycle).
+        pi_over_period = math.pi / self.twinkle_period
+        w = self.w
+        buf = self._buf
         for s in self.stars:
             base = s[2]
             if s[4] < 0:
-                if random.random() < self._twinkle_prob:
-                    s[4] = now
-                    s[5] = self._twinkle_duration * random.uniform(0.8, 1.2)
                 v = base
             else:
-                elapsed = now - s[4]
-                if elapsed >= s[5]:
-                    s[4] = -1.0
-                    v = base
-                else:
-                    v = base + int(math.sin(math.pi * elapsed / s[5]) * s[3])
-                    if v >= _PALETTE_SIZE:
-                        v = _PALETTE_SIZE - 1
-            if v < 1:
-                v = 1
-            self.bitmap[s[0], s[1]] = v
+                decay = (1.0 + math.cos((now - s[4]) * pi_over_period)) * 0.5
+                v = base + int(s[3] * decay)
+                if v >= _PALETTE_SIZE:
+                    v = _PALETTE_SIZE - 1
+            if v >= 1:
+                buf[s[1] * w + s[0]] = v
 
         # Shooting star: head + fading trail along the velocity vector.
         if self.shoot is None:
@@ -125,10 +154,14 @@ class NightSky:
                     v = head_i - k * 3
                     if v < 1:
                         v = 1
-                    if v > self.bitmap[tx, ty]:
-                        self.bitmap[tx, ty] = v
+                    idx = ty * w + tx
+                    if v > buf[idx]:
+                        buf[idx] = v
             sh[0] += sh[2]
             sh[1] += sh[3]
             if sh[0] < -15 or sh[0] > self.w + 15 or sh[1] > self.h + 15:
                 self.shoot = None
                 self.next_shoot = now + random.uniform(self.shoot_min, self.shoot_max)
+
+        # One atomic update of the whole bitmap.
+        bitmaptools.arrayblit(self.bitmap, buf, 0, 0, self.w, self.h)
