@@ -12,5 +12,5 @@ test-code/
 
 settings.toml
 
-heart-message-manager/secret_key
-heart-message-manager/db.sqlite
+secret_key
+db.sqlite

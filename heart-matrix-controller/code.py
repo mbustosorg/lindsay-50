@@ -39,13 +39,13 @@ connect_wifi()
 pool = socketpool.SocketPool(wifi.radio)
 ssl_context = adafruit_connection_manager.get_radio_ssl_context(wifi.radio)
 
-matrix = Matrix(width=64, height=64, serpentine=True, tile_rows=2, bit_depth=5)
+matrix = Matrix(width=64, height=64, serpentine=True, tile_rows=2, bit_depth=4)
 scroller = Scroller(matrix)
 fireworks = Fireworks(matrix.display, scroller.group)
+fireworks.tilegrid.hidden = True
 flame = Flame(matrix.display, scroller.group)
 flame.tilegrid.hidden = True
 nightsky = NightSky(matrix.display, scroller.group)
-nightsky.tilegrid.hidden = True
 
 
 class EffectCoordinator:
@@ -108,7 +108,7 @@ class EffectCoordinator:
         self.scroller.tick()
 
 
-coordinator = EffectCoordinator(matrix.display, scroller, [fireworks, flame, nightsky], fade_seconds=5.2)
+coordinator = EffectCoordinator(matrix.display, scroller, [nightsky, fireworks, flame], fade_seconds=5.2)
 
 
 def connected(client):
