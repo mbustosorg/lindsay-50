@@ -49,13 +49,19 @@ def _s3_client():
 # ---------------------------------------------------------------------------
 
 def _load_s3_config() -> dict:
-    """Load S3 configuration from settings.toml."""
+    """Load S3 configuration from settings.toml or environment variables."""
     import tomllib
+    import os
     settings_path = Path(__file__).parent.parent / "heart-message-manager" / "settings.toml"
-    if not settings_path.exists():
-        return {}
-    with open(settings_path, "rb") as f:
-        return tomllib.load(f)
+    if settings_path.exists():
+        with open(settings_path, "rb") as f:
+            return tomllib.load(f)
+    # Heroku: use environment variables
+    return {
+        "AWS_S3_BUCKET": os.environ.get("AWS_S3_BUCKET", ""),
+        "AWS_S3_ENDPOINT_URL": os.environ.get("AWS_S3_ENDPOINT_URL", ""),
+        "AWS_S3_REGION": os.environ.get("AWS_S3_REGION", "us-east-1"),
+    }
 
 
 def _s3_bucket() -> str:

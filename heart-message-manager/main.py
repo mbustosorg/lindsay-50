@@ -36,18 +36,28 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# Load settings
+# Load settings (settings.toml for local dev, env vars for Heroku)
 _settings_path = Path(__file__).parent / "settings.toml"
-if not _settings_path.exists():
-    raise RuntimeError("settings.toml not found; copy settings.toml.example first")
-with open(_settings_path, "rb") as f:
-    _cfg = tomllib.load(f)
-
-AIO_USERNAME = _cfg["AIO_USERNAME"]
-AIO_KEY = _cfg["AIO_KEY"]
-AIO_FEED = _cfg["AIO_FEED"]
-
-SERVER_PORT = _cfg.get("PORT", 3100)
+if _settings_path.exists():
+    with open(_settings_path, "rb") as f:
+        _cfg = tomllib.load(f)
+    AIO_USERNAME = _cfg["AIO_USERNAME"]
+    AIO_KEY = _cfg["AIO_KEY"]
+    AIO_FEED = _cfg["AIO_FEED"]
+    SERVER_PORT = _cfg.get("PORT", 3100)
+    MQTT_HOST = _cfg.get("MQTT_HOST", "io.adafruit.com")
+    MQTT_PORT = _cfg.get("MQTT_PORT", 8883)
+    AIO_CONFIG_FEED = _cfg.get("AIO_CONFIG_FEED", "")
+else:
+    import os
+    AIO_USERNAME = os.environ["AIO_USERNAME"]
+    AIO_KEY = os.environ["AIO_KEY"]
+    AIO_FEED = os.environ["AIO_FEED"]
+    SERVER_PORT = int(os.environ.get("PORT", 3100))
+    MQTT_HOST = os.environ.get("MQTT_HOST", "io.adafruit.com")
+    MQTT_PORT = int(os.environ.get("MQTT_PORT", 8883))
+    AIO_CONFIG_FEED = os.environ.get("AIO_CONFIG_FEED", "")
+    _cfg = {}
 
 
 # Start the Adafruit client
@@ -80,9 +90,8 @@ except Exception as e:
 
 # Print environment and config for debugging
 logger.info("=== DEBUG CONFIG ===")
-logger.info("OBJC_DISABLE_FORK_SAFETY=%s", __import__("os").environ.get("OBJC_DISABLE_FORK_SAFETY", "NOT SET"))
-logger.info("MQTT_HOST=%s", _cfg.get("MQTT_HOST", "NOT SET"))
-logger.info("MQTT_PORT=%s", _cfg.get("MQTT_PORT", "NOT SET"))
+logger.info("MQTT_HOST=%s", MQTT_HOST)
+logger.info("MQTT_PORT=%s", MQTT_PORT)
 logger.info("AIO_FEED=%s", AIO_FEED)
 logger.info("SERVER_PORT=%s", SERVER_PORT)
 logger.info("=== END DEBUG CONFIG ===")
@@ -91,7 +100,7 @@ logger.info("=== END DEBUG CONFIG ===")
 # MessagesSubscriber — starts MQTT threads at worker boot
 _messages_sub: MessagesSubscriber = MessagesSubscriber(
     feed=AIO_FEED,
-    config_feed=_cfg.get("AIO_CONFIG_FEED", "config"),
+    config_feed=AIO_CONFIG_FEED or "config",
     api_url=f"http://localhost:{SERVER_PORT}/api/messages",
     config_api_url=f"http://localhost:{SERVER_PORT}/api/config",
 )
