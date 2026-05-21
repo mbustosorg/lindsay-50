@@ -149,6 +149,9 @@ class MqttConfig:
                 logger.warning("Invalid config payload")
 
         self._sub = MqttSubscriber(feed=config_feed, on_message=on_message)
+
+    def start(self) -> None:
+        """Start the MQTT subscriber thread."""
         self._sub.start()
 
     @property
@@ -156,19 +159,20 @@ class MqttConfig:
         return self._config
 
     def seed(self) -> bool:
-        """Seed config from REST API. Returns True on success, False on failure."""
+        """Seed config from REST API. Spawns a thread so caller isn't blocked."""
         if not self._config_api_url:
             return True
-        try:
-            import requests as req
-            resp = req.get(self._config_api_url, timeout=10)
-            resp.raise_for_status()
-            self._config.update_from_dict(resp.json())
-            logger.info("MqttConfig seeded config")
-            return True
-        except Exception as e:
-            logger.warning("MqttConfig seed failed: %s", e)
-            return False
+        def _do():
+            try:
+                import requests as req
+                resp = req.get(self._config_api_url, timeout=10)
+                resp.raise_for_status()
+                self._config.update_from_dict(resp.json())
+                logger.info("MqttConfig seeded config")
+            except Exception as e:
+                logger.warning("MqttConfig seed failed: %s", e)
+        threading.Thread(target=_do, daemon=True).start()
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +215,9 @@ class MqttMessages:
             self._msgs.add(msg_obj, source="mqtt")
 
         self._sub = MqttSubscriber(feed=feed, on_message=on_message)
+
+    def start(self) -> None:
+        """Start the MQTT subscriber thread."""
         self._sub.start()
 
     @property
@@ -218,31 +225,32 @@ class MqttMessages:
         return self._msgs
 
     def seed(self) -> bool:
-        """Seed messages from REST API. Returns True on success, False on failure."""
+        """Seed messages from REST API. Spawns a thread so caller isn't blocked."""
         if not self._api_url:
             return True
-        try:
-            import requests as req
-            resp = req.get(self._api_url, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            if isinstance(data, list):
-                self._msgs.clear()
-                msgs = [
-                    Message(
-                        id=item.get("id", ""),
-                        sender=item.get("sender", ""),
-                        body=item.get("body", ""),
-                        received_at=item.get("received_at", ""),
-                    )
-                    for item in data[-100:]
-                ]
-                self._msgs.add_many(msgs, source="rest")
-            logger.info("MqttMessages seeded %d messages", len(data) if isinstance(data, list) else 0)
-            return True
-        except Exception as e:
-            logger.warning("MqttMessages seed failed: %s", e)
-            return False
+        def _do():
+            try:
+                import requests as req
+                resp = req.get(self._api_url, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                if isinstance(data, list):
+                    self._msgs.clear()
+                    msgs = [
+                        Message(
+                            id=item.get("id", ""),
+                            sender=item.get("sender", ""),
+                            body=item.get("body", ""),
+                            received_at=item.get("received_at", ""),
+                        )
+                        for item in data[-100:]
+                    ]
+                    self._msgs.add_many(msgs, source="rest")
+                logger.info("MqttMessages seeded %d messages", len(data) if isinstance(data, list) else 0)
+            except Exception as e:
+                logger.warning("MqttMessages seed failed: %s", e)
+        threading.Thread(target=_do, daemon=True).start()
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -252,8 +260,8 @@ class MqttMessages:
 class MessagesSubscriber:
     """Thin orchestrator over MqttConfig and MqttMessages.
 
-    Provides the same get_messages(), seed(), update_config() interface
-    as before so main.py requires no changes.
+    __init__ creates objects. start() starts MQTT threads and seeds from REST APIs.
+    start() is idempotent - calling multiple times is safe.
     """
 
     def __init__(self, feed: str, config_feed: str, api_url: str = "", config_api_url: str = ""):
@@ -261,14 +269,23 @@ class MessagesSubscriber:
         # Share the same Config between MqttConfig and MqttMessages so
         # filter rules apply to messages as soon as they arrive.
         self._messages = MqttMessages(feed, api_url, config=self._config.config)
-        # Seed from REST APIs. Retry with delay in case Flask is still starting up.
+        self._started = False
+
+    def start(self) -> None:
+        """Start MQTT subscribers and seed from REST APIs. Idempotent."""
+        if self._started:
+            return
+        self._started = True
+        self._config.start()
+        self._messages.start()
+        # Seed with retry loop - give Flask time to start responding
         for delay in (0.5, 1.0, 2.0):
             logger.info("MessagesSubscriber seed attempt...")
             if self.seed():
                 break
             logger.info("MessagesSubscriber seed failed, retrying in %ss...", delay)
             time.sleep(delay)
-        logger.info("MessagesSubscriber init done. Buffer has %d messages",
+        logger.info("MessagesSubscriber start done. Buffer has %d messages",
                     len(self._messages._msgs._msgs))
 
     @property

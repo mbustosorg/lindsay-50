@@ -44,6 +44,6 @@ class InMemoryMessages(FilteredMessages):
 
     def get_messages(self, limit=100):
         """Return the most recent N messages, newest first (sorted by received_at desc)."""
-        entries = list(self._msgs)[-limit:]
+        entries = list(self._msgs)
         self._apply_suppression(entries)
-        return sorted(entries, key=lambda e: e.message.received_at, reverse=True)
+        return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[:limit]

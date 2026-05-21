@@ -29,10 +29,9 @@ class SqliteMessages(FilteredMessages):
     def get_messages(self, limit: int = 100):
         """Return messages from SQLite with suppression applied, newest first."""
         all_msgs = storage.get_all_messages()
-        page_msgs = all_msgs[-limit:]
 
         entries = []
-        for msg in reversed(page_msgs):
+        for msg in all_msgs:
             entries.append(MessageView(
                 message=msg,
                 source="rest",
@@ -42,4 +41,4 @@ class SqliteMessages(FilteredMessages):
             ))
 
         self._apply_suppression(entries)
-        return entries
+        return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[:limit]

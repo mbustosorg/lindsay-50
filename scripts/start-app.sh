@@ -47,7 +47,15 @@ done
 
 if [ "$START_SERVICES" = "true" ]; then
     # MinIO (S3-compatible)
-    if ! docker ps --filter "name=minio-local" --format "{{.Names}}" | grep -q minio-local; then
+    if docker ps -a --filter "name=minio-local" --format "{{.Names}}" | grep -q minio-local; then
+        if docker ps --filter "name=minio-local" --format "{{.Names}}" | grep -q minio-local; then
+            echo "MinIO already running"
+        else
+            echo "Starting existing MinIO container..."
+            docker start minio-local
+            echo "MinIO started at http://localhost:9000 (console: http://localhost:9001)"
+        fi
+    else
         echo "Starting MinIO..."
         docker run -d --name minio-local \
             -p 9000:9000 -p 9001:9001 \
@@ -55,8 +63,6 @@ if [ "$START_SERVICES" = "true" ]; then
             -e MINIO_ROOT_PASSWORD=minioadmin \
             minio/minio server /data --console-address ':9001'
         echo "MinIO started at http://localhost:9000 (console: http://localhost:9001)"
-    else
-        echo "MinIO already running"
     fi
 
     # Wait for MinIO to be ready, then create the bucket
@@ -102,7 +108,22 @@ PYEOF
     fi
 
     # Mosquitto (MQTT broker)
-    if ! docker ps --filter "name=mosquitto-local" --format "{{.Names}}" | grep -q mosquitto-local; then
+    if docker ps -a --filter "name=mosquitto-local" --format "{{.Names}}" | grep -q mosquitto-local; then
+        if docker ps --filter "name=mosquitto-local" --format "{{.Names}}" | grep -q mosquitto-local; then
+            echo "Mosquitto already running"
+        else
+            echo "Recreating stale Mosquitto container..."
+            docker rm mosquitto-local
+            MOSQUITTO_CONF=$(mktemp)
+            printf 'listener 1883\nallow_anonymous true\n' > "$MOSQUITTO_CONF"
+            docker run -d --name mosquitto-local \
+                -p 1883:1883 \
+                -v "$MOSQUITTO_CONF:/mosquitto.conf" \
+                eclipse-mosquitto \
+                mosquitto -c /mosquitto.conf
+            echo "Mosquitto started on port 1883"
+        fi
+    else
         echo "Starting Mosquitto..."
         MOSQUITTO_CONF=$(mktemp)
         printf 'listener 1883\nallow_anonymous true\n' > "$MOSQUITTO_CONF"
@@ -112,8 +133,6 @@ PYEOF
             eclipse-mosquitto \
             mosquitto -c /mosquitto.conf
         echo "Mosquitto started on port 1883"
-    else
-        echo "Mosquitto already running"
     fi
 fi
 
@@ -126,10 +145,6 @@ print(cfg.get("PORT", 6000))
 PYEOF
 )
 
-echo "Starting Flask server on http://0.0.0.0:$SERVER_PORT ..."
-cd "$PROJECT_ROOT"
-export FLASK_APP=heart-message-manager/main.py
-# Disable Werkzeug reloader to prevent duplicate MQTT subscribers
-export FLASK_DEBUG=0
-export FLASK_RUN_RELOAD=0
-exec flask run --host=0.0.0.0 --port="$SERVER_PORT"
+echo "Starting gunicorn Flask server on http://0.0.0.0:$SERVER_PORT ..."
+cd "$PROJECT_ROOT/heart-message-manager"
+exec gunicorn main:app --bind "0.0.0.0:$SERVER_PORT" --worker-class=gthread

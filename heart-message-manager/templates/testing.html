@@ -100,12 +100,6 @@
       <p class="text-slate-500 text-sm mt-1">Live view via REST, with suppression preview</p>
     </div>
     <div class="flex items-center gap-3">
-      <select id="feed-limit" onchange="refreshFeed()"
-              class="px-3 py-2 rounded-xl border border-indigo-100 text-sm focus:border-primary outline-none">
-        <option value="20">20</option>
-        <option value="50">50</option>
-        <option value="100" selected>100</option>
-      </select>
       <button onclick="refreshFeed()"
               class="px-4 py-2 rounded-xl bg-indigo-100 text-indigo-700 font-semibold text-sm hover:bg-indigo-200 transition-colors cursor-pointer">
         Refresh
@@ -180,8 +174,7 @@ async function refreshFeed() {
 
 async function fetchMessages() {
   try {
-    const limit = document.getElementById('feed-limit').value;
-    const liveRes = await fetch('/api/live-messages?limit=' + limit);
+    const liveRes = await fetch('/api/live-messages');
     const live = await liveRes.json();
 
     // Match ring buffer entries to SQLite messages for sender info
@@ -212,7 +205,7 @@ async function fetchMessages() {
       const rules = item.rules || [];
       const statusLabel = item.suppressed ? 'suppressed' : 'visible';
       const statusReason = item.suppressed && rules.length > 0 ? '<div class="text-xs text-red-500 mt-0.5">' + rules.map(function(r) { return r.type; }).join(', ') + '</div>' : '';
-      return '<tr class="hover:bg-indigo-50/30 transition-colors cursor-pointer" onclick="showMessageModal(' + btoa(JSON.stringify(item)).replace(/'/g, "\\'") + ')">' +
+      return '<tr class="hover:bg-indigo-50/30 transition-colors cursor-pointer" data-msg=\'' + btoa(JSON.stringify(item)).replace(/'/g, "\\'") + '\' onclick="showMessageModal(this)">' +
         '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-medium ' + sourceColor + '">' + sourceIcon + ' ' + item.source + '</span></td>' +
         '<td class="px-6 py-4 text-sm">' + senderDisplay + '</td>' +
         '<td class="px-6 py-4 text-sm text-slate-600 max-w-xs truncate">' + escapeHtml(body) + '</td>' +
@@ -332,8 +325,8 @@ function closeJsonModal() {
   document.getElementById('json-modal').classList.remove('flex');
 }
 
-function showMessageModal(itemBase64) {
-  const item = JSON.parse(atob(itemBase64));
+function showMessageModal(tr) {
+  const item = JSON.parse(atob(tr.dataset.msg));
   document.getElementById('json-modal-title').textContent = 'Message ' + item.id;
   document.getElementById('json-modal-body').textContent = JSON.stringify(item, null, 2);
   document.getElementById('json-modal').classList.remove('hidden');
@@ -350,21 +343,17 @@ document.getElementById('inject-form').addEventListener('submit', async function
   e.preventDefault();
   const form = e.target;
   const data = new FormData(form);
-  const result = document.getElementById('inject-result');
-  result.textContent = 'Sending...';
   try {
     const res = await fetch('/api/messages', { method: 'POST', body: data });
     const text = await res.text();
     if (res.ok) {
-      result.innerHTML = '<span class="text-green-600 font-medium">OK — ' + escapeHtml(text.slice(0, 100)) + '</span>';
-      fetchMessages();
-      fetchConfig();
       form.Body.value = '';
+      // Live feed updates automatically via polling
     } else {
-      result.innerHTML = '<span class="text-red-500 font-medium">Error ' + res.status + '</span>';
+      showJsonModal('Webhook Error ' + res.status, text, true);
     }
   } catch (e) {
-    result.innerHTML = '<span class="text-red-500 font-medium">Network error</span>';
+    showJsonModal('Network Error', String(e), true);
   }
 });
 

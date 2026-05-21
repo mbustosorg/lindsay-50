@@ -62,7 +62,7 @@ def publish_config(config_dict: dict) -> bool:
     try:
         client.connect(host, port, keepalive=30)
         client.loop_start()
-        result = client.publish(topic, payload.encode(), qos=0)
+        result = client.publish(topic, payload.encode(), qos=1)
         client.loop_stop()
         client.disconnect()
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
@@ -123,7 +123,7 @@ def publish_message(body: str,
     try:
         client.connect(host, port, keepalive=30)
         client.loop_start()
-        result = client.publish(topic, payload.encode(), qos=0)
+        result = client.publish(topic, payload.encode(), qos=1)
         client.loop_stop()
         client.disconnect()
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
