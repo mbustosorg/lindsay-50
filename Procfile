@@ -1,1 +1,1 @@
-web: gunicorn main:app --worker-class=gthread
+web: gunicorn heart-message-manager.main:app --worker-class=gthread
