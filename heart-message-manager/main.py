@@ -16,7 +16,6 @@ from flask import Flask, Response, jsonify, redirect, render_template, request, 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from Adafruit_IO import Client
-import tomllib
 
 from lib import storage, s3, publish
 from lib_shared.models import Config, FilterRule, Message
@@ -36,28 +35,15 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# Load settings (settings.toml for local dev, env vars for Heroku)
-_settings_path = Path(__file__).parent / "settings.toml"
-if _settings_path.exists():
-    with open(_settings_path, "rb") as f:
-        _cfg = tomllib.load(f)
-    AIO_USERNAME = _cfg["AIO_USERNAME"]
-    AIO_KEY = _cfg["AIO_KEY"]
-    AIO_FEED = _cfg["AIO_FEED"]
-    SERVER_PORT = _cfg.get("PORT", 3100)
-    MQTT_HOST = _cfg.get("MQTT_HOST", "io.adafruit.com")
-    MQTT_PORT = _cfg.get("MQTT_PORT", 8883)
-    AIO_CONFIG_FEED = _cfg.get("AIO_CONFIG_FEED", "")
-else:
-    import os
-    AIO_USERNAME = os.environ["AIO_USERNAME"]
-    AIO_KEY = os.environ["AIO_KEY"]
-    AIO_FEED = os.environ["AIO_FEED"]
-    SERVER_PORT = int(os.environ.get("PORT", 3100))
-    MQTT_HOST = os.environ.get("MQTT_HOST", "io.adafruit.com")
-    MQTT_PORT = int(os.environ.get("MQTT_PORT", 8883))
-    AIO_CONFIG_FEED = os.environ.get("AIO_CONFIG_FEED", "")
-    _cfg = {}
+# Load settings from lib_shared.config (CWD/settings.toml > env vars)
+from lib_shared.config import cfg
+AIO_USERNAME = cfg.get("AIO_USERNAME", "")
+AIO_KEY = cfg.get("AIO_KEY", "")
+AIO_FEED = cfg.get("AIO_FEED", "")
+AIO_CONFIG_FEED = cfg.get("AIO_CONFIG_FEED", "")
+SERVER_PORT = int(cfg.get("PORT", 3100))
+MQTT_HOST = cfg.get("MQTT_HOST", "io.adafruit.com")
+MQTT_PORT = int(cfg.get("MQTT_PORT", 8883))
 
 
 # Start the Adafruit client

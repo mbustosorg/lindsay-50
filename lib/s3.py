@@ -17,10 +17,10 @@ import json
 import logging
 import boto3
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Iterator, Optional
 import pytz
 
+from lib_shared.config import cfg
 from lib_shared.models import Message
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,6 @@ _CONFIG_KEY_TEMPLATE = "config/{year}-{month}/cfg-{datetime}.json"
 # ---------------------------------------------------------------------------
 
 def _s3_client():
-    cfg = _load_s3_config()
     return boto3.client(
         "s3",
         aws_access_key_id=cfg.get("AWS_ACCESS_KEY_ID"),
@@ -44,28 +43,8 @@ def _s3_client():
     )
 
 
-# ---------------------------------------------------------------------------
-# Config (loaded from settings.toml)
-# ---------------------------------------------------------------------------
-
-def _load_s3_config() -> dict:
-    """Load S3 configuration from settings.toml or environment variables."""
-    import tomllib
-    import os
-    settings_path = Path(__file__).parent.parent / "heart-message-manager" / "settings.toml"
-    if settings_path.exists():
-        with open(settings_path, "rb") as f:
-            return tomllib.load(f)
-    # Heroku: use environment variables
-    return {
-        "AWS_S3_BUCKET": os.environ.get("AWS_S3_BUCKET", ""),
-        "AWS_S3_ENDPOINT_URL": os.environ.get("AWS_S3_ENDPOINT_URL", ""),
-        "AWS_S3_REGION": os.environ.get("AWS_S3_REGION", "us-east-1"),
-    }
-
-
 def _s3_bucket() -> str:
-    return _load_s3_config()["AWS_S3_BUCKET"]
+    return cfg.get("AWS_S3_BUCKET", "")
 
 
 # ---------------------------------------------------------------------------

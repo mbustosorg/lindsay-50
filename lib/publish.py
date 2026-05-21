@@ -6,21 +6,12 @@ subscribes via MQTT.
 
 import json
 import logging
-import tomllib
-from pathlib import Path
 
 import paho.mqtt.client as mqtt
 
+from lib_shared.config import cfg
+
 logger = logging.getLogger(__name__)
-
-
-def _aio_config() -> dict:
-    """Load Adafruit IO config from settings.toml."""
-    settings_path = Path(__file__).parent.parent / "heart-message-manager" / "settings.toml"
-    if not settings_path.exists():
-        return {}
-    with open(settings_path, "rb") as f:
-        return tomllib.load(f)
 
 
 def _feed_topic(feed: str, username: str) -> str:
@@ -35,7 +26,6 @@ def publish_config(config_dict: dict) -> bool:
 
     Returns True on success, False on failure.
     """
-    cfg = _aio_config()
     feed = cfg.get("AIO_FEED", "")
     username = cfg.get("AIO_USERNAME", "")
 
@@ -92,7 +82,6 @@ def publish_message(body: str,
     Returns:
         True on success, False on failure.
     """
-    cfg = _aio_config()
     feed = cfg.get("AIO_FEED", "")
     username = cfg.get("AIO_USERNAME", "")
 

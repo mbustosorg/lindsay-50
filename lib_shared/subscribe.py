@@ -16,21 +16,11 @@ from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
+from lib_shared.config import cfg
 from lib_shared.messages import InMemoryMessages
 from lib_shared.models import Config, Message
 
 logger = logging.getLogger(__name__)
-
-
-def _aio_config() -> dict:
-    """Load Adafruit IO config from settings.toml."""
-    import tomllib
-    from pathlib import Path
-    settings_path = Path(__file__).parent.parent / "heart-message-manager" / "settings.toml"
-    if not settings_path.exists():
-        return {}
-    with open(settings_path, "rb") as f:
-        return tomllib.load(f)
 
 
 def _feed_topic(feed: str, username: str) -> str:
@@ -61,7 +51,6 @@ class MqttSubscriber:
 
     def start(self) -> None:
         """Start the background MQTT subscriber thread."""
-        cfg = _aio_config()
         username = cfg.get("AIO_USERNAME", "")
         password = cfg.get("AIO_KEY", "")
         host = cfg.get("MQTT_HOST", "io.adafruit.com")
@@ -81,7 +70,6 @@ class MqttSubscriber:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            cfg = _aio_config()
             host = cfg.get("MQTT_HOST", "io.adafruit.com")
             port = int(cfg.get("MQTT_PORT", 8883))
             username = cfg.get("MQTT_USERNAME") or cfg.get("AIO_USERNAME", "")
