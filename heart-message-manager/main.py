@@ -138,6 +138,7 @@ def api_messages():
 
     try:
         storage.put_message(msg)
+        assert _mqtt_client is not None
         _mqtt_client.publish_envelope(MessageEnvelope("message", msg.to_dict()))
     except Exception as e:
         logger.error("Post-webhook processing failed: %s", e)
@@ -310,6 +311,7 @@ def _save_and_publish(cfg: SignConfig) -> None:
         s3.save_config_snapshot(cfg.to_dict())
     except Exception as e:
         logger.warning("Config S3 snapshot failed: %s", e)
+    assert _mqtt_client is not None
     _mqtt_client.publish_envelope(MessageEnvelope("config", cfg.to_dict()))
 
 
