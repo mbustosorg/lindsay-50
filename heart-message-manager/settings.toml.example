@@ -43,3 +43,6 @@ AIO_CONFIG_FEED = "YOUR_AIO_CONFIG_FEED_NAME"
 # Local dev with Mosquitto: localhost, port 1883 (no TLS).
 AIO_HOST = "io.adafruit.com"
 AIO_PORT = 8883
+# MQTT provider: "adafruit" (uses Adafruit IO MQTT with TLS) or "paho" (raw paho-mqtt, for local dev).
+# Flask and subscriber use the same provider.
+MQTT_PROVIDER = "adafruit"

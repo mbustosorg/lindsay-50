@@ -1,11 +1,11 @@
-"""MQTT subscriber for ESP32 / CircuitPython.
+"""MQTT subscriber for Flask server and CircuitPython device.
 
-MqttSubscriber is a simple MQTT-to-callback bridge.
 MessagesSubscriber creates two MqttSubscriber instances and maps callbacks
 to InMemoryMessages and Config methods.
 
-This module MUST NOT import from lib.storage (SQLite) or any other module
-that depends on SQLite.
+MQTT_PROVIDER determines the client backend:
+  - "adafruit" : Adafruit_IO.MQTTClient (TLS on port 8883, Heroku)
+  - "paho"     : paho.mqtt.client (plain TCP, local dev with Mosquitto)
 """
 
 import json
@@ -14,8 +14,6 @@ import threading
 import time
 from datetime import datetime, timezone
 
-import paho.mqtt.client as mqtt
-
 from lib_shared.config_reader import get_config
 cfg = get_config()
 
@@ -23,13 +21,6 @@ from lib_shared.messages import InMemoryMessages
 from lib_shared.models import SignConfig, Message
 
 logger = logging.getLogger(__name__)
-
-
-def _feed_topic(feed: str, username: str) -> str:
-    """Build the Adafruit IO MQTT topic for a feed."""
-    if "/feeds/" in feed:
-        return feed
-    return f"{username}/feeds/{feed}"
 
 
 # ---------------------------------------------------------------------------
@@ -53,31 +44,72 @@ class MqttSubscriber:
 
     def start(self) -> None:
         """Start the background MQTT subscriber thread."""
-        username = cfg.AIO_USERNAME
-        host = cfg.AIO_HOST
-        port = int(cfg.AIO_PORT)
-
-        self._topic = _feed_topic(self._feed, username)
-
         self._thread = threading.Thread(target=self._run, name="mqtt-subscriber", daemon=True)
         self._thread.start()
-        logger.info("MqttSubscriber started on %s", self._topic)
+        logger.info("MqttSubscriber started for %s", self._feed)
 
     def stop(self) -> None:
         """Stop the background MQTT subscriber thread."""
         self._stop.set()
 
     def _run(self) -> None:
-        while not self._stop.is_set():
-            host = cfg.AIO_HOST
-            port = int(cfg.AIO_PORT)
-            username = cfg.AIO_USERNAME
-            password = cfg.AIO_KEY
+        if cfg.MQTT_PROVIDER == "adafruit":
+            self._run_adafruit()
+        else:
+            self._run_paho()
 
-            client = mqtt.Client(
-                client_id=f"lindsay-subscriber-{id(self)}",
-                clean_session=True,
-            )
+    def _run_adafruit(self) -> None:
+        """Subscribe using Adafruit_IO.MQTTClient."""
+        from Adafruit_IO import MQTTClient
+
+        username = cfg.AIO_USERNAME
+        key = cfg.AIO_KEY
+
+        def on_message(_client, topic, payload):
+            if self._on_message_cb:
+                self._on_message_cb(payload)
+
+        def on_connect(_client):
+            _client.subscribe(self._feed)
+            logger.info("Adafruit IO MQTT subscribed to %s/%s", username, self._feed)
+
+        def on_disconnect(_client, rc):
+            if rc != 0:
+                logger.warning("Adafruit IO MQTT disconnected unexpectedly: rc=%s", rc)
+
+        while not self._stop.is_set():
+            try:
+                client = MQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
+                client.on_connect = on_connect
+                client.on_disconnect = on_disconnect
+                client.on_message = on_message
+                logger.info("Adafruit IO MQTT connecting to %s...", cfg.AIO_HOST)
+                client.connect()
+                client.loop_background()
+                # loop_background blocks in a thread, so we wait for disconnect
+                while not self._stop.is_set() and client.is_connected():
+                    time.sleep(1)
+            except Exception as e:
+                if not self._stop.is_set():
+                    logger.warning("Adafruit IO MQTT error: %s. Reconnecting in 5s...", e)
+                    time.sleep(5)
+
+    def _run_paho(self) -> None:
+        """Subscribe using raw paho-mqtt.client."""
+        import paho.mqtt.client as mqtt
+
+        username = cfg.AIO_USERNAME
+        password = cfg.AIO_KEY
+        host = cfg.AIO_HOST
+        port = int(cfg.AIO_PORT)
+
+        if "/feeds/" in self._feed:
+            topic = self._feed
+        else:
+            topic = f"{username}/feeds/{self._feed}"
+
+        while not self._stop.is_set():
+            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)
             if username:
                 client.username_pw_set(username, password)
             client.on_connect = self._on_connect
@@ -85,28 +117,32 @@ class MqttSubscriber:
             client.on_disconnect = self._on_disconnect
 
             try:
-                logger.info("MqttSubscriber connecting to %s:%d...", host, port)
+                logger.info("Paho MQTT connecting to %s:%d...", host, port)
                 client.connect(host, port, keepalive=60)
                 client.loop_forever()
             except Exception as e:
                 if not self._stop.is_set():
-                    logger.warning("MqttSubscriber error: %s. Reconnecting in 5s...", e)
+                    logger.warning("Paho MQTT error: %s. Reconnecting in 5s...", e)
                     time.sleep(5)
 
     def _on_connect(self, _client, _userdata, _flags, rc: int) -> None:
         if rc == 0:
-            _client.subscribe(self._topic)
-            logger.info("MqttSubscriber subscribed to %s", self._topic)
+            if "/feeds/" in self._feed:
+                topic = self._feed
+            else:
+                topic = f"{cfg.AIO_USERNAME}/feeds/{self._feed}"
+            _client.subscribe(topic)
+            logger.info("Paho MQTT subscribed to %s", topic)
         else:
-            logger.warning("MqttSubscriber connection failed: rc=%s", rc)
+            logger.warning("Paho MQTT connection failed: rc=%s", rc)
 
-    def _on_message(self, _client, _userdata, msg: mqtt.MQTTMessage) -> None:
+    def _on_message(self, _client, _userdata, msg) -> None:
         if self._on_message_cb:
             self._on_message_cb(msg.payload.decode(errors="replace"))
 
     def _on_disconnect(self, _client, _userdata, rc: int) -> None:
         if rc != 0:
-            logger.warning("MqttSubscriber disconnected unexpectedly: rc=%s", rc)
+            logger.warning("Paho MQTT disconnected unexpectedly: rc=%s", rc)
 
 
 # ---------------------------------------------------------------------------
