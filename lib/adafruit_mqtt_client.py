@@ -71,14 +71,17 @@ class AdafruitMqttClient:
         key = cfg.AIO_KEY
 
         def on_connect(_client):
+            logger.info("AdafruitMqttClient on_connect called")
             _client.subscribe(self._feed)
             logger.info("AdafruitMqttClient subscribed to %s/%s", username, self._feed)
 
         def on_disconnect(_client, rc):
+            logger.info("AdafruitMqttClient on_disconnect called: rc=%s", rc)
             if rc != 0:
                 logger.warning("AdafruitMqttClient disconnected: rc=%s", rc)
 
         def on_message(_client, topic, payload):
+            logger.info("AdafruitMqttClient on_message called: topic=%r payload=%r", topic, payload)
             self._dispatch(payload)
 
         self._stop = threading.Event()
@@ -94,6 +97,7 @@ class AdafruitMqttClient:
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
                     logger.info("AdafruitMqttClient connecting to %s...", cfg.AIO_HOST)
                     client.connect()
+                    logger.info("AdafruitMqttClient connect() returned, is_connected=%s", client.is_connected())
                     client.loop_background()
                     while not stop.is_set() and client.is_connected():
                         time.sleep(1)
