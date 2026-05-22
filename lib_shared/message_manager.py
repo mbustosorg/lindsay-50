@@ -5,7 +5,6 @@ Both Flask and ESP32 instantiate this at boot. Seed URLs come from cfg internall
 
 import json
 import logging
-import threading
 from datetime import datetime, timezone
 
 from lib_shared.config_reader import get_config
@@ -75,44 +74,41 @@ class MessageManager:
         logger.info("MessageManager applied config update")
 
     def seed(self) -> None:
-        """Back-populate config + messages from Flask REST API (daemon thread)."""
+        """Back-populate config and messages from the Flask REST API."""
         cfg_api = cfg.get("CONFIG_API_URL")
         msgs_api = cfg.get("MESSAGES_API_URL")
 
-        def _do():
-            if msgs_api:
-                try:
-                    import requests as req
-                    resp = req.get(msgs_api, timeout=10)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    if isinstance(data, list):
-                        self._messages.clear()
-                        msgs = [
-                            Message(
-                                id=item.get("id", ""),
-                                sender=item.get("sender", ""),
-                                body=item.get("body", ""),
-                                received_at=item.get("received_at", ""),
-                            )
-                            for item in data[-100:]
-                        ]
-                        self._messages.add_many(msgs, source="rest")
-                    logger.info("MessageManager seeded %d messages", len(data) if isinstance(data, list) else 0)
-                except Exception as e:
-                    logger.warning("MessageManager message seed failed: %s", e)
+        if msgs_api:
+            try:
+                import requests as req
+                resp = req.get(msgs_api, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                if isinstance(data, list):
+                    self._messages.clear()
+                    msgs = [
+                        Message(
+                            id=item.get("id", ""),
+                            sender=item.get("sender", ""),
+                            body=item.get("body", ""),
+                            received_at=item.get("received_at", ""),
+                        )
+                        for item in data[-100:]
+                    ]
+                    self._messages.add_many(msgs, source="rest")
+                logger.info("MessageManager seeded %d messages", len(data) if isinstance(data, list) else 0)
+            except Exception as e:
+                logger.warning("MessageManager message seed failed: %s", e)
 
-            if cfg_api:
-                try:
-                    import requests as req
-                    resp = req.get(cfg_api, timeout=10)
-                    resp.raise_for_status()
-                    self._config.update_from_dict(resp.json())
-                    logger.info("MessageManager seeded config")
-                except Exception as e:
-                    logger.warning("MessageManager config seed failed: %s", e)
-
-        threading.Thread(target=_do, daemon=True).start()
+        if cfg_api:
+            try:
+                import requests as req
+                resp = req.get(cfg_api, timeout=10)
+                resp.raise_for_status()
+                self._config.update_from_dict(resp.json())
+                logger.info("MessageManager seeded config")
+            except Exception as e:
+                logger.warning("MessageManager config seed failed: %s", e)
 
     def get_messages(self, limit: int = 100):
         return self._messages.get_messages(limit)
