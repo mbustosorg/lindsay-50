@@ -63,11 +63,15 @@ class MqttSubscriber:
         import paho.mqtt.client as mqtt
         from Adafruit_IO import MQTTClient
 
+        # paho < 2.0 doesn't have CallbackAPIVersion; inject a stub so
+        # MQTTClient.__init__ (which uses it internally) doesn't AttributeError.
+        if not hasattr(mqtt, "CallbackAPIVersion"):
+            class _Cav:
+                VERSION1 = None
+            mqtt.CallbackAPIVersion = _Cav  # type: ignore[reportAttributeAccessIssue]
+
         username = cfg.AIO_USERNAME
         key = cfg.AIO_KEY
-
-        # paho >= 2.0 requires CallbackAPIVersion; paho < 2.0 does not have it
-        has_cav = hasattr(mqtt, "CallbackAPIVersion")
 
         def on_message(_client, topic, payload):
             if self._on_message_cb:
@@ -84,9 +88,6 @@ class MqttSubscriber:
         while not self._stop.is_set():
             try:
                 client = MQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
-                # Override the paho client's callback API version for paho 2.x compatibility
-                if has_cav:
-                    client._client._callback_api_version = mqtt.CallbackAPIVersion.VERSION1  # type: ignore[reportAttributeAccessIssue]
                 client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                 client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
                 client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
