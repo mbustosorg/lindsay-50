@@ -60,10 +60,14 @@ class MqttSubscriber:
 
     def _run_adafruit(self) -> None:
         """Subscribe using Adafruit_IO.MQTTClient."""
+        import paho.mqtt.client as mqtt
         from Adafruit_IO import MQTTClient
 
         username = cfg.AIO_USERNAME
         key = cfg.AIO_KEY
+
+        # paho >= 2.0 requires CallbackAPIVersion; paho < 2.0 does not have it
+        has_cav = hasattr(mqtt, "CallbackAPIVersion")
 
         def on_message(_client, topic, payload):
             if self._on_message_cb:
@@ -80,6 +84,9 @@ class MqttSubscriber:
         while not self._stop.is_set():
             try:
                 client = MQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
+                # Override the paho client's callback API version for paho 2.x compatibility
+                if has_cav:
+                    client._client._callback_api_version = mqtt.CallbackAPIVersion.VERSION1  # type: ignore[reportAttributeAccessIssue]
                 client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                 client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
                 client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
@@ -109,7 +116,12 @@ class MqttSubscriber:
             topic = f"{username}/feeds/{self._feed}"
 
         while not self._stop.is_set():
-            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)  # type: ignore[reportPrivateImportUsage]
+            if hasattr(mqtt, "CallbackAPIVersion"):
+                # paho >= 2.0: requires explicit callback API version
+                client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)  # type: ignore[reportPrivateImportUsage]
+            else:
+                # paho < 2.0: no CallbackAPIVersion, MQTT v3.1.1 by default
+                client = mqtt.Client(clean_session=True)  # type: ignore[reportArgumentType]
             if username:
                 client.username_pw_set(username, password)
             client.on_connect = self._on_connect  # type: ignore[reportAttributeAccessIssue]
