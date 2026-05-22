@@ -77,7 +77,7 @@ Both share the same functionality. The playful variant is served from `*-playful
 The two `settings.toml` files use different keys because the server and device use different APIs:
 
 `heart-message-manager/settings.toml` — Adafruit IO REST publish:
-- `AIO_USERNAME`, `AIO_KEY`, `AIO_FEED`
+- `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC`
 - `ALLOWED_SENDERS` (optional comma-separated phone-number allow-list; empty = accept all)
 
 `heart-matrix-controller/settings.toml` — Wi-Fi + Adafruit IO MQTT subscribe + log level:

@@ -5,8 +5,8 @@
 #   cp settings.toml.example settings.toml
 #
 # Heroku: set these as environment variables (config vars):
-#   heroku config:set AIO_USERNAME=xxx AIO_KEY=xxx AIO_MESSAGES_FEED=xxx \
-#   AIO_CONFIG_FEED=xxx AWS_S3_BUCKET=xxx
+#   heroku config:set MQTT_USERNAME=xxx MQTT_PASSWORD=xxx MQTT_HOST=xxx \
+#   MQTT_PORT=8883 MQTT_TOPIC=xxx AWS_S3_BUCKET=xxx
 #
 # All keys are required unless marked [optional].
 # =============================================================================
@@ -36,17 +36,16 @@ AWS_S3_BUCKET = "YOUR_S3_BUCKET_NAME"
 # Flask and subscriber use the same client.
 MQTT_CLIENT = "adafruit"
 
-# Default: io.adafruit.com (Adafruit IO cloud with TLS on port 8883).
-# Local dev with Mosquitto: localhost, port 1883 (no TLS).
-AIO_HOST = "io.adafruit.com"
-AIO_PORT = 8883
-AIO_USERNAME = "YOUR_AIO_USERNAME"
-AIO_KEY = "YOUR_AIO_KEY"
-AIO_MESSAGES_FEED = "YOUR_AIO_MESSAGES_FEED_NAME"
-AIO_CONFIG_FEED = "YOUR_AIO_CONFIG_FEED_NAME"
-
-# Unified MQTT feed for the new MessageManager-based publish.
-AIO_FEED = "lindsay50"
+# Adafruit IO over MQTT.
+# MQTT_HOST Default: io.adafruit.com (Adafruit IO cloud with TLS on port 8883).
+#   Local dev with Mosquitto: localhost, port 1883 (no TLS).
+# MQTT_USERNAME = your AIO username, MQTT_PASSWORD = your AIO key.
+# MQTT_TOPIC is the feed name (the device extracts the feed from "user/feeds/feed" if you give it the full path).
+MQTT_HOST = "io.adafruit.com"
+MQTT_PORT = 8883
+MQTT_USERNAME = "YOUR_AIO_USERNAME"
+MQTT_PASSWORD = "YOUR_AIO_KEY"
+MQTT_TOPIC = "YOUR_AIO_FEED_NAME"
 
 # REST API URLs for seeding (Flask seeds from itself via localhost).
 # On Heroku, override these via config vars with the actual public URL

@@ -3,13 +3,15 @@ WIFI_SSID = "YOUR_WIFI_SSID"
 WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
 
 # Adafruit IO over MQTT.
+# MQTT_HOST Default: io.adafruit.com (Adafruit IO cloud with TLS on port 8883).
+#   Local dev with Mosquitto: localhost, port 1883 (no TLS).
 # MQTT_USERNAME = your AIO username, MQTT_PASSWORD = your AIO key.
 # MQTT_TOPIC is the feed name (the device extracts the feed from "user/feeds/feed" if you give it the full path).
 MQTT_HOST = "io.adafruit.com"
 MQTT_PORT = 1883
-MQTT_TOPIC = "YOUR_AIO_FEED_NAME"
 MQTT_USERNAME = "YOUR_AIO_USERNAME"
 MQTT_PASSWORD = "YOUR_AIO_KEY"
+MQTT_TOPIC = "YOUR_AIO_FEED_NAME"
 
 # Flask server REST API URLs for seeding config and messages on boot.
 # The ESP32 boots without persistent storage, so it seeds from the Flask server.

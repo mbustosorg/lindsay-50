@@ -29,9 +29,9 @@ class PahoMqttClient:
         import threading
         import time
 
-        username = cfg.AIO_USERNAME
-        host = cfg.AIO_HOST
-        port = int(cfg.AIO_PORT)
+        username = cfg.MQTT_USERNAME
+        host = cfg.MQTT_HOST
+        port = int(cfg.MQTT_PORT)
 
         if "/feeds/" in self._feed:
             topic = self._feed
@@ -68,7 +68,7 @@ class PahoMqttClient:
             while not stop.is_set():
                 try:
                     client = mqtt.Client(clean_session=True)  # type: ignore[reportPrivateImportUsage]
-                    client.username_pw_set(username, cfg.AIO_KEY)
+                    client.username_pw_set(username, cfg.MQTT_PASSWORD)
                     client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
@@ -98,12 +98,12 @@ class PahoMqttClient:
     def publish_envelope(self, envelope) -> bool:
         """Publish a MessageEnvelope to the AIO feed. Returns True on success."""
         import paho.mqtt.client as mqtt
-        topic = f"{cfg.AIO_USERNAME}/feeds/{self._feed}"
+        topic = f"{cfg.MQTT_USERNAME}/feeds/{self._feed}"
         payload = envelope.to_json()
         try:
             client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)  # type: ignore[reportPrivateImportUsage]
-            client.username_pw_set(cfg.AIO_USERNAME, cfg.AIO_KEY)
-            client.connect(cfg.AIO_HOST, int(cfg.AIO_PORT), keepalive=30)
+            client.username_pw_set(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD)
+            client.connect(cfg.MQTT_HOST, int(cfg.MQTT_PORT), keepalive=30)
             result = client.publish(topic, payload.encode(), qos=1)
             client.loop_stop()
             client.disconnect()

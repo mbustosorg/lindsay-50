@@ -1,43 +1,40 @@
 import os
 import time
 import wifi
-import socketpool
-import adafruit_connection_manager
 import adafruit_logging as logging
-import adafruit_minimqtt.adafruit_minimqtt as MQTT
-from adafruit_io.adafruit_io import IO_MQTT
 from adafruit_matrixportal.matrix import Matrix
 from scroller import Scroller
 from fireworks import Fireworks
 from flame import Flame
 from nightsky import NightSky
+from mqtt_client import CircuitPythonMqttClient
+from lib_shared.message_manager import MessageManager
 
-# Credentials are loaded from settings.toml
-SSID = os.getenv("WIFI_SSID")
-PASSWORD = os.getenv("WIFI_PASSWORD")
-
-MQTT_HOST = os.getenv("MQTT_HOST")
-MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
-MQTT_TOPIC = os.getenv("MQTT_TOPIC")
-MQTT_USERNAME = os.getenv("MQTT_USERNAME")
-MQTT_PASSWORD = os.getenv("MQTT_PASSWORD")
+from lib_shared.config_reader import get_config
+REQUIRED_KEYS: set[str] = {
+    "WIFI_SSID",
+    "WIFI_PASSWORD",
+    "MQTT_HOST",
+    "MQTT_PORT",
+    "MQTT_USERNAME",
+    "MQTT_PASSWORD",
+    "MQTT_TOPIC",
+    "CONFIG_API_URL",
+    "MESSAGES_API_URL",
+}
+cfg = get_config(REQUIRED_KEYS)
 
 log = logging.getLogger("heart")
 log.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
 
-# IO_MQTT.subscribe() takes the feed name, not the full "{user}/feeds/{feed}" path.
-MQTT_FEED = MQTT_TOPIC.rsplit("/feeds/", 1)[-1]
-
 
 def connect_wifi():
-    log.info("Connecting to WiFi: %s", SSID)
-    wifi.radio.connect(SSID, PASSWORD)
+    log.info("Connecting to WiFi: %s", cfg.WIFI_SSID)
+    wifi.radio.connect(cfg.WIFI_SSID, cfg.WIFI_PASSWORD)
     log.info("Connected, IP: %s", wifi.radio.ipv4_address)
 
-
 connect_wifi()
-pool = socketpool.SocketPool(wifi.radio)
-ssl_context = adafruit_connection_manager.get_radio_ssl_context(wifi.radio)
+
 
 matrix = Matrix(width=64, height=64, serpentine=True, tile_rows=2, bit_depth=4)
 scroller = Scroller(matrix)
@@ -110,52 +107,18 @@ class EffectCoordinator:
 
 coordinator = EffectCoordinator(matrix.display, scroller, [nightsky, fireworks, flame], fade_seconds=5.2)
 
-
-def connected(client):
-    log.info("Connected to Adafruit IO")
-    client.subscribe(MQTT_FEED)
-
-def disconnected(client):
-    log.warning("Disconnected from Adafruit IO")
-
-
-def subscribe(client, userdata, topic, granted_qos):
-    log.info("Subscribed to %s with QOS level %s", topic, granted_qos)
-
-
-def message(client, feed_id, payload):
-    log.info("Feed %s received: %r", feed_id, payload)
-    coordinator.request_message(payload)
-
-
-mqtt = MQTT.MQTT(
-    broker=MQTT_HOST,
-    port=MQTT_PORT,
-    username=MQTT_USERNAME,
-    password=MQTT_PASSWORD,
-    is_ssl=(MQTT_PORT == 8883),
-    socket_pool=pool,
-    ssl_context=ssl_context,
-    socket_timeout=0.001,
-)
-
-io = IO_MQTT(mqtt)
-io.on_connect = connected
-io.on_disconnect = disconnected
-io.on_subscribe = subscribe
-io.on_message = message
-
-log.info("Connecting to MQTT broker...")
-io.connect()
+_message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
+_mqtt_client = CircuitPythonMqttClient(dispatch_callback=_message_mgr.dispatch, feed=_feed)
+_mqtt_client.start()
 
 while True:
     try:
-        io.loop(timeout=0.001)
+        _mqtt_client.loop(timeout=0.001)
     except Exception as e:
         log.error("MQTT error: %s — reconnecting...", e)
         try:
             wifi.reset()
-            io.reconnect()
+            _mqtt_client.reconnect()
         except Exception as e2:
             log.error("Reconnect failed: %s", e2)
     coordinator.tick()

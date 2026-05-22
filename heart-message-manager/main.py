@@ -17,18 +17,16 @@ from flask import Flask, Response, jsonify, redirect, render_template, request, 
 # Load config before any lib imports that call get_config() at module level
 from lib_shared.config_reader import get_config
 REQUIRED_KEYS: set[str] = {
-    "AIO_USERNAME",
-    "AIO_KEY",
-    "AIO_MESSAGES_FEED",
-    "AIO_CONFIG_FEED",
-    "AIO_HOST",
-    "AIO_PORT",
+    "MQTT_CLIENT",
+    "MQTT_HOST",
+    "MQTT_PORT",
+    "MQTT_USERNAME",
+    "MQTT_PASSWORD",
+    "MQTT_TOPIC",
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",
     "AWS_S3_BUCKET",
     "AWS_S3_REGION",
-    "MQTT_CLIENT",
-    "AIO_FEED",
     "CONFIG_API_URL",
     "MESSAGES_API_URL",
 }
@@ -57,7 +55,7 @@ logger = logging.getLogger(__name__)
 
 
 # Start the Adafruit client
-aio = Client(cfg.AIO_USERNAME, cfg.AIO_KEY)
+aio = Client(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD)
 
 
 # Wipe SQLite and rebuild messages and config from S3 on startup
@@ -66,13 +64,11 @@ storage.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
 # Print environment and config for debugging
 logger.info("=== DEBUG CONFIG ===")
-logger.info("AIO_HOST=%s", cfg.AIO_HOST)
-logger.info("AIO_PORT=%s", cfg.AIO_PORT)
-logger.info("AIO_USERNAME=%s", cfg.AIO_USERNAME)
-logger.info("AIO_KEY=%s", "***" if cfg.AIO_KEY else "")
-logger.info("AIO_FEED=%s", cfg.AIO_FEED)
-logger.info("AIO_MESSAGES_FEED=%s", cfg.AIO_MESSAGES_FEED)
-logger.info("AIO_CONFIG_FEED=%s", cfg.AIO_CONFIG_FEED)
+logger.info("MQTT_HOST=%s", cfg.MQTT_HOST)
+logger.info("MQTT_PORT=%s", cfg.MQTT_PORT)
+logger.info("MQTT_USERNAME=%s", cfg.MQTT_USERNAME)
+logger.info("MQTT_PASSWORD=%s", "***" if cfg.MQTT_PASSWORD else "")
+logger.info("MQTT_TOPIC=%s", cfg.MQTT_TOPIC)
 logger.info("MQTT_CLIENT=%s", cfg.MQTT_CLIENT)
 logger.info("AWS_S3_BUCKET=%s", cfg.AWS_S3_BUCKET)
 logger.info("CONFIG_API_URL=%s", cfg.CONFIG_API_URL)
@@ -91,13 +87,13 @@ if cfg.MQTT_CLIENT == "adafruit":
     from lib.adafruit_mqtt_client import AdafruitMqttClient
     _mqtt_client = AdafruitMqttClient(
         dispatch_callback=_message_mgr.dispatch,
-        feed=cfg.AIO_FEED,
+        feed=cfg.MQTT_TOPIC,
     )
 else:
     from lib.paho_mqtt_client import PahoMqttClient
     _mqtt_client = PahoMqttClient(
         dispatch_callback=_message_mgr.dispatch,
-        feed=cfg.AIO_FEED,
+        feed=cfg.MQTT_TOPIC,
     )
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()

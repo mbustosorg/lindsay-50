@@ -25,8 +25,8 @@ class AdafruitMqttClient:
         self._client: MQTTClient | None = None
 
     def start(self) -> None:
-        username = cfg.AIO_USERNAME
-        key = cfg.AIO_KEY
+        username = cfg.MQTT_USERNAME
+        key = cfg.MQTT_PASSWORD
 
         def on_connect(_client):
             logger.info("AdafruitMqttClient connected, subscribing to %s/%s", username, self._feed)
@@ -39,12 +39,12 @@ class AdafruitMqttClient:
             logger.info("AdafruitMqttClient on_message: feed_id=%r payload=%r", feed_id, payload)
             self._dispatch(payload)
 
-        self._client = MQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
+        self._client = MQTTClient(username, key, secure=True)
         self._client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
         self._client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
         self._client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
 
-        logger.info("AdafruitMqttClient connecting to %s...", cfg.AIO_HOST)
+        logger.info("AdafruitMqttClient connecting to %s...", cfg.MQTT_HOST)
         self._client.connect()
         self._client.loop_background()
         logger.info("AdafruitMqttClient started for feed %s", self._feed)
@@ -54,7 +54,7 @@ class AdafruitMqttClient:
         from lib_shared.models import MessageEnvelope
         payload = envelope.to_json()
         try:
-            client = MQTTClient(cfg.AIO_USERNAME, cfg.AIO_KEY, service_host=cfg.AIO_HOST, secure=True)
+            client = MQTTClient(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD, service_host=cfg.MQTT_HOST, secure=True)
             client.connect()
             client.publish(self._feed, payload)
             client.disconnect()

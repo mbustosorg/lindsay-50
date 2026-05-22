@@ -72,7 +72,7 @@ class ConfigReader:
         return self.get_raw(key)
 
     def __getattr__(self, name: str):
-        """Allow attribute-style access: cfg.AIO_USERNAME → cfg.get("AIO_USERNAME")."""
+        """Allow attribute-style access: cfg.MQTT_USERNAME → cfg.get("MQTT_USERNAME")."""
         if name.startswith("_"):
             raise AttributeError(name)
         return self.get(name)
