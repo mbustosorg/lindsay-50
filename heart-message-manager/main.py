@@ -7,18 +7,29 @@ publishes to Adafruit IO, and serves the admin UI.
 import html
 import logging
 import uuid
-from datetime import datetime, timezone
 from pathlib import Path
 import sys
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from flask import Flask, Response, jsonify, redirect, render_template, request, url_for
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Load config before any lib imports that call get_config() at module level
+from lib_shared.config_reader import get_config
+REQUIRED_KEYS: set[str] = {
+    "AIO_USERNAME",
+    "AIO_KEY",
+    "AIO_MESSAGES_FEED",
+    "AIO_CONFIG_FEED",
+    "AWS_S3_BUCKET",
+}
+cfg = get_config(REQUIRED_KEYS)
 
 from Adafruit_IO import Client
 
 from lib import storage, s3, publish
-from lib_shared.models import Config, FilterRule, Message
+from lib.time import format_from_iso, now_utc_iso
+from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.subscribe import MessagesSubscriber
 
 
@@ -35,60 +46,29 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-# Load settings from lib_shared.config (CWD/settings.toml > env vars)
-from lib_shared.config import cfg
-AIO_USERNAME = cfg.get("AIO_USERNAME", "")
-AIO_KEY = cfg.get("AIO_KEY", "")
-AIO_FEED = cfg.get("AIO_FEED", "")
-AIO_CONFIG_FEED = cfg.get("AIO_CONFIG_FEED", "")
-SERVER_PORT = int(cfg.get("PORT", 3100))
-MQTT_HOST = cfg.get("MQTT_HOST", "io.adafruit.com")
-MQTT_PORT = int(cfg.get("MQTT_PORT", 8883))
-
-
 # Start the Adafruit client
-aio = Client(AIO_USERNAME, AIO_KEY)
+aio = Client(cfg.AIO_USERNAME, cfg.AIO_KEY)
 
 
 # Wipe SQLite and rebuild messages and config from S3 on startup
-_db_path = Path(__file__).parent / "db.sqlite"
-if _db_path.exists():
-    _db_path.unlink()
-    logger.info("Wiped existing SQLite database")
-
-storage.init_db()
-
-try:
-    storage.rebuild_from_s3(s3.load_messages_from_s3)
-    logger.info("Rebuilt messages from S3")
-except Exception as e:
-    logger.warning("Could not rebuild messages from S3 (S3 may not be configured): %s", e)
-
-try:
-    latest = s3.load_latest_config()
-    if latest:
-        cfg = Config.from_dict(latest)
-        storage.put_config(cfg)
-        logger.info("Loaded config from S3 snapshot")
-except Exception as e:
-    logger.warning("Could not load config from S3 (S3 may not be configured): %s", e)
+storage.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
 
 # Print environment and config for debugging
 logger.info("=== DEBUG CONFIG ===")
-logger.info("MQTT_HOST=%s", MQTT_HOST)
-logger.info("MQTT_PORT=%s", MQTT_PORT)
-logger.info("AIO_FEED=%s", AIO_FEED)
-logger.info("SERVER_PORT=%s", SERVER_PORT)
+logger.info("AIO_HOST=%s", cfg.AIO_HOST)
+logger.info("AIO_PORT=%s", cfg.AIO_PORT)
+logger.info("AIO_MESSAGES_FEED=%s", cfg.AIO_MESSAGES_FEED)
+logger.info("SERVER_PORT=%s", cfg.PORT)
 logger.info("=== END DEBUG CONFIG ===")
 
 
 # MessagesSubscriber — starts MQTT threads at worker boot
 _messages_sub: MessagesSubscriber = MessagesSubscriber(
-    feed=AIO_FEED,
-    config_feed=AIO_CONFIG_FEED or "config",
-    api_url=f"http://localhost:{SERVER_PORT}/api/messages",
-    config_api_url=f"http://localhost:{SERVER_PORT}/api/config",
+    feed=cfg.AIO_MESSAGES_FEED,
+    config_feed=cfg.AIO_CONFIG_FEED,
+    api_url=f"http://localhost:{cfg.PORT}/api/messages",
+    config_api_url=f"http://localhost:{cfg.PORT}/api/config",
 )
 logger.info("Starting MessagesSubscriber at boot...")
 _messages_sub.start()
@@ -110,7 +90,7 @@ def api_messages():
         id=str(uuid.uuid4()),
         sender=sender,
         body=body,
-        received_at=_now_iso(),
+        received_at=now_utc_iso(),
     )
 
     try:
@@ -207,7 +187,7 @@ def api_put_config():
     if not isinstance(data, dict):
         return jsonify({"error": "expected JSON object"}), 400
 
-    cfg = Config.from_dict(data)
+    cfg = SignConfig.from_dict(data)
     _save_and_publish(cfg)
     return jsonify({"status": "ok"})
 
@@ -298,11 +278,8 @@ def api_s3_object():
 
 
 # Helpers
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-
-def _save_and_publish(cfg: Config) -> None:
+def _save_and_publish(cfg: SignConfig) -> None:
     """Save config to SQLite, snapshot S3, publish to Adafruit IO."""
     storage.put_config(cfg)
     try:
@@ -356,6 +333,7 @@ def dashboard():
         suppression_counts=suppression_counts,
         sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
         timezone=cfg.timezone,
+        format_from_iso=format_from_iso,
     )
 
 
@@ -382,6 +360,7 @@ def message_list():
         total_pages=total_pages,
         cfg=cfg,
         sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
+        format_from_iso=format_from_iso,
     )
 
 
@@ -460,6 +439,7 @@ def preview():
         include_filtered=include_filtered,
         sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
         timezone=cfg.timezone,
+        format_from_iso=format_from_iso,
     )
 
 
@@ -476,4 +456,4 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=SERVER_PORT, debug=True)
+    app.run(host="0.0.0.0", port=int(cfg.PORT), debug=True)

@@ -1,5 +1,4 @@
 # Server-side dependencies (Flask app + shared lib)
-pytz>=2024.1
 flask>=3.0
 adafruit-io
 boto3>=1.34

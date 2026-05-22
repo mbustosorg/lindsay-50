@@ -50,7 +50,7 @@
         <p class="text-dark font-medium">{{ msg.sender }}</p>
         <p class="text-slate-500 text-sm truncate">{{ msg.body }}</p>
       </div>
-      <span class="text-xs text-slate-400 whitespace-nowrap">{{ msg.format_received_at(timezone) }}</span>
+      <span class="text-xs text-slate-400 whitespace-nowrap">{{ format_from_iso(msg.received_at, timezone) }}</span>
     </div>
     {% else %}
     <div class="p-8 text-center text-slate-500">

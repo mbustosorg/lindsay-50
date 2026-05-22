@@ -9,19 +9,19 @@ import sqlite3
 from pathlib import Path
 from typing import Optional
 
-from lib_shared.models import Config, Message
+from lib_shared.models import SignConfig, Message
 
 
 def _db_path() -> Path:
     return Path(__file__).parent.parent / "heart-message-manager" / "db.sqlite"
 
 
-def _json_dumps(cfg: Config) -> str:
+def _json_dumps(cfg: SignConfig) -> str:
     return json.dumps(cfg.to_dict(), separators=(",", ":"))
 
 
-def _json_loads(raw: str) -> Config:
-    return Config.from_dict(json.loads(raw))
+def _json_loads(raw: str) -> SignConfig:
+    return SignConfig.from_dict(json.loads(raw))
 
 
 # ---------------------------------------------------------------------------
@@ -116,7 +116,7 @@ def message_count() -> int:
 # Config operations
 # ---------------------------------------------------------------------------
 
-def get_config() -> Config:
+def get_config() -> SignConfig:
     """Return the current config, or a default config if none is stored."""
     conn = sqlite3.connect(_db_path())
     row = conn.execute(
@@ -124,12 +124,18 @@ def get_config() -> Config:
     ).fetchone()
     conn.close()
     if row is None:
-        return Config.default()
+        return SignConfig.default()
     return _json_loads(row[0])
 
 
-def put_config(cfg: Config) -> None:
-    """Save the config JSON to SQLite under the 'current' key."""
+def put_config(cfg: SignConfig) -> None:
+    """Save the config JSON to SQLite under the 'current' key.
+
+    tz_offset_mins is recomputed from the current timezone so it is always
+    up to date when serialized.
+    """
+    from lib.time import tz_offset_mins
+    cfg.tz_offset_mins = tz_offset_mins(cfg.timezone)
     conn = sqlite3.connect(_db_path())
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('current', ?)",
@@ -143,12 +149,39 @@ def put_config(cfg: Config) -> None:
 # S3 rebuild helpers (called on startup)
 # ---------------------------------------------------------------------------
 
-def rebuild_from_s3(s3_loader) -> None:
-    """Reload all messages from S3 into SQLite.
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+def rebuild_from_s3(s3_load_messages, s3_load_config) -> None:
+    """Wipe SQLite, then reload both config and messages from S3.
+
+    Each loader runs in its own try/except so partial failures log but
+    don't abort the other restore.
 
     Args:
-        s3_loader: A callable that returns an iterator of Message objects,
-                   e.g. ``s3_loader() -> Iterator[Message]``.
+        s3_load_messages: A callable that returns an iterator of Message objects,
+                          e.g. ``s3.load_messages_from_s3()``.
+        s3_load_config:  A callable that returns a config dict or None, e.g.
+                         ``s3.load_latest_config``.
     """
-    for msg in s3_loader():
-        put_message(msg)
+    db_path = _db_path()
+    if db_path.exists():
+        db_path.unlink()
+    init_db()
+
+    try:
+        for msg in s3_load_messages():
+            put_message(msg)
+        logger.info("Rebuilt messages from S3")
+    except Exception as e:
+        logger.warning("Could not rebuild messages from S3: %s", e)
+
+    try:
+        cfg_data = s3_load_config()
+        if cfg_data:
+            put_config(SignConfig.from_dict(cfg_data))
+            logger.info("Loaded config from S3 snapshot")
+    except Exception as e:
+        logger.warning("Could not rebuild config from S3: %s", e)

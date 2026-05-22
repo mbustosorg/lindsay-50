@@ -16,11 +16,12 @@ uses the configured local timezone from settings.toml (default: US/Pacific).
 import json
 import logging
 import boto3
-from datetime import datetime, timezone
-from typing import Iterator, Optional
-import pytz
+from typing import Iterator
 
-from lib_shared.config import cfg
+from lib.time import now_utc_iso, to_utc_datetime
+from lib_shared.config_reader import get_config
+cfg = get_config()
+
 from lib_shared.models import Message
 
 logger = logging.getLogger(__name__)
@@ -34,62 +35,35 @@ _CONFIG_KEY_TEMPLATE = "config/{year}-{month}/cfg-{datetime}.json"
 # ---------------------------------------------------------------------------
 
 def _s3_client():
+    endpoint = cfg.if_exists("AWS_S3_ENDPOINT_URL")
     return boto3.client(
         "s3",
-        aws_access_key_id=cfg.get("AWS_ACCESS_KEY_ID"),
-        aws_secret_access_key=cfg.get("AWS_SECRET_ACCESS_KEY"),
-        endpoint_url=cfg.get("AWS_S3_ENDPOINT_URL"),
-        region_name=cfg.get("AWS_S3_REGION", "us-east-1"),
+        aws_access_key_id=cfg.AWS_ACCESS_KEY_ID,
+        aws_secret_access_key=cfg.AWS_SECRET_ACCESS_KEY,
+        endpoint_url=endpoint,
+        region_name=cfg.AWS_S3_REGION,
     )
 
 
 def _s3_bucket() -> str:
-    return cfg.get("AWS_S3_BUCKET", "")
+    return cfg.AWS_S3_BUCKET
 
 
 # ---------------------------------------------------------------------------
 # Internal: ISO strings, with UTC conversion only for S3 key formatting
 # ---------------------------------------------------------------------------
 
-def _to_utc_datetime(dt_iso: str) -> datetime:
-    """Parse an ISO 8601 timestamp and return it as a UTC datetime."""
-    dt = datetime.fromisoformat(dt_iso.replace("Z", "+00:00"))
-    return dt.astimezone(timezone.utc)
-
-
 def _format_s3_key(key_template: str, dt_iso: str) -> str:
     """Build an S3 key from an ISO timestamp string.
 
     Converts to UTC for the key format so S3 objects sort chronologically.
     """
-    dt_utc = _to_utc_datetime(dt_iso)
+    dt_utc = to_utc_datetime(dt_iso)
     return key_template.format(
         year=dt_utc.strftime("%Y"),
         month=dt_utc.strftime("%m"),
         datetime=dt_utc.strftime("%Y-%m-%dT%H-%M-%SZ"),
     )
-
-
-# ---------------------------------------------------------------------------
-# Display formatting (local timezone)
-# ---------------------------------------------------------------------------
-
-def format_timestamp_display(dt_iso: str, tz_name: Optional[str] = None) -> str:
-    """Format an ISO 8601 timestamp for display in the local timezone.
-
-    Args:
-        dt_iso: ISO 8601 timestamp (UTC with Z or with offset).
-        tz_name: IANA timezone name (e.g. "US/Pacific"). Defaults to configured TIMEZONE.
-
-    Returns:
-        Formatted string in local timezone, e.g. "2026-05-10 14:32:01 PST".
-    """
-    if tz_name is None:
-        tz_name = "US/Pacific"
-    tz = pytz.timezone(tz_name)
-    dt_utc = _to_utc_datetime(dt_iso)
-    dt_local = dt_utc.astimezone(tz)
-    return dt_local.strftime("%Y-%m-%d %H:%M:%S %Z")
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +138,7 @@ def _config_key(dt_iso: str) -> str:
 
 def save_config_snapshot(config_dict: dict) -> None:
     """Save a timestamped config snapshot to S3 and prune old snapshots (keep 10)."""
-    dt_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    dt_iso = now_utc_iso()
     bucket = _s3_bucket()
     key = _config_key(dt_iso)
 
@@ -194,7 +168,7 @@ def _prune_config_snapshots(bucket: str) -> None:
         logger.info("Pruned old config snapshot: s3://%s/%s", bucket, old_key)
 
 
-def load_latest_config() -> Optional[dict]:
+def load_latest_config() -> dict | None:
     """Load the most recent config snapshot from S3."""
     bucket = _s3_bucket()
     paginator = _s3_client().get_paginator("list_objects_v2")

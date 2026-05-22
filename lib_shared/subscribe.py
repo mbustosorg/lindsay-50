@@ -16,9 +16,11 @@ from datetime import datetime, timezone
 
 import paho.mqtt.client as mqtt
 
-from lib_shared.config import cfg
+from lib_shared.config_reader import get_config
+cfg = get_config()
+
 from lib_shared.messages import InMemoryMessages
-from lib_shared.models import Config, Message
+from lib_shared.models import SignConfig, Message
 
 logger = logging.getLogger(__name__)
 
@@ -51,14 +53,11 @@ class MqttSubscriber:
 
     def start(self) -> None:
         """Start the background MQTT subscriber thread."""
-        username = cfg.get("AIO_USERNAME", "")
-        password = cfg.get("AIO_KEY", "")
-        host = cfg.get("MQTT_HOST", "io.adafruit.com")
-        port = int(cfg.get("MQTT_PORT", 8883))
-        mqtt_username = cfg.get("MQTT_USERNAME") or username
-        mqtt_password = cfg.get("MQTT_PASSWORD") or password
+        username = cfg.AIO_USERNAME
+        host = cfg.AIO_HOST
+        port = int(cfg.AIO_PORT)
 
-        self._topic = _feed_topic(self._feed, mqtt_username)
+        self._topic = _feed_topic(self._feed, username)
 
         self._thread = threading.Thread(target=self._run, name="mqtt-subscriber", daemon=True)
         self._thread.start()
@@ -70,10 +69,10 @@ class MqttSubscriber:
 
     def _run(self) -> None:
         while not self._stop.is_set():
-            host = cfg.get("MQTT_HOST", "io.adafruit.com")
-            port = int(cfg.get("MQTT_PORT", 8883))
-            username = cfg.get("MQTT_USERNAME") or cfg.get("AIO_USERNAME", "")
-            password = cfg.get("MQTT_PASSWORD") or cfg.get("AIO_KEY", "")
+            host = cfg.AIO_HOST
+            port = int(cfg.AIO_PORT)
+            username = cfg.AIO_USERNAME
+            password = cfg.AIO_KEY
 
             client = mqtt.Client(
                 client_id=f"lindsay-subscriber-{id(self)}",
@@ -122,7 +121,7 @@ class MqttConfig:
     """
 
     def __init__(self, config_feed: str, config_api_url: str = ""):
-        self._config = Config()
+        self._config = SignConfig()
         self._config_api_url = config_api_url
 
         def on_message(raw: str) -> None:
@@ -143,7 +142,7 @@ class MqttConfig:
         self._sub.start()
 
     @property
-    def config(self) -> Config:
+    def config(self) -> SignConfig:
         return self._config
 
     def seed(self) -> bool:
@@ -174,8 +173,8 @@ class MqttMessages:
     Exposes the underlying InMemoryMessages as .messages.
     """
 
-    def __init__(self, feed: str, api_url: str = "", config: Config | None = None):
-        self._msgs = InMemoryMessages(config if config is not None else Config(), maxlen=100)
+    def __init__(self, feed: str, api_url: str = "", config: SignConfig | None = None):
+        self._msgs = InMemoryMessages(config if config is not None else SignConfig(), maxlen=100)
         self._api_url = api_url
 
         def on_message(raw: str) -> None:
@@ -277,7 +276,7 @@ class MessagesSubscriber:
                     len(self._messages._msgs._msgs))
 
     @property
-    def config(self) -> Config:
+    def config(self) -> SignConfig:
         return self._config.config
 
     @property

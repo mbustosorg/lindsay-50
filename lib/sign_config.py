@@ -1,20 +1,20 @@
 """SQLite-backed config for Flask.
 
-SqliteConfig inherits from Config and persists to SQLite on update.
+SqliteConfig inherits from SignConfig and persists to SQLite on update.
 """
 
 from lib import storage
-from lib_shared.models import Config
+from lib_shared.models import SignConfig
 
 
-class SqliteConfig(Config):
+class SqliteConfig(SignConfig):
     """Config that persists to SQLite on update()."""
 
     def __init__(self):
         super().__init__()
 
-    def update(self, other: Config) -> None:
-        """Update from another Config and persist to SQLite."""
+    def update(self, other: SignConfig) -> None:
+        """Update from another SignConfig and persist to SQLite."""
         super().update(other)
         # Persist the whole config to SQLite after the update
         storage.put_config(self)

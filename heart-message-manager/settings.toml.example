@@ -1,27 +1,45 @@
-# AWS S3 for message logging and config snapshots.
-# For local dev with MinIO: S3_ENDPOINT_URL=http://localhost:9000
-# On Heroku: leave S3_ENDPOINT_URL empty, use IAM role attached to dyno.
-S3_BUCKET = "YOUR_S3_BUCKET_NAME"
-S3_MESSAGE_LOG_KEY = "messages/messages.jsonl"
-S3_CONFIG_PREFIX = "config/config"
-S3_ENDPOINT_URL = ""
+# =============================================================================
+# Heart Message Manager — Configuration
+# =============================================================================
+# Local dev: copy this file to settings.toml and fill in values.
+#   cp settings.toml.example settings.toml
+#
+# Heroku: set these as environment variables (config vars):
+#   heroku config:set AIO_USERNAME=xxx AIO_KEY=xxx AIO_MESSAGES_FEED=xxx \
+#   AIO_CONFIG_FEED=xxx AWS_S3_BUCKET=xxx
+#
+# All keys are required unless marked [optional].
+# =============================================================================
 
-# Adafruit IO credentials (used for MQTT publishing).
-# For local dev with Mosquitto: set MQTT_HOST=localhost, MQTT_PORT=1883
-# and use dummy MQTT_USERNAME/MQTT_PASSWORD (auth is ignored by local broker).
+# -----------------------------------------------------------------------------
+# Flask server
+# -----------------------------------------------------------------------------
+# Port for the Flask server.
+PORT = 3100
+
+# -----------------------------------------------------------------------------
+# AWS S3 — for message logging and config snapshots
+# -----------------------------------------------------------------------------
+# [optional] AWS access key. Falls back to IAM role on Heroku.
+AWS_ACCESS_KEY_ID = "minioadmin"
+AWS_SECRET_ACCESS_KEY = "minioadmin"
+AWS_S3_REGION = "us-east-1"
+AWS_S3_BUCKET = "YOUR_S3_BUCKET_NAME"
+# [optional] Overrride S3 endpoint for local MinIO. Defaults to AWS S3.
+# AWS_S3_ENDPOINT_URL = "http://localhost:9000"
+
+# -----------------------------------------------------------------------------
+# Adafruit IO — for MQTT publishing (both REST and MQTT use the same credentials)
+# -----------------------------------------------------------------------------
 AIO_USERNAME = "YOUR_AIO_USERNAME"
 AIO_KEY = "YOUR_AIO_KEY"
-AIO_FEED = "YOUR_AIO_FEED_NAME"
+AIO_MESSAGES_FEED = "YOUR_AIO_MESSAGES_FEED_NAME"
+AIO_CONFIG_FEED = "YOUR_AIO_CONFIG_FEED_NAME"
 
-# Optional: separate Adafruit IO feed for publishing config changes.
-# If not set, config publishing is skipped.
-AIO_CONFIG_FEED = ""
-
-# MQTT settings for publishing messages and config.
-# Production: use io.adafruit.com:8883 with TLS (MQTT_PORT=8883).
-# Local dev: use a local Mosquitto broker on port 1883 (no TLS).
-MQTT_HOST = "io.adafruit.com"
-MQTT_PORT = 8883
-# MQTT_USERNAME and MQTT_PASSWORD default to AIO_USERNAME/AIO_KEY if not set.
-# MQTT_USERNAME = "YOUR_AIO_USERNAME"
-# MQTT_PASSWORD = "YOUR_AIO_KEY"
+# -----------------------------------------------------------------------------
+# Adafruit IO MQTT broker
+# -----------------------------------------------------------------------------
+# Default: io.adafruit.com (Adafruit IO cloud with TLS on port 8883).
+# Local dev with Mosquitto: localhost, port 1883 (no TLS).
+AIO_HOST = "io.adafruit.com"
+AIO_PORT = 8883

@@ -9,7 +9,9 @@ import logging
 
 import paho.mqtt.client as mqtt
 
-from lib_shared.config import cfg
+from lib_shared.config_reader import get_config
+cfg = get_config()
+
 
 logger = logging.getLogger(__name__)
 
@@ -26,28 +28,26 @@ def publish_config(config_dict: dict) -> bool:
 
     Returns True on success, False on failure.
     """
-    feed = cfg.get("AIO_FEED", "")
-    username = cfg.get("AIO_USERNAME", "")
+    host = cfg.AIO_HOST
+    port = int(cfg.AIO_PORT)
+    feed = cfg.AIO_CONFIG_FEED
+    username = cfg.AIO_USERNAME
+    password = cfg.AIO_KEY
 
     if not feed or not username:
         logger.warning("AIO not configured; skipping config publish")
         return False
 
-    config_feed = cfg.get("AIO_CONFIG_FEED", "config")
-    host = cfg.get("MQTT_HOST", "io.adafruit.com")
-    port = int(cfg.get("MQTT_PORT", 8883))
-    topic = _feed_topic(config_feed, username)
+    topic = _feed_topic(feed, username)
 
     payload = json.dumps({"value": _compact_json(config_dict)}, separators=(",", ":"))
 
     client = mqtt.Client(
-        client_id=f"lindsay-flask-config-{id(None)}",
+        client_id=f"lindsay-flask-cfg-{id(None)}",
         clean_session=True,
     )
-    mqtt_username = cfg.get("MQTT_USERNAME") or cfg.get("AIO_USERNAME", "")
-    password = cfg.get("MQTT_PASSWORD") or cfg.get("AIO_KEY", "")
-    if mqtt_username:
-        client.username_pw_set(mqtt_username, password)
+    if username:
+        client.username_pw_set(username, password)
 
     try:
         client.connect(host, port, keepalive=30)
@@ -82,15 +82,16 @@ def publish_message(body: str,
     Returns:
         True on success, False on failure.
     """
-    feed = cfg.get("AIO_FEED", "")
-    username = cfg.get("AIO_USERNAME", "")
+    host = cfg.AIO_HOST
+    port = int(cfg.AIO_PORT)
+    username = cfg.AIO_USERNAME
+    password = cfg.AIO_KEY
+    feed = cfg.AIO_MESSAGES_FEED
 
     if not feed or not username:
-        logger.warning("MQTT/AIO_FEED not configured; skipping publish")
+        logger.warning("AIO not configured; skipping publish")
         return False
 
-    host = cfg.get("MQTT_HOST", "io.adafruit.com")
-    port = int(cfg.get("MQTT_PORT", 8883))
     topic = _feed_topic(feed, username)
 
     payload = json.dumps({
@@ -101,13 +102,11 @@ def publish_message(body: str,
     }, separators=(",", ":"))
 
     client = mqtt.Client(
-        client_id=f"lindsay-flask-pub-{id(None)}",
+        client_id=f"lindsay-flask-msg-{id(None)}",
         clean_session=True,
     )
-    mqtt_username = cfg.get("MQTT_USERNAME") or cfg.get("AIO_USERNAME", "")
-    password = cfg.get("MQTT_PASSWORD") or cfg.get("AIO_KEY", "")
-    if mqtt_username:
-        client.username_pw_set(mqtt_username, password)
+    if username:
+        client.username_pw_set(username, password)
 
     try:
         client.connect(host, port, keepalive=30)

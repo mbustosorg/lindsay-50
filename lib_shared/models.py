@@ -18,20 +18,6 @@ class Message:
     def to_dict(self):
         return {"id": self.id, "sender": self.sender, "body": self.body, "received_at": self.received_at}
 
-    def format_received_at(self, timezone_str: str = "UTC") -> str:
-        """Format received_at for display in the given timezone (server-only)."""
-        try:
-            from zoneinfo import ZoneInfo
-            from datetime import datetime
-        except ImportError:
-            return self.received_at
-        try:
-            dt = datetime.fromisoformat(self.received_at.replace("Z", "+00:00"))
-            local = dt.astimezone(ZoneInfo(timezone_str))
-            return local.strftime("%b %d %I:%M %p")
-        except Exception:
-            return self.received_at
-
 
 class MessageView:
     """Message with source and computed suppression status."""
@@ -107,8 +93,8 @@ class RenderingSettings:
         return {"mode": self.mode, "speed": self.speed, "color": self.color}
 
 
-class Config:
-    """Base config class. Default implementation is just in-memory.
+class SignConfig:
+    """Configuration data model for the sign.
 
     filters: list of FilterRule objects
     senders: dict of phone -> name
@@ -118,13 +104,14 @@ class Config:
     Thread-safe: uses a reentrant lock when threading is available.
     CircuitPython has no threading module so lock is None there.
     """
-    def __init__(self, filters=None, senders=None, rendering=None, sign=None, timezone="US/Pacific", version=1):
+    def __init__(self, filters=None, senders=None, rendering=None, sign=None, timezone="US/Pacific", version=1, tz_offset_mins: int = 0):
         self.filters = filters or []
         self.senders = senders or {}  # dict: phone -> name
         self.rendering = rendering if isinstance(rendering, RenderingSettings) else RenderingSettings.from_dict(rendering or {})
         self.sign = sign if isinstance(sign, SignSettings) else SignSettings.from_dict(sign or {})
         self.timezone = timezone
         self.version = version
+        self.tz_offset_mins = tz_offset_mins
         try:
             import threading as _th
             self._lock = _th.RLock()
@@ -152,6 +139,7 @@ class Config:
             sign=SignSettings.from_dict(data.get("sign")) if data.get("sign") else SignSettings(),
             timezone=data.get("timezone", "US/Pacific"),
             version=data.get("version", 1),
+            tz_offset_mins=data.get("tz_offset_mins", 0),
         )
 
     def to_dict(self):
@@ -161,11 +149,12 @@ class Config:
             "rendering": self.rendering.to_dict(),
             "sign": self.sign.to_dict(),
             "timezone": self.timezone,
+            "tz_offset_mins": self.tz_offset_mins,
             "version": self.version,
         })
 
-    def update(self, other: "Config") -> None:
-        """Update fields from another Config object.
+    def update(self, other: "SignConfig") -> None:
+        """Update fields from another SignConfig object.
 
         Subclasses can override this and change behavior
         (e.g. SqliteConfig persists to storage).
@@ -178,6 +167,7 @@ class Config:
             self.sign = other.sign
             self.timezone = other.timezone
             self.version = other.version
+            self.tz_offset_mins = other.tz_offset_mins
         self._with_lock(_do)
 
     def update_from_dict(self, data: dict) -> None:
@@ -190,6 +180,7 @@ class Config:
             self.sign = SignSettings.from_dict(sign_data) if sign_data else SignSettings()
             self.timezone = data.get("timezone", "US/Pacific")
             self.version = data.get("version", 1)
+            self.tz_offset_mins = data.get("tz_offset_mins", 0)
         self._with_lock(_do)
 
 

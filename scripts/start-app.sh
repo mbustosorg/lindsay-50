@@ -23,20 +23,6 @@ if [ ! -f "$SETTINGS_FILE" ]; then
     exit 1
 fi
 
-# Validate required settings
-SETTINGS_PATH="$SETTINGS_FILE" python3 - <<PYEOF
-import tomllib, sys, os
-with open(os.environ["SETTINGS_PATH"], "rb") as f:
-    cfg = tomllib.load(f)
-
-required = ["AIO_USERNAME", "AIO_KEY", "AIO_FEED", "AWS_S3_BUCKET"]
-missing = [k for k in required if not cfg.get(k)]
-if missing:
-    print(f"Error: missing required settings: {', '.join(missing)}", file=sys.stderr)
-    sys.exit(1)
-print("Config validated OK")
-PYEOF
-
 # Optionally start Docker services (enabled by default)
 START_SERVICES=true
 for arg in "$@"; do
@@ -67,17 +53,11 @@ if [ "$START_SERVICES" = "true" ]; then
 
     # Wait for MinIO to be ready, then create the bucket
     echo "Checking AWS_S3_BUCKET..."
-    SETTINGS_PATH="$SETTINGS_FILE" python3 - <<'PYEOF'
-import tomllib, sys, os
-with open(os.environ["SETTINGS_PATH"], "rb") as f:
-    cfg = tomllib.load(f)
-print(cfg.get("AWS_S3_BUCKET", ""))
-PYEOF
     AWS_S3_BUCKET=$(SETTINGS_PATH="$SETTINGS_FILE" python3 - <<'PYEOF'
 import tomllib, sys, os
 with open(os.environ["SETTINGS_PATH"], "rb") as f:
     cfg = tomllib.load(f)
-print(cfg.get("AWS_S3_BUCKET", ""))
+print(cfg.get("AWS_S3_BUCKET") or "")
 PYEOF
 )
 
