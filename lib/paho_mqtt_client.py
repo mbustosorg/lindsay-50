@@ -65,7 +65,7 @@ class PahoMqttClient:
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
                     # Adafruit IO broker only supports MQTT 3.1.1, not v5
-                    client.protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
+                    client._protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
                     # TLS required for port 8883
                     if port == 8883:
                         client.tls_set_context()
