@@ -28,6 +28,9 @@ REQUIRED_KEYS: set[str] = {
     "AWS_S3_BUCKET",
     "AWS_S3_REGION",
     "MQTT_CLIENT",
+    "AIO_FEED",
+    "CONFIG_API_URL",
+    "MESSAGES_API_URL",
 }
 cfg = get_config(REQUIRED_KEYS)
 
@@ -36,7 +39,8 @@ from Adafruit_IO import Client
 from lib import storage, s3, publish
 from lib.time import format_from_iso, now_utc_iso
 from lib_shared.models import SignConfig, FilterRule, Message
-from lib_shared.subscribe import MessagesSubscriber
+from lib_shared.message_manager import MessageManager
+from lib_shared.models import MessageEnvelope
 
 
 # App setup
@@ -69,15 +73,26 @@ logger.info("SERVER_PORT=%s", cfg.PORT)
 logger.info("=== END DEBUG CONFIG ===")
 
 
-# MessagesSubscriber — starts MQTT threads at worker boot
-_messages_sub: MessagesSubscriber = MessagesSubscriber(
-    feed=cfg.AIO_MESSAGES_FEED,
-    config_feed=cfg.AIO_CONFIG_FEED,
-    api_url=f"http://localhost:{cfg.PORT}/api/messages",
-    config_api_url=f"http://localhost:{cfg.PORT}/api/config",
-)
-logger.info("Starting MessagesSubscriber at boot...")
-_messages_sub.start()
+# MessageManager — owns config + message storage, handles dispatch and seeding
+_message_mgr = MessageManager()
+_message_mgr.seed()
+
+# Platform MQTT client
+_mqtt_client = None
+if cfg.MQTT_CLIENT == "adafruit":
+    from lib.adafruit_mqtt_client import AdafruitMqttClient
+    _mqtt_client = AdafruitMqttClient(
+        dispatch_callback=_message_mgr.dispatch,
+        feed=cfg.AIO_FEED,
+    )
+else:
+    from lib.paho_mqtt_client import PahoMqttClient
+    _mqtt_client = PahoMqttClient(
+        dispatch_callback=_message_mgr.dispatch,
+        feed=cfg.AIO_FEED,
+    )
+logger.info("Starting MQTT client at boot...")
+_mqtt_client.start()
 
 
 # Inbound Twilio webhook handler
@@ -115,12 +130,7 @@ def api_messages():
 
     try:
         storage.put_message(msg)
-        publish.publish_message(
-            body=body,
-            msg_id=msg.id,
-            sender=msg.sender,
-            received_at=msg.received_at,
-        )
+        publish.publish_envelope(MessageEnvelope("message", msg.to_dict()))
     except Exception as e:
         logger.error("Post-webhook processing failed: %s", e)
 
@@ -202,24 +212,24 @@ def api_put_config():
 @app.route("/api/live-messages", methods=["GET"])
 def api_live_messages():
     """Return messages in the live ring buffer, newest first."""
-    assert _messages_sub is not None
+    assert _message_mgr is not None
     limit = min(100, int(request.args.get("limit", 100)))
-    return jsonify([m.to_dict() for m in _messages_sub.get_messages(limit=limit)])
+    return jsonify([m.to_dict() for m in _message_mgr.get_messages(limit=limit)])
 
 
 @app.route("/api/live-messages/seed", methods=["POST"])
 def api_live_messages_seed():
     """Back-populate the live message ring buffer from a REST call."""
-    assert _messages_sub is not None
-    _messages_sub.seed()
+    assert _message_mgr is not None
+    _message_mgr.seed()
     return jsonify({"status": "ok", "seeded": min(50, len(storage.get_all_messages()))})
 
 
 @app.route("/api/live-config", methods=["GET"])
 def api_live_config():
     """Return the subscriber's current config buffer."""
-    assert _messages_sub is not None
-    return jsonify(_messages_sub.config.to_dict())
+    assert _message_mgr is not None
+    return jsonify(_message_mgr.config.to_dict())
 
 
 @app.route("/api/admin/s3-objects")
@@ -293,6 +303,7 @@ def _save_and_publish(cfg: SignConfig) -> None:
     except Exception as e:
         logger.warning("Config S3 snapshot failed: %s", e)
     publish.publish_config(cfg.to_dict())
+    publish.publish_envelope(MessageEnvelope("config", cfg.to_dict()))
 
 
 def _suppress_message(msg_id: str) -> bool:

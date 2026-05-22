@@ -3,6 +3,29 @@
 No dataclasses or ABCs - CircuitPython compatible.
 """
 
+import json
+
+
+class MessageEnvelope:
+    """JSON envelope for the unified MQTT feed.
+
+    Attributes:
+        type:    "message" | "config"
+        payload: dict — Message.to_dict() or SignConfig.to_dict()
+    """
+
+    def __init__(self, type: str, payload: dict):
+        self.type = type
+        self.payload = payload
+
+    @classmethod
+    def from_json(cls, raw: str) -> "MessageEnvelope":
+        d = json.loads(raw)
+        return cls(type=d["type"], payload=d["payload"])
+
+    def to_json(self) -> str:
+        return json.dumps({"type": self.type, "payload": self.payload}, separators=(",", ":"))
+
 
 class Message:
     def __init__(self, id, sender, body, received_at):

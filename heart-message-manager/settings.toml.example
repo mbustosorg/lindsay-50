@@ -44,3 +44,12 @@ AIO_USERNAME = "YOUR_AIO_USERNAME"
 AIO_KEY = "YOUR_AIO_KEY"
 AIO_MESSAGES_FEED = "YOUR_AIO_MESSAGES_FEED_NAME"
 AIO_CONFIG_FEED = "YOUR_AIO_CONFIG_FEED_NAME"
+
+# Unified MQTT feed for the new MessageManager-based publish.
+AIO_FEED = "lindsay50"
+
+# REST API URLs for seeding (Flask seeds from itself via localhost).
+# On Heroku, override these via config vars with the actual public URL
+# if the Flask server is behind a proxy that changes the port.
+CONFIG_API_URL = "http://localhost:3100/api/config"
+MESSAGES_API_URL = "http://localhost:3100/api/messages"

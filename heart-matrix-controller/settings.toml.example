@@ -11,5 +11,10 @@ MQTT_TOPIC = "YOUR_AIO_FEED_NAME"
 MQTT_USERNAME = "YOUR_AIO_USERNAME"
 MQTT_PASSWORD = "YOUR_AIO_KEY"
 
+# Flask server REST API URLs for seeding config and messages on boot.
+# The ESP32 boots without persistent storage, so it seeds from the Flask server.
+MESSAGES_API_URL = "http://YOUR_FLASK_HOST/api/messages"
+CONFIG_API_URL = "http://YOUR_FLASK_HOST/api/config"
+
 # DEBUG | INFO | WARNING | ERROR | CRITICAL
 LOG_LEVEL = "INFO"

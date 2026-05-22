@@ -13,6 +13,7 @@ import logging
 
 from lib_shared.config_reader import get_config
 cfg = get_config()
+from lib_shared.models import MessageEnvelope
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,24 @@ def publish_message(body: str,
         "body": body,
         "received_at": received_at,
     }, separators=(",", ":"))
+
+    if cfg.MQTT_CLIENT == "adafruit":
+        return _adafruit_publish(feed, payload)
+    else:
+        return _paho_publish(feed, payload)
+
+
+def publish_envelope(envelope: MessageEnvelope) -> bool:
+    """Publish a MessageEnvelope to the unified AIO feed over MQTT.
+
+    Returns True on success, False on failure.
+    """
+    feed = cfg.AIO_FEED
+    if not feed:
+        logger.warning("AIO_FEED not set; skipping envelope publish")
+        return False
+
+    payload = envelope.to_json()
 
     if cfg.MQTT_CLIENT == "adafruit":
         return _adafruit_publish(feed, payload)
