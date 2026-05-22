@@ -40,6 +40,15 @@ class _AdafruitMQTTClient(MQTTClient):
         if self.on_connect is not None:
             self.on_connect(self)
 
+    def _mqtt_disconnect(self, client, userdata, rc):
+        # Adafruit IO base class raises on any non-zero rc.
+        # rc=2 ("network protocol error") can occur transiently — log and continue.
+        if rc != 0:
+            logger.warning("AdafruitMqttClient broker disconnect rc=%s", rc)
+        self._connected = False
+        if self.on_disconnect is not None:
+            self.on_disconnect(self, rc)
+
 
 class AdafruitMqttClient:
     """Thin adapter: owns the Adafruit_IO.MQTTClient lifecycle.
