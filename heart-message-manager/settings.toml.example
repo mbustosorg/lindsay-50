@@ -31,18 +31,16 @@ AWS_S3_BUCKET = "YOUR_S3_BUCKET_NAME"
 # -----------------------------------------------------------------------------
 # Adafruit IO — for MQTT publishing (both REST and MQTT use the same credentials)
 # -----------------------------------------------------------------------------
-AIO_USERNAME = "YOUR_AIO_USERNAME"
-AIO_KEY = "YOUR_AIO_KEY"
-AIO_MESSAGES_FEED = "YOUR_AIO_MESSAGES_FEED_NAME"
-AIO_CONFIG_FEED = "YOUR_AIO_CONFIG_FEED_NAME"
 
-# -----------------------------------------------------------------------------
-# Adafruit IO MQTT broker
-# -----------------------------------------------------------------------------
+# MQTT client: "adafruit" (Adafruit IO MQTT with TLS) or "paho" (raw paho-mqtt, for local dev).
+# Flask and subscriber use the same client.
+MQTT_CLIENT = "adafruit"
+
 # Default: io.adafruit.com (Adafruit IO cloud with TLS on port 8883).
 # Local dev with Mosquitto: localhost, port 1883 (no TLS).
 AIO_HOST = "io.adafruit.com"
 AIO_PORT = 8883
-# MQTT provider: "adafruit" (uses Adafruit IO MQTT with TLS) or "paho" (raw paho-mqtt, for local dev).
-# Flask and subscriber use the same provider.
-MQTT_PROVIDER = "adafruit"
+AIO_USERNAME = "YOUR_AIO_USERNAME"
+AIO_KEY = "YOUR_AIO_KEY"
+AIO_MESSAGES_FEED = "YOUR_AIO_MESSAGES_FEED_NAME"
+AIO_CONFIG_FEED = "YOUR_AIO_CONFIG_FEED_NAME"

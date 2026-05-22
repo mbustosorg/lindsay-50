@@ -49,7 +49,7 @@ def _paho_publish(feed: str, payload: str) -> bool:
     else:
         topic = f"{username}/feeds/{feed}"
 
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)  # type: ignore[reportPrivateImportUsage]
     if username:
         client.username_pw_set(username, key)
 
@@ -81,7 +81,7 @@ def publish_config(config_dict: dict) -> bool:
 
     payload = json.dumps({"value": json.dumps(config_dict, separators=(",", ":"))})
 
-    if cfg.MQTT_PROVIDER == "adafruit":
+    if cfg.MQTT_CLIENT == "adafruit":
         return _adafruit_publish(feed, payload)
     else:
         return _paho_publish(feed, payload)
@@ -114,7 +114,7 @@ def publish_message(body: str,
         "received_at": received_at,
     }, separators=(",", ":"))
 
-    if cfg.MQTT_PROVIDER == "adafruit":
+    if cfg.MQTT_CLIENT == "adafruit":
         return _adafruit_publish(feed, payload)
     else:
         return _paho_publish(feed, payload)

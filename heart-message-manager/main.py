@@ -27,7 +27,7 @@ REQUIRED_KEYS: set[str] = {
     "AWS_SECRET_ACCESS_KEY",
     "AWS_S3_BUCKET",
     "AWS_S3_REGION",
-    "MQTT_PROVIDER",
+    "MQTT_CLIENT",
 }
 cfg = get_config(REQUIRED_KEYS)
 

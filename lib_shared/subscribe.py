@@ -53,7 +53,7 @@ class MqttSubscriber:
         self._stop.set()
 
     def _run(self) -> None:
-        if cfg.MQTT_PROVIDER == "adafruit":
+        if cfg.MQTT_CLIENT == "adafruit":
             self._run_adafruit()
         else:
             self._run_paho()
@@ -80,9 +80,9 @@ class MqttSubscriber:
         while not self._stop.is_set():
             try:
                 client = MQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
-                client.on_connect = on_connect
-                client.on_disconnect = on_disconnect
-                client.on_message = on_message
+                client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
+                client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
+                client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
                 logger.info("Adafruit IO MQTT connecting to %s...", cfg.AIO_HOST)
                 client.connect()
                 client.loop_background()
@@ -109,12 +109,12 @@ class MqttSubscriber:
             topic = f"{username}/feeds/{self._feed}"
 
         while not self._stop.is_set():
-            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)
+            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)  # type: ignore[reportPrivateImportUsage]
             if username:
                 client.username_pw_set(username, password)
-            client.on_connect = self._on_connect
-            client.on_message = self._on_message
-            client.on_disconnect = self._on_disconnect
+            client.on_connect = self._on_connect  # type: ignore[reportAttributeAccessIssue]
+            client.on_message = self._on_message  # type: ignore[reportAttributeAccessIssue]
+            client.on_disconnect = self._on_disconnect  # type: ignore[reportAttributeAccessIssue]
 
             try:
                 logger.info("Paho MQTT connecting to %s:%d...", host, port)
