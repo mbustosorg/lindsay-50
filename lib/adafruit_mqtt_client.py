@@ -52,7 +52,7 @@ class AdafruitMqttClient:
                 try:
                     client = MQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
                     # Adafruit IO broker only supports MQTT 3.1.1; paho 2.x defaults to v5
-                    client._client.protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
+                    client._client._protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
                     client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
