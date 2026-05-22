@@ -32,8 +32,6 @@ REQUIRED_KEYS: set[str] = {
 }
 cfg = get_config(REQUIRED_KEYS)
 
-from Adafruit_IO import Client
-
 from lib import storage, s3
 from lib.time import format_from_iso, now_utc_iso
 from lib_shared.models import SignConfig, FilterRule, Message
@@ -52,10 +50,6 @@ else:
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-# Start the Adafruit client
-aio = Client(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD)
 
 
 # Wipe SQLite and rebuild messages and config from S3 on startup
