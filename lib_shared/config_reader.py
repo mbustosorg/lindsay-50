@@ -7,9 +7,13 @@ This module is safe to import on CircuitPython (no settings.toml support there;
 config is handled separately in heart-matrix-controller/settings.toml).
 """
 
-import logging
 import os
 from pathlib import Path
+
+try:
+    import logging
+except ImportError:
+    import adafruit_logging as logging
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +45,10 @@ class ConfigReader:
             return {}
         try:
             import tomllib
+        except ImportError:
+            logger.info("No tomllib on this platform, skipping settings.toml")
+            return {}
+        try:
             with open(settings_path, "rb") as f:
                 data = tomllib.load(f)
             logger.info("Loaded settings.toml from %s", settings_path)

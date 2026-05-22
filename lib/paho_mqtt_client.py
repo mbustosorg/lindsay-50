@@ -19,26 +19,29 @@ class PahoMqttClient:
     Calls dispatch_callback(raw_payload) for each incoming message.
     """
 
-    def __init__(self, dispatch_callback, feed: str):
+    def __init__(self, dispatch_callback):
         self._dispatch = dispatch_callback
-        self._feed = feed
         self._thread = None
         self._stop = None
+
+        self._host = cfg.MQTT_HOST
+        self._port = int(cfg.MQTT_PORT)
+        self._username = cfg.MQTT_USERNAME
+        self._password = cfg.MQTT_PASSWORD
+        self._feed = cfg.MQTT_TOPIC
 
     def start(self) -> None:
         import threading
         import time
-
-        username = cfg.MQTT_USERNAME
-        host = cfg.MQTT_HOST
-        port = int(cfg.MQTT_PORT)
-
+        
+        '''
         if "/feeds/" in self._feed:
             topic = self._feed
         else:
-            topic = f"{username}/feeds/{self._feed}"
-
-        logger.info("PahoMqttClient will subscribe to topic=%r feed=%r username=%r", topic, self._feed, username)
+            topic = f"{self._username}/feeds/{self._feed}"
+        '''
+        topic = self._feed
+        logger.info("PahoMqttClient will subscribe to topic=%r feed=%r username=%r", topic, self._feed, self._username)
 
         def on_connect(_client, _userdata, _flags, rc):
             logger.info("PahoMqttClient on_connect called: rc=%s", rc)
@@ -68,7 +71,7 @@ class PahoMqttClient:
             while not stop.is_set():
                 try:
                     client = mqtt.Client(clean_session=True)  # type: ignore[reportPrivateImportUsage]
-                    client.username_pw_set(username, cfg.MQTT_PASSWORD)
+                    client.username_pw_set(self._username, cfg.MQTT_PASSWORD)
                     client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
@@ -77,11 +80,11 @@ class PahoMqttClient:
                     # Adafruit IO broker only supports MQTT 3.1.1, not v5
                     client._protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
                     # TLS required for port 8883
-                    if port == 8883:
+                    if self._port == 8883:
                         client.tls_set_context()
-                    logger.info("PahoMqttClient connecting to %s:%d...", host, port)
+                    logger.info("PahoMqttClient connecting to %s:%d...", self._host, self._port)
                     logger.info("PahoMqttClient calling client.connect()...")
-                    client.connect(host, port, keepalive=60)
+                    client.connect(self._host, self._port, keepalive=60)
                     logger.info("PahoMqttClient connect() returned, entering loop_forever()")
                     client.loop_forever()
                 except Exception as e:
@@ -98,7 +101,8 @@ class PahoMqttClient:
     def publish_envelope(self, envelope) -> bool:
         """Publish a MessageEnvelope to the AIO feed. Returns True on success."""
         import paho.mqtt.client as mqtt
-        topic = f"{cfg.MQTT_USERNAME}/feeds/{self._feed}"
+        #topic = f"{cfg.MQTT_USERNAME}/feeds/{self._feed}"
+        topic = self._feed
         payload = envelope.to_json()
         try:
             client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)  # type: ignore[reportPrivateImportUsage]

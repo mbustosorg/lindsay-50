@@ -108,7 +108,9 @@ class EffectCoordinator:
 coordinator = EffectCoordinator(matrix.display, scroller, [nightsky, fireworks, flame], fade_seconds=5.2)
 
 _message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
-_mqtt_client = CircuitPythonMqttClient(dispatch_callback=_message_mgr.dispatch, feed=_feed)
+_message_mgr.seed()
+
+_mqtt_client = CircuitPythonMqttClient(dispatch_callback=_message_mgr.dispatch)
 _mqtt_client.start()
 
 while True:

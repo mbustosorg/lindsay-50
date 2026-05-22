@@ -20,7 +20,7 @@ cfg = get_config()
 class CircuitPythonMqttClient:
     """Owns the IO_MQTT lifecycle; dispatches raw payload to callback."""
 
-    def __init__(self, dispatch_callback, feed: str):
+    def __init__(self, dispatch_callback):
         """Create client.
 
         Args:
@@ -29,16 +29,17 @@ class CircuitPythonMqttClient:
             feed: Adafruit IO feed name (e.g. "lindsay50").
         """
         self._dispatch = dispatch_callback
-        self._feed = feed
         self._io = None
         self._mqtt = None
+        self._host = cfg.MQTT_HOST
+        self._port = int(cfg.MQTT_PORT)
+        self._username = cfg.MQTT_USERNAME
+        self._password = cfg.MQTT_PASSWORD
+        self._feed = cfg.MQTT_TOPIC
+
 
     def start(self) -> None:
         """Set up MQTT and IO_MQTT, connect and subscribe."""
-        host = cfg.MQTT_HOST
-        port = int(cfg.MQTT_PORT)
-        username = cfg.MQTT_USERNAME
-        password = cfg.MQTT_PASSWORD
         '''
         # IO_MQTT.subscribe() takes the feed name, not the full "{user}/feeds/{feed}" path.
         _feed = cfg.MQTT_TOPIC.rsplit("/feeds/", 1)[-1]
@@ -47,8 +48,9 @@ class CircuitPythonMqttClient:
             topic = self._feed
         else:
             topic = f"{username}/feeds/{self._feed}"
-        '''
+        
         print("PahoMqttClient will subscribe to topic=%r feed=%r username=%r", topic, self._feed, username)
+        '''
 
         pool = socketpool.SocketPool(wifi.radio)
         ssl_context = adafruit_connection_manager.get_radio_ssl_context(wifi.radio)
@@ -68,11 +70,11 @@ class CircuitPythonMqttClient:
             self._dispatch(payload)
 
         self._mqtt = MQTT.MQTT(
-            broker=host,
-            port=port,
-            username=username,
-            password=password,
-            is_ssl=(port == 8883),
+            broker=self._host,
+            port=self._port,
+            username=self._username,
+            password=self._password,
+            is_ssl=(self._port == 8883),
             socket_pool=pool,
             ssl_context=ssl_context,
             socket_timeout=0.001,

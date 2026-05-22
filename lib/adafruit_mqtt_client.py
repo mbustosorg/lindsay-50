@@ -19,17 +19,17 @@ class AdafruitMqttClient:
     Calls dispatch_callback(raw_payload) for each incoming message.
     """
 
-    def __init__(self, dispatch_callback, feed: str):
+    def __init__(self, dispatch_callback):
         self._dispatch = dispatch_callback
-        self._feed = feed
         self._client: MQTTClient | None = None
+        self._username = cfg.MQTT_USERNAME
+        self._key = cfg.MQTT_PASSWORD
+        self._feed = cfg.MQTT_TOPIC
 
     def start(self) -> None:
-        username = cfg.MQTT_USERNAME
-        key = cfg.MQTT_PASSWORD
 
         def on_connect(_client):
-            logger.info("AdafruitMqttClient connected, subscribing to %s/%s", username, self._feed)
+            logger.info("AdafruitMqttClient connected, subscribing to %s/%s", self._username, self._feed)
             _client.subscribe(self._feed)
 
         def on_disconnect(_client, rc):
@@ -39,7 +39,7 @@ class AdafruitMqttClient:
             logger.info("AdafruitMqttClient on_message: feed_id=%r payload=%r", feed_id, payload)
             self._dispatch(payload)
 
-        self._client = MQTTClient(username, key, secure=True)
+        self._client = MQTTClient(self._username, self._key, secure=True)
         self._client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
         self._client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
         self._client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
@@ -54,7 +54,7 @@ class AdafruitMqttClient:
         from lib_shared.models import MessageEnvelope
         payload = envelope.to_json()
         try:
-            client = MQTTClient(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD, service_host=cfg.MQTT_HOST, secure=True)
+            client = MQTTClient(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD, secure=True)
             client.connect()
             client.publish(self._feed, payload)
             client.disconnect()

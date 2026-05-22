@@ -56,24 +56,22 @@ logger = logging.getLogger(__name__)
 storage.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
 
-# MessageManager — owns config + message storage, handles dispatch and seeding
+# MessageManager — owns config + message storage, handles dispatch and seeding.
+# Threaded on Flask (non-blocking), CircuitPython calls seed() synchronously.
 _message_mgr = MessageManager()
-_message_mgr.seed()
+
+import threading
+threading.Thread(target=_message_mgr.seed, daemon=True).start()
+
 
 # Platform MQTT client
 _mqtt_client = None
 if cfg.MQTT_CLIENT == "adafruit":
     from lib.adafruit_mqtt_client import AdafruitMqttClient
-    _mqtt_client = AdafruitMqttClient(
-        dispatch_callback=_message_mgr.dispatch,
-        feed=cfg.MQTT_TOPIC,
-    )
+    _mqtt_client = AdafruitMqttClient(dispatch_callback=_message_mgr.dispatch)
 else:
     from lib.paho_mqtt_client import PahoMqttClient
-    _mqtt_client = PahoMqttClient(
-        dispatch_callback=_message_mgr.dispatch,
-        feed=cfg.MQTT_TOPIC,
-    )
+    _mqtt_client = PahoMqttClient(dispatch_callback=_message_mgr.dispatch)
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 
@@ -205,7 +203,7 @@ def api_live_messages():
 def api_live_messages_seed():
     """Back-populate the live message ring buffer from a REST call."""
     assert _message_mgr is not None
-    _message_mgr.seed()
+    threading.Thread(target=_message_mgr.seed, daemon=True).start()
     return jsonify({"status": "ok", "seeded": min(50, len(storage.get_all_messages()))})
 
 

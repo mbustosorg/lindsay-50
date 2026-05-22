@@ -4,8 +4,11 @@ Both Flask and ESP32 instantiate this at boot. Seed URLs come from cfg internall
 """
 
 import json
-import logging
-from datetime import datetime, timezone
+
+try:
+    import logging
+except ImportError:
+    import adafruit_logging as logging
 
 from lib_shared.config_reader import get_config
 cfg = get_config()
@@ -62,8 +65,8 @@ class MessageManager:
             id=payload.get("id", ""),
             sender=payload.get("sender", ""),
             body=payload.get("body", ""),
-            received_at=payload.get("received_at", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")),
-        )
+            received_at=payload.get("received_at", ""))
+
         self._messages.add(msg, source="mqtt")
         logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
         if self._on_message:
@@ -75,14 +78,22 @@ class MessageManager:
 
     def seed(self) -> None:
         """Back-populate config and messages from the Flask REST API."""
+        try:
+            import requests as req
+            _requests_timeout = 10
+            _requests_raise_for_status = lambda r: r.raise_for_status()
+        except ImportError:
+            import adafruit_requests as req
+            _requests_timeout = None  # adafruit_requests doesn't support timeout param
+            _requests_raise_for_status = lambda r: None  # no-op on CircuitPython
+
         cfg_api = cfg.get("CONFIG_API_URL")
         msgs_api = cfg.get("MESSAGES_API_URL")
 
         if msgs_api:
             try:
-                import requests as req
-                resp = req.get(msgs_api, timeout=10)
-                resp.raise_for_status()
+                resp = req.get(msgs_api, timeout=_requests_timeout)
+                _requests_raise_for_status(resp)
                 data = resp.json()
                 if isinstance(data, list):
                     self._messages.clear()
@@ -102,9 +113,8 @@ class MessageManager:
 
         if cfg_api:
             try:
-                import requests as req
-                resp = req.get(cfg_api, timeout=10)
-                resp.raise_for_status()
+                resp = req.get(cfg_api, timeout=_requests_timeout)
+                _requests_raise_for_status(resp)
                 self._config.update_from_dict(resp.json())
                 logger.info("MessageManager seeded config")
             except Exception as e:
