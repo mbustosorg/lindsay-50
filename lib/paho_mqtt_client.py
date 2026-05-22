@@ -39,6 +39,7 @@ class PahoMqttClient:
             topic = f"{username}/feeds/{self._feed}"
 
         def on_connect(_client, _userdata, _flags, rc):
+            logger.info("PahoMqttClient on_connect called: rc=%s", rc)
             if rc == 0:
                 _client.subscribe(topic)
                 logger.info("PahoMqttClient subscribed to %s", topic)
@@ -46,9 +47,11 @@ class PahoMqttClient:
                 logger.warning("PahoMqttClient connection failed: rc=%s", rc)
 
         def on_message(_client, _userdata, msg):
+            logger.info("PahoMqttClient on_message called: topic=%s payload=%r", msg.topic, msg.payload)
             self._dispatch(msg.payload.decode(errors="replace"))
 
         def on_disconnect(_client, _userdata, rc):
+            logger.info("PahoMqttClient on_disconnect called: rc=%s", rc)
             if rc != 0:
                 logger.warning("PahoMqttClient disconnected: rc=%s", rc)
 
@@ -64,18 +67,23 @@ class PahoMqttClient:
                     client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
+                    client.on_subscribe = lambda _c, _ud, _mid, _qos: logger.info("PahoMqttClient on_subscribe: mid=%s qos=%s", _mid, _qos)
                     # Adafruit IO broker only supports MQTT 3.1.1, not v5
                     client._protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
                     # TLS required for port 8883
                     if port == 8883:
                         client.tls_set_context()
                     logger.info("PahoMqttClient connecting to %s:%d...", host, port)
+                    logger.info("PahoMqttClient calling client.connect()...")
                     client.connect(host, port, keepalive=60)
+                    logger.info("PahoMqttClient connect() returned, entering loop_forever()")
                     client.loop_forever()
                 except Exception as e:
                     if not stop.is_set():
                         logger.warning("PahoMqttClient error: %s. Reconnecting in 5s...", e)
                         time.sleep(5)
+                    else:
+                        logger.info("PahoMqttClient thread stopping")
 
         self._thread = threading.Thread(target=_run, name="paho-mqtt", daemon=True)
         self._thread.start()
