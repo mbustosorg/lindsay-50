@@ -57,6 +57,9 @@ class PahoMqttClient:
             if rc != 0:
                 logger.warning("PahoMqttClient disconnected: rc=%s", rc)
 
+        def on_log(_client, _userdata, level, string):
+            logger.info("PahoMqttClient on_log [%s]: %s", level, string)
+
         self._stop = threading.Event()
 
         def _run():
@@ -64,12 +67,13 @@ class PahoMqttClient:
             assert stop is not None
             while not stop.is_set():
                 try:
-                    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)  # type: ignore[reportPrivateImportUsage]
+                    client = mqtt.Client(clean_session=True)  # type: ignore[reportPrivateImportUsage]
                     client.username_pw_set(username, cfg.AIO_KEY)
                     client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
                     client.on_subscribe = lambda _c, _ud, _mid, _qos: logger.info("PahoMqttClient on_subscribe: mid=%s qos=%s", _mid, _qos)
+                    client.on_log = on_log  # type: ignore[reportAttributeAccessIssue]
                     # Adafruit IO broker only supports MQTT 3.1.1, not v5
                     client._protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
                     # TLS required for port 8883
