@@ -40,9 +40,9 @@ class AdafruitMqttClient:
             self._dispatch(payload)
 
         self._client = MQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
-        self._client.on_connect = on_connect
-        self._client.on_disconnect = on_disconnect
-        self._client.on_message = on_message
+        self._client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
+        self._client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
+        self._client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
 
         logger.info("AdafruitMqttClient connecting to %s...", cfg.AIO_HOST)
         self._client.connect()
