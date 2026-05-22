@@ -21,7 +21,12 @@ REQUIRED_KEYS: set[str] = {
     "AIO_KEY",
     "AIO_MESSAGES_FEED",
     "AIO_CONFIG_FEED",
+    "AIO_HOST",
+    "AIO_PORT",
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
     "AWS_S3_BUCKET",
+    "AWS_S3_REGION",
 }
 cfg = get_config(REQUIRED_KEYS)
 
