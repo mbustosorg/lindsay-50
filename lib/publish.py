@@ -63,7 +63,7 @@ def _paho_publish(feed: str, payload: str) -> bool:
         if result.rc != mqtt.MQTT_ERR_SUCCESS:
             logger.error("MQTT publish failed: rc=%s", result.rc)
             return False
-        logger.info("Published to MQTT %s:%d/%s", host, port, topic)
+        logger.info("Published to MQTT %s:%d/%s qos=1 payload=%r", host, port, topic, payload)
         return True
     except Exception as e:
         logger.error("MQTT publish failed: %s", e)

@@ -38,6 +38,8 @@ class PahoMqttClient:
         else:
             topic = f"{username}/feeds/{self._feed}"
 
+        logger.info("PahoMqttClient will subscribe to topic=%r feed=%r username=%r", topic, self._feed, username)
+
         def on_connect(_client, _userdata, _flags, rc):
             logger.info("PahoMqttClient on_connect called: rc=%s", rc)
             if rc == 0:
