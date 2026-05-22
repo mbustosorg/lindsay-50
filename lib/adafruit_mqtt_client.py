@@ -7,13 +7,38 @@ dispatch_callback(raw_payload).
 import logging
 import threading
 import time
-import paho.mqtt.client as mqtt
-from Adafruit_IO import MQTTClient
+from Adafruit_IO import MQTTClient, errors as aio_errors
 
 from lib_shared.config_reader import get_config
 cfg = get_config()
 
 logger = logging.getLogger(__name__)
+
+
+class _AdafruitMQTTClient(MQTTClient):
+    """Subclass of Adafruit_IO.MQTTClient that handles broker rc != 0 gracefully.
+
+    The Adafruit IO broker sometimes returns non-zero CONNACK codes (e.g. rc=6
+    "Message not found" when the feed is new). The base class raises on any
+    non-zero rc, which causes the client to repeatedly reconnect. This subclass
+    treats rc=6 as a successful connection so the client loop stays alive and
+    the subscription succeeds once the feed is populated.
+    """
+
+    def _mqtt_connect(self, client, userdata, flags, rc):
+        logger.debug("AdafruitMqttClient CONNACK rc=%s", rc)
+        if rc == 0:
+            self._connected = True
+            logger.info("Connected to Adafruit IO!")
+        elif rc == 6:
+            # "Message not found (internal error)" — feed may not exist yet.
+            # Treat as connected; subscribe will work once feed has messages.
+            self._connected = True
+            logger.warning("AdafruitMqttClient CONNACK rc=6 (feed may not exist yet)")
+        else:
+            raise aio_errors.MQTTError(rc)
+        if self.on_connect is not None:
+            self.on_connect(self)
 
 
 class AdafruitMqttClient:
@@ -50,9 +75,7 @@ class AdafruitMqttClient:
             assert stop is not None
             while not stop.is_set():
                 try:
-                    client = MQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
-                    # Adafruit IO broker only supports MQTT 3.1.1; paho 2.x defaults to v5
-                    client._client._protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
+                    client = _AdafruitMQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
                     client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
