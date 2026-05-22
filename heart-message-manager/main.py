@@ -68,7 +68,15 @@ storage.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 logger.info("=== DEBUG CONFIG ===")
 logger.info("AIO_HOST=%s", cfg.AIO_HOST)
 logger.info("AIO_PORT=%s", cfg.AIO_PORT)
+logger.info("AIO_USERNAME=%s", cfg.AIO_USERNAME)
+logger.info("AIO_KEY=%s", "***" if cfg.AIO_KEY else "")
+logger.info("AIO_FEED=%s", cfg.AIO_FEED)
 logger.info("AIO_MESSAGES_FEED=%s", cfg.AIO_MESSAGES_FEED)
+logger.info("AIO_CONFIG_FEED=%s", cfg.AIO_CONFIG_FEED)
+logger.info("MQTT_CLIENT=%s", cfg.MQTT_CLIENT)
+logger.info("AWS_S3_BUCKET=%s", cfg.AWS_S3_BUCKET)
+logger.info("CONFIG_API_URL=%s", cfg.CONFIG_API_URL)
+logger.info("MESSAGES_API_URL=%s", cfg.MESSAGES_API_URL)
 logger.info("SERVER_PORT=%s", cfg.PORT)
 logger.info("=== END DEBUG CONFIG ===")
 
@@ -208,7 +216,7 @@ def api_put_config():
     return jsonify({"status": "ok"})
 
 
-# Testing API into MessagesSubscriber
+# Testing API into MessageManager
 @app.route("/api/live-messages", methods=["GET"])
 def api_live_messages():
     """Return messages in the live ring buffer, newest first."""

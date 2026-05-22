@@ -7,6 +7,7 @@ dispatch_callback(raw_payload).
 import logging
 import threading
 import time
+import paho.mqtt.client as mqtt
 from Adafruit_IO import MQTTClient
 
 from lib_shared.config_reader import get_config
@@ -50,6 +51,8 @@ class AdafruitMqttClient:
             while not stop.is_set():
                 try:
                     client = MQTTClient(username, key, service_host=cfg.AIO_HOST, secure=True)
+                    # Adafruit IO broker only supports MQTT 3.1.1; paho 2.x defaults to v5
+                    client._mqtt_client.protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
                     client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
