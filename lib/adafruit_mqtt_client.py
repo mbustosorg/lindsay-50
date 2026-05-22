@@ -35,6 +35,10 @@ class _AdafruitMQTTClient(MQTTClient):
             # Treat as connected; subscribe will work once feed has messages.
             self._connected = True
             logger.warning("AdafruitMqttClient CONNACK rc=6 (feed may not exist yet)")
+        elif rc == 2:
+            # "Network protocol error" — transient, treat as connected.
+            self._connected = True
+            logger.warning("AdafruitMqttClient CONNACK rc=2 (transient)")
         else:
             raise aio_errors.MQTTError(rc)
         if self.on_connect is not None:
