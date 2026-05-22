@@ -62,21 +62,6 @@ aio = Client(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD)
 storage.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
 
-# Print environment and config for debugging
-logger.info("=== DEBUG CONFIG ===")
-logger.info("MQTT_HOST=%s", cfg.MQTT_HOST)
-logger.info("MQTT_PORT=%s", cfg.MQTT_PORT)
-logger.info("MQTT_USERNAME=%s", cfg.MQTT_USERNAME)
-logger.info("MQTT_PASSWORD=%s", "***" if cfg.MQTT_PASSWORD else "")
-logger.info("MQTT_TOPIC=%s", cfg.MQTT_TOPIC)
-logger.info("MQTT_CLIENT=%s", cfg.MQTT_CLIENT)
-logger.info("AWS_S3_BUCKET=%s", cfg.AWS_S3_BUCKET)
-logger.info("CONFIG_API_URL=%s", cfg.CONFIG_API_URL)
-logger.info("MESSAGES_API_URL=%s", cfg.MESSAGES_API_URL)
-logger.info("SERVER_PORT=%s", cfg.PORT)
-logger.info("=== END DEBUG CONFIG ===")
-
-
 # MessageManager — owns config + message storage, handles dispatch and seeding
 _message_mgr = MessageManager()
 _message_mgr.seed()

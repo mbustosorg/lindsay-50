@@ -14,6 +14,11 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _masked(key: str) -> bool:
+    """Return True if the value for this key should be masked in logs."""
+    return any(k in key.upper() for k in ("PASSWORD", "KEY", "SECRET", "TOKEN"))
+
+
 class ConfigReader:
     """Singleton config object. Env vars always override settings.toml.
 
@@ -49,6 +54,20 @@ class ConfigReader:
         missing = [k for k in self._required if not self.get_raw(k)]
         if missing:
             raise KeyError(f"Missing required config keys: {', '.join(missing)}")
+        self._debug_log()
+
+    def _debug_log(self) -> None:
+        """Print all required keys and their values (passwords masked)."""
+        logger.info("=== CONFIG ===")
+        for key in sorted(self._required):
+            val = self.get_raw(key)
+            if val is None:
+                logger.warning("%s: (not set)", key)
+            elif _masked(key):
+                logger.info("%s: ***", key)
+            else:
+                logger.info("%s: %s", key, val)
+        logger.info("=== END CONFIG ===")
 
     def get(self, key: str) -> str:
         """Get a config value as a string. Raises KeyError if not found."""
