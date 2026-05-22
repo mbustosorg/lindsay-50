@@ -167,8 +167,10 @@ def rebuild_from_s3(s3_load_messages, s3_load_config) -> None:
                          ``s3.load_latest_config``.
     """
     db_path = _db_path()
-    if db_path.exists():
+    try:
         db_path.unlink()
+    except OSError:
+        pass
     init_db()
 
     try:
