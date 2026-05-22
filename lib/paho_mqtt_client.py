@@ -95,6 +95,27 @@ class PahoMqttClient:
         self._thread.start()
         logger.info("PahoMqttClient started for feed %s", self._feed)
 
+    def publish_envelope(self, envelope) -> bool:
+        """Publish a MessageEnvelope to the AIO feed. Returns True on success."""
+        import paho.mqtt.client as mqtt
+        topic = f"{cfg.AIO_USERNAME}/feeds/{self._feed}"
+        payload = envelope.to_json()
+        try:
+            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)  # type: ignore[reportPrivateImportUsage]
+            client.username_pw_set(cfg.AIO_USERNAME, cfg.AIO_KEY)
+            client.connect(cfg.AIO_HOST, int(cfg.AIO_PORT), keepalive=30)
+            result = client.publish(topic, payload.encode(), qos=1)
+            client.loop_stop()
+            client.disconnect()
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                logger.warning("PahoMqttClient publish failed: rc=%s", result.rc)
+                return False
+            logger.info("PahoMqttClient published envelope to %s", topic)
+            return True
+        except Exception as e:
+            logger.warning("PahoMqttClient publish failed: %s", e)
+            return False
+
     def stop(self) -> None:
         if self._stop:
             self._stop.set()

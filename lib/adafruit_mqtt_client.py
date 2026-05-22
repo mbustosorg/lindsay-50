@@ -22,7 +22,7 @@ class AdafruitMqttClient:
     def __init__(self, dispatch_callback, feed: str):
         self._dispatch = dispatch_callback
         self._feed = feed
-        self._client = None
+        self._client: MQTTClient | None = None
 
     def start(self) -> None:
         username = cfg.AIO_USERNAME
@@ -48,6 +48,21 @@ class AdafruitMqttClient:
         self._client.connect()
         self._client.loop_background()
         logger.info("AdafruitMqttClient started for feed %s", self._feed)
+
+    def publish_envelope(self, envelope) -> bool:
+        """Publish a MessageEnvelope to the AIO feed. Returns True on success."""
+        from lib_shared.models import MessageEnvelope
+        payload = envelope.to_json()
+        try:
+            client = MQTTClient(cfg.AIO_USERNAME, cfg.AIO_KEY, service_host=cfg.AIO_HOST, secure=True)
+            client.connect()
+            client.publish(self._feed, payload)
+            client.disconnect()
+            logger.info("AdafruitMqttClient published envelope to %s", self._feed)
+            return True
+        except Exception as e:
+            logger.warning("AdafruitMqttClient publish failed: %s", e)
+            return False
 
     def stop(self) -> None:
         if self._client:

@@ -36,7 +36,7 @@ cfg = get_config(REQUIRED_KEYS)
 
 from Adafruit_IO import Client
 
-from lib import storage, s3, publish
+from lib import storage, s3
 from lib.time import format_from_iso, now_utc_iso
 from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.message_manager import MessageManager
@@ -138,7 +138,7 @@ def api_messages():
 
     try:
         storage.put_message(msg)
-        publish.publish_envelope(MessageEnvelope("message", msg.to_dict()))
+        _mqtt_client.publish_envelope(MessageEnvelope("message", msg.to_dict()))
     except Exception as e:
         logger.error("Post-webhook processing failed: %s", e)
 
@@ -310,8 +310,7 @@ def _save_and_publish(cfg: SignConfig) -> None:
         s3.save_config_snapshot(cfg.to_dict())
     except Exception as e:
         logger.warning("Config S3 snapshot failed: %s", e)
-    publish.publish_config(cfg.to_dict())
-    publish.publish_envelope(MessageEnvelope("config", cfg.to_dict()))
+    _mqtt_client.publish_envelope(MessageEnvelope("config", cfg.to_dict()))
 
 
 def _suppress_message(msg_id: str) -> bool:
