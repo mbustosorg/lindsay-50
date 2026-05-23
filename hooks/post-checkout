@@ -55,7 +55,15 @@ fi
 
 # Copy settings.toml files from the main worktree (gitignored, so not in repo)
 # The app handles creating secret_key and db.sqlite on first startup
-MAIN_REPO=$(dirname "$GIT_COMMON_DIR")
+# Derive main repo: .git file contains "gitdir: /path/to/.git/worktrees/<name>"
+# We need to extract the repo root from this path
+if [ -f ".git" ]; then
+    GITDIR=$(cat ".git" | sed 's/gitdir: //')
+    # Strip /worktrees/<name> to get repo root
+    MAIN_REPO=$(echo "$GITDIR" | sed 's|/.git/worktrees/.*||')
+else
+    MAIN_REPO=$(pwd)
+fi
 
 for proj in heart-message-manager heart-matrix-controller; do
     if [ ! -f "$proj/settings.toml" ] && [ -f "$MAIN_REPO/$proj/settings.toml" ]; then
