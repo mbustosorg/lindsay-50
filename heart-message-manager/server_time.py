@@ -1,4 +1,5 @@
 """Server-only time helpers. zoneinfo is available here but not on CircuitPython."""
+
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
@@ -9,7 +10,7 @@ def to_utc_datetime(dt_iso: str) -> datetime:
     Examples:
         >>> to_utc_datetime("2026-05-22T14:30:00-07:00")
         datetime.datetime(2026, 5, 22, 21, 30, tzinfo=datetime.timezone.utc)
-        
+
         >>> to_utc_datetime("2026-05-22T21:30:00Z")
         datetime.datetime(2026, 5, 22, 21, 30, tzinfo=datetime.timezone.utc)
     """

@@ -11,6 +11,7 @@ except ImportError:
     import adafruit_logging as logging
 
 from lib_shared.config_reader import get_config
+
 cfg = get_config()
 
 from lib_shared.models import MessageEnvelope, Message, SignConfig
@@ -66,10 +67,13 @@ class MessageManager:
             id=payload.get("id", ""),
             sender=payload.get("sender", ""),
             body=payload.get("body", ""),
-            received_at=payload.get("received_at", ""))
+            received_at=payload.get("received_at", ""),
+        )
 
         self._messages.add(msg, source="mqtt")
-        logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
+        logger.info(
+            "MessageManager routed message id=%s body=%r", msg.id, msg.body[:40]
+        )
         if self._on_message:
             self._on_message(msg)
 
@@ -82,10 +86,12 @@ class MessageManager:
         """Back-populate config and messages from the Flask REST API."""
         try:
             import requests as req
+
             _requests_timeout = 10
             _requests_raise_for_status = lambda r: r.raise_for_status()
         except ImportError:
             import adafruit_requests as req
+
             _requests_timeout = None  # adafruit_requests doesn't support timeout param
             _requests_raise_for_status = lambda r: None  # no-op on CircuitPython
 
@@ -109,7 +115,10 @@ class MessageManager:
                         for item in data[-100:]
                     ]
                     self._messages.add_many(msgs, source="rest")
-                logger.info("MessageManager seeded %d messages", len(data) if isinstance(data, list) else 0)
+                logger.info(
+                    "MessageManager seeded %d messages",
+                    len(data) if isinstance(data, list) else 0,
+                )
             except Exception as e:
                 logger.warning("MessageManager message seed failed: %s", e)
 

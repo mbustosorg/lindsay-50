@@ -11,6 +11,7 @@ from mqtt_client import CircuitPythonMqttClient
 from lib_shared.message_manager import MessageManager
 
 from lib_shared.config_reader import get_config
+
 REQUIRED_KEYS: set[str] = {
     "WIFI_SSID",
     "WIFI_PASSWORD",
@@ -33,6 +34,7 @@ def connect_wifi():
     wifi.radio.connect(cfg.WIFI_SSID, cfg.WIFI_PASSWORD)
     log.info("Connected, IP: %s", wifi.radio.ipv4_address)
 
+
 connect_wifi()
 
 
@@ -48,7 +50,9 @@ nightsky = NightSky(matrix.display, scroller.group)
 class EffectCoordinator:
     """Toggles between effects and fades the display when a new message arrives."""
 
-    def __init__(self, display, scroller, effects, fade_seconds=0.5, fade_step=0.04, gamma=2.2):
+    def __init__(
+        self, display, scroller, effects, fade_seconds=0.5, fade_step=0.04, gamma=2.2
+    ):
         self.display = display
         self.scroller = scroller
         self.effects = effects
@@ -80,7 +84,7 @@ class EffectCoordinator:
             if now - self.last_step >= self.fade_step or progress >= 1.0:
                 self.last_step = now
                 linear = 1.0 - progress if self.mode == "out" else progress
-                b = linear ** self.gamma
+                b = linear**self.gamma
                 self.effects[self.idx].set_brightness(b)
                 self.scroller.set_brightness(b)
                 log.info("fade %s linear=%.3f b=%.3f", self.mode, linear, b)
@@ -105,9 +109,13 @@ class EffectCoordinator:
         self.scroller.tick()
 
 
-coordinator = EffectCoordinator(matrix.display, scroller, [nightsky, fireworks, flame], fade_seconds=5.2)
+coordinator = EffectCoordinator(
+    matrix.display, scroller, [nightsky, fireworks, flame], fade_seconds=5.2
+)
 
-_message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
+_message_mgr = MessageManager(
+    on_message=lambda msg: coordinator.request_message(msg.body)
+)
 _message_mgr.seed()
 
 _mqtt_client = CircuitPythonMqttClient(dispatch_callback=_message_mgr.dispatch)

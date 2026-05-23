@@ -14,6 +14,7 @@ import adafruit_minimqtt.adafruit_minimqtt as MQTT
 from adafruit_io.adafruit_io import IO_MQTT
 
 from lib_shared.config_reader import get_config
+
 cfg = get_config()
 
 
@@ -37,10 +38,9 @@ class CircuitPythonMqttClient:
         self._password = cfg.MQTT_PASSWORD
         self._feed = cfg.MQTT_TOPIC
 
-
     def start(self) -> None:
         """Set up MQTT and IO_MQTT, connect and subscribe."""
-        '''
+        """
         # IO_MQTT.subscribe() takes the feed name, not the full "{user}/feeds/{feed}" path.
         _feed = cfg.MQTT_TOPIC.rsplit("/feeds/", 1)[-1]
 
@@ -50,7 +50,7 @@ class CircuitPythonMqttClient:
             topic = f"{username}/feeds/{self._feed}"
         
         print("PahoMqttClient will subscribe to topic=%r feed=%r username=%r", topic, self._feed, username)
-        '''
+        """
 
         pool = socketpool.SocketPool(wifi.radio)
         ssl_context = adafruit_connection_manager.get_radio_ssl_context(wifi.radio)

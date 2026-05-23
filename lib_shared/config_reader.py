@@ -107,6 +107,7 @@ class ConfigReader:
 
 _cfg: ConfigReader | None = None
 
+
 def get_config(required_keys: set[str] | None = None) -> ConfigReader:
     """Create (or return existing) ConfigReader singleton.
 
