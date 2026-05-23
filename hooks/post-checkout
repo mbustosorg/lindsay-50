@@ -53,30 +53,17 @@ if [ -f ".venv/bin/activate" ]; then
     fi
 fi
 
-# Copy settings.toml examples if not already present
-if [ ! -f "heart-message-manager/settings.toml" ] && [ -f "heart-message-manager/settings.toml.example" ]; then
-    cp heart-message-manager/settings.toml.example heart-message-manager/settings.toml
-    echo "✅ Copied heart-message-manager/settings.toml"
-    echo "   ⚠️  Edit it with your actual credentials before running the server!"
-fi
+# Copy settings.toml files from the main worktree (gitignored, so not in repo)
+# The app handles creating secret_key and db.sqlite on first startup
+MAIN_REPO=$(dirname "$GIT_COMMON_DIR")
 
-if [ ! -f "heart-matrix-controller/settings.toml" ] && [ -f "heart-matrix-controller/settings.toml.example" ]; then
-    cp heart-matrix-controller/settings.toml.example heart-matrix-controller/settings.toml
-    echo "✅ Copied heart-matrix-controller/settings.toml"
-    echo "   ⚠️  Edit it with your actual credentials before deploying to device!"
-fi
-
-# Generate Flask secret_key (gitignored)
-if [ ! -f "heart-message-manager/secret_key" ]; then
-    python3 -c "import secrets; print(secrets.token_hex(32))" > heart-message-manager/secret_key
-    echo "✅ Generated heart-message-manager/secret_key"
-fi
-
-# Touch empty SQLite db (gitignored)
-if [ ! -f "db.sqlite" ]; then
-    touch db.sqlite
-    echo "✅ Created db.sqlite"
-fi
+for proj in heart-message-manager heart-matrix-controller; do
+    if [ ! -f "$proj/settings.toml" ] && [ -f "$MAIN_REPO/$proj/settings.toml" ]; then
+        cp "$MAIN_REPO/$proj/settings.toml" "$proj/settings.toml"
+        echo "✅ Copied $proj/settings.toml from main worktree"
+        echo "   ⚠️  Review credentials before running the server!"
+    fi
+done
 
 # ---------------------------------------------------------------------------
 # Mark this worktree as initialized — guard for future checkouts
