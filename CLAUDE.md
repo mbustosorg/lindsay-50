@@ -4,34 +4,38 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-SMS → microcontroller bridge. A Twilio webhook posts an incoming SMS to a Flask server (`heart-message-manager/main.py`), which publishes the body to an Adafruit IO feed via the REST API. An ESP32 running CircuitPython (`heart-matrix-controller/code.py`) subscribes to that feed over MQTT and renders the message as scrolling text on a 64×64 HUB75 LED panel (two stacked 64×32 panels, serpentine wired) over a fireworks- or flame-effect background that toggles on each new message.
+SMS → microcontroller bridge. A Twilio webhook posts an incoming SMS to a Flask server (`heart-message-manager/main.py`), which publishes the body to an Adafruit IO feed via MQTT. An ESP32 running CircuitPython (`heart-matrix-controller/code.py`) subscribes to that feed over MQTT and renders the message as scrolling text on a 64×64 HUB75 LED panel (two stacked 64×32 panels, serpentine wired) over a fireworks- or flame-effect background that toggles on each new message.
+
+Flask also subscribes to the same MQTT feed to keep its live message ring buffer in sync with the ESP32.
 
 ## Project structure
 
 ```
 lindsay-50/
-├── heart-message-manager/     # Flask server (SMS receiver + admin UI)
-│   ├── main.py
-│   ├── templates/            # Jinja2 templates
-│   │   ├── base.html        # Original Bootstrap 5 UI
-│   │   ├── base-playful.html # Redesigned playful UI
-│   │   └── *-playful.html   # Playful variants of each page
-│   ├── settings.toml         # Local config (gitignored)
+├── heart-message-manager/        # Flask server (SMS receiver + admin UI)
+│   ├── main.py                  # Flask app entrypoint
+│   ├── sqlite.py               # SQLite storage (rebuild-from-S3 on startup)
+│   ├── s3.py                   # S3 backup helpers
+│   ├── server_time.py          # Time helpers (zoneinfo-based, avoids stdlib conflict)
+│   ├── adafruit_mqtt_client.py # Adafruit IO MQTT subscriber (Heroku)
+│   ├── paho_mqtt_client.py     # Paho MQTT subscriber (local dev)
+│   ├── templates/              # Jinja2 templates
+│   ├── settings.toml           # Local config (gitignored)
 │   └── settings.toml.example
-├── heart-matrix-controller/   # CircuitPython device code
+├── heart-matrix-controller/      # CircuitPython device code
 │   ├── code.py
+│   ├── mqtt_client.py          # CircuitPython MQTT client (adafruit_io)
 │   ├── scroller.py
 │   ├── fireworks.py
 │   ├── flame.py
-│   └── settings.toml         # Local config (gitignored)
-├── lib/                     # Shared server-side Python modules
-│   ├── storage.py           # SQLite + S3 backup
-│   ├── filters.py           # Message filtering logic
-│   ├── s3.py               # AWS S3 operations
-│   ├── publish.py           # Adafruit IO publishing
-│   └── models.py            # Data models
-├── requirements.txt          # Server dependencies
-└── .venv/                   # Python venv (created on setup)
+│   └── settings.toml            # Local config (gitignored)
+├── lib_shared/                  # Shared code (Flask + CircuitPython)
+│   ├── models.py               # Message, SignConfig, FilterRule, RenderingSettings
+│   ├── messages.py             # FilteredMessages, InMemoryMessages
+│   ├── message_manager.py      # MessageManager (dispatch + seed)
+│   └── config_reader.py        # TOML + env config loader
+├── requirements.txt
+└── .venv/
 ```
 
 ## First-time setup
@@ -54,12 +58,12 @@ source .venv/bin/activate
 python heart-message-manager/main.py
 ```
 
-Runs on `http://0.0.0.0:5000`. Twilio webhook URL: `POST /sms`.
+Runs on `http://0.0.0.0:5000`. Twilio webhook URL: `POST /api/messages`.
 
 ## Testing the webhook locally
 
 ```bash
-curl -X POST http://localhost:5000/sms \
+curl -X POST http://localhost:5000/api/messages \
   -d "From=%2B15551234567&Body=hello+world&To=%2B15559999999"
 ```
 
@@ -76,34 +80,39 @@ Both share the same functionality. The playful variant is served from `*-playful
 
 The two `settings.toml` files use different keys because the server and device use different APIs:
 
-`heart-message-manager/settings.toml` — Adafruit IO REST publish:
-- `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC`
-- `ALLOWED_SENDERS` (optional comma-separated phone-number allow-list; empty = accept all)
+`heart-message-manager/settings.toml` — MQTT broker settings:
+- `MQTT_CLIENT` — `"adafruit"` (Heroku) or `"paho"` (local dev)
+- `MQTT_HOST`, `MQTT_PORT`, `MQTT_USERNAME`, `MQTT_PASSWORD`, `MQTT_TOPIC`
 
 `heart-matrix-controller/settings.toml` — Wi-Fi + Adafruit IO MQTT subscribe + log level:
 - `WIFI_SSID`, `WIFI_PASSWORD`
 - `MQTT_HOST` (`io.adafruit.com`), `MQTT_PORT`, `MQTT_TOPIC`, `MQTT_USERNAME`, `MQTT_PASSWORD`
 - `LOG_LEVEL` (DEBUG / INFO / WARNING / ERROR / CRITICAL)
 
-The same Adafruit IO key serves as both the REST API key (server side) and the MQTT password (device side). `MQTT_TOPIC` accepts either a bare feed name or a full `user/feeds/feed` path; `code.py` rsplits to recover the feed for `IO_MQTT.subscribe()`. TLS auto-enables when `MQTT_PORT == 8883`.
+Environment variables always take precedence over `settings.toml` values.
 
 ## Architecture
 
 ```
-SMS → Twilio → POST /sms (main.py) → Adafruit IO REST → AIO feed
-                                                           ↓ MQTT
-                                                      ESP32 code.py
-                                                           ↓
-                                          EffectCoordinator.request_message()
-                                                           ↓
-                              fade out → toggle effect → set scroll text → fade in
+SMS → Twilio → POST /api/messages → Flask
+                                      │
+                    ┌─────────────────┼─────────────────┐
+                    ▼                 ▼                 ▼
+               SQLite              S3 (log)         MQTT broker
+                                            (publish envelope)
+                                                   │
+                              ┌────────────────────┴────────────────────┐
+                              ▼                                         ▼
+                        ESP32 subscribes                        Flask subscribes
+                        (display updates)                      (live ring buffer)
 ```
 
-- `heart-message-manager/main.py` — Flask app, single `/sms` route, publishes via `Adafruit_IO.Client.send_data`.
-- `heart-matrix-controller/code.py` — CircuitPython entrypoint; runs `io.loop()` and `EffectCoordinator.tick()` in a tight loop.
-- `heart-matrix-controller/scroller.py` — `Scroller`: two `Label`s scrolling right-to-left, top panel and bottom panel offset by 1s, time-based pixel advance.
-- `heart-matrix-controller/fireworks.py` — `Fireworks`: rocket → apex-explode → spark physics on a 64×64 bitmap.
-- `heart-matrix-controller/flame.py` — `Flame`: heat-field on a 32×32 internal grid drawn into a `Group(scale=2)` for cheap upscale; palette is capped to 40% brightness so total LED current stays within USB budget.
+- `heart-message-manager/main.py` — Flask app, publishes envelopes via MQTT client, serves admin UI.
+- `heart-message-manager/adafruit_mqtt_client.py` — Heroku: wraps `Adafruit_IO.MQTTClient`.
+- `heart-message-manager/paho_mqtt_client.py` — Local dev: wraps `paho-mqtt`.
+- `heart-matrix-controller/mqtt_client.py` — CircuitPython MQTT client wrapping `adafruit_io.IO_MQTT`.
+- `heart-matrix-controller/code.py` — CircuitPython entrypoint; runs MQTT loop and `EffectCoordinator.tick()`.
+- `lib_shared/message_manager.py` — Shared `MessageManager`; Flask seeds from REST API, ESP32 seeds from Flask REST API.
 
 ## ESP32 / CircuitPython setup
 

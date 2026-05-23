@@ -15,6 +15,12 @@ class MessageEnvelope:
     """
 
     def __init__(self, type: str, payload: dict):
+        """Initialize a MessageEnvelope.
+
+        Args:
+            type: Envelope type — "message" or "config".
+            payload: Dict payload — Message.to_dict() or SignConfig.to_dict().
+        """
         self.type = type
         self.payload = payload
 
@@ -28,11 +34,23 @@ class MessageEnvelope:
 
 
 class Message:
+    """Represents an incoming SMS message.
+
+    Stored to S3 as JSON and published over MQTT as part of a MessageEnvelope.
+    """
     def __init__(self, id, sender, body, received_at):
+        """Initialize a Message.
+
+        Args:
+            id: Unique message identifier (UUID string).
+            sender: Phone number of the sender.
+            body: Text content of the message.
+            received_at: ISO 8601 UTC timestamp when received.
+        """
         self.id = id
         self.sender = sender
         self.body = body
-        self.received_at = received_at  # ISO 8601 UTC
+        self.received_at = received_at
 
     @classmethod
     def from_dict(cls, d):
@@ -45,10 +63,19 @@ class Message:
 class MessageView:
     """Message with source and computed suppression status."""
     def __init__(self, message, source="rest", suppressed=False, rules=None, sender_name=None):
-        self.message = message        # Message object
-        self.source = source        # "rest" | "mqtt"
+        """Initialize a MessageView.
+
+        Args:
+            message: Message object this view wraps.
+            source: "rest" when loaded from storage, "mqtt" when received live.
+            suppressed: True if any filter rule matched this message.
+            rules: List of FilterRule dicts that suppressed the message.
+            sender_name: Display name for the sender (from the senders allowlist).
+        """
+        self.message = message
+        self.source = source
         self.suppressed = suppressed
-        self.rules = rules or []    # list of FilterRule dicts
+        self.rules = rules or []
         self.sender_name = sender_name
 
     def to_dict(self):
@@ -65,7 +92,21 @@ class MessageView:
 
 
 class FilterRule:
+    """A single filter rule that can suppress messages.
+
+    Attributes:
+        type: Rule type — "keyword", "regex", "sender", or "message".
+        pattern: The value to match against (case-sensitive except for keyword).
+        action: Always "suppress" in practice.
+    """
     def __init__(self, type, pattern, action="suppress"):
+        """Initialize a FilterRule.
+
+        Args:
+            type: Rule type — "keyword", "regex", "sender", or "message".
+            pattern: Value to match against.
+            action: Action to take when matched (default "suppress").
+        """
         self.type = type
         self.pattern = pattern
         self.action = action
@@ -82,6 +123,11 @@ class SignSettings:
     """Sign configuration with name attribute."""
 
     def __init__(self, name: str = "Lindsay's Heart"):
+        """Initialize SignSettings.
+
+        Args:
+            name: Display name shown on the sign (default "Lindsay's Heart").
+        """
         self.name = name
 
     @classmethod
@@ -98,6 +144,13 @@ class RenderingSettings:
     """LED rendering defaults: mode, speed, color."""
 
     def __init__(self, mode: str = "scroll", speed: float = 0.5, color: int = 0xFFFFFF):
+        """Initialize RenderingSettings.
+
+        Args:
+            mode: LED effect — "scroll" (default), "fireworks", "flame", etc.
+            speed: Scroll/animation speed from 0.0 (slow) to 1.0 (fast).
+            color: 24-bit RGB color value (default 0xFFFFFF white).
+        """
         self.mode = mode
         self.speed = speed
         self.color = color
@@ -128,8 +181,19 @@ class SignConfig:
     CircuitPython has no threading module so lock is None there.
     """
     def __init__(self, filters=None, senders=None, rendering=None, sign=None, timezone="US/Pacific", version=1, tz_offset_mins: int = 0):
+        """Initialize a SignConfig.
+
+        Args:
+            filters: List of FilterRule objects (default empty).
+            senders: Dict mapping phone number -> display name (default empty).
+            rendering: RenderingSettings instance or dict (default built from empty dict).
+            sign: SignSettings instance or dict (default built from empty dict).
+            timezone: IANA timezone string (default "US/Pacific").
+            version: Config schema version (default 1).
+            tz_offset_mins: Manual UTC offset in minutes (default 0).
+        """
         self.filters = filters or []
-        self.senders = senders or {}  # dict: phone -> name
+        self.senders = senders or {}
         self.rendering = rendering if isinstance(rendering, RenderingSettings) else RenderingSettings.from_dict(rendering or {})
         self.sign = sign if isinstance(sign, SignSettings) else SignSettings.from_dict(sign or {})
         self.timezone = timezone
@@ -142,7 +206,14 @@ class SignConfig:
             self._lock = None
 
     def _with_lock(self, fn):
-        """Run fn under the config lock (no-op if lock unavailable)."""
+        """Run fn under the config lock (no-op if lock unavailable).
+
+        Args:
+            fn: a callable to execute inside the lock.
+
+        Returns:
+            The return value of fn().
+        """
         if self._lock:
             with self._lock:
                 return fn()
@@ -150,11 +221,20 @@ class SignConfig:
 
     @classmethod
     def default(cls):
-        """Return a default config."""
+        """Return a default SignConfig with empty filters, senders, and US/Pacific timezone."""
         return cls()
 
     @classmethod
     def from_dict(cls, data):
+        """Deserialize a SignConfig from a dict (the same shape as to_dict()).
+
+        Args:
+            data: dict with optional keys: filters, senders, rendering, sign,
+                  timezone, version, tz_offset_mins.
+
+        Returns:
+            A new SignConfig instance.
+        """
         return cls(
             filters=[FilterRule.from_dict(f) for f in data.get("filters", [])],
             senders={s["phone"]: s["name"] for s in data.get("senders", [])},
@@ -166,6 +246,12 @@ class SignConfig:
         )
 
     def to_dict(self):
+        """Serialize the config to a dict suitable for JSON or S3 storage.
+
+        Returns:
+            dict with keys: filters, senders, rendering, sign, timezone,
+            tz_offset_mins, version.
+        """
         return self._with_lock(lambda: {
             "filters": [f.to_dict() for f in self.filters],
             "senders": [{"phone": p, "name": n} for p, n in self.senders.items()],
@@ -177,11 +263,9 @@ class SignConfig:
         })
 
     def update(self, other: "SignConfig") -> None:
-        """Update fields from another SignConfig object.
+        """Replace all fields with values from another SignConfig (thread-safe).
 
-        Subclasses can override this and change behavior
-        (e.g. SqliteConfig persists to storage).
-        Thread-safe.
+        Subclasses can override this to persist to storage (e.g. SqliteConfig).
         """
         def _do():
             self.filters = other.filters
@@ -194,7 +278,7 @@ class SignConfig:
         self._with_lock(_do)
 
     def update_from_dict(self, data: dict) -> None:
-        """Update config from a dict (mutates self). Thread-safe."""
+        """Replace all fields from a dict (mutates self). Thread-safe."""
         def _do():
             self.filters = [FilterRule.from_dict(f) for f in data.get("filters", [])]
             self.senders = {s["phone"]: s["name"] for s in data.get("senders", [])}
@@ -205,85 +289,3 @@ class SignConfig:
             self.version = data.get("version", 1)
             self.tz_offset_mins = data.get("tz_offset_mins", 0)
         self._with_lock(_do)
-
-
-# ---------------------------------------------------------------------------
-# FilteredMessages — base class for message services
-# ---------------------------------------------------------------------------
-
-import re
-
-class FilteredMessages:
-    """Base class for message services.
-
-    Subclasses must implement:
-      - add(message, source="rest")
-      - add_many(messages, source="rest")
-      - clear()
-      - get_messages(limit=100) -> list[MessageView]
-
-    The base class provides _apply_suppression() for use by subclasses.
-    """
-
-    def __init__(self, config):
-        self._config = config
-
-    def _apply_filter(self, msg, rules):
-        """Apply filter rules to a message.
-
-        Args:
-            msg:   Message object
-            rules: list of FilterRule objects
-
-        Returns:
-            List of FilterRule objects that suppress the message (in evaluation order).
-        """
-        suppressing = []
-        for rule in rules:
-            if rule.action != "suppress":
-                continue
-            if self._matches(msg, rule):
-                suppressing.append(rule)
-        return suppressing
-
-    def _matches(self, msg, rule):
-        """Return True if message matches the filter rule."""
-        if rule.type == "keyword":
-            return rule.pattern.lower() in msg.body.lower()
-        elif rule.type == "regex":
-            try:
-                return bool(re.fullmatch(rule.pattern, msg.body))
-            except re.error:
-                return False
-        elif rule.type == "sender":
-            return msg.sender == rule.pattern
-        elif rule.type == "message":
-            return msg.id == rule.pattern
-        return False
-
-    def _apply_suppression(self, entries):
-        """Fill suppressed, rules, sender_name on each MessageView entry.
-
-        Called by get_messages() before returning. Override to customize.
-        """
-        for entry in entries:
-            suppressing = self._apply_filter(entry.message, self._config.filters)
-            entry.suppressed = bool(suppressing)
-            entry.rules = [r.to_dict() for r in suppressing]
-            entry.sender_name = self._config.senders.get(entry.message.sender)
-
-    def add(self, message, source="rest"):
-        """Add a single message."""
-        raise NotImplementedError()
-
-    def add_many(self, messages, source="rest"):
-        """Add multiple messages."""
-        raise NotImplementedError()
-
-    def clear(self):
-        """Clear all messages."""
-        raise NotImplementedError()
-
-    def get_messages(self, limit=100):
-        """Return messages, newest first, with suppression applied."""
-        raise NotImplementedError()

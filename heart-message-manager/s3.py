@@ -16,13 +16,13 @@ uses the configured local timezone from settings.toml (default: US/Pacific).
 import json
 import logging
 import boto3
+from datetime import datetime
 from typing import Iterator
 
-from lib.time import now_utc_iso, to_utc_datetime
+from server_time import now_utc_iso, to_utc_datetime
+from lib_shared.models import Message
 from lib_shared.config_reader import get_config
 cfg = get_config()
-
-from lib_shared.models import Message
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +35,7 @@ _CONFIG_KEY_TEMPLATE = "config/{year}-{month}/cfg-{datetime}.json"
 # ---------------------------------------------------------------------------
 
 def _s3_client():
+    """Return a cached boto3 S3 client (credentials from config)."""
     endpoint = cfg.if_exists("AWS_S3_ENDPOINT_URL")
     return boto3.client(
         "s3",
@@ -46,6 +47,7 @@ def _s3_client():
 
 
 def _s3_bucket() -> str:
+    """Return the S3 bucket name from config."""
     return cfg.AWS_S3_BUCKET
 
 
@@ -53,27 +55,23 @@ def _s3_bucket() -> str:
 # Internal: ISO strings, with UTC conversion only for S3 key formatting
 # ---------------------------------------------------------------------------
 
-def _format_s3_key(key_template: str, dt_iso: str) -> str:
-    """Build an S3 key from an ISO timestamp string.
+def _format_s3_key(key_template: str, dt: datetime) -> str:
+    """Fill in {year}, {month}, {datetime} in an S3 key template.
 
-    Converts to UTC for the key format so S3 objects sort chronologically.
+    Args:
+        key_template: S3 key with {year}, {month}, {datetime} placeholders.
+        dt: UTC datetime object (from to_utc_datetime).
     """
-    dt_utc = to_utc_datetime(dt_iso)
     return key_template.format(
-        year=dt_utc.strftime("%Y"),
-        month=dt_utc.strftime("%m"),
-        datetime=dt_utc.strftime("%Y-%m-%dT%H-%M-%SZ"),
+        year=dt.strftime("%Y"),
+        month=dt.strftime("%m"),
+        datetime=dt.strftime("%Y-%m-%dT%H-%M-%SZ"),
     )
 
 
 # ---------------------------------------------------------------------------
 # Message files
 # ---------------------------------------------------------------------------
-
-def _message_key(dt_iso: str) -> str:
-    """Build the S3 key for a message file."""
-    return _format_s3_key(_MESSAGE_KEY_TEMPLATE, dt_iso)
-
 
 def log_message(msg: Message) -> None:
     """Write a message to its own S3 file."""
@@ -83,8 +81,8 @@ def log_message(msg: Message) -> None:
         "body": msg.body,
         "received_at": msg.received_at,
     }
-    key = _message_key(msg.received_at)
-
+    key = _format_s3_key(_MESSAGE_KEY_TEMPLATE, to_utc_datetime(msg.received_at))
+    
     _s3_client().put_object(
         Bucket=_s3_bucket(),
         Key=key,
@@ -131,16 +129,11 @@ def load_messages_from_s3() -> Iterator[Message]:
 # Config snapshots
 # ---------------------------------------------------------------------------
 
-def _config_key(dt_iso: str) -> str:
-    """Build the S3 key for a config snapshot file."""
-    return _format_s3_key(_CONFIG_KEY_TEMPLATE, dt_iso)
-
-
 def save_config_snapshot(config_dict: dict) -> None:
     """Save a timestamped config snapshot to S3 and prune old snapshots (keep 10)."""
     dt_iso = now_utc_iso()
     bucket = _s3_bucket()
-    key = _config_key(dt_iso)
+    key = _format_s3_key(_CONFIG_KEY_TEMPLATE, to_utc_datetime(dt_iso))
 
     _s3_client().put_object(
         Bucket=bucket,

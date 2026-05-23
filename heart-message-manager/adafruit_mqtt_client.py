@@ -20,6 +20,11 @@ class AdafruitMqttClient:
     """
 
     def __init__(self, dispatch_callback):
+        """Initialize the client.
+
+        Args:
+            dispatch_callback: Callable that accepts a raw MQTT payload string.
+        """
         self._dispatch = dispatch_callback
         self._client: MQTTClient | None = None
         self._username = cfg.MQTT_USERNAME
@@ -27,6 +32,7 @@ class AdafruitMqttClient:
         self._feed = cfg.MQTT_TOPIC
 
     def start(self) -> None:
+        """Connect to Adafruit IO and start the background loop."""
 
         def on_connect(_client):
             logger.info("AdafruitMqttClient connected, subscribing to %s/%s", self._username, self._feed)
@@ -51,7 +57,6 @@ class AdafruitMqttClient:
 
     def publish_envelope(self, envelope) -> bool:
         """Publish a MessageEnvelope to the AIO feed. Returns True on success."""
-        from lib_shared.models import MessageEnvelope
         payload = envelope.to_json()
         try:
             client = MQTTClient(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD, secure=True)
@@ -65,5 +70,6 @@ class AdafruitMqttClient:
             return False
 
     def stop(self) -> None:
+        """Disconnect the MQTT client."""
         if self._client:
             self._client.disconnect()

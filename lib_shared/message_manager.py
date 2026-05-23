@@ -61,6 +61,7 @@ class MessageManager:
             logger.warning("Unknown envelope type: %r", envelope.type)
 
     def _handle_message(self, payload: dict) -> None:
+        """Convert payload dict to Message, store it, and call _on_message callback."""
         msg = Message(
             id=payload.get("id", ""),
             sender=payload.get("sender", ""),
@@ -73,6 +74,7 @@ class MessageManager:
             self._on_message(msg)
 
     def _handle_config(self, payload: dict) -> None:
+        """Apply a SignConfig dict to the in-memory config (thread-safe update)."""
         self._config.update_from_dict(payload)
         logger.info("MessageManager applied config update")
 

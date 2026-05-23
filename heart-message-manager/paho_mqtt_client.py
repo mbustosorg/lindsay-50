@@ -20,6 +20,11 @@ class PahoMqttClient:
     """
 
     def __init__(self, dispatch_callback):
+        """Initialize the client.
+
+        Args:
+            dispatch_callback: Callable that accepts a raw MQTT payload string.
+        """
         self._dispatch = dispatch_callback
         self._thread = None
         self._stop = None
@@ -31,15 +36,10 @@ class PahoMqttClient:
         self._feed = cfg.MQTT_TOPIC
 
     def start(self) -> None:
+        """Connect to the broker and start the subscriber loop in a daemon thread."""
         import threading
         import time
-        
-        '''
-        if "/feeds/" in self._feed:
-            topic = self._feed
-        else:
-            topic = f"{self._username}/feeds/{self._feed}"
-        '''
+
         topic = self._feed
         logger.info("PahoMqttClient will subscribe to topic=%r feed=%r username=%r", topic, self._feed, self._username)
 
@@ -77,8 +77,6 @@ class PahoMqttClient:
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
                     client.on_subscribe = lambda _c, _ud, _mid, _qos: logger.info("PahoMqttClient on_subscribe: mid=%s qos=%s", _mid, _qos)
                     client.on_log = on_log  # type: ignore[reportAttributeAccessIssue]
-                    # Adafruit IO broker only supports MQTT 3.1.1, not v5
-                    client._protocol = mqtt.MQTTv311  # type: ignore[reportAttributeAccessIssue]
                     # TLS required for port 8883
                     if self._port == 8883:
                         client.tls_set_context()
@@ -99,13 +97,12 @@ class PahoMqttClient:
         logger.info("PahoMqttClient started for feed %s", self._feed)
 
     def publish_envelope(self, envelope) -> bool:
-        """Publish a MessageEnvelope to the AIO feed. Returns True on success."""
+        """Publish a MessageEnvelope to the broker feed. Returns True on success."""
         import paho.mqtt.client as mqtt
-        #topic = f"{cfg.MQTT_USERNAME}/feeds/{self._feed}"
         topic = self._feed
         payload = envelope.to_json()
         try:
-            client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, clean_session=True)  # type: ignore[reportPrivateImportUsage]
+            client = mqtt.Client(clean_session=True)
             client.username_pw_set(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD)
             client.connect(cfg.MQTT_HOST, int(cfg.MQTT_PORT), keepalive=30)
             result = client.publish(topic, payload.encode(), qos=1)
@@ -121,6 +118,7 @@ class PahoMqttClient:
             return False
 
     def stop(self) -> None:
+        """Signal the subscriber thread to shut down and wait for it to join."""
         if self._stop:
             self._stop.set()
         if self._thread:

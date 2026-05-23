@@ -13,14 +13,17 @@ from lib_shared.models import SignConfig, Message
 
 
 def _db_path() -> Path:
+    """Return the path to the SQLite database file."""
     return Path(__file__).parent.parent / "heart-message-manager" / "db.sqlite"
 
 
 def _json_dumps(cfg: SignConfig) -> str:
+    """Serialize a SignConfig to a compact JSON string."""
     return json.dumps(cfg.to_dict(), separators=(",", ":"))
 
 
 def _json_loads(raw: str) -> SignConfig:
+    """Deserialize a SignConfig from a JSON string."""
     return SignConfig.from_dict(json.loads(raw))
 
 
@@ -134,7 +137,7 @@ def put_config(cfg: SignConfig) -> None:
     tz_offset_mins is recomputed from the current timezone so it is always
     up to date when serialized.
     """
-    from lib.time import tz_offset_mins
+    from server_time import tz_offset_mins
     cfg.tz_offset_mins = tz_offset_mins(cfg.timezone)
     conn = sqlite3.connect(_db_path())
     conn.execute(

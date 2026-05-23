@@ -32,8 +32,8 @@ REQUIRED_KEYS: set[str] = {
 }
 cfg = get_config(REQUIRED_KEYS)
 
-from lib import storage, s3
-from lib.time import format_from_iso, now_utc_iso
+import sqlite, s3
+from server_time import format_from_iso, now_utc_iso
 from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.message_manager import MessageManager
 from lib_shared.models import MessageEnvelope
@@ -53,7 +53,7 @@ logger = logging.getLogger(__name__)
 
 
 # Wipe SQLite and rebuild messages and config from S3 on startup
-storage.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
+sqlite.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
 
 # MessageManager — owns config + message storage, handles dispatch and seeding.
@@ -67,10 +67,10 @@ threading.Thread(target=_message_mgr.seed, daemon=True).start()
 # Platform MQTT client
 _mqtt_client = None
 if cfg.MQTT_CLIENT == "adafruit":
-    from lib.adafruit_mqtt_client import AdafruitMqttClient
+    from adafruit_mqtt_client import AdafruitMqttClient
     _mqtt_client = AdafruitMqttClient(dispatch_callback=_message_mgr.dispatch)
 else:
-    from lib.paho_mqtt_client import PahoMqttClient
+    from paho_mqtt_client import PahoMqttClient
     _mqtt_client = PahoMqttClient(dispatch_callback=_message_mgr.dispatch)
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
@@ -100,7 +100,7 @@ def api_messages():
     except Exception as e:
         logger.warning("S3 logging failed (will continue): %s", e)
 
-    cfg = storage.get_config()
+    cfg = sqlite.get_config()
     sign_name = cfg.sign.name if cfg.sign else "Lindsay's Heart"
     reply = f"{sign_name} got your message: {html.escape(body)}"
     twiml = Response(
@@ -110,7 +110,7 @@ def api_messages():
     )
 
     try:
-        storage.put_message(msg)
+        sqlite.put_message(msg)
         assert _mqtt_client is not None
         _mqtt_client.publish_envelope(MessageEnvelope("message", msg.to_dict()))
     except Exception as e:
@@ -125,16 +125,16 @@ def api_get_messages():
     """GET /api/messages?since=<timestamp> — return messages as JSON."""
     since = request.args.get("since")
     if since:
-        msgs = storage.get_messages_since(since)
+        msgs = sqlite.get_messages_since(since)
     else:
-        msgs = storage.get_all_messages()
+        msgs = sqlite.get_all_messages()
     return jsonify([m.to_dict() for m in msgs])
 
 
 @app.route("/api/messages/<msg_id>/suppress", methods=["POST"])
 def api_suppress(msg_id):
     """Add a type=message filter rule to suppress the given message (JSON API)."""
-    msg = storage.get_message(msg_id)
+    msg = sqlite.get_message(msg_id)
     if msg is None:
         return jsonify({"error": "message not found"}), 404
 
@@ -170,7 +170,7 @@ def web_unsuppress(msg_id):
 @app.route("/api/config", methods=["GET"])
 def api_get_config():
     """Return current config as JSON."""
-    cfg = storage.get_config()
+    cfg = sqlite.get_config()
     return jsonify(cfg.to_dict())
 
 
@@ -204,7 +204,7 @@ def api_live_messages_seed():
     """Back-populate the live message ring buffer from a REST call."""
     assert _message_mgr is not None
     threading.Thread(target=_message_mgr.seed, daemon=True).start()
-    return jsonify({"status": "ok", "seeded": min(50, len(storage.get_all_messages()))})
+    return jsonify({"status": "ok", "seeded": min(50, len(sqlite.get_all_messages()))})
 
 
 @app.route("/api/live-config", methods=["GET"])
@@ -279,7 +279,7 @@ def api_s3_object():
 
 def _save_and_publish(cfg: SignConfig) -> None:
     """Save config to SQLite, snapshot S3, publish to Adafruit IO."""
-    storage.put_config(cfg)
+    sqlite.put_config(cfg)
     try:
         s3.save_config_snapshot(cfg.to_dict())
     except Exception as e:
@@ -290,10 +290,10 @@ def _save_and_publish(cfg: SignConfig) -> None:
 
 def _suppress_message(msg_id: str) -> bool:
     """Add type=message filter rule. Returns True if newly added."""
-    msg = storage.get_message(msg_id)
+    msg = sqlite.get_message(msg_id)
     if msg is None:
         return False
-    cfg = storage.get_config()
+    cfg = sqlite.get_config()
     for f in cfg.filters:
         if f.type == "message" and f.pattern == msg_id:
             return False
@@ -304,7 +304,7 @@ def _suppress_message(msg_id: str) -> bool:
 
 def _unsuppress_message(msg_id: str) -> bool:
     """Remove type=message filter rule. Returns True if found and removed."""
-    cfg = storage.get_config()
+    cfg = sqlite.get_config()
     original_len = len(cfg.filters)
     cfg.filters = [f for f in cfg.filters if not (f.type == "message" and f.pattern == msg_id)]
     if len(cfg.filters) == original_len:
@@ -317,9 +317,9 @@ def _unsuppress_message(msg_id: str) -> bool:
 @app.route("/")
 def dashboard():
     """Dashboard: recent messages and counts."""
-    msgs = storage.get_all_messages()[:20]
-    cfg = storage.get_config()
-    total = storage.message_count()
+    msgs = sqlite.get_all_messages()[:20]
+    cfg = sqlite.get_config()
+    total = sqlite.message_count()
 
     suppression_counts = {}
     for f in cfg.filters:
@@ -342,7 +342,7 @@ def message_list():
     page = max(1, int(request.args.get("page", 1)))
     per_page = 50
 
-    all_msgs = storage.get_all_messages()
+    all_msgs = sqlite.get_all_messages()
     total = len(all_msgs)
     total_pages = max(1, (total + per_page - 1) // per_page)
 
@@ -350,7 +350,7 @@ def message_list():
     end = start + per_page
     page_msgs = all_msgs[start:end]
 
-    cfg = storage.get_config()
+    cfg = sqlite.get_config()
 
     return render_template(
         "messages.html",
@@ -372,7 +372,7 @@ def filter_rules():
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
     """Allowed senders, rendering defaults, sign name, and filter rules."""
-    cfg = storage.get_config()
+    cfg = sqlite.get_config()
 
     if request.method == "POST":
         # Filter rules (before general settings so saves happen once)
@@ -429,8 +429,8 @@ def settings():
 def preview():
     """Preview: show what display_list() returns, with toggle for include_filtered."""
     include_filtered = request.args.get("include_filtered", "false") == "true"
-    cfg = storage.get_config()
-    all_msgs = storage.get_all_messages()
+    cfg = sqlite.get_config()
+    all_msgs = sqlite.get_all_messages()
 
     return render_template(
         "preview.html",
@@ -445,12 +445,13 @@ def preview():
 @app.route("/testing")
 def testing():
     """Testing: inject messages and inspect system state."""
-    cfg = storage.get_config()
+    cfg = sqlite.get_config()
     return render_template("testing.html", sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart")
 
 
 @app.route("/health")
 def health():
+    """Return a minimal 200 response for load-balancer health checks."""
     return "ok"
 
 
