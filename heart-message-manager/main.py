@@ -9,6 +9,7 @@ import logging
 import uuid
 from pathlib import Path
 import sys
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -400,6 +401,14 @@ def settings():
         sign_name = request.form.get("sign_name", "").strip()
         if sign_name:
             cfg.sign.name = sign_name
+
+        timezone = request.form.get("timezone", "").strip()
+        if timezone:
+            try:
+                ZoneInfo(timezone)
+                cfg.timezone = timezone
+            except ZoneInfoNotFoundError:
+                pass  # ignore invalid timezone, keep current value
 
         cfg.rendering.mode = request.form.get("rendering_mode", cfg.rendering.mode)
         try:

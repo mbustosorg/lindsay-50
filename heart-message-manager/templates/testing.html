@@ -200,9 +200,7 @@ async function fetchMessages() {
     }
 
     document.getElementById('feed-tbody').innerHTML = entries.map(function(item) {
-      const time = item.received_at
-        ? new Date(item.received_at).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false})
-        : '—';
+      const time = item.display_time || '—';
       const sourceColor = item.source === 'mqtt' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
       const sourceIcon = item.source === 'mqtt' ? '📡' : '💾';
       const body = item.body || '';

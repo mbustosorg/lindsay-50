@@ -7,10 +7,47 @@ Classes:
     InMemoryMessages: Ring-buffer implementation with O(1) deduplication.
 """
 
+import calendar
 import re
+import time
 from collections import deque
 
 from lib_shared.models import MessageView
+
+
+def _format_display_time(received_at: str, tz_offset_mins: int) -> str:
+    """Format a UTC ISO timestamp for display in the sign's configured timezone.
+
+    Uses only ``time`` and ``calendar`` — no ``zoneinfo`` or ``datetime`` — for
+    broad CircuitPython compatibility.
+
+    ``time.gmtime(local_epoch)`` is used instead of ``time.localtime()`` to avoid
+    the system timezone polluting the result.  We treat the UTC epoch as UTC and
+    only apply the configured sign offset.
+
+    Args:
+        received_at:    UTC ISO 8601 timestamp, e.g. ``"2026-05-22T14:30:00Z"``.
+        tz_offset_mins: Signed UTC offset in minutes for the sign's timezone,
+                        e.g. ``-240`` for EDT, ``-420`` for PDT.
+
+    Returns:
+        Formatted string, e.g. ``"May 22 10:30 AM"``.
+    """
+    try:
+        time_tuple = time.strptime(received_at, "%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return received_at
+    try:
+        utc_epoch = calendar.timegm(time_tuple)
+    except Exception:
+        return received_at
+    local_epoch = utc_epoch + tz_offset_mins * 60
+    try:
+        # time.gmtime always interprets as UTC, so we get the correct UTC
+        # components of the local time without the system TZ interfering.
+        return time.strftime("%b %d %I:%M %p", time.gmtime(local_epoch))
+    except Exception:
+        return received_at
 
 
 class FilteredMessages:
@@ -22,7 +59,7 @@ class FilteredMessages:
       - clear()
       - get_messages(limit=100) -> list[MessageView]
 
-    The base class provides _apply_filter(), _matches(), and _apply_suppression()
+    The base class provides _apply_filter(), _matches(), and _enrich_messages()
     for use by subclasses. Thread-safety is the caller's responsibility.
     """
 
@@ -63,16 +100,18 @@ class FilteredMessages:
             return msg.id == rule.pattern
         return False
 
-    def _apply_suppression(self, entries):
-        """Fill suppressed, rules, sender_name on each MessageView entry.
+    def _enrich_messages(self, entries):
+        """Enrich each MessageView entry with suppressed, rules, sender_name, and display_time.
 
         Called by get_messages() before returning. Override to customize.
         """
+        tz_offset = self._config.tz_offset_mins
         for entry in entries:
             suppressing = self._apply_filter(entry.message, self._config.filters)
             entry.suppressed = bool(suppressing)
             entry.rules = [r.to_dict() for r in suppressing]
             entry.sender_name = self._config.senders.get(entry.message.sender)
+            entry.display_time = _format_display_time(entry.message.received_at, tz_offset)
 
     def add(self, message, source="rest"):
         """Add a single message to the store."""
@@ -120,7 +159,7 @@ class InMemoryMessages(FilteredMessages):
             return
         self._seen_ids.add(message.id)
         self._msgs.append(
-            MessageView(message, source=source, suppressed=False, rules=[], sender_name=None)
+            MessageView(message, source=source)
         )
 
     def add_many(self, messages, source="rest"):
@@ -141,7 +180,7 @@ class InMemoryMessages(FilteredMessages):
             suppress: If True (default), exclude suppressed messages from the result.
         """
         entries = list(self._msgs)
-        self._apply_suppression(entries)
+        self._enrich_messages(entries)
         if suppress:
             entries = [e for e in entries if not e.suppressed]
         return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[:limit]

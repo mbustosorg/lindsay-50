@@ -62,7 +62,7 @@ class Message:
 
 class MessageView:
     """Message with source and computed suppression status."""
-    def __init__(self, message, source="rest", suppressed=False, rules=None, sender_name=None):
+    def __init__(self, message, source="rest", suppressed=False, rules=[], sender_name="", display_time=None):
         """Initialize a MessageView.
 
         Args:
@@ -71,12 +71,14 @@ class MessageView:
             suppressed: True if any filter rule matched this message.
             rules: List of FilterRule dicts that suppressed the message.
             sender_name: Display name for the sender (from the senders allowlist).
+            display_time: Pre-formatted local time string, or None (set by _enrich_messages).
         """
         self.message = message
         self.source = source
         self.suppressed = suppressed
-        self.rules = rules or []
+        self.rules = rules
         self.sender_name = sender_name
+        self.display_time = display_time
 
     def to_dict(self):
         return {
@@ -88,6 +90,7 @@ class MessageView:
             "suppressed": self.suppressed,
             "rules": self.rules,
             "sender_name": self.sender_name,
+            "display_time": self.display_time,
         }
 
 
