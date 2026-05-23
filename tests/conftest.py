@@ -9,18 +9,40 @@ import pytest
 # Ensure project root is on the path so lib_shared is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib_shared.models import FilterRule, Message, RenderingSettings, SignConfig, SignSettings
+from lib_shared.models import (
+    FilterRule,
+    Message,
+    RenderingSettings,
+    SignConfig,
+    SignSettings,
+)
 
 # ---------------------------------------------------------------------------
 # Sample data fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def sample_messages():
     return [
-        Message(id="msg-001", sender="+15551234567", body="Hello world", received_at="2026-05-08T10:00:00Z"),
-        Message(id="msg-002", sender="+15559876543", body="badword inside", received_at="2026-05-08T11:00:00Z"),
-        Message(id="msg-003", sender="+15550001111", body="Another message", received_at="2026-05-08T12:00:00Z"),
+        Message(
+            id="msg-001",
+            sender="+15551234567",
+            body="Hello world",
+            received_at="2026-05-08T10:00:00Z",
+        ),
+        Message(
+            id="msg-002",
+            sender="+15559876543",
+            body="badword inside",
+            received_at="2026-05-08T11:00:00Z",
+        ),
+        Message(
+            id="msg-003",
+            sender="+15550001111",
+            body="Another message",
+            received_at="2026-05-08T12:00:00Z",
+        ),
     ]
 
 
@@ -77,15 +99,3 @@ def config_with_message_filter():
         rendering=RenderingSettings(),
         sign=SignSettings(),
     )
-
-
-@pytest.fixture
-def temp_db(tmp_path):
-    """Provide a temporary SQLite database path for storage tests."""
-    db = tmp_path / "test.db"
-    # Patch _db_path in lib.storage
-    import lib.storage as storage_module
-    original_path = storage_module._db_path
-    storage_module._db_path = lambda: db
-    yield db
-    storage_module._db_path = original_path
