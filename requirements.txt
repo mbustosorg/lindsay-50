@@ -1,7 +1,9 @@
 # Server-side dependencies (Flask app + shared lib)
 flask>=3.0
+flask-login>=0.6
 adafruit-io
 boto3>=1.34
 requests>=2.31
 paho-mqtt
 gunicorn>=21.0
+twilio>=8.0

@@ -1,4 +1,4 @@
-"""Shared pytest fixtures for heart-sms-receiver tests."""
+"""Shared pytest fixtures for heart-message-manager tests."""
 
 import sys
 import tempfile
@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-# Ensure lib/ is on the path
+# Ensure project root is on the path so lib_shared is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from lib.models import Config, FilterRule, Message, RenderingSettings, SignSettings
+from lib_shared.models import FilterRule, Message, RenderingSettings, SignConfig, SignSettings
 
 # ---------------------------------------------------------------------------
 # Sample data fixtures
@@ -26,10 +26,10 @@ def sample_messages():
 
 @pytest.fixture
 def default_config():
-    return Config(
+    return SignConfig(
         version=1,
-        allowed_senders=[],
         filters=[],
+        senders={},
         rendering=RenderingSettings(),
         sign=SignSettings(),
     )
@@ -37,10 +37,10 @@ def default_config():
 
 @pytest.fixture
 def config_with_keyword_filter():
-    return Config(
+    return SignConfig(
         version=1,
-        allowed_senders=[],
         filters=[FilterRule(type="keyword", pattern="badword", action="suppress")],
+        senders={},
         rendering=RenderingSettings(),
         sign=SignSettings(),
     )
@@ -48,10 +48,10 @@ def config_with_keyword_filter():
 
 @pytest.fixture
 def config_with_sender_filter():
-    return Config(
+    return SignConfig(
         version=1,
-        allowed_senders=[],
         filters=[FilterRule(type="sender", pattern="+15550001111", action="suppress")],
+        senders={},
         rendering=RenderingSettings(),
         sign=SignSettings(),
     )
@@ -59,10 +59,10 @@ def config_with_sender_filter():
 
 @pytest.fixture
 def config_with_regex_filter():
-    return Config(
+    return SignConfig(
         version=1,
-        allowed_senders=[],
         filters=[FilterRule(type="regex", pattern=r"^\s*$", action="suppress")],
+        senders={},
         rendering=RenderingSettings(),
         sign=SignSettings(),
     )
@@ -70,10 +70,10 @@ def config_with_regex_filter():
 
 @pytest.fixture
 def config_with_message_filter():
-    return Config(
+    return SignConfig(
         version=1,
-        allowed_senders=[],
         filters=[FilterRule(type="message", pattern="msg-002", action="suppress")],
+        senders={},
         rendering=RenderingSettings(),
         sign=SignSettings(),
     )
@@ -83,7 +83,7 @@ def config_with_message_filter():
 def temp_db(tmp_path):
     """Provide a temporary SQLite database path for storage tests."""
     db = tmp_path / "test.db"
-    # Patch _db_path to return the temp path
+    # Patch _db_path in lib.storage
     import lib.storage as storage_module
     original_path = storage_module._db_path
     storage_module._db_path = lambda: db
