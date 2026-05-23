@@ -30,9 +30,9 @@ fi
 . .venv/bin/activate
 pip install -q --upgrade pip
 
-if [ -f "heart-sms-receiver/requirements.txt" ]; then
-  pip install -q -r heart-sms-receiver/requirements.txt
-  echo "Installed heart-sms-receiver deps"
+if [ -f "requirements.txt" ]; then
+  pip install -q -r requirements.txt
+  echo "Installed deps from requirements.txt"
 fi
 
 if [ -d "tests" ]; then
@@ -180,10 +180,24 @@ echo "  1. ~/.agent-orchestrator/setup-ao.sh   # add this repo to AO dashboard"
 echo "  2. cd ~/.agent-orchestrator && ao start  # launch AO dashboard"
 echo "  3. Skills /os-new, /os-propose, /os-spawn are in .claude/skills/ — already available"
 
+# --- Git hooks (post-checkout for worktree auto-prep) ---
+echo ""
+echo "--- Git hooks ---"
+GIT_COMMON_DIR=$(git rev-parse --git-common-dir)
+HOOKS_SOURCE="$(dirname "$(pwd)")/hooks/post-checkout"
+if [ -f "$GIT_COMMON_DIR/hooks/post-checkout" ]; then
+    echo "Post-checkout hook already installed"
+elif [ -f "hooks/post-checkout" ]; then
+    ln -sf "$(pwd)/hooks/post-checkout" "$GIT_COMMON_DIR/hooks/post-checkout"
+    echo "✅ Installed hooks/post-checkout → $GIT_COMMON_DIR/hooks/"
+else
+    echo "⚠️  hooks/post-checkout not found — worktrees won't auto-prep"
+fi
+
 # --- Flask start/stop scripts ---
 echo ""
 echo "=== Flask dev server ==="
-echo "  cp heart-sms-receiver/settings.toml.example heart-sms-receiver/settings.toml"
+echo "  cp heart-message-manager/settings.toml.example heart-message-manager/settings.toml"
 echo "  # edit settings.toml with your values"
 echo ""
 echo "  # With local MinIO + Mosquitto:"

@@ -1,0 +1,85 @@
+#!/bin/bash
+
+# Git passes these three arguments automatically
+PREV_HEAD=$1
+NEW_HEAD=$2
+CHECKOUT_TYPE=$3
+
+# 1. Ensure it's a branch checkout, not a file checkout (type 1 = branch, type 0 = file)
+if [ "$CHECKOUT_TYPE" -ne 1 ]; then
+    exit 0
+fi
+
+# 2. Check if this worktree has already been initialized
+if [ -f ".git_wt_initialized" ]; then
+    exit 0
+fi
+
+# 3. Detect new worktree creation
+# When a worktree is created, the previous HEAD is this magic empty value
+EMPTY_HASH="0000000000000000000000000000000000000000"
+
+if [ "$PREV_HEAD" != "$EMPTY_HASH" ]; then
+    # Normal branch checkout, not a new worktree
+    exit 0
+fi
+
+echo "🚀 New Git worktree detected! Running one-time setup..."
+
+# ---------------------------------------------------------------------------
+# Project-specific setup — edit this section for your project
+# ---------------------------------------------------------------------------
+
+# Python venv + deps
+echo "📦 Creating Python venv and installing dependencies..."
+if [ ! -d ".venv" ]; then
+    python3 -m venv .venv
+    echo "   Created .venv"
+else
+    echo "   .venv already exists, skipping"
+fi
+
+# shellcheck disable=SC1091
+if [ -f ".venv/bin/activate" ]; then
+    . .venv/bin/activate
+    pip install -q --upgrade pip
+    if [ -f "requirements.txt" ]; then
+        pip install -q -r requirements.txt
+        echo "   Installed Python deps from requirements.txt"
+    fi
+    if [ -d "tests" ]; then
+        pip install -q pytest
+        echo "   Installed pytest"
+    fi
+fi
+
+# Copy settings.toml examples if not already present
+if [ ! -f "heart-message-manager/settings.toml" ] && [ -f "heart-message-manager/settings.toml.example" ]; then
+    cp heart-message-manager/settings.toml.example heart-message-manager/settings.toml
+    echo "✅ Copied heart-message-manager/settings.toml"
+    echo "   ⚠️  Edit it with your actual credentials before running the server!"
+fi
+
+if [ ! -f "heart-matrix-controller/settings.toml" ] && [ -f "heart-matrix-controller/settings.toml.example" ]; then
+    cp heart-matrix-controller/settings.toml.example heart-matrix-controller/settings.toml
+    echo "✅ Copied heart-matrix-controller/settings.toml"
+    echo "   ⚠️  Edit it with your actual credentials before deploying to device!"
+fi
+
+# Generate Flask secret_key (gitignored)
+if [ ! -f "heart-message-manager/secret_key" ]; then
+    python3 -c "import secrets; print(secrets.token_hex(32))" > heart-message-manager/secret_key
+    echo "✅ Generated heart-message-manager/secret_key"
+fi
+
+# Touch empty SQLite db (gitignored)
+if [ ! -f "db.sqlite" ]; then
+    touch db.sqlite
+    echo "✅ Created db.sqlite"
+fi
+
+# ---------------------------------------------------------------------------
+# Mark this worktree as initialized — guard for future checkouts
+# ---------------------------------------------------------------------------
+touch ".git_wt_initialized"
+echo "✨ Worktree preparation complete."
