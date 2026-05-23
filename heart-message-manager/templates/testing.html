@@ -100,6 +100,13 @@
       <p class="text-slate-500 text-sm mt-1">Live view via REST, with suppression preview</p>
     </div>
     <div class="flex items-center gap-3">
+      <label id="show-suppressed-toggle" class="flex items-center gap-2 cursor-pointer select-none">
+        <input type="checkbox" id="show-suppressed" class="sr-only" onchange="fetchMessages()">
+        <span class="text-sm text-slate-600 font-medium">Hide suppressed</span>
+        <span id="show-suppressed-track" class="w-10 h-6 bg-slate-200 rounded-full relative transition-colors duration-200">
+          <span class="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-200 translate-x-0" id="show-suppressed-thumb"></span>
+        </span>
+      </label>
       <button onclick="refreshFeed()"
               class="px-4 py-2 rounded-xl bg-indigo-100 text-indigo-700 font-semibold text-sm hover:bg-indigo-200 transition-colors cursor-pointer">
         Refresh
@@ -174,7 +181,9 @@ async function refreshFeed() {
 
 async function fetchMessages() {
   try {
-    const liveRes = await fetch('/api/live-messages');
+    const showSuppressed = document.getElementById('show-suppressed').checked;
+    const suppress = showSuppressed ? 'false' : 'true';
+    const liveRes = await fetch('/api/live-messages?suppress=' + suppress);
     const live = await liveRes.json();
 
     // Match ring buffer entries to SQLite messages for sender info
@@ -337,6 +346,29 @@ function showMessageModal(tr) {
 document.getElementById('json-modal').addEventListener('click', function(e) {
   if (e.target === this) closeJsonModal();
 });
+
+// Suppress toggle styling
+const showSuppressedInput = document.getElementById('show-suppressed');
+const showSuppressedTrack = document.getElementById('show-suppressed-track');
+const showSuppressedThumb = document.getElementById('show-suppressed-thumb');
+
+function updateSuppressToggle() {
+  const checked = showSuppressedInput.checked;
+  // When checked (hide suppressed ON): track turns primary, thumb slides right
+  // When unchecked (show all ON): track is slate-200, thumb slides left
+  if (checked) {
+    showSuppressedTrack.classList.remove('bg-slate-200');
+    showSuppressedTrack.classList.add('bg-primary');
+    showSuppressedThumb.style.transform = 'translateX(16px)';
+  } else {
+    showSuppressedTrack.classList.remove('bg-primary');
+    showSuppressedTrack.classList.add('bg-slate-200');
+    showSuppressedThumb.style.transform = 'translateX(0)';
+  }
+}
+
+showSuppressedInput.addEventListener('change', updateSuppressToggle);
+updateSuppressToggle(); // init
 
 // Inject form
 document.getElementById('inject-form').addEventListener('submit', async function(e) {

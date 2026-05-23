@@ -86,8 +86,13 @@ class FilteredMessages:
         """Clear all messages from the store."""
         raise NotImplementedError()
 
-    def get_messages(self, limit=100):
-        """Return MessageView entries, newest first."""
+    def get_messages(self, limit=100, suppress=True):
+        """Return MessageView entries, newest first.
+
+        Args:
+            limit: Maximum number of messages to return.
+            suppress: If True (default), excluded suppressed messages from the result.
+        """
         raise NotImplementedError()
 
 
@@ -96,10 +101,6 @@ class InMemoryMessages(FilteredMessages):
 
     Uses a deque for the ring buffer and a set for fast seen-id lookup.
     Duplicates are dropped silently on add().
-    """
-    """In-memory ring buffer with O(1) deduplication.
-
-    Uses a deque for the ring buffer and a set for fast seen-id lookup.
     """
 
     def __init__(self, config, maxlen=100):
@@ -132,8 +133,15 @@ class InMemoryMessages(FilteredMessages):
         self._msgs.clear()
         self._seen_ids.clear()
 
-    def get_messages(self, limit=100):
-        """Return the most recent N messages, newest first (sorted by received_at desc)."""
+    def get_messages(self, limit=100, suppress=True):
+        """Return the most recent N messages, newest first (sorted by received_at desc).
+
+        Args:
+            limit: Maximum number of messages to return (default 100).
+            suppress: If True (default), exclude suppressed messages from the result.
+        """
         entries = list(self._msgs)
         self._apply_suppression(entries)
+        if suppress:
+            entries = [e for e in entries if not e.suppressed]
         return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[:limit]

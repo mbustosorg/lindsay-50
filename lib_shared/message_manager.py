@@ -122,8 +122,14 @@ class MessageManager:
             except Exception as e:
                 logger.warning("MessageManager config seed failed: %s", e)
 
-    def get_messages(self, limit: int = 100):
-        return self._messages.get_messages(limit)
+    def get_messages(self, limit: int = 100, suppress: bool = True):
+        """Return messages from the ring buffer.
+
+        Args:
+            limit: Maximum number of messages to return.
+            suppress: If True (default), exclude suppressed messages.
+        """
+        return self._messages.get_messages(limit, suppress=suppress)
 
     def get_config(self) -> SignConfig:
         return self._config

@@ -193,10 +193,16 @@ def api_put_config():
 # Testing API into MessageManager
 @app.route("/api/live-messages", methods=["GET"])
 def api_live_messages():
-    """Return messages in the live ring buffer, newest first."""
+    """Return messages in the live ring buffer, newest first.
+
+    Query params:
+        limit: Maximum number of messages (default 100, max 100).
+        suppress: "true" to exclude suppressed messages, "false" to include all (default "true").
+    """
     assert _message_mgr is not None
     limit = min(100, int(request.args.get("limit", 100)))
-    return jsonify([m.to_dict() for m in _message_mgr.get_messages(limit=limit)])
+    show_suppressed = request.args.get("suppress", "true").lower() != "true"
+    return jsonify([m.to_dict() for m in _message_mgr.get_messages(limit=limit, suppress=show_suppressed)])
 
 
 @app.route("/api/live-messages/seed", methods=["POST"])
