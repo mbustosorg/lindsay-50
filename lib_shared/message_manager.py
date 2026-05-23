@@ -89,18 +89,22 @@ class MessageManager:
 
             _requests_timeout = 10
             _requests_raise_for_status = lambda r: r.raise_for_status()
+            # Flask-to-Flask seed calls need API key auth
+            _api_key = cfg.if_exists("API_SECRET_KEY") or ""
+            _headers = {"X-API-Key": _api_key} if _api_key else {}
         except ImportError:
             import adafruit_requests as req
 
             _requests_timeout = None  # adafruit_requests doesn't support timeout param
             _requests_raise_for_status = lambda r: None  # no-op on CircuitPython
+            _headers = {}
 
         cfg_api = cfg.get("CONFIG_API_URL")
         msgs_api = cfg.get("MESSAGES_API_URL")
 
         if msgs_api:
             try:
-                resp = req.get(msgs_api, timeout=_requests_timeout)
+                resp = req.get(msgs_api, timeout=_requests_timeout, headers=_headers)
                 _requests_raise_for_status(resp)
                 data = resp.json()
                 if isinstance(data, list):
@@ -124,7 +128,7 @@ class MessageManager:
 
         if cfg_api:
             try:
-                resp = req.get(cfg_api, timeout=_requests_timeout)
+                resp = req.get(cfg_api, timeout=_requests_timeout, headers=_headers)
                 _requests_raise_for_status(resp)
                 self._config.update_from_dict(resp.json())
                 logger.info("MessageManager seeded config")
