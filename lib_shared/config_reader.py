@@ -85,13 +85,23 @@ class ConfigReader:
         return val
 
     def get_raw(self, key: str) -> str | None:
-        """Get value from env or toml without defaults."""
+        """Get value from env or toml without defaults.
+
+        Searches top-level TOML keys first, then falls back to nested
+        TOML sections (e.g. [auth] API_SECRET_KEY) to support both flat
+        and sectioned config layouts.
+        """
         env_val = os.environ.get(key)
         if env_val is not None:
             return env_val
+        # Top-level first
         toml_val = self._toml.get(key)
         if toml_val is not None:
             return str(toml_val)
+        # Fall back to nested sections (e.g. [auth] section)
+        for section in self._toml.values():
+            if isinstance(section, dict) and key in section:
+                return str(section[key])
         return None
 
     def if_exists(self, key: str) -> str | None:
