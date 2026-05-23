@@ -124,13 +124,17 @@ def api_messages():
     global cfg
     twilio_token = cfg.if_exists("TWILIO_AUTH_TOKEN")
     if twilio_token:
-        from twilio.request_validator import RequestValidator
+        # Skip signature validation for localhost (dev/testing)
+        if request.host.startswith("localhost:"):
+            logger.info("Skipping Twilio signature validation for localhost")
+        else:
+            from twilio.request_validator import RequestValidator
 
-        validator = RequestValidator(twilio_token)
-        signature = request.headers.get("X-Twilio-Signature", "")
-        if not validator.validate(request.url, request.form.to_dict(), signature):
-            logger.warning("Twilio signature verification failed for %s", request.url)
-            return Response("forbidden", status=403)
+            validator = RequestValidator(twilio_token)
+            signature = request.headers.get("X-Twilio-Signature", "")
+            if not validator.validate(request.url, request.form.to_dict(), signature):
+                logger.warning("Twilio signature verification failed for %s", request.url)
+                return Response("forbidden", status=403)
     sender = request.form.get("From", "")
     body = request.form.get("Body", "").strip()
 
