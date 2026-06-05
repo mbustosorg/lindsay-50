@@ -52,3 +52,21 @@ MQTT_TOPIC = "YOUR_AIO_FEED_NAME"
 # if the Flask server is behind a proxy that changes the port.
 CONFIG_API_URL = "http://localhost:3100/api/config"
 MESSAGES_API_URL = "http://localhost:3100/api/messages"
+
+# -----------------------------------------------------------------------------
+# Twilio — webhook signature verification
+# -----------------------------------------------------------------------------
+# Your Twilio Auth Token from the Twilio console.
+TWILIO_AUTH_TOKEN = "YOUR_TWILIO_AUTH_TOKEN"
+
+# -----------------------------------------------------------------------------
+# Admin authentication
+# -----------------------------------------------------------------------------
+[auth]
+# Username and password for the browser-based admin UI login.
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "your-browser-password"
+# API key for ESP32 machine clients (X-API-Key header auth).
+API_SECRET_KEY = "your-esp32-api-key"
+# Session inactivity timeout in minutes (sliding window).
+ADMIN_SESSION_TIMEOUT_MINS = 60

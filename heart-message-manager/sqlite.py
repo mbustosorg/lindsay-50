@@ -31,6 +31,7 @@ def _json_loads(raw: str) -> SignConfig:
 # Database initialisation
 # ---------------------------------------------------------------------------
 
+
 def init_db() -> None:
     """Create the messages and config tables if they don't exist."""
     db = _db_path()
@@ -51,7 +52,9 @@ def init_db() -> None:
         )
     """)
     # Index for time-ordered retrieval
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_received_at ON messages(received_at)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_received_at ON messages(received_at)"
+    )
     conn.commit()
     conn.close()
 
@@ -59,6 +62,7 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 # Message operations
 # ---------------------------------------------------------------------------
+
 
 def put_message(msg: Message) -> None:
     """Insert a message into SQLite. Upserts on duplicate id."""
@@ -119,12 +123,11 @@ def message_count() -> int:
 # Config operations
 # ---------------------------------------------------------------------------
 
+
 def get_config() -> SignConfig:
     """Return the current config, or a default config if none is stored."""
     conn = sqlite3.connect(_db_path())
-    row = conn.execute(
-        "SELECT value FROM config WHERE key = 'current'"
-    ).fetchone()
+    row = conn.execute("SELECT value FROM config WHERE key = 'current'").fetchone()
     conn.close()
     if row is None:
         return SignConfig.default()
@@ -138,6 +141,7 @@ def put_config(cfg: SignConfig) -> None:
     up to date when serialized.
     """
     from server_time import tz_offset_mins
+
     cfg.tz_offset_mins = tz_offset_mins(cfg.timezone)
     conn = sqlite3.connect(_db_path())
     conn.execute(

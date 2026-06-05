@@ -8,6 +8,7 @@ import logging
 from Adafruit_IO import MQTTClient
 
 from lib_shared.config_reader import get_config
+
 cfg = get_config()
 
 logger = logging.getLogger(__name__)
@@ -35,14 +36,20 @@ class AdafruitMqttClient:
         """Connect to Adafruit IO and start the background loop."""
 
         def on_connect(_client):
-            logger.info("AdafruitMqttClient connected, subscribing to %s/%s", self._username, self._feed)
+            logger.info(
+                "AdafruitMqttClient connected, subscribing to %s/%s",
+                self._username,
+                self._feed,
+            )
             _client.subscribe(self._feed)
 
         def on_disconnect(_client, rc):
             logger.warning("AdafruitMqttClient disconnected: rc=%s", rc)
 
         def on_message(_client, feed_id, payload):
-            logger.info("AdafruitMqttClient on_message: feed_id=%r payload=%r", feed_id, payload)
+            logger.info(
+                "AdafruitMqttClient on_message: feed_id=%r payload=%r", feed_id, payload
+            )
             self._dispatch(payload)
 
         self._client = MQTTClient(self._username, self._key, secure=True)

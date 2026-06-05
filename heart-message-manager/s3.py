@@ -22,6 +22,7 @@ from typing import Iterator
 from server_time import now_utc_iso, to_utc_datetime
 from lib_shared.models import Message
 from lib_shared.config_reader import get_config
+
 cfg = get_config()
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ _CONFIG_KEY_TEMPLATE = "config/{year}-{month}/cfg-{datetime}.json"
 # ---------------------------------------------------------------------------
 # S3 client (lazily created on first call)
 # ---------------------------------------------------------------------------
+
 
 def _s3_client():
     """Return a cached boto3 S3 client (credentials from config)."""
@@ -55,6 +57,7 @@ def _s3_bucket() -> str:
 # Internal: ISO strings, with UTC conversion only for S3 key formatting
 # ---------------------------------------------------------------------------
 
+
 def _format_s3_key(key_template: str, dt: datetime) -> str:
     """Fill in {year}, {month}, {datetime} in an S3 key template.
 
@@ -73,6 +76,7 @@ def _format_s3_key(key_template: str, dt: datetime) -> str:
 # Message files
 # ---------------------------------------------------------------------------
 
+
 def log_message(msg: Message) -> None:
     """Write a message to its own S3 file."""
     entry = {
@@ -82,7 +86,7 @@ def log_message(msg: Message) -> None:
         "received_at": msg.received_at,
     }
     key = _format_s3_key(_MESSAGE_KEY_TEMPLATE, to_utc_datetime(msg.received_at))
-    
+
     _s3_client().put_object(
         Bucket=_s3_bucket(),
         Key=key,
@@ -113,7 +117,9 @@ def load_messages_from_s3() -> Iterator[Message]:
             if not key.endswith(".json"):
                 continue
             try:
-                content = client.get_object(Bucket=bucket, Key=key)["Body"].read().decode()
+                content = (
+                    client.get_object(Bucket=bucket, Key=key)["Body"].read().decode()
+                )
                 d = json.loads(content)
                 yield Message(
                     id=d["id"],
@@ -128,6 +134,7 @@ def load_messages_from_s3() -> Iterator[Message]:
 # ---------------------------------------------------------------------------
 # Config snapshots
 # ---------------------------------------------------------------------------
+
 
 def save_config_snapshot(config_dict: dict) -> None:
     """Save a timestamped config snapshot to S3 and prune old snapshots (keep 10)."""
@@ -173,5 +180,7 @@ def load_latest_config() -> dict | None:
         return None
 
     latest_key = sorted(keys)[-1]
-    content = _s3_client().get_object(Bucket=bucket, Key=latest_key)["Body"].read().decode()
+    content = (
+        _s3_client().get_object(Bucket=bucket, Key=latest_key)["Body"].read().decode()
+    )
     return json.loads(content)

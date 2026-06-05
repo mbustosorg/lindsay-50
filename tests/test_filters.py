@@ -1,8 +1,119 @@
-"""Tests for lib/filters.py."""
+"""Tests for filter logic in lib_shared/messages.py (FilteredMessages)."""
 
 import pytest
-from lib.filters import apply, get_messages
-from lib.models import Config, FilterRule, Message, RenderingSettings, SignSettings
+from lib_shared.messages import FilteredMessages, InMemoryMessages
+from lib_shared.models import FilterRule, Message, SignConfig
+
+# ---------------------------------------------------------------------------
+# Helpers matching the original test API surface
+# ---------------------------------------------------------------------------
+
+
+def apply(msg, cfg):
+    """Return (suppressed: bool, first_matching_rule: FilterRule or None)."""
+    fm = FilteredMessages(cfg)
+    suppressing = fm._apply_filter(msg, cfg.filters)
+    if suppressing:
+        return True, suppressing[0]
+    return False, None
+
+
+def get_messages(msgs, cfg, include_filtered=False, since=None):
+    """Filter msgs by cfg rules, return newest-first list.
+
+    Mirrors the original test API surface using InMemoryMessages.
+    """
+    store = InMemoryMessages(cfg, maxlen=100)
+    for m in msgs:
+        store.add(m)
+    result = store.get_messages(limit=100, suppress=not include_filtered)
+    if since is not None:
+        result = [e for e in result if e.message.received_at > since]
+    if include_filtered:
+        return [
+            {"message": e.message, "suppressed": e.suppressed, "rules": e.rules}
+            for e in result
+        ]
+    return [e.message for e in result]
+
+
+# ---------------------------------------------------------------------------
+# Sample data fixtures
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def sample_messages():
+    return [
+        Message(
+            id="msg-001",
+            sender="+15551234567",
+            body="Hello world",
+            received_at="2026-05-08T10:00:00Z",
+        ),
+        Message(
+            id="msg-002",
+            sender="+15559876543",
+            body="badword inside",
+            received_at="2026-05-08T11:00:00Z",
+        ),
+        Message(
+            id="msg-003",
+            sender="+15550001111",
+            body="Another message",
+            received_at="2026-05-08T12:00:00Z",
+        ),
+    ]
+
+
+@pytest.fixture
+def default_config():
+    return SignConfig(
+        version=1,
+        filters=[],
+        senders={},
+    )
+
+
+@pytest.fixture
+def config_with_keyword_filter():
+    return SignConfig(
+        version=1,
+        filters=[FilterRule(type="keyword", pattern="badword", action="suppress")],
+        senders={},
+    )
+
+
+@pytest.fixture
+def config_with_sender_filter():
+    return SignConfig(
+        version=1,
+        filters=[FilterRule(type="sender", pattern="+15550001111", action="suppress")],
+        senders={},
+    )
+
+
+@pytest.fixture
+def config_with_regex_filter():
+    return SignConfig(
+        version=1,
+        filters=[FilterRule(type="regex", pattern=r"^\s*$", action="suppress")],
+        senders={},
+    )
+
+
+@pytest.fixture
+def config_with_message_filter():
+    return SignConfig(
+        version=1,
+        filters=[FilterRule(type="message", pattern="msg-002", action="suppress")],
+        senders={},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
 
 
 class TestApply:
@@ -13,27 +124,21 @@ class TestApply:
             assert rule is None
 
     def test_keyword_suppress_case_insensitive(self, default_config):
-        cfg = Config(
-            version=1, allowed_senders=[], filters=[],
-            rendering=RenderingSettings(), sign=SignSettings(),
+        default_config.filters.append(
+            FilterRule(type="keyword", pattern="BADWORD", action="suppress")
         )
-        cfg.filters.append(FilterRule(type="keyword", pattern="BADWORD", action="suppress"))
         msg = Message(id="1", sender="+1555", body="has badword in it", received_at="")
-
-        suppressed, rule = apply(msg, cfg)
+        suppressed, rule = apply(msg, default_config)
         assert suppressed
         assert rule.type == "keyword"
         assert rule.pattern == "BADWORD"
 
     def test_keyword_no_match(self, default_config):
-        cfg = Config(
-            version=1, allowed_senders=[], filters=[],
-            rendering=RenderingSettings(), sign=SignSettings(),
+        default_config.filters.append(
+            FilterRule(type="keyword", pattern="badword", action="suppress")
         )
-        cfg.filters.append(FilterRule(type="keyword", pattern="badword", action="suppress"))
         msg = Message(id="1", sender="+1555", body="clean message", received_at="")
-
-        suppressed, rule = apply(msg, cfg)
+        suppressed, rule = apply(msg, default_config)
         assert not suppressed
 
     def test_regex_suppress(self, config_with_regex_filter):
@@ -67,26 +172,25 @@ class TestApply:
         assert rule.pattern == "msg-002"
 
     def test_first_matching_rule_wins(self):
-        """When multiple rules match, the first one in the list suppresses."""
-        cfg = Config(
-            version=1, allowed_senders=[],
+        cfg = SignConfig(
+            version=1,
             filters=[
                 FilterRule(type="keyword", pattern="bad", action="suppress"),
                 FilterRule(type="sender", pattern="+15550001111", action="suppress"),
             ],
-            rendering=RenderingSettings(), sign=SignSettings(),
+            senders={},
         )
-        msg = Message(id="1", sender="+15550001111", body="has bad word", received_at="")
+        msg = Message(
+            id="1", sender="+15550001111", body="has bad word", received_at=""
+        )
         suppressed, rule = apply(msg, cfg)
         assert suppressed
-        assert rule.type == "keyword"  # first rule wins
+        assert rule.type == "keyword"
         assert rule.pattern == "bad"
 
 
 class TestGetMessages:
     def test_returns_descending_order(self, sample_messages, default_config):
-        # sample_messages fixture: msg-001=T01, msg-002=T02, msg-003=T03
-        # Descending by received_at: msg-003 (T03), msg-002 (T02), msg-001 (T01)
         result = get_messages(sample_messages, default_config)
         ids = [m.id for m in result]
         assert ids == ["msg-003", "msg-002", "msg-001"]
@@ -94,13 +198,16 @@ class TestGetMessages:
     def test_excludes_suppressed(self, sample_messages, config_with_keyword_filter):
         result = get_messages(sample_messages, config_with_keyword_filter)
         ids = [m.id for m in result]
-        # msg-002 body is "badword inside" which contains "badword" → suppressed → NOT in result
         assert "msg-002" not in ids
         assert "msg-001" in ids
         assert "msg-003" in ids
 
-    def test_include_filtered_true_returns_dicts(self, sample_messages, config_with_keyword_filter):
-        result = get_messages(sample_messages, config_with_keyword_filter, include_filtered=True)
+    def test_include_filtered_true_returns_dicts(
+        self, sample_messages, config_with_keyword_filter
+    ):
+        result = get_messages(
+            sample_messages, config_with_keyword_filter, include_filtered=True
+        )
         assert isinstance(result, list)
         assert all(isinstance(r, dict) for r in result)
         suppressed_entries = [r for r in result if r["suppressed"]]
@@ -109,19 +216,19 @@ class TestGetMessages:
         assert suppressed_entries[0]["rules"][0]["type"] == "keyword"
 
     def test_since_filters_by_timestamp(self, sample_messages, default_config):
-        # sample_messages: msg-001=T10, msg-002=T11, msg-003=T12 (descending: msg-003, msg-002, msg-001)
-        # Query for > T11: only msg-003 (T12) qualifies
-        result = get_messages(sample_messages, default_config, since="2026-05-08T11:00:00Z")
+        result = get_messages(
+            sample_messages, default_config, since="2026-05-08T11:00:00Z"
+        )
         ids = [m.id for m in result]
         assert ids == ["msg-003"]
 
     def test_since_strictly_after(self, sample_messages, default_config):
-        """Messages with received_at exactly equal to 'since' are excluded."""
-        # sample_messages: msg-001=T10, msg-002=T11, msg-003=T12 (descending: msg-003, msg-002, msg-001)
-        # Query for > T12: nothing is strictly after T12
-        result = get_messages(sample_messages, default_config, since="2026-05-08T12:00:00Z")
+        result = get_messages(
+            sample_messages, default_config, since="2026-05-08T12:00:00Z"
+        )
         assert [m.id for m in result] == []
 
-        # Query for > T11: only msg-003 (T12) qualifies
-        result2 = get_messages(sample_messages, default_config, since="2026-05-08T11:00:00Z")
+        result2 = get_messages(
+            sample_messages, default_config, since="2026-05-08T11:00:00Z"
+        )
         assert [m.id for m in result2] == ["msg-003"]

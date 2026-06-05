@@ -8,15 +8,15 @@ _PALETTE_SIZE = 32
 # Piecewise-linear keypoints for the heat → color ramp.  Adjust freely; each
 # entry is (t in [0,1], R, G, B).  Order matters and t must be ascending.
 _HEAT_KEYPOINTS = (
-    (0.00, 0, 0, 0),         # black (no heat)
-    (0.10, 30, 0, 30),        # deep purple (almost-extinguished embers)
-    (0.22, 110, 0, 30),       # plum red
-    (0.35, 220, 20, 0),       # bright red
-    (0.50, 255, 100, 0),      # orange
-    (0.65, 255, 200, 0),      # yellow-orange
-    (0.80, 255, 255, 90),     # bright yellow
-    (0.92, 220, 255, 230),    # near-white
-    (1.00, 180, 220, 255),    # cyan-white (hottest core)
+    (0.00, 0, 0, 0),  # black (no heat)
+    (0.10, 30, 0, 30),  # deep purple (almost-extinguished embers)
+    (0.22, 110, 0, 30),  # plum red
+    (0.35, 220, 20, 0),  # bright red
+    (0.50, 255, 100, 0),  # orange
+    (0.65, 255, 200, 0),  # yellow-orange
+    (0.80, 255, 255, 90),  # bright yellow
+    (0.92, 220, 255, 230),  # near-white
+    (1.00, 180, 220, 255),  # cyan-white (hottest core)
 )
 
 
@@ -40,8 +40,15 @@ def _heat_color(t):
 
 
 class Flame:
-    def __init__(self, display, group, frame_delay=0.05, ignite_prob=0.3,
-                 max_brightness=0.4, scale=2):
+    def __init__(
+        self,
+        display,
+        group,
+        frame_delay=0.05,
+        ignite_prob=0.3,
+        max_brightness=0.4,
+        scale=2,
+    ):
         self.display = display
         self.frame_delay = frame_delay
         self.ignite_prob = ignite_prob
