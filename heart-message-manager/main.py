@@ -125,15 +125,27 @@ def api_messages():
     twilio_token = cfg.if_exists("TWILIO_AUTH_TOKEN")
     if twilio_token:
         # Skip signature validation for localhost (dev/testing)
-        if request.host.startswith("localhost:"):
+        if request.host.startswith("localhost"):
             logger.info("Skipping Twilio signature validation for localhost")
         else:
             from twilio.request_validator import RequestValidator
 
+            # Reconstruct URL with the scheme Twilio actually used (from X-Forwarded-Proto)
+            # Heroku terminates TLS and forwards over HTTP internally, so we can't use
+            # request.scheme directly — we must trust X-Forwarded-Proto.
+            forwarded_proto = request.headers.get("X-Forwarded-Proto", "http")
+            webhook_url = f"{forwarded_proto}://{request.host}/api/messages"
+
             validator = RequestValidator(twilio_token)
             signature = request.headers.get("X-Twilio-Signature", "")
-            if not validator.validate(request.url, request.form.to_dict(), signature):
-                logger.warning("Twilio signature verification failed for %s", request.url)
+            params = request.form.to_dict()
+            logger.info(
+                "Twilio validation: reconstructed_url=%s X-Forwarded-Proto=%s",
+                webhook_url,
+                forwarded_proto,
+            )
+            if not validator.validate(webhook_url, params, signature):
+                logger.warning("Twilio signature verification failed for %s", webhook_url)
                 return Response("forbidden", status=403)
     sender = request.form.get("From", "")
     body = request.form.get("Body", "").strip()

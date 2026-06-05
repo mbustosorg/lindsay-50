@@ -314,7 +314,8 @@ class TestTwilioSignature:
         """POST /api/messages with valid X-Twilio-Signature processes webhook."""
         from twilio.request_validator import RequestValidator
 
-        url = "http://localhost/api/messages"
+        # Heroku sets X-Forwarded-Proto: https, so we reconstruct as https
+        url = "https://lindsay-50.herokuapp.com/api/messages"
         params = {"From": "+15551234567", "Body": "hello"}
         validator = RequestValidator("twilio-auth-token")
         signature = validator.compute_signature(url, params)
@@ -322,17 +323,25 @@ class TestTwilioSignature:
         response = client.post(
             "/api/messages",
             data=params,
-            headers={"X-Twilio-Signature": signature},
+            headers={
+                "X-Twilio-Signature": signature,
+                "Host": "lindsay-50.herokuapp.com",
+                "X-Forwarded-Proto": "https",
+            },
         )
         # Should return TwiML (200 or 204), not 403
         assert response.status_code in (200, 204)
 
     def test_twilio_invalid_signature_returns_403(self, app, client):
-        """POST /api/messages with invalid/missing signature returns 403."""
+        """POST /api/messages with invalid signature returns 403."""
         response = client.post(
             "/api/messages",
             data={"From": "+15551234567", "Body": "hello"},
-            headers={"X-Twilio-Signature": "invalid-signature"},
+            headers={
+                "X-Twilio-Signature": "invalid-signature",
+                "Host": "lindsay-50.herokuapp.com",
+                "X-Forwarded-Proto": "https",
+            },
         )
         assert response.status_code == 403
 
@@ -341,5 +350,9 @@ class TestTwilioSignature:
         response = client.post(
             "/api/messages",
             data={"From": "+15551234567", "Body": "hello"},
+            headers={
+                "Host": "lindsay-50.herokuapp.com",
+                "X-Forwarded-Proto": "https",
+            },
         )
         assert response.status_code == 403
