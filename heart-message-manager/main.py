@@ -81,6 +81,8 @@ _mqtt_client.start()
 @app.route("/api/messages", methods=["POST"])
 def api_messages():
     """Receive Twilio webhook: log to S3 → respond → store → publish."""
+    # TEMP DEBUG: log all incoming headers to verify Twilio webhook token
+    logger.info("DEBUG TWILIO HEADERS: %s", dict(request.headers))
     sender = request.form.get("From", "")
     body = request.form.get("Body", "").strip()
 
