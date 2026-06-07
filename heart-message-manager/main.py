@@ -45,7 +45,7 @@ REQUIRED_KEYS: set[str] = {
     "CONFIG_API_URL",
     "MESSAGES_API_URL",
 }
-cfg = get_config(REQUIRED_KEYS)
+_cfg = get_config(REQUIRED_KEYS)
 
 import sqlite, s3
 from server_time import format_from_iso, now_utc_iso
@@ -105,7 +105,7 @@ threading.Thread(target=_message_mgr.seed, daemon=True).start()
 
 # Platform MQTT client
 _mqtt_client = None
-if cfg.MQTT_CLIENT == "adafruit":
+if _cfg.MQTT_CLIENT == "adafruit":
     from adafruit_mqtt_client import AdafruitMqttClient
 
     _mqtt_client = AdafruitMqttClient(dispatch_callback=_message_mgr.dispatch)
@@ -121,8 +121,7 @@ _mqtt_client.start()
 @app.route("/api/messages", methods=["POST"])
 def api_messages():
     """Receive Twilio webhook: verify signature → log to S3 → respond → store → publish."""
-    global cfg
-    twilio_token = cfg.if_exists("TWILIO_AUTH_TOKEN")
+    twilio_token = _cfg.if_exists("TWILIO_AUTH_TOKEN")
     if twilio_token:
         # Skip signature validation for localhost (dev/testing)
         if request.host.startswith("localhost"):
@@ -589,4 +588,4 @@ def health():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(cfg.PORT), debug=True)
+    app.run(host="0.0.0.0", port=int(_cfg.PORT), debug=True)
