@@ -1,9 +1,10 @@
+
+import math
 import random
 import time
-import displayio
-import bitmaptools
+from rgb_display import Bitmap, Palette, Effect, arrayblit
 
-_PALETTE_SIZE = 32
+_PALETTE_SIZE = 64
 
 # Piecewise-linear keypoints for the heat → color ramp.  Adjust freely; each
 # entry is (t in [0,1], R, G, B).  Order matters and t must be ascending.
@@ -39,21 +40,36 @@ def _heat_color(t):
     return 0
 
 
-class Flame:
-    def __init__(self, display, group, frame_delay=0.05, ignite_prob=0.3,
-                 max_brightness=0.4, scale=2):
+class Flame(Effect):
+    # Heat field runs at full 8-bit resolution (0..255) for smooth gradients,
+    # then is mapped down to the palette's index range when blitted.
+    _HEAT_MAX = 255
+
+    def __init__(self, display, frame_delay=0.05, cooling=None, fuel_min=165,
+                 max_brightness=0.7, scale=1, wind_speed=0.4):
         self.display = display
         self.frame_delay = frame_delay
-        self.ignite_prob = ignite_prob
         self.last_frame = 0.0
+        self.scale = scale
 
-        # Run the heat field at 1/scale resolution and let displayio upscale,
-        # so per-frame work drops by scale**2 (here 4x).
+        # Slowly drifting wind makes the whole flame lean and sway over time.
+        self.wind_speed = wind_speed
+        self._wind_phase = 0.0
+
+        # Run the heat field at 1/scale resolution and let the renderer upscale,
+        # so per-frame work drops by scale**2.
         self.w = display.width // scale
         self.h = display.height // scale
 
-        self.bitmap = displayio.Bitmap(self.w, self.h, _PALETTE_SIZE)
-        self.palette = displayio.Palette(_PALETTE_SIZE)
+        # Persistent hot fuel bed flickers between fuel_min..255 each frame.
+        self._fuel_min = fuel_min
+        # Per-cell random cooling, auto-scaled to panel height: a cell loses on
+        # average cool_max/2 of heat per row it rises, so flames burn out near
+        # the top regardless of how tall the panel is (taller -> gentler).
+        self._cool_max = cooling if cooling is not None else max(3, 640 // self.h)
+
+        self.bitmap = Bitmap(self.w, self.h, _PALETTE_SIZE)
+        self.palette = Palette(_PALETTE_SIZE)
         self.palette[0] = 0x000000
         for i in range(1, _PALETTE_SIZE):
             c = _heat_color(i / (_PALETTE_SIZE - 1))
@@ -64,20 +80,9 @@ class Flame:
             b = int((c & 0xFF) * max_brightness)
             self.palette[i] = (r << 16) | (g << 8) | b
 
-        self.tilegrid = displayio.TileGrid(self.bitmap, pixel_shader=self.palette)
-        wrapper = displayio.Group(scale=scale)
-        wrapper.append(self.tilegrid)
-        group.insert(0, wrapper)
-
-        self._original_palette = [self.palette[i] for i in range(_PALETTE_SIZE)]
-        self._buf = bytearray(self.w * self.h)
-
-    def set_brightness(self, b):
-        for i, c in enumerate(self._original_palette):
-            r = int(((c >> 16) & 0xFF) * b)
-            g = int(((c >> 8) & 0xFF) * b)
-            bl = int((c & 0xFF) * b)
-            self.palette[i] = (r << 16) | (g << 8) | bl
+        self._init_render()
+        self._heat = bytearray(self.w * self.h)  # 0..255 heat field
+        self._buf = bytearray(self.w * self.h)   # palette indices for the blit
 
     def tick(self):
         now = time.monotonic()
@@ -86,24 +91,51 @@ class Flame:
         self.last_frame = now
 
         w, h = self.w, self.h
-        buf = self._buf
+        heat = self._heat
+        rnd = random.getrandbits
+        cool_max = self._cool_max
 
-        # Heat rises one row (one memmove on the bytearray).
-        buf[: w * (h - 1)] = buf[w:]
+        # Drift the wind so flames lean and sway instead of rising dead straight.
+        # Two out-of-phase sines beat for a non-repetitive gust; round to a whole
+        # column of lean (-1, 0, or 1) shared by the whole frame.
+        self._wind_phase += self.frame_delay * self.wind_speed
+        gust = math.sin(self._wind_phase) + 0.4 * math.sin(self._wind_phase * 2.7)
+        wind_off = int(round(gust))
 
-        # Cool every cell by 1 so columns fade as they rise.
-        for i in range(w * h):
-            v = buf[i]
-            if v:
-                buf[i] = v - 1
+        # Diffuse heat upward (toward y=0) and blur it sideways, then cool each
+        # cell a random amount. Averaging the cells below makes flames smooth and
+        # tapered; the random cooling makes them flicker with dark licking tips.
+        last = w - 1
+        for y in range(h - 1):
+            row = y * w
+            b1 = row + w                          # one row below (y+1)
+            b2 = b1 + w if y + 2 < h else b1       # two rows below, clamped at base
+            for x in range(w):
+                sx = x - wind_off                  # lean the source column upwind
+                if sx < 0:
+                    sx = 0
+                elif sx > last:
+                    sx = last
+                lx = sx - 1 if sx > 0 else 0
+                rx = sx + 1 if sx < last else last
+                # Mostly straight up, a little from the diagonals -> rising tongues.
+                avg = (heat[b1 + sx] * 4 + heat[b2 + sx] * 2
+                       + heat[b1 + lx] + heat[b1 + rx]) >> 3
+                cool = (rnd(8) * cool_max) >> 8    # 0..cool_max-1, ~uniform
+                v = avg - cool
+                heat[row + x] = v if v > 0 else 0
 
-        # Sparse hot ignitions along the bottom.
-        bottom = (h - 1) * w
-        hot_min = _PALETTE_SIZE - 4
+        # Fuel bed: keep the bottom row hot with smooth flicker (no on/off
+        # strobing) so the diffusion above always has a glowing base to draw from.
+        base = (h - 1) * w
+        fuel_min = self._fuel_min
+        fuel_span = self._HEAT_MAX - fuel_min
         for x in range(w):
-            if random.random() < self.ignite_prob:
-                buf[bottom + x] = hot_min + random.getrandbits(2)
-            else:
-                buf[bottom + x] = 0
+            heat[base + x] = fuel_min + ((rnd(8) * fuel_span) >> 8)
 
-        bitmaptools.arrayblit(self.bitmap, buf, 0, 0, w, h)
+        # Map 0..255 heat down to the 0..(_PALETTE_SIZE-1) palette and blit.
+        buf = self._buf
+        shift = 8 - (_PALETTE_SIZE.bit_length() - 1)  # 255 -> _PALETTE_SIZE-1
+        for i in range(w * h):
+            buf[i] = heat[i] >> shift
+        arrayblit(self.bitmap, buf, 0, 0, w, h)

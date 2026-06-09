@@ -1,7 +1,7 @@
 import math
 import random
 import time
-import displayio
+from rgb_display import Bitmap, Palette, Effect
 
 # Saturated hues that read well on HUB75 panels.
 _HUES = (
@@ -13,8 +13,8 @@ _HUES = (
 _PALETTE_SIZE = 32  # index 0 = black background; 1..31 = preassigned hues
 
 
-class Fireworks:
-    def __init__(self, display, group, frame_delay=0.05, spawn_seconds=0.8,
+class Fireworks(Effect):
+    def __init__(self, display, frame_delay=0.05, spawn_seconds=0.8,
                  sparks_per_burst=18, gravity=0.15):
         self.display = display
         self.frame_delay = frame_delay
@@ -24,28 +24,16 @@ class Fireworks:
         self.last_frame = 0.0
         self.last_spawn = 0.0
 
-        self.bitmap = displayio.Bitmap(display.width, display.height, _PALETTE_SIZE)
-        self.palette = displayio.Palette(_PALETTE_SIZE)
+        self.bitmap = Bitmap(display.width, display.height, _PALETTE_SIZE)
+        self.palette = Palette(_PALETTE_SIZE)
         self.palette[0] = 0x000000
         for i in range(1, _PALETTE_SIZE):
             self.palette[i] = random.choice(_HUES)
 
-        # Insert at index 0 so labels appended later draw on top.
-        self.tilegrid = displayio.TileGrid(self.bitmap, pixel_shader=self.palette)
-        group.insert(0, self.tilegrid)
-
-        # Originals captured for palette-based brightness fading.
-        self._original_palette = [self.palette[i] for i in range(_PALETTE_SIZE)]
+        self._init_render()
 
         # Particle = [x, y, vx, vy, life, color_idx, kind]  kind: 0=rocket, 1=spark
         self.particles = []
-
-    def set_brightness(self, b):
-        for i, c in enumerate(self._original_palette):
-            r = int(((c >> 16) & 0xFF) * b)
-            g = int(((c >> 8) & 0xFF) * b)
-            bl = int((c & 0xFF) * b)
-            self.palette[i] = (r << 16) | (g << 8) | bl
 
     def tick(self):
         now = time.monotonic()

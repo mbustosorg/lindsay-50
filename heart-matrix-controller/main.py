@@ -1,19 +1,13 @@
 import os
 import time
-import wifi
-import adafruit_logging as logging
-from adafruit_matrixportal.matrix import Matrix
-from scroller import Scroller
-from fireworks import Fireworks
-from flame import Flame
-from nightsky import NightSky
-from mqtt_client import CircuitPythonMqttClient
-from lib_shared.message_manager import MessageManager
+import signal
+import logging
 
+# Create the config singleton FIRST: modules imported below (rgb_display,
+# message_manager, paho_mqtt_client) call get_config() at import time, so it
+# must already exist. Wi-Fi is managed by the Raspberry Pi OS, not this process.
 from lib_shared.config_reader import get_config
 REQUIRED_KEYS: set[str] = {
-    "WIFI_SSID",
-    "WIFI_PASSWORD",
     "MQTT_HOST",
     "MQTT_PORT",
     "MQTT_USERNAME",
@@ -24,25 +18,23 @@ REQUIRED_KEYS: set[str] = {
 }
 cfg = get_config(REQUIRED_KEYS)
 
+logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
 log = logging.getLogger("heart")
-log.setLevel(getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
+
+from rgb_display import Display
+from scroller import Scroller
+from fireworks import Fireworks
+from flame import Flame
+from nightsky import NightSky
+from paho_mqtt_client import PahoMqttClient
+from lib_shared.message_manager import MessageManager
 
 
-def connect_wifi():
-    log.info("Connecting to WiFi: %s", cfg.WIFI_SSID)
-    wifi.radio.connect(cfg.WIFI_SSID, cfg.WIFI_PASSWORD)
-    log.info("Connected, IP: %s", wifi.radio.ipv4_address)
-
-connect_wifi()
-
-
-matrix = Matrix(width=64, height=64, serpentine=True, tile_rows=2, bit_depth=4)
-scroller = Scroller(matrix)
-fireworks = Fireworks(matrix.display, scroller.group)
-fireworks.tilegrid.hidden = True
-flame = Flame(matrix.display, scroller.group)
-flame.tilegrid.hidden = True
-nightsky = NightSky(matrix.display, scroller.group)
+display = Display()
+scroller = Scroller(display)
+fireworks = Fireworks(display)
+flame = Flame(display)
+nightsky = NightSky(display)
 
 
 class EffectCoordinator:
@@ -55,7 +47,7 @@ class EffectCoordinator:
         self.idx = 0
         self.fade_seconds = fade_seconds
         # Throttles palette writes during a fade. Without this, a fast main loop
-        # saturates the displayio compositor and the fade visually freezes.
+        # rewrites the palette far faster than the panel refreshes, wasting work.
         self.fade_step = fade_step
         # Gamma correction: linear time → perceptually linear brightness.
         self.gamma = gamma
@@ -87,10 +79,8 @@ class EffectCoordinator:
 
             if progress >= 1.0:
                 if self.mode == "out":
-                    self.effects[self.idx].tilegrid.hidden = True
                     self.idx = (self.idx + 1) % len(self.effects)
                     self.effects[self.idx].set_brightness(0.0)
-                    self.effects[self.idx].tilegrid.hidden = False
                     self.scroller.set_text(self.pending_text)
                     self.pending_text = None
                     self.mode = "in"
@@ -103,24 +93,41 @@ class EffectCoordinator:
 
         self.effects[self.idx].tick()
         self.scroller.tick()
+        # Composite the active effect + text onto the panel. SwapOnVSync inside
+        # render() blocks until the next refresh, which paces this loop.
+        self.display.render(self.effects[self.idx], self.scroller)
 
 
-coordinator = EffectCoordinator(matrix.display, scroller, [nightsky, fireworks, flame], fade_seconds=5.2)
+coordinator = EffectCoordinator(display, scroller, [flame, fireworks, nightsky], fade_seconds=5.2)
 
 _message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
 _message_mgr.seed()
 
-_mqtt_client = CircuitPythonMqttClient(dispatch_callback=_message_mgr.dispatch)
+# Network loop runs in a daemon thread with built-in reconnect, so the main
+# loop below only has to drive the display.
+_mqtt_client = PahoMqttClient(dispatch_callback=_message_mgr.dispatch)
 _mqtt_client.start()
 
-while True:
+# SIGTERM (systemd stop / `kill`) doesn't raise an exception by default, so the
+# `finally` below would never run. Turn it into SystemExit so cleanup happens on
+# every stop path; SIGINT (Ctrl-C) already raises KeyboardInterrupt.
+def _on_sigterm(signum, frame):
+    raise SystemExit(0)
+
+
+signal.signal(signal.SIGTERM, _on_sigterm)
+
+try:
+    while True:
+        coordinator.tick()
+except (KeyboardInterrupt, SystemExit):
+    log.info("interrupted, shutting down")
+finally:
+    # Blank the panel on any exit — interrupt, stop signal, or crash — so the
+    # LEDs don't hold the last frame. Guard it: a failure here would otherwise
+    # replace whatever exception triggered the shutdown, hiding the root cause.
     try:
-        _mqtt_client.loop(timeout=0.001)
-    except Exception as e:
-        log.error("MQTT error: %s — reconnecting...", e)
-        try:
-            wifi.reset()
-            _mqtt_client.reconnect()
-        except Exception as e2:
-            log.error("Reconnect failed: %s", e2)
-    coordinator.tick()
+        display.clear()
+        log.info("display cleared")
+    except Exception:
+        log.exception("failed to clear display on shutdown")

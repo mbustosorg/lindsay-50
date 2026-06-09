@@ -1,6 +1,5 @@
-# Wi-Fi credentials.
-WIFI_SSID = "YOUR_WIFI_SSID"
-WIFI_PASSWORD = "YOUR_WIFI_PASSWORD"
+# Wi-Fi is managed by the Raspberry Pi OS (nmcli / raspi-config), not this
+# process — no WIFI_SSID / WIFI_PASSWORD needed here.
 
 # Adafruit IO over MQTT.
 # MQTT_HOST Default: io.adafruit.com (Adafruit IO cloud with TLS on port 8883).
@@ -17,6 +16,25 @@ MQTT_TOPIC = "YOUR_AIO_FEED_NAME"
 # The ESP32 boots without persistent storage, so it seeds from the Flask server.
 MESSAGES_API_URL = "http://YOUR_FLASK_HOST/api/messages"
 CONFIG_API_URL = "http://YOUR_FLASK_HOST/api/config"
+
+# BDF font for scrolling text. Copy one from the rpi-rgb-led-matrix repo's
+# `fonts/` directory onto the Pi (e.g. into ./fonts/). Path is relative to the
+# working directory the app is launched from.
+FONT_PATH = "fonts/6x9.bdf"
+
+# HUB75 panel geometry (hzeller rpi-rgb-led-matrix RGBMatrixOptions).
+# Defaults: 64x64 logical panel from two 64x32 panels, serpentine-wired
+# (chain of 2 folded by the U-mapper). Verify MATRIX_HARDWARE_MAPPING and
+# MATRIX_PIXEL_MAPPER against your wiring / HAT.
+MATRIX_ROWS = 32
+MATRIX_COLS = 64
+MATRIX_CHAIN = 2
+MATRIX_PARALLEL = 1
+MATRIX_HARDWARE_MAPPING = "regular"        # or "adafruit-hat", "adafruit-hat-pwm"
+MATRIX_PIXEL_MAPPER = "U-mapper"           # "" for a single straight chain
+MATRIX_PWM_BITS = 4
+MATRIX_BRIGHTNESS = 100
+MATRIX_GPIO_SLOWDOWN = 4                    # 4 is a good starting point for a Pi 4
 
 # DEBUG | INFO | WARNING | ERROR | CRITICAL
 LOG_LEVEL = "INFO"
