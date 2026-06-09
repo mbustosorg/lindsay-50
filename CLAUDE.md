@@ -4,9 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-SMS → microcontroller bridge. A Twilio webhook posts an incoming SMS to a Flask server (`heart-message-manager/main.py`), which publishes the body to an Adafruit IO feed via MQTT. An ESP32 running CircuitPython (`heart-matrix-controller/code.py`) subscribes to that feed over MQTT and renders the message as scrolling text on a 64×64 HUB75 LED panel (two stacked 64×32 panels, serpentine wired) over a fireworks- or flame-effect background that toggles on each new message.
+SMS → display bridge. A Twilio webhook posts an incoming SMS to a Flask server (`heart-message-manager/main.py`), which publishes the body to an Adafruit IO feed via MQTT. A Raspberry Pi 4 (`heart-matrix-controller/code.py`) subscribes to that feed over MQTT and renders the message as scrolling text on a 64×64 HUB75 LED panel (two stacked 64×32 panels, serpentine wired) over a night-sky / fireworks / flame background that cycles on each new message.
 
-Flask also subscribes to the same MQTT feed to keep its live message ring buffer in sync with the ESP32.
+The display device was originally an ESP32 running CircuitPython and was migrated to a Raspberry Pi 4: native `logging` replaces `adafruit_logging`, `paho-mqtt` replaces the CircuitPython `adafruit_io` MQTT client, and the rendering layer was ported from displayio (retained scene graph, auto-refresh) to the immediate-mode hzeller `rpi-rgb-led-matrix` API (`rgb_display.py` blits an offscreen canvas each frame and `SwapOnVSync`es it).
+
+Flask also subscribes to the same MQTT feed to keep its live message ring buffer in sync with the display device.
 
 ## Project structure
 
@@ -22,14 +24,16 @@ lindsay-50/
 │   ├── templates/              # Jinja2 templates
 │   ├── settings.toml           # Local config (gitignored)
 │   └── settings.toml.example
-├── heart-matrix-controller/      # CircuitPython device code
-│   ├── code.py
-│   ├── mqtt_client.py          # CircuitPython MQTT client (adafruit_io)
-│   ├── scroller.py
+├── heart-matrix-controller/      # Raspberry Pi 4 display device
+│   ├── code.py                 # Entrypoint: builds Display + effects, runs the loop
+│   ├── rgb_display.py          # hzeller rgbmatrix wrapper + Bitmap/Palette/Effect
+│   ├── paho_mqtt_client.py     # Paho MQTT subscriber (daemon thread, auto-reconnect)
+│   ├── scroller.py             # Scrolling text via rgbmatrix graphics + BDF font
 │   ├── fireworks.py
 │   ├── flame.py
+│   ├── nightsky.py
 │   └── settings.toml            # Local config (gitignored)
-├── lib_shared/                  # Shared code (Flask + CircuitPython)
+├── lib_shared/                  # Shared code (Flask + Pi device)
 │   ├── models.py               # Message, SignConfig, FilterRule, RenderingSettings
 │   ├── messages.py             # FilteredMessages, InMemoryMessages
 │   ├── message_manager.py      # MessageManager (dispatch + seed)
@@ -103,38 +107,44 @@ SMS → Twilio → POST /api/messages → Flask
                                                    │
                               ┌────────────────────┴────────────────────┐
                               ▼                                         ▼
-                        ESP32 subscribes                        Flask subscribes
+                        Pi 4 subscribes                        Flask subscribes
                         (display updates)                      (live ring buffer)
 ```
 
 - `heart-message-manager/main.py` — Flask app, publishes envelopes via MQTT client, serves admin UI.
 - `heart-message-manager/adafruit_mqtt_client.py` — Heroku: wraps `Adafruit_IO.MQTTClient`.
 - `heart-message-manager/paho_mqtt_client.py` — Local dev: wraps `paho-mqtt`.
-- `heart-matrix-controller/mqtt_client.py` — CircuitPython MQTT client wrapping `adafruit_io.IO_MQTT`.
-- `heart-matrix-controller/code.py` — CircuitPython entrypoint; runs MQTT loop and `EffectCoordinator.tick()`.
-- `lib_shared/message_manager.py` — Shared `MessageManager`; Flask seeds from REST API, ESP32 seeds from Flask REST API.
+- `heart-matrix-controller/paho_mqtt_client.py` — Pi: subscribe-only `paho-mqtt` client in a daemon thread (auto-reconnect).
+- `heart-matrix-controller/rgb_display.py` — Pi: wraps hzeller `RGBMatrix`; provides `Bitmap`/`Palette`/`arrayblit` (the displayio subset the effects use), the `Effect` base, and the per-frame composite (`Display.render`).
+- `heart-matrix-controller/code.py` — Pi entrypoint; seeds, starts MQTT, runs `EffectCoordinator.tick()` which advances + composites each frame.
+- `lib_shared/message_manager.py` — Shared `MessageManager`; Flask seeds from REST API, the Pi seeds from Flask's REST API.
 
-## ESP32 / CircuitPython setup
+## Raspberry Pi 4 setup
 
-Download the Adafruit CircuitPython Bundle matching your CircuitPython version, then copy files to `CIRCUITPY/lib/`:
+Wi-Fi is managed by the Pi OS (`nmcli` / `raspi-config`), not this process. The LED panel is driven by the [hzeller rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library (its Python bindings, `rgbmatrix`, are pulled in by `requirements.txt`).
 
-Single files:
-- `adafruit_logging.mpy`
-- `adafruit_connection_manager.mpy`
-- `adafruit_ticks.mpy` (required by `adafruit_minimqtt`)
-- `adafruit_requests.mpy` (required by `adafruit_io` / `adafruit_matrixportal`)
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r heart-matrix-controller/requirements.txt   # builds the rgbmatrix C extension
 
-Folders:
-- `adafruit_minimqtt/`
-- `adafruit_io/`
-- `adafruit_matrixportal/`
-- `adafruit_portalbase/` (parent of `adafruit_matrixportal`, not imported directly)
-- `adafruit_display_text/` (used by `scroller.py`)
+# Scrolling text needs a BDF font. Copy one from the rpi-rgb-led-matrix repo:
+mkdir -p heart-matrix-controller/fonts
+# cp <rpi-rgb-led-matrix>/fonts/6x9.bdf heart-matrix-controller/fonts/
 
-Built into CircuitPython firmware (do not copy): `os`, `time`, `wifi`, `socketpool`, `displayio`, `terminalio`, `rgbmatrix`, `framebufferio`, `bitmaptools`.
+cp heart-matrix-controller/settings.toml.example heart-matrix-controller/settings.toml
+# fill in MQTT_*, the API URLs, FONT_PATH, and the MATRIX_* panel geometry
+```
 
-Skip unless needed: `adafruit_esp32spi/` (only for non-S3 boards with an external WiFi co-processor); `adafruit_bitmap_font/` (only if switching from `terminalio.FONT` to a custom BDF/PCF font).
+Run from the `heart-matrix-controller/` directory so `settings.toml` and the relative `FONT_PATH` resolve, with the repo root on `PYTHONPATH` for `lib_shared`. The hzeller library needs root for GPIO:
 
-Files to copy onto `CIRCUITPY/`: `code.py`, `scroller.py`, `fireworks.py`, `flame.py`, `settings.toml`.
+```bash
+cd heart-matrix-controller
+sudo PYTHONPATH=.. LOG_LEVEL=INFO python3 code.py
+```
 
-To add a new visual effect, implement a class with the same surface as `Fireworks`/`Flame` (a `tilegrid` attribute that's hideable, a `tick()` method, and a `set_brightness(b)` method) and append it to the `effects` list passed to `EffectCoordinator` in `code.py`.
+Panel geometry (rows/cols/chain/mapper/hardware mapping/pwm bits/gpio slowdown) is configured via the `MATRIX_*` keys in `settings.toml` — see `settings.toml.example`. The defaults assume a 64×64 logical panel built from two 64×32 panels, serpentine-wired (chain of 2 folded by the `U-mapper`), wired directly to GPIO (`MATRIX_HARDWARE_MAPPING = "regular"`; use `"adafruit-hat"` for the Adafruit HAT/Bonnet). Verify `MATRIX_HARDWARE_MAPPING` and `MATRIX_PIXEL_MAPPER` against your actual wiring.
+
+The scroller adapts to panel height: a 64×64 stack shows two scrolling lines (one centered per 64×32 half); a single short panel (`display.height <= 32`) shows one line centered on the whole display. For a single 32×64 test panel, set `MATRIX_CHAIN = 1` and `MATRIX_PIXEL_MAPPER = ""`.
+
+To add a new visual effect, subclass `Effect` (from `rgb_display.py`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` and `render(canvas)`. Append an instance to the `effects` list passed to `EffectCoordinator` in `code.py`.

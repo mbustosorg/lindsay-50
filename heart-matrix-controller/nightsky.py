@@ -1,25 +1,15 @@
 import math
 import random
 import time
-import displayio
-import bitmaptools
+from rgb_display import Bitmap, Palette, Effect, arrayblit
 
 _PALETTE_SIZE = 32
 
 
-class NightSky:
-    def __init__(
-        self,
-        display,
-        group,
-        frame_delay=0.05,
-        num_stars=45,
-        shoot_min=5.0,
-        shoot_max=15.0,
-        sky_color=0x000000,
-        twinkle_period=3.0,
-        twinkle_fraction=0.20,
-    ):
+class NightSky(Effect):
+    def __init__(self, display, frame_delay=0.05, num_stars=45,
+                 shoot_min=5.0, shoot_max=15.0, sky_color=0x000000,
+                 twinkle_period=3.0, twinkle_fraction=0.20):
         self.display = display
         self.frame_delay = frame_delay
         self.shoot_min = shoot_min
@@ -32,8 +22,8 @@ class NightSky:
         self.w = display.width
         self.h = display.height
 
-        self.bitmap = displayio.Bitmap(self.w, self.h, _PALETTE_SIZE)
-        self.palette = displayio.Palette(_PALETTE_SIZE)
+        self.bitmap = Bitmap(self.w, self.h, _PALETTE_SIZE)
+        self.palette = Palette(_PALETTE_SIZE)
         self.palette[0] = sky_color
         # Star intensity gradient with a slight cool-white cast.
         for i in range(1, _PALETTE_SIZE):
@@ -43,14 +33,11 @@ class NightSky:
             b = int(255 * t)
             self.palette[i] = (r << 16) | (g << 8) | b
 
-        self.tilegrid = displayio.TileGrid(self.bitmap, pixel_shader=self.palette)
-        group.insert(0, self.tilegrid)
-
-        self._original_palette = [self.palette[i] for i in range(_PALETTE_SIZE)]
+        self._init_render()
 
         # Render into a bytearray and push the whole frame to the bitmap in
         # one arrayblit call.  Per-pixel bitmap writes interleaved with the
-        # displayio compositor read are what produces visible tearing/flicker.
+        # compositor read are what produces visible tearing/flicker.
         self._buf = bytearray(self.w * self.h)
         self._zero_buf = bytes(self.w * self.h)
 
@@ -64,15 +51,13 @@ class NightSky:
         # also stays in the stable region the whole way.
         self.stars = []
         for _ in range(num_stars):
-            self.stars.append(
-                [
-                    random.randint(0, self.w - 1),
-                    random.randint(0, self.h - 1),
-                    random.randint(12, 18),
-                    random.randint(10, 14),
-                    -1.0,
-                ]
-            )
+            self.stars.append([
+                random.randint(0, self.w - 1),
+                random.randint(0, self.h - 1),
+                random.randint(12, 18),
+                random.randint(10, 14),
+                -1.0,
+            ])
 
         # Seed the initial active set with phases offset across [0, period) so
         # they aren't all peaking simultaneously on the first frame.
@@ -85,13 +70,6 @@ class NightSky:
         # Shoot = [x, y, vx, vy, trail_len, head_intensity]  (None = idle)
         self.shoot = None
         self.next_shoot = now + random.uniform(shoot_min, shoot_max)
-
-    def set_brightness(self, b):
-        for i, c in enumerate(self._original_palette):
-            r = int(((c >> 16) & 0xFF) * b)
-            g = int(((c >> 8) & 0xFF) * b)
-            bl = int((c & 0xFF) * b)
-            self.palette[i] = (r << 16) | (g << 8) | bl
 
     def _spawn_shoot(self):
         side = random.randint(0, 2)
@@ -175,4 +153,4 @@ class NightSky:
                 self.next_shoot = now + random.uniform(self.shoot_min, self.shoot_max)
 
         # One atomic update of the whole bitmap.
-        bitmaptools.arrayblit(self.bitmap, buf, 0, 0, self.w, self.h)
+        arrayblit(self.bitmap, buf, 0, 0, self.w, self.h)

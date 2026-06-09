@@ -18,6 +18,15 @@
 PORT = 3100
 
 # -----------------------------------------------------------------------------
+# Twilio — webhook authentication
+# -----------------------------------------------------------------------------
+# [optional] Twilio Auth Token (Console → Account Info). When set, POST
+# /api/messages verifies the X-Twilio-Signature header and rejects (403) any
+# request not genuinely signed by Twilio. Leave unset for local curl testing —
+# the endpoint is then unauthenticated and logs a startup warning.
+# TWILIO_AUTH_TOKEN = "your_twilio_auth_token"
+
+# -----------------------------------------------------------------------------
 # AWS S3 — for message logging and config snapshots
 # -----------------------------------------------------------------------------
 # [optional] AWS access key. Falls back to IAM role on Heroku.
