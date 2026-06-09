@@ -15,7 +15,7 @@ REQUIRED_KEYS: set[str] = {
     "MQTT_TOPIC",
     "CONFIG_API_URL",
     "MESSAGES_API_URL",
-    "TWILIO_AUTH_TOKEN",
+    "API_SECRET_KEY",
 }
 cfg = get_config(REQUIRED_KEYS)
 
@@ -76,7 +76,7 @@ class EffectCoordinator:
                 b = linear ** self.gamma
                 self.effects[self.idx].set_brightness(b)
                 self.scroller.set_brightness(b)
-                log.info("fade %s linear=%.3f b=%.3f", self.mode, linear, b)
+                log.debug("fade %s linear=%.3f b=%.3f", self.mode, linear, b)
 
             if progress >= 1.0:
                 if self.mode == "out":
@@ -104,9 +104,17 @@ coordinator = EffectCoordinator(display, scroller, [flame, fireworks, nightsky],
 _message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
 _message_mgr.seed()
 
-# Network loop runs in a daemon thread with built-in reconnect, so the main
-# loop below only has to drive the display.
-_mqtt_client = PahoMqttClient(dispatch_callback=_message_mgr.dispatch)
+# Platform MQTT client
+_mqtt_client = None
+if cfg.MQTT_CLIENT == "adafruit":
+    from adafruit_mqtt_client import AdafruitMqttClient
+
+    _mqtt_client = AdafruitMqttClient(dispatch_callback=_message_mgr.dispatch)
+else:
+    from paho_mqtt_client import PahoMqttClient
+
+    _mqtt_client = PahoMqttClient(dispatch_callback=_message_mgr.dispatch)
+logging.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 
 # SIGTERM (systemd stop / `kill`) doesn't raise an exception by default, so the

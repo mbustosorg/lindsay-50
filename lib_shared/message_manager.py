@@ -11,6 +11,7 @@ except ImportError:
     import adafruit_logging as logging
 
 from lib_shared.config_reader import get_config
+
 cfg = get_config()
 
 from lib_shared.models import MessageEnvelope, Message, SignConfig
@@ -66,10 +67,13 @@ class MessageManager:
             id=payload.get("id", ""),
             sender=payload.get("sender", ""),
             body=payload.get("body", ""),
-            received_at=payload.get("received_at", ""))
+            received_at=payload.get("received_at", ""),
+        )
 
         self._messages.add(msg, source="mqtt")
-        logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
+        logger.info(
+            "MessageManager routed message id=%s body=%r", msg.id, msg.body[:40]
+        )
         if self._on_message:
             self._on_message(msg)
 
@@ -82,19 +86,25 @@ class MessageManager:
         """Back-populate config and messages from the Flask REST API."""
         try:
             import requests as req
+
             _requests_timeout = 10
             _requests_raise_for_status = lambda r: r.raise_for_status()
+            # Flask-to-Flask seed calls need API key auth
+            _api_key = cfg.if_exists("API_SECRET_KEY") or ""
+            _headers = {"X-API-Key": _api_key} if _api_key else {}
         except ImportError:
             import adafruit_requests as req
+
             _requests_timeout = None  # adafruit_requests doesn't support timeout param
             _requests_raise_for_status = lambda r: None  # no-op on CircuitPython
+            _headers = {}
 
         cfg_api = cfg.get("CONFIG_API_URL")
         msgs_api = cfg.get("MESSAGES_API_URL")
 
         if msgs_api:
             try:
-                resp = req.get(msgs_api, timeout=_requests_timeout)
+                resp = req.get(msgs_api, timeout=_requests_timeout, headers=_headers)
                 _requests_raise_for_status(resp)
                 data = resp.json()
                 if isinstance(data, list):
@@ -109,21 +119,30 @@ class MessageManager:
                         for item in data[-100:]
                     ]
                     self._messages.add_many(msgs, source="rest")
-                logger.info("MessageManager seeded %d messages", len(data) if isinstance(data, list) else 0)
+                logger.info(
+                    "MessageManager seeded %d messages",
+                    len(data) if isinstance(data, list) else 0,
+                )
             except Exception as e:
                 logger.warning("MessageManager message seed failed: %s", e)
 
         if cfg_api:
             try:
-                resp = req.get(cfg_api, timeout=_requests_timeout)
+                resp = req.get(cfg_api, timeout=_requests_timeout, headers=_headers)
                 _requests_raise_for_status(resp)
                 self._config.update_from_dict(resp.json())
                 logger.info("MessageManager seeded config")
             except Exception as e:
                 logger.warning("MessageManager config seed failed: %s", e)
 
-    def get_messages(self, limit: int = 100):
-        return self._messages.get_messages(limit)
+    def get_messages(self, limit: int = 100, suppress: bool = True):
+        """Return messages from the ring buffer.
+
+        Args:
+            limit: Maximum number of messages to return.
+            suppress: If True (default), exclude suppressed messages.
+        """
+        return self._messages.get_messages(limit, suppress=suppress)
 
     def get_config(self) -> SignConfig:
         return self._config

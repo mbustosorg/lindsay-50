@@ -140,13 +140,13 @@ class Display:
             val = cfg.if_exists(key)
             return val if val is not None else default
         options = RGBMatrixOptions()
-        options.rows = int(_opt("MATRIX_ROWS", 64))
+        options.rows = int(_opt("MATRIX_ROWS", 32))
         options.cols = int(_opt("MATRIX_COLS", 64))
         options.chain_length = int(_opt("MATRIX_CHAIN", 1))
         options.parallel = int(_opt("MATRIX_PARALLEL", 1))
         options.hardware_mapping = _opt("MATRIX_HARDWARE_MAPPING", "regular")
         options.pixel_mapper_config = _opt("MATRIX_PIXEL_MAPPER", "U-mapper")
-        options.pwm_bits = int(_opt("MATRIX_PWM_BITS", 4))
+        options.pwm_bits = int(_opt("MATRIX_PWM_BITS", 10))
         options.brightness = int(_opt("MATRIX_BRIGHTNESS",100))
         options.gpio_slowdown = int(_opt("MATRIX_GPIO_SLOWDOWN", 4))
         # Keep root after init (don't drop to 'nobody'); harmless here and avoids

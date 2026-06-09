@@ -28,7 +28,7 @@ class Scroller:
         self._brightness = 1.0
 
         cfg = get_config()
-        path = font_path or cfg.if_exists("FONT_PATH") or "fonts/6x9.bdf"
+        path = font_path or cfg.if_exists("FONT_PATH") or "fonts/8x13B.bdf"
         self.font = graphics.Font()
         self.font.LoadFont(path)
         log.info("Scroller loaded font %s (height=%d)", path, self.font.height)
