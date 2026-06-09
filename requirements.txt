@@ -1,7 +1,8 @@
-# Server-side dependencies (Flask app + shared lib)
+# Server-side dependencies (Flask app + shared lib) — deployed to Heroku.
 flask>=3.0
 adafruit-io
 boto3>=1.34
 requests>=2.31
 paho-mqtt
+twilio>=8.0
 gunicorn>=21.0

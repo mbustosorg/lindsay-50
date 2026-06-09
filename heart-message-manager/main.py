@@ -12,7 +12,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from flask import Flask, Response, jsonify, redirect, render_template, request, url_for
+from flask import Flask, Response, abort, jsonify, redirect, render_template, request, url_for
 
 # Load config before any lib imports that call get_config() at module level
 from lib_shared.config_reader import get_config
@@ -52,6 +52,41 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
+# Twilio webhook authentication. When TWILIO_AUTH_TOKEN is configured, the
+# X-Twilio-Signature header on /api/messages is verified so only genuine Twilio
+# requests are accepted. Without a token (e.g. local dev / curl testing) the
+# check is skipped and a warning is logged so the gap is visible. The twilio
+# package is only imported when a token is set, so local dev doesn't need it.
+_twilio_auth_token = cfg.if_exists("TWILIO_AUTH_TOKEN")
+if _twilio_auth_token:
+    from twilio.request_validator import RequestValidator
+    _twilio_validator = RequestValidator(_twilio_auth_token)
+else:
+    _twilio_validator = None
+    logger.warning(
+        "TWILIO_AUTH_TOKEN not set — POST /api/messages is UNAUTHENTICATED. "
+        "Set it (Heroku config var / settings.toml) to enable signature checks."
+    )
+
+
+def _twilio_request_valid() -> bool:
+    """Verify the X-Twilio-Signature header for an incoming webhook.
+
+    Returns True when validation is disabled (no token configured) or the
+    signature matches; False only when a token is set and the signature is
+    missing/invalid.
+    """
+    if _twilio_validator is None:
+        return True
+    # Validate against the public URL Twilio actually signed. Behind Heroku's
+    # proxy request.url reports http://, so honor X-Forwarded-Proto.
+    url = request.url
+    if request.headers.get("X-Forwarded-Proto") == "https":
+        url = url.replace("http://", "https://", 1)
+    signature = request.headers.get("X-Twilio-Signature", "")
+    return _twilio_validator.validate(url, request.form, signature)
+
+
 # Wipe SQLite and rebuild messages and config from S3 on startup
 sqlite.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
@@ -79,7 +114,11 @@ _mqtt_client.start()
 # Inbound Twilio webhook handler
 @app.route("/api/messages", methods=["POST"])
 def api_messages():
-    """Receive Twilio webhook: log to S3 → respond → store → publish."""
+    """Receive Twilio webhook: validate signature → log to S3 → respond → store → publish."""
+    if not _twilio_request_valid():
+        logger.warning("Rejected /api/messages: invalid or missing Twilio signature")
+        abort(403)
+
     sender = request.form.get("From", "")
     body = request.form.get("Body", "").strip()
 
