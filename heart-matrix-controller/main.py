@@ -15,6 +15,7 @@ REQUIRED_KEYS: set[str] = {
     "MQTT_TOPIC",
     "CONFIG_API_URL",
     "MESSAGES_API_URL",
+    "TWILIO_AUTH_TOKEN",
 }
 cfg = get_config(REQUIRED_KEYS)
 
