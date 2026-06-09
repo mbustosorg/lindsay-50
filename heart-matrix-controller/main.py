@@ -19,7 +19,9 @@ REQUIRED_KEYS: set[str] = {
 }
 cfg = get_config(REQUIRED_KEYS)
 
-logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
+from lib_shared.log_setup import configure_logging
+
+configure_logging(getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
 log = logging.getLogger("heart")
 
 from rgb_display import Display

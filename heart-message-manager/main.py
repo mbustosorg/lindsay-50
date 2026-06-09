@@ -86,7 +86,9 @@ def api_login_required(f):
     return decorated_function
 
 
-logging.basicConfig(level=logging.INFO)
+from lib_shared.log_setup import configure_logging
+
+configure_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
 
