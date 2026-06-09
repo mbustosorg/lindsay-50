@@ -1,9 +1,7 @@
-"""Plain Python models shared between Flask app and ESP32.
-
-No dataclasses or ABCs - CircuitPython compatible.
-"""
+"""Plain Python models shared between the Flask app and the Raspberry Pi display."""
 
 import json
+import threading
 
 
 class MessageEnvelope:
@@ -202,8 +200,7 @@ class SignConfig:
     rendering: RenderingSettings
     sign: Sign object with .name attribute
 
-    Thread-safe: uses a reentrant lock when threading is available.
-    CircuitPython has no threading module so lock is None there.
+    Thread-safe: guards mutations with a reentrant lock.
     """
 
     def __init__(
@@ -244,13 +241,7 @@ class SignConfig:
         self.timezone = timezone
         self.version = version
         self.tz_offset_mins = tz_offset_mins
-        self._lock = None
-        try:
-            import threading as _th
-
-            self._lock = _th.RLock()
-        except ImportError:
-            pass
+        self._lock = threading.RLock()
 
     def _with_lock(self, fn):
         """Run fn under the config lock (no-op if lock unavailable).
