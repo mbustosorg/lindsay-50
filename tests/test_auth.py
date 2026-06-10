@@ -61,6 +61,8 @@ def _load_app_module(mock_cfg):
     lib_shared = _make_mock("lib_shared")
     config_reader_mod = _make_mock("lib_shared.config_reader")
     config_reader_mod.get_config = lambda required_keys=None: mock_cfg
+    log_setup_mod = _make_mock("lib_shared.log_setup")
+    log_setup_mod.configure_logging = MagicMock()
 
     models_mod = _make_mock("lib_shared.models")
     models_mod.SignConfig = MagicMock()
@@ -71,6 +73,8 @@ def _load_app_module(mock_cfg):
 
     mm_mod = _make_mock("lib_shared.message_manager")
     mm_mod.MessageManager = MagicMock()
+    mqtt_factory_mod = _make_mock("lib_shared.mqtt_factory")
+    mqtt_factory_mod.make_mqtt_client = MagicMock()
 
     # Mock heart-message-manager submodules (but load the real auth module)
     # auth.py needs to be imported from the real location

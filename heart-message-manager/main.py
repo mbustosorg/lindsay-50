@@ -119,29 +119,38 @@ def api_messages():
     """Receive Twilio webhook: verify signature → log to S3 → respond → store → publish."""
     twilio_token = _cfg.if_exists("TWILIO_AUTH_TOKEN")
     if twilio_token:
-        # Skip signature validation for localhost (dev/testing)
-        if request.host.startswith("localhost"):
-            logger.info("Skipping Twilio signature validation for localhost")
-        else:
-            from twilio.request_validator import RequestValidator
+        from twilio.request_validator import RequestValidator
 
-            # Reconstruct URL with the scheme Twilio actually used (from X-Forwarded-Proto)
-            # Heroku terminates TLS and forwards over HTTP internally, so we can't use
-            # request.scheme directly — we must trust X-Forwarded-Proto.
-            forwarded_proto = request.headers.get("X-Forwarded-Proto", "http")
-            webhook_url = f"{forwarded_proto}://{request.host}/api/messages"
+        # Reconstruct URL with the scheme Twilio actually used (from X-Forwarded-Proto)
+        # Heroku terminates TLS and forwards over HTTP internally, so we can't use
+        # request.scheme directly — we must trust X-Forwarded-Proto.
+        forwarded_proto = request.headers.get("X-Forwarded-Proto", "http")
+        webhook_url = f"{forwarded_proto}://{request.host}/api/messages"
 
-            validator = RequestValidator(twilio_token)
-            signature = request.headers.get("X-Twilio-Signature", "")
-            params = request.form.to_dict()
-            logger.info(
-                "Twilio validation: reconstructed_url=%s X-Forwarded-Proto=%s",
-                webhook_url,
-                forwarded_proto,
-            )
-            if not validator.validate(webhook_url, params, signature):
-                logger.warning("Twilio signature verification failed for %s", webhook_url)
-                return Response("forbidden", status=403)
+        validator = RequestValidator(twilio_token)
+        signature = request.headers.get("X-Twilio-Signature", "")
+        params = request.form.to_dict()
+        logger.info(
+            "Twilio validation: reconstructed_url=%s X-Forwarded-Proto=%s",
+            webhook_url,
+            forwarded_proto,
+        )
+        if not validator.validate(webhook_url, params, signature):
+            logger.warning("Twilio signature verification failed for %s", webhook_url)
+            return Response("forbidden", status=403)
+
+    return _process_inbound_message(request)
+
+
+@app.route("/api/test-messages", methods=["POST"])
+@login_required
+def api_test_messages():
+    """Test injection from the admin UI — authenticated, skips Twilio signature validation."""
+    return _process_inbound_message(request)
+
+
+def _process_inbound_message(request) -> Response:
+    """Shared message processing for both real Twilio webhooks and test injections."""
     sender = request.form.get("From", "")
     body = request.form.get("Body", "").strip()
 
@@ -572,8 +581,11 @@ def preview():
 def testing():
     """Testing: inject messages and inspect system state."""
     cfg = sqlite.get_config()
+    twilio_token = _cfg.if_exists("TWILIO_AUTH_TOKEN")
     return render_template(
-        "testing.html", sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart"
+        "testing.html",
+        sign_name=cfg.sign.name, 
+        twilio_token=twilio_token or "",
     )
 
 

@@ -374,7 +374,7 @@ document.getElementById('inject-form').addEventListener('submit', async function
   const form = e.target;
   const data = new FormData(form);
   try {
-    const res = await fetch('/api/messages', { method: 'POST', body: data });
+    const res = await fetch('/api/test-messages', { method: 'POST', body: data });
     const text = await res.text();
     if (res.ok) {
       form.Body.value = '';
