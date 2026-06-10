@@ -1,10 +1,16 @@
-"""Paho MQTT subscriber for Flask (local dev with Mosquitto, plain TCP).
+"""Paho MQTT client shared by the Flask server and the Raspberry Pi display.
 
-Wraps raw paho-mqtt.client. On each incoming message calls
-dispatch_callback(raw_payload).
+Wraps paho-mqtt. Subscribes in a daemon thread with automatic reconnect and
+calls dispatch_callback(raw_payload) for each incoming message. The Flask
+server also uses publish_envelope() to push envelopes to the broker; the Pi is
+subscribe-only and simply never calls it. TLS is enabled automatically on port
+8883 (e.g. io.adafruit.com).
 """
 
 import logging
+import threading
+import time
+
 import paho.mqtt.client as mqtt
 
 from lib_shared.config_reader import get_config
@@ -15,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class PahoMqttClient:
-    """Thin adapter: owns the paho-mqtt client lifecycle.
+    """Owns the paho-mqtt client lifecycle.
 
     Calls dispatch_callback(raw_payload) for each incoming message.
     """
@@ -37,41 +43,28 @@ class PahoMqttClient:
         self._feed = cfg.MQTT_TOPIC
 
     def start(self) -> None:
-        """Connect to the broker and start the subscriber loop in a daemon thread."""
-        import threading
-        import time
-
+        """Connect to the broker and run the subscriber loop in a daemon thread."""
         topic = self._feed
         logger.info(
-            "PahoMqttClient will subscribe to topic=%r feed=%r username=%r",
-            topic,
-            self._feed,
-            self._username,
+            "PahoMqttClient will subscribe to topic=%r username=%r", topic, self._username
         )
 
         def on_connect(_client, _userdata, _flags, rc):
-            logger.info("PahoMqttClient on_connect called: rc=%s", rc)
             if rc == 0:
                 _client.subscribe(topic)
-                logger.info("PahoMqttClient subscribed to %s", topic)
+                logger.info("PahoMqttClient connected, subscribed to %s", topic)
             else:
                 logger.warning("PahoMqttClient connection failed: rc=%s", rc)
 
         def on_message(_client, _userdata, msg):
             logger.info(
-                "PahoMqttClient on_message called: topic=%s payload=%r",
-                msg.topic,
-                msg.payload,
+                "PahoMqttClient received: topic=%s payload=%r", msg.topic, msg.payload
             )
             self._dispatch(msg.payload.decode(errors="replace"))
 
         def on_disconnect(_client, _userdata, rc):
-            logger.info("PahoMqttClient on_disconnect called: rc=%s", rc)
             if rc != 0:
-                logger.warning("PahoMqttClient disconnected: rc=%s", rc)
-
-        def on_log(_client, _userdata, level, string):
-            logger.info("PahoMqttClient on_log [%s]: %s", level, string)
+                logger.warning("PahoMqttClient unexpectedly disconnected: rc=%s", rc)
 
         self._stop = threading.Event()
 
@@ -81,25 +74,17 @@ class PahoMqttClient:
             while not stop.is_set():
                 try:
                     client = mqtt.Client(clean_session=True)  # type: ignore[reportPrivateImportUsage]
-                    client.username_pw_set(self._username, cfg.MQTT_PASSWORD)
+                    client.username_pw_set(self._username, self._password)
                     client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
-                    client.on_subscribe = lambda _c, _ud, _mid, _qos: logger.info(
-                        "PahoMqttClient on_subscribe: mid=%s qos=%s", _mid, _qos
-                    )
-                    client.on_log = on_log  # type: ignore[reportAttributeAccessIssue]
-                    # TLS required for port 8883
+                    # TLS required for port 8883 (e.g. io.adafruit.com).
                     if self._port == 8883:
                         client.tls_set_context()
                     logger.info(
                         "PahoMqttClient connecting to %s:%d...", self._host, self._port
                     )
-                    logger.info("PahoMqttClient calling client.connect()...")
                     client.connect(self._host, self._port, keepalive=60)
-                    logger.info(
-                        "PahoMqttClient connect() returned, entering loop_forever()"
-                    )
                     client.loop_forever()
                 except Exception as e:
                     if not stop.is_set():
@@ -116,14 +101,14 @@ class PahoMqttClient:
 
     def publish_envelope(self, envelope) -> bool:
         """Publish a MessageEnvelope to the broker feed. Returns True on success."""
-        import paho.mqtt.client as mqtt
-
         topic = self._feed
         payload = envelope.to_json()
         try:
             client = mqtt.Client(clean_session=True)
-            client.username_pw_set(cfg.MQTT_USERNAME, cfg.MQTT_PASSWORD)
-            client.connect(cfg.MQTT_HOST, int(cfg.MQTT_PORT), keepalive=30)
+            client.username_pw_set(self._username, self._password)
+            if self._port == 8883:
+                client.tls_set_context()
+            client.connect(self._host, self._port, keepalive=30)
             result = client.publish(topic, payload.encode(), qos=1)
             client.loop_stop()
             client.disconnect()

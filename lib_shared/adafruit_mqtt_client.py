@@ -1,4 +1,4 @@
-"""Adafruit IO MQTT subscriber for Flask (Heroku, TLS on port 8883).
+"""Adafruit IO MQTT client for the Flask server (Heroku, TLS on port 8883).
 
 Wraps Adafruit_IO.MQTTClient. On each incoming message calls
 dispatch_callback(raw_payload).

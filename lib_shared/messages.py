@@ -1,6 +1,4 @@
-"""In-memory message service for ESP32 / CircuitPython.
-
-No ABCs or dataclasses — plain Python only for CircuitPython compatibility.
+"""In-memory message service shared by the Flask app and the Raspberry Pi.
 
 Classes:
     FilteredMessages: Abstract base; applies filter rules and sender-name resolution.
@@ -18,8 +16,7 @@ from lib_shared.models import MessageView
 def _format_display_time(received_at: str, tz_offset_mins: int) -> str:
     """Format a UTC ISO timestamp for display in the sign's configured timezone.
 
-    Uses only ``time`` and ``calendar`` — no ``zoneinfo`` or ``datetime`` — for
-    broad CircuitPython compatibility.
+    Uses only ``time`` and ``calendar`` — no ``zoneinfo`` or ``datetime``.
 
     ``time.gmtime(local_epoch)`` is used instead of ``time.localtime()`` to avoid
     the system timezone polluting the result.  We treat the UTC epoch as UTC and

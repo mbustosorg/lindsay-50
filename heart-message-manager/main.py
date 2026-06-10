@@ -86,7 +86,9 @@ def api_login_required(f):
     return decorated_function
 
 
-logging.basicConfig(level=logging.INFO)
+from lib_shared.log_setup import configure_logging
+
+configure_logging(logging.INFO)
 logger = logging.getLogger(__name__)
 
 
@@ -103,16 +105,10 @@ import threading
 threading.Thread(target=_message_mgr.seed, daemon=True).start()
 
 
-# Platform MQTT client
-_mqtt_client = None
-if _cfg.MQTT_CLIENT == "adafruit":
-    from adafruit_mqtt_client import AdafruitMqttClient
+# Platform MQTT client (adafruit on Heroku, paho for local dev)
+from lib_shared.mqtt_factory import make_mqtt_client
 
-    _mqtt_client = AdafruitMqttClient(dispatch_callback=_message_mgr.dispatch)
-else:
-    from paho_mqtt_client import PahoMqttClient
-
-    _mqtt_client = PahoMqttClient(dispatch_callback=_message_mgr.dispatch)
+_mqtt_client = make_mqtt_client(_message_mgr.dispatch)
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 

@@ -1,14 +1,11 @@
 """MessageManager — owns config + message storage, handles dispatch and seeding.
 
-Both Flask and ESP32 instantiate this at boot. Seed URLs come from cfg internally.
+Both Flask and the Raspberry Pi display instantiate this at boot. Seed URLs come
+from cfg internally.
 """
 
 import json
-
-try:
-    import logging
-except ImportError:
-    import adafruit_logging as logging
+import logging
 
 from lib_shared.config_reader import get_config
 
@@ -24,7 +21,7 @@ class MessageManager:
     """Owns SignConfig + InMemoryMessages; handles dispatch, seeding, and storage.
 
     On Flask: instantiated at boot. Seeds from own REST API.
-    On ESP32: same — seeds from the Flask server's REST API.
+    On the Raspberry Pi: same — seeds from the Flask server's REST API.
     """
 
     def __init__(self, on_message=None):
@@ -32,7 +29,7 @@ class MessageManager:
 
         Args:
             on_message: callback(msg: Message) — called when a "message" envelope
-                        arrives over MQTT. ESP32 uses this to trigger display updates.
+                        arrives over MQTT. The Pi uses this to trigger display updates.
         """
         self._config = SignConfig()
         self._messages = InMemoryMessages(self._config, maxlen=100)
@@ -84,28 +81,19 @@ class MessageManager:
 
     def seed(self) -> None:
         """Back-populate config and messages from the Flask REST API."""
-        try:
-            import requests as req
+        import requests as req
 
-            _requests_timeout = 10
-            _requests_raise_for_status = lambda r: r.raise_for_status()
-            # Flask-to-Flask seed calls need API key auth
-            _api_key = cfg.if_exists("API_SECRET_KEY") or ""
-            _headers = {"X-API-Key": _api_key} if _api_key else {}
-        except ImportError:
-            import adafruit_requests as req
-
-            _requests_timeout = None  # adafruit_requests doesn't support timeout param
-            _requests_raise_for_status = lambda r: None  # no-op on CircuitPython
-            _headers = {}
+        # Seed calls (Flask-to-Flask and Pi-to-Flask) need API key auth.
+        _api_key = cfg.if_exists("API_SECRET_KEY") or ""
+        _headers = {"X-API-Key": _api_key} if _api_key else {}
 
         cfg_api = cfg.get("CONFIG_API_URL")
         msgs_api = cfg.get("MESSAGES_API_URL")
 
         if msgs_api:
             try:
-                resp = req.get(msgs_api, timeout=_requests_timeout, headers=_headers)
-                _requests_raise_for_status(resp)
+                resp = req.get(msgs_api, timeout=10, headers=_headers)
+                resp.raise_for_status()
                 data = resp.json()
                 if isinstance(data, list):
                     self._messages.clear()
@@ -128,8 +116,8 @@ class MessageManager:
 
         if cfg_api:
             try:
-                resp = req.get(cfg_api, timeout=_requests_timeout, headers=_headers)
-                _requests_raise_for_status(resp)
+                resp = req.get(cfg_api, timeout=10, headers=_headers)
+                resp.raise_for_status()
                 self._config.update_from_dict(resp.json())
                 logger.info("MessageManager seeded config")
             except Exception as e:

@@ -4,8 +4,8 @@ import signal
 import logging
 
 # Create the config singleton FIRST: modules imported below (rgb_display,
-# message_manager, paho_mqtt_client) call get_config() at import time, so it
-# must already exist. Wi-Fi is managed by the Raspberry Pi OS, not this process.
+# message_manager, and the MQTT client built by mqtt_factory) call get_config()
+# at import time, so it must already exist. Wi-Fi is managed by the Pi OS.
 from lib_shared.config_reader import get_config
 REQUIRED_KEYS: set[str] = {
     "MQTT_HOST",
@@ -19,7 +19,9 @@ REQUIRED_KEYS: set[str] = {
 }
 cfg = get_config(REQUIRED_KEYS)
 
-logging.basicConfig(level=getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
+from lib_shared.log_setup import configure_logging
+
+configure_logging(getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
 log = logging.getLogger("heart")
 
 from rgb_display import Display
@@ -27,8 +29,8 @@ from scroller import Scroller
 from fireworks import Fireworks
 from flame import Flame
 from nightsky import NightSky
-from paho_mqtt_client import PahoMqttClient
 from lib_shared.message_manager import MessageManager
+from lib_shared.mqtt_factory import make_mqtt_client
 
 
 display = Display()
@@ -104,16 +106,8 @@ coordinator = EffectCoordinator(display, scroller, [flame, fireworks, nightsky],
 _message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
 _message_mgr.seed()
 
-# Platform MQTT client
-_mqtt_client = None
-if cfg.MQTT_CLIENT == "adafruit":
-    from adafruit_mqtt_client import AdafruitMqttClient
-
-    _mqtt_client = AdafruitMqttClient(dispatch_callback=_message_mgr.dispatch)
-else:
-    from paho_mqtt_client import PahoMqttClient
-
-    _mqtt_client = PahoMqttClient(dispatch_callback=_message_mgr.dispatch)
+# Platform MQTT client (paho on the Pi; adafruit available via MQTT_CLIENT)
+_mqtt_client = make_mqtt_client(_message_mgr.dispatch)
 logging.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 
