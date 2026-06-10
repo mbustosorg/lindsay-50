@@ -19,8 +19,8 @@ class NightSky(Effect):
         self.target_twinkling = max(1, int(num_stars * twinkle_fraction))
         self.last_frame = 0.0
 
-        self.w = display.width
-        self.h = display.height
+        self.w = display.canvas.width
+        self.h = display.canvas.height
 
         self.bitmap = Bitmap(self.w, self.h, _PALETTE_SIZE)
         self.palette = Palette(_PALETTE_SIZE)

@@ -1,0 +1,14 @@
+[Unit]
+Description=binary-clock
+After=network.target
+
+[Service]
+ExecStart=/home/pi/projects/controller/startup.sh
+WorkingDirectory=/home/pi/projects/controller
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+User=root
+
+[Install]
+WantedBy=multi-user.target
