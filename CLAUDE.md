@@ -19,15 +19,13 @@ lindsay-50/
 │   ├── sqlite.py               # SQLite storage (rebuild-from-S3 on startup)
 │   ├── s3.py                   # S3 backup helpers
 │   ├── server_time.py          # Time helpers (zoneinfo-based, avoids stdlib conflict)
-│   ├── adafruit_mqtt_client.py # Adafruit IO MQTT subscriber (Heroku)
-│   ├── paho_mqtt_client.py     # Paho MQTT subscriber (local dev)
+│   ├── auth.py                 # User auth + API-key / Twilio webhook verification
 │   ├── templates/              # Jinja2 templates
 │   ├── settings.toml           # Local config (gitignored)
 │   └── settings.toml.example
 ├── heart-matrix-controller/      # Raspberry Pi 4 display device
 │   ├── main.py                 # Entrypoint: builds Display + effects, runs the loop
 │   ├── rgb_display.py          # hzeller rgbmatrix wrapper + Bitmap/Palette/Effect
-│   ├── paho_mqtt_client.py     # Paho MQTT subscriber (daemon thread, auto-reconnect)
 │   ├── scroller.py             # Scrolling text via rgbmatrix graphics + BDF font
 │   ├── fireworks.py
 │   ├── flame.py
@@ -37,7 +35,12 @@ lindsay-50/
 │   ├── models.py               # Message, SignConfig, FilterRule, RenderingSettings
 │   ├── messages.py             # FilteredMessages, InMemoryMessages
 │   ├── message_manager.py      # MessageManager (dispatch + seed)
-│   └── config_reader.py        # TOML + env config loader
+│   ├── config_reader.py        # TOML + env config loader
+│   ├── log_setup.py            # Shared logging format (Los Angeles timestamps)
+│   ├── mqtt_factory.py         # Selects the adafruit/paho MQTT client
+│   ├── adafruit_mqtt_client.py # Adafruit IO MQTT client (Heroku)
+│   └── paho_mqtt_client.py     # Paho MQTT client (local dev + Pi)
+├── scripts/                     # start/stop helpers, Pi systemd service + startup
 ├── requirements.txt
 └── .venv/
 ```
@@ -112,9 +115,9 @@ SMS → Twilio → POST /api/messages → Flask
 ```
 
 - `heart-message-manager/main.py` — Flask app, publishes envelopes via MQTT client, serves admin UI.
-- `heart-message-manager/adafruit_mqtt_client.py` — Heroku: wraps `Adafruit_IO.MQTTClient`.
-- `heart-message-manager/paho_mqtt_client.py` — Local dev: wraps `paho-mqtt`.
-- `heart-matrix-controller/paho_mqtt_client.py` — Pi: subscribe-only `paho-mqtt` client in a daemon thread (auto-reconnect).
+- `lib_shared/mqtt_factory.py` — `make_mqtt_client()` picks the client from `MQTT_CLIENT` (defaults to paho); both entrypoints call it.
+- `lib_shared/adafruit_mqtt_client.py` — wraps `Adafruit_IO.MQTTClient` (Heroku, `MQTT_CLIENT="adafruit"`).
+- `lib_shared/paho_mqtt_client.py` — wraps `paho-mqtt`; subscribe loop in a daemon thread (auto-reconnect), plus `publish_envelope()` for Flask. Used by local dev and the Pi.
 - `heart-matrix-controller/rgb_display.py` — Pi: wraps hzeller `RGBMatrix`; provides `Bitmap`/`Palette`/`arrayblit` (the displayio subset the effects use), the `Effect` base, and the per-frame composite (`Display.render`).
 - `heart-matrix-controller/main.py` — Pi entrypoint; seeds, starts MQTT, runs `EffectCoordinator.tick()` which advances + composites each frame.
 - `lib_shared/message_manager.py` — Shared `MessageManager`; Flask seeds from REST API, the Pi seeds from Flask's REST API.
