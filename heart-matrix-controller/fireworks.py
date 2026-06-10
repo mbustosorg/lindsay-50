@@ -24,7 +24,7 @@ class Fireworks(Effect):
         self.last_frame = 0.0
         self.last_spawn = 0.0
 
-        self.bitmap = Bitmap(display.width, display.height, _PALETTE_SIZE)
+        self.bitmap = Bitmap(display.canvas.width, display.canvas.height, _PALETTE_SIZE)
         self.palette = Palette(_PALETTE_SIZE)
         self.palette[0] = 0x000000
         for i in range(1, _PALETTE_SIZE):
@@ -47,7 +47,7 @@ class Fireworks(Effect):
             self._spawn_rocket()
             self.last_spawn = now
 
-        w, h = self.display.width, self.display.height
+        w, h = self.display.canvas.width, self.display.canvas.height
         survivors = []
         explosions = []
 
@@ -86,8 +86,8 @@ class Fireworks(Effect):
         # vy_init chosen so apex lands in the upper panel (rows 0..31):
         # apex_y = launch_y - vy_init**2 / (2*gravity)
         self.particles.append([
-            random.randint(8, self.display.width - 8),
-            self.display.height - 1,
+            random.randint(8, self.display.canvas.width - 8),
+            self.display.canvas.height - 1,
             random.uniform(-0.3, 0.3),
             random.uniform(-4.2, -3.6),
             80,

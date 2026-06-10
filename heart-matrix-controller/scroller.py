@@ -35,8 +35,8 @@ class Scroller:
 
         self.text = ""
         # Start off the right edge.
-        self.top_x = display.width
-        self.bottom_x = display.width
+        self.top_x = display.canvas.width
+        self.bottom_x = display.canvas.width
 
         # graphics.DrawText places the text baseline at y. Convert a desired
         # vertical center to a baseline for this font.
@@ -48,9 +48,9 @@ class Scroller:
         # A 64x64 stack shows two lines, one centered in each 64x32 panel
         # (centers at 16 and 48). A single short panel (<= 32 tall) can't fit
         # two stacked lines, so draw one line centered on the whole display.
-        self.single_line = display.height <= 32
+        self.single_line = display.canvas.height <= 32
         if self.single_line:
-            self.top_y = baseline_for(display.height // 2)
+            self.top_y = baseline_for(display.canvas.height // 2)
             self.bottom_y = self.top_y  # unused
         else:
             self.top_y = baseline_for(16)

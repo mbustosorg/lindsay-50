@@ -1,0 +1,22 @@
+# Install on the Pi (paths below assume the repo is at /home/pi/projects/lindsay-50):
+#   sudo cp scripts/lindsay_50.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now lindsay_50
+#   journalctl -u lindsay_50 -f      # follow logs
+
+[Unit]
+Description=Lindsay-50 heart matrix display
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/home/pi/projects/lindsay-50/scripts/startup_matrix_server.sh
+WorkingDirectory=/home/pi/projects/lindsay-50/heart-matrix-controller
+StandardOutput=inherit
+StandardError=inherit
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

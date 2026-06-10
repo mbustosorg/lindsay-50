@@ -1,8 +1,8 @@
 # Lindsay's 50th Heart Sign
 
-SMS → Twilio webhook → Flask server → MQTT broker → ESP32 (CircuitPython)
+SMS → Twilio webhook → Flask server → MQTT broker → Raspberry Pi 4
 
-Send a text message to a Twilio phone number. The ESP32 displays it on the LED matrix.
+Send a text message to a Twilio phone number. A Raspberry Pi 4 displays it on a 64×64 LED matrix.
 
 ## Architecture
 
@@ -12,12 +12,15 @@ SMS → Twilio → POST /api/messages → Flask
                                       ├─→ SQLite (persistent storage)
                                       ├─→ S3 (source of truth backup)
                                       │
-                                      └─→ MQTT broker ──→ ESP32 subscribes
+                                      └─→ MQTT broker ──→ Raspberry Pi 4 subscribes
                                                    ↑
                                           Flask also subscribes (ring buffer)
 ```
 
-ESP32 subscribes to a feed on the MQTT broker and renders incoming messages on a 64×64 HUB75 LED panel. Flask also subscribes to the same feed to populate its live message ring buffer.
+The Raspberry Pi 4 subscribes to a feed on the MQTT broker and renders incoming
+messages on a 64×64 HUB75 LED panel (two stacked 64×32 panels) using the hzeller
+`rpi-rgb-led-matrix` library. Flask also subscribes to the same feed to populate
+its live message ring buffer.
 
 ## Setup
 
@@ -26,8 +29,13 @@ ESP32 subscribes to a feed on the MQTT broker and renders incoming messages on a
 ```bash
 git clone https://github.com/mbustosorg/lindsay-50
 cd lindsay-50
-./scripts/setup-dev-tools.sh
+python3.12 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
+
+(`./scripts/setup-dev-tools.sh` is optional — it installs OpenSpec,
+agent-orchestrator, and the GitHub CLI, not the app dependencies.)
 
 ### 2. Configure
 
@@ -57,16 +65,16 @@ AWS_S3_ENDPOINT_URL = ""           # leave empty for real AWS, set for MinIO
 
 ### 3. Local development
 
-Start Flask with local MinIO + Mosquitto:
-
-```bash
-./scripts/start-app.sh --with-services
-```
-
-Or without local services (uses real S3/AIO):
+Start Flask with local MinIO (S3) + Mosquitto (MQTT) containers (started by default):
 
 ```bash
 ./scripts/start-app.sh
+```
+
+Or Flask only, against real S3/AIO:
+
+```bash
+./scripts/start-app.sh --flask-only
 ```
 
 Flask runs at **http://localhost:5000**
@@ -117,48 +125,59 @@ source .venv/bin/activate
 PYTHONPATH=. pytest tests/ -v
 ```
 
-## ESP32 Setup
+## Raspberry Pi 4 (display device) Setup
 
-Copy to `CIRCUITPY/`:
+The display runs on a Raspberry Pi 4 driving a 64×64 HUB75 panel via the hzeller
+[rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library. Wi-Fi
+is managed by the Pi OS, not this process.
 
-- `heart-matrix-controller/code.py`
-- `heart-matrix-controller/settings.toml`
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r heart-matrix-controller/requirements.txt   # builds the rgbmatrix C extension
 
-Required CircuitPython libraries (from Adafruit Bundle):
+cp heart-matrix-controller/settings.toml.example heart-matrix-controller/settings.toml
+# fill in MQTT_*, the API URLs, FONT_PATH, and the MATRIX_* panel geometry
 
-- `adafruit_minimqtt/`
-- `adafruit_io/`
-- `adafruit_matrixportal/`
-- `adafruit_connection_manager/`
-- `adafruit_ticks.mpy`
-- `adafruit_requests.mpy`
-- `adafruit_logging.mpy`
+# Run from the controller dir (so settings.toml/FONT_PATH resolve); root is needed for GPIO:
+cd heart-matrix-controller
+sudo PYTHONPATH=.. LOG_LEVEL=INFO python3 main.py
+```
+
+To run it at boot, install the systemd unit `scripts/lindsay_50.service`. See
+**Raspberry Pi 4 setup** in [CLAUDE.md](CLAUDE.md) for the `MATRIX_*` panel
+geometry keys and the service install steps.
 
 ## Project structure
 
 ```
 lindsay-50/
-├── heart-message-manager/     # Flask server (SMS receiver + admin UI)
-│   ├── main.py               # Flask app entrypoint
-│   ├── sqlite.py            # SQLite storage
-│   ├── s3.py                # S3 backup helpers
-│   ├── server_time.py        # Time helpers (zoneinfo-based, not stdlib)
-│   ├── adafruit_mqtt_client.py  # Adafruit IO MQTT subscriber (Heroku)
-│   ├── paho_mqtt_client.py      # Paho MQTT subscriber (local dev)
-│   ├── templates/            # Jinja2 templates
+├── heart-message-manager/        # Flask server (SMS receiver + admin UI)
+│   ├── main.py                  # Flask app entrypoint
+│   ├── auth.py                  # User auth + API-key / Twilio webhook verification
+│   ├── sqlite.py                # SQLite storage (rebuild-from-S3 on startup)
+│   ├── s3.py                    # S3 backup helpers
+│   ├── server_time.py           # Time helpers (zoneinfo-based)
+│   ├── templates/               # Jinja2 templates
 │   └── settings.toml.example
-├── heart-matrix-controller/   # CircuitPython device code
-│   ├── code.py
-│   ├── mqtt_client.py       # CircuitPython MQTT client (adafruit_io)
-│   ├── scroller.py
+├── heart-matrix-controller/      # Raspberry Pi 4 display device
+│   ├── main.py                  # Entrypoint: builds Display + effects, runs the loop
+│   ├── rgb_display.py           # hzeller rgbmatrix wrapper + Bitmap/Palette/Effect
+│   ├── scroller.py              # Scrolling text via rgbmatrix graphics + BDF font
 │   ├── fireworks.py
 │   ├── flame.py
+│   ├── nightsky.py
 │   └── settings.toml.example
-├── lib_shared/               # Shared code (Flask + CircuitPython)
-│   ├── models.py            # Message, SignConfig, FilterRule, etc.
-│   ├── messages.py          # InMemoryMessages ring buffer
-│   ├── message_manager.py   # Dispatch + seed orchestration
-│   └── config_reader.py     # TOML + env config loader
+├── lib_shared/                   # Shared code (Flask + Pi device)
+│   ├── models.py                # Message, SignConfig, FilterRule, RenderingSettings
+│   ├── messages.py              # FilteredMessages, InMemoryMessages
+│   ├── message_manager.py       # MessageManager (dispatch + seed)
+│   ├── config_reader.py         # TOML + env config loader
+│   ├── log_setup.py             # Shared logging format (Los Angeles timestamps)
+│   ├── mqtt_factory.py          # Selects the adafruit/paho MQTT client
+│   ├── adafruit_mqtt_client.py  # Adafruit IO MQTT client (Heroku)
+│   └── paho_mqtt_client.py      # Paho MQTT client (local dev + Pi)
+├── scripts/                      # start/stop helpers, Pi systemd service + startup
 ├── requirements.txt
 └── .venv/
 ```

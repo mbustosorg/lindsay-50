@@ -58,8 +58,8 @@ class Flame(Effect):
 
         # Run the heat field at 1/scale resolution and let the renderer upscale,
         # so per-frame work drops by scale**2.
-        self.w = display.width // scale
-        self.h = display.height // scale
+        self.w = display.canvas.width // scale
+        self.h = display.canvas.height // scale
 
         # Persistent hot fuel bed flickers between fuel_min..255 each frame.
         self._fuel_min = fuel_min
