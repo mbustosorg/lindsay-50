@@ -1,13 +1,15 @@
 [Unit]
-Description=binary-clock
-After=network.target
+Description=Lindsay-50 heart matrix display
+After=network-online.target
+Wants=network-online.target
 
 [Service]
-ExecStart=/home/pi/projects/controller/startup.sh
-WorkingDirectory=/home/pi/projects/controller
+ExecStart=/home/pi/projects/lindsay-50/scripts/startup_matrix_server.sh
+WorkingDirectory=/home/pi/projects/lindsay-50/heart-matrix-controller
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
+RestartSec=5
 User=root
 
 [Install]
