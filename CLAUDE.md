@@ -140,11 +140,22 @@ Run from the `heart-matrix-controller/` directory so `settings.toml` and the rel
 
 ```bash
 cd heart-matrix-controller
-sudo PYTHONPATH=.. LOG_LEVEL=INFO python3 code.py
+sudo PYTHONPATH=.. LOG_LEVEL=INFO python3 main.py
+```
+
+### Run as a systemd service
+
+`scripts/lindsay_50.service` runs the controller at boot via `scripts/startup_matrix_server.sh` (which cds into `heart-matrix-controller/`, activates the repo-root `.venv`, sets `PYTHONPATH` to the repo root, and runs `main.py` as root). Both files assume the repo is cloned at `/home/pi/projects/lindsay-50` — edit `REPO_DIR` in the script and the paths in the unit file if yours differs.
+
+```bash
+sudo cp scripts/lindsay_50.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now lindsay_50
+journalctl -u lindsay_50 -f        # follow logs
 ```
 
 Panel geometry (rows/cols/chain/mapper/hardware mapping/pwm bits/gpio slowdown) is configured via the `MATRIX_*` keys in `settings.toml` — see `settings.toml.example`. The defaults assume a 64×64 logical panel built from two 64×32 panels, serpentine-wired (chain of 2 folded by the `U-mapper`), wired directly to GPIO (`MATRIX_HARDWARE_MAPPING = "regular"`; use `"adafruit-hat"` for the Adafruit HAT/Bonnet). Verify `MATRIX_HARDWARE_MAPPING` and `MATRIX_PIXEL_MAPPER` against your actual wiring.
 
 The scroller adapts to panel height: a 64×64 stack shows two scrolling lines (one centered per 64×32 half); a single short panel (`display.height <= 32`) shows one line centered on the whole display. For a single 32×64 test panel, set `MATRIX_CHAIN = 1` and `MATRIX_PIXEL_MAPPER = ""`.
 
-To add a new visual effect, subclass `Effect` (from `rgb_display.py`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` and `render(canvas)`. Append an instance to the `effects` list passed to `EffectCoordinator` in `code.py`.
+To add a new visual effect, subclass `Effect` (from `rgb_display.py`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` and `render(canvas)`. Append an instance to the `effects` list passed to `EffectCoordinator` in `main.py`.
