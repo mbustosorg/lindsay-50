@@ -161,12 +161,14 @@ lindsay-50/
 │   ├── templates/               # Jinja2 templates
 │   └── settings.toml.example
 ├── heart-matrix-controller/      # Raspberry Pi 4 display device
-│   ├── main.py                  # Entrypoint: builds Display + effects, runs the loop
+│   ├── main.py                  # Entrypoint: builds Display + patterns, runs the loop
 │   ├── rgb_display.py           # hzeller rgbmatrix wrapper + Bitmap/Palette/Effect
 │   ├── scroller.py              # Scrolling text via rgbmatrix graphics + BDF font
-│   ├── fireworks.py
-│   ├── flame.py
-│   ├── nightsky.py
+│   ├── patterns/                # Background patterns (Effect subclasses)
+│   │   ├── fireworks.py
+│   │   ├── flame.py
+│   │   ├── nightsky.py
+│   │   └── png_display.py       # PNG slideshow from design/pngs
 │   └── settings.toml.example
 ├── lib_shared/                   # Shared code (Flask + Pi device)
 │   ├── models.py                # Message, SignConfig, FilterRule, RenderingSettings

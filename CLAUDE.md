@@ -24,12 +24,14 @@ lindsay-50/
 │   ├── settings.toml           # Local config (gitignored)
 │   └── settings.toml.example
 ├── heart-matrix-controller/      # Raspberry Pi 4 display device
-│   ├── main.py                 # Entrypoint: builds Display + effects, runs the loop
+│   ├── main.py                 # Entrypoint: builds Display + patterns, runs the loop
 │   ├── rgb_display.py          # hzeller rgbmatrix wrapper + Bitmap/Palette/Effect
 │   ├── scroller.py             # Scrolling text via rgbmatrix graphics + BDF font
-│   ├── fireworks.py
-│   ├── flame.py
-│   ├── nightsky.py
+│   ├── patterns/               # Background patterns (Effect subclasses)
+│   │   ├── fireworks.py
+│   │   ├── flame.py
+│   │   ├── nightsky.py
+│   │   └── png_display.py      # PNG slideshow from design/pngs
 │   └── settings.toml            # Local config (gitignored)
 ├── lib_shared/                  # Shared code (Flask + Pi device)
 │   ├── models.py               # Message, SignConfig, FilterRule, RenderingSettings
@@ -161,4 +163,4 @@ Panel geometry (rows/cols/chain/mapper/hardware mapping/pwm bits/gpio slowdown) 
 
 The scroller adapts to panel height: a 64×64 stack shows two scrolling lines (one centered per 64×32 half); a single short panel (`display.height <= 32`) shows one line centered on the whole display. For a single 32×64 test panel, set `MATRIX_CHAIN = 1` and `MATRIX_PIXEL_MAPPER = ""`.
 
-To add a new visual effect, subclass `Effect` (from `rgb_display.py`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` and `render(canvas)`. Append an instance to the `effects` list passed to `EffectCoordinator` in `main.py`.
+To add a new visual pattern, drop a module in `heart-matrix-controller/patterns/` that subclasses `Effect` (from `rgb_display.py`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` and a default `render(canvas)` (which a pattern may override — e.g. `png_display.py` draws every pixel instead of skipping the transparent index 0). Append an instance to the list passed to `EffectCoordinator` in `main.py`.

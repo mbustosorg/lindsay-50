@@ -2,6 +2,7 @@
 # Install on the Pi: pip install -r heart-matrix-controller/requirements.txt
 paho-mqtt
 requests>=2.31
+Pillow            # PNG loading/scaling for the png_display pattern
 # rgbmatrix bindings live in a subdirectory and build a C extension (needs the
 # Pi's build toolchain). Alternatively: clone the repo and run
 # `make build-python && sudo make install-python`.
