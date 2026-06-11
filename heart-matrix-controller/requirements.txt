@@ -2,6 +2,11 @@
 # Install on the Pi: pip install -r heart-matrix-controller/requirements.txt
 paho-mqtt
 requests>=2.31
+Pillow            # PNG loading/scaling for the png_display pattern
+numpy             # vectorized math for the honeycomb pattern
+# Video decoding for the video_display pattern. On the Pi, `sudo apt install
+# python3-opencv` is often more reliable than the pip wheel.
+opencv-python-headless
 # rgbmatrix bindings live in a subdirectory and build a C extension (needs the
 # Pi's build toolchain). Alternatively: clone the repo and run
 # `make build-python && sudo make install-python`.

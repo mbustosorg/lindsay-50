@@ -148,6 +148,18 @@ To run it at boot, install the systemd unit `scripts/lindsay_50.service`. See
 **Raspberry Pi 4 setup** in [CLAUDE.md](CLAUDE.md) for the `MATRIX_*` panel
 geometry keys and the service install steps.
 
+### Patterns
+
+The display cycles through background patterns (one switches in with each new
+message), with the scrolling text composited on top:
+
+| Pattern | Notes |
+|---------|-------|
+| `flame`, `fireworks`, `nightsky` | Generative palette-based effects |
+| `png_display` | Slideshow of PNGs in `design/pngs/` (crossfades; `PNG_INTERVAL`, `PNG_FADE`) |
+| `video_display` | Loops a video from `design/videos/` — or `VIDEO_PATH` (`VIDEO_FPS` to override). Needs OpenCV; pre-scale clips to 64×64 with ffmpeg |
+| `honeycomb` | Port of a Pixelblaze HSV pattern (numpy) |
+
 ## Project structure
 
 ```
@@ -161,12 +173,16 @@ lindsay-50/
 │   ├── templates/               # Jinja2 templates
 │   └── settings.toml.example
 ├── heart-matrix-controller/      # Raspberry Pi 4 display device
-│   ├── main.py                  # Entrypoint: builds Display + effects, runs the loop
+│   ├── main.py                  # Entrypoint: builds Display + patterns, runs the loop
 │   ├── rgb_display.py           # hzeller rgbmatrix wrapper + Bitmap/Palette/Effect
 │   ├── scroller.py              # Scrolling text via rgbmatrix graphics + BDF font
-│   ├── fireworks.py
-│   ├── flame.py
-│   ├── nightsky.py
+│   ├── patterns/                # Background patterns (Effect subclasses)
+│   │   ├── fireworks.py
+│   │   ├── flame.py
+│   │   ├── nightsky.py
+│   │   ├── png_display.py       # PNG slideshow from design/pngs (crossfade)
+│   │   ├── video_display.py     # Looping video (OpenCV) from design/videos
+│   │   └── honeycomb.py         # Pixelblaze HSV pattern port (numpy + SetImage)
 │   └── settings.toml.example
 ├── lib_shared/                   # Shared code (Flask + Pi device)
 │   ├── models.py                # Message, SignConfig, FilterRule, RenderingSettings

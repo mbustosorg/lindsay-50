@@ -26,9 +26,12 @@ log = logging.getLogger("heart")
 
 from rgb_display import Display
 from scroller import Scroller
-from fireworks import Fireworks
-from flame import Flame
-from nightsky import NightSky
+from patterns.fireworks import Fireworks
+from patterns.flame import Flame
+from patterns.nightsky import NightSky
+from patterns.png_display import PngDisplay
+from patterns.video_display import VideoDisplay
+from patterns.honeycomb import Honeycomb
 from lib_shared.message_manager import MessageManager
 from lib_shared.mqtt_factory import make_mqtt_client
 
@@ -38,6 +41,9 @@ scroller = Scroller(display)
 fireworks = Fireworks(display)
 flame = Flame(display)
 nightsky = NightSky(display)
+png = PngDisplay(display)
+video = VideoDisplay(display)
+honeycomb = Honeycomb(display)
 
 
 class EffectCoordinator:
@@ -101,7 +107,7 @@ class EffectCoordinator:
         self.display.render(self.effects[self.idx], self.scroller)
 
 
-coordinator = EffectCoordinator(display, scroller, [flame, fireworks, nightsky], fade_seconds=5.2)
+coordinator = EffectCoordinator(display, scroller, [video, png, honeycomb, flame, fireworks, nightsky], fade_seconds=4)
 
 _message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
 _message_mgr.seed()
