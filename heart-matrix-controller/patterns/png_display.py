@@ -68,14 +68,16 @@ class PngDisplay(Effect):
         from PIL import Image  # lazy: only the Pi needs Pillow
 
         w, h = self._w, self._h
+        # The source PNGs in design/pngs are pre-inverted; load them as-is.
         img = Image.open(path)
-        img.thumbnail((w, h), Image.LANCZOS)  # fit within the panel, keep aspect
+        img.thumbnail((w, h), Image.LANCZOS) # fit within the panel, keep aspect
         frame = Image.new("RGB", (w, h), (0, 0, 0))
         offset = ((w - img.width) // 2, (h - img.height) // 2)
         if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
             # Composite over black using the alpha channel as the paste mask.
-            img = img.convert("RGBA")
-            frame.paste(img, offset, img)
+            # img = img.convert("RGBA")
+            # frame.paste(img, offset, img)
+            frame.paste(img.convert("RGB"), offset)
         else:
             frame.paste(img.convert("RGB"), offset)
 
