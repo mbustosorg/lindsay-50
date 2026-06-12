@@ -144,3 +144,30 @@ def test_preview_js_resizes_canvas_on_window_resize():
     assert "sizeCanvasToViewport" in src
     # And both the canvas and sizeCanvasToViewport must be in scope where
     # the handler is added (the IIFE binds `canvas` from init()).
+
+
+def test_preview_js_listens_for_pyscript_py_ready_event():
+    """Regression: PyScript 2024.10+ renamed the runtime-ready event from
+    `pyodideReady` (plain Event on document) to `py:ready` (CustomEvent
+    with bubbles:true on each `<py-script>` element). preview.js must
+    listen for the new name or the page never advances past the
+    "Loading preview…" overlay, even though the Python module loaded
+    fine and all the static file fetches returned 200.
+
+    The list is also kept as a backwards-compat fallback for older
+    PyScript releases that still fire `pyodideReady`.
+    """
+    src = _js_source()
+    # The new event name (with the colon)
+    assert re.search(
+        r"addEventListener\(\s*[\"']py:ready[\"']", src
+    ), "preview.js must listen for PyScript 2024.10+'s 'py:ready' event"
+    # The legacy event name should still be wired up for older releases
+    assert re.search(
+        r"addEventListener\(\s*[\"']pyodideReady[\"']", src
+    ), "preview.js must keep a 'pyodideReady' fallback for older PyScript"
+    # Both listeners should call the same handler, otherwise the page
+    # would boot twice on a runtime that fires both events.
+    assert src.count("addEventListener") >= 2
+    # The handler name appears at most once as a defined function
+    # (the const onReady is referenced in both addEventListener calls).

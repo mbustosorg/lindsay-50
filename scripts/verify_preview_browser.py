@@ -268,10 +268,16 @@ def assert_9_5_five_tabs(p) -> tuple[bool, str]:
         };
         const _fireReady = () => {
             // Defer to the next macrotask so all DOMContentLoaded
-            // listeners (including preview.js's init() which
-            // attaches the pyodideReady listener) run first.
+            // listeners (including preview.js's init() which attaches
+            // the py:ready / pyodideReady listener) run first.
+            // PyScript 2024.10+ dispatches `py:ready` (CustomEvent,
+            // bubbles); older releases used `pyodideReady` (plain
+            // Event). preview.js listens for both, so we fire both.
             setTimeout(() => {
                 document.dispatchEvent(new Event("pyodideReady"));
+                document.dispatchEvent(
+                    new CustomEvent("py:ready", { bubbles: true })
+                );
             }, 0);
         };
         if (document.readyState === "loading") {
@@ -388,13 +394,17 @@ def install_pyscript_shim(page) -> None:
                 get: (name) => _globals.get(name),
             },
         };
-        // Fire pyodideReady immediately so preview.js kicks off
-        // its render + polling loops without waiting for the real
-        // Pyodide bootstrap. The real browser does the same once
-        // PyScript finishes loading the main module.
+        // Fire py:ready (PyScript 2024.10+) / pyodideReady (older)
+        // immediately so preview.js kicks off its render + polling
+        // loops without waiting for the real Pyodide bootstrap. The
+        // real browser does the same once PyScript finishes loading
+        // the main module.
         const _fireReady = () => {
             setTimeout(() => {
                 document.dispatchEvent(new Event("pyodideReady"));
+                document.dispatchEvent(
+                    new CustomEvent("py:ready", { bubbles: true })
+                );
             }, 0);
         };
         if (document.readyState === "loading") {

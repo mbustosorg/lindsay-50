@@ -38,6 +38,7 @@
 <py-script src="{{ url_for('static', filename='preview/preview_main.py') }}"></py-script>
 
 <!-- App-side main loop + polling. Loaded after PyScript so it can wait for
-     the runtime's `pyodideReady` event. -->
+     the runtime's `py:ready` event (PyScript 2024.10+; `pyodideReady` on
+     older releases). -->
 <script src="{{ url_for('static', filename='preview/preview.js') }}"></script>
 {% endblock %}

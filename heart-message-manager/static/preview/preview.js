@@ -2,7 +2,8 @@
 //
 // Three loops run in the browser:
 //   1. PyScript's bootstrap, which loads the runtime + preview_main.py and
-//      fires the `pyodideReady` event when the coordinator is callable.
+//      fires the `py:ready` event (PyScript 2024.10+) — or
+//      `pyodideReady` (older releases) — when the coordinator is callable.
 //   2. A requestAnimationFrame loop, capped at 30 FPS, that calls
 //      `coordinator.tick()` and blits the frame buffer to the canvas.
 //   3. A setInterval polling loop that fetches /api/live-messages every
@@ -51,10 +52,15 @@
       });
     });
 
-    // Wait for PyScript runtime to be ready. PyScript 2024.10+ exposes a
-    // `pyodideReady` event when its main module has finished evaluating
-    // (which is when coordinator.request_message and tick are callable).
-    document.addEventListener("pyodideReady", () => {
+    // Wait for PyScript runtime to be ready.
+    //
+    // PyScript 2024.10+ dispatches a CustomEvent named `py:ready` (with
+    // bubbles:true) on each `<py-script>` element when its main module
+    // has finished evaluating — that's when coordinator.request_message
+    // and tick become callable. Older releases (≤ 2024.5.x) used
+    // `pyodideReady` on document. We listen for both so the page works
+    // on either runtime version.
+    const onReady = () => {
       hideLoading();
       startRenderLoop(canvas);
       // First poll + ongoing poll, mirroring the testing page pattern:
@@ -62,7 +68,10 @@
       //   setInterval(fetchMessages, 3000);
       pollLatestMessage();
       setInterval(pollLatestMessage, POLL_MS);
-    });
+    };
+    document.addEventListener("py:ready", onReady);
+    // Backwards-compat for older PyScript releases.
+    document.addEventListener("pyodideReady", onReady);
   }
 
   function sizeCanvasToViewport(canvas) {
