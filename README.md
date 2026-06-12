@@ -37,6 +37,8 @@ pip install -r requirements.txt
 (`./scripts/setup-dev-tools.sh` is optional — it installs OpenSpec,
 agent-orchestrator, and the GitHub CLI, not the app dependencies.)
 
+For Black formatter setup (install + VSCode/PyCharm config), see [BLACK.md](BLACK.md).
+
 ### 2. Configure
 
 ```bash
