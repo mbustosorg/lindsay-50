@@ -10,6 +10,7 @@ real network access. The /api/messages webhook is preserved so curl
 can inject messages, and /api/live-messages is preserved so the
 browser polling loop has something to fetch.
 """
+
 import importlib.util
 import os
 import sys
@@ -42,19 +43,22 @@ mock_cfg.AWS_S3_REGION = "us-east-1"
 mock_cfg.CONFIG_API_URL = "http://localhost/api/config"
 mock_cfg.MESSAGES_API_URL = "http://localhost/api/messages"
 mock_cfg.PORT = "5050"
-mock_cfg.if_exists = MagicMock(side_effect=lambda k: {
-    "ADMIN_USERNAME": "admin",
-    "ADMIN_PASSWORD": "secret123",
-    "API_SECRET_KEY": "esp32-api-key",
-    "ADMIN_SESSION_TIMEOUT_MINS": "60",
-    "TWILIO_AUTH_TOKEN": "",  # disable Twilio sig validation for curl injection
-}.get(k))
+mock_cfg.if_exists = MagicMock(
+    side_effect=lambda k: {
+        "ADMIN_USERNAME": "admin",
+        "ADMIN_PASSWORD": "secret123",
+        "API_SECRET_KEY": "esp32-api-key",
+        "ADMIN_SESSION_TIMEOUT_MINS": "60",
+        "TWILIO_AUTH_TOKEN": "",  # disable Twilio sig validation for curl injection
+    }.get(k)
+)
 
 
 def _make_mock(name):
     mod = types.ModuleType(name)
     sys.modules[name] = mod
     return mod
+
 
 # lib_shared
 # Import the real models module directly (it has no internal lib_shared
@@ -104,6 +108,7 @@ _fake_lock = threading.Lock()
 
 def _make_msg(body, msg_id=None):
     from uuid import uuid4
+
     return RealMessage(
         id=msg_id or str(uuid4()),
         sender="+15551234567",
@@ -124,14 +129,24 @@ def _get_all_messages():
 
 # Patch the sqlite functions on the mod's namespace (it's bound to `import sqlite`)
 sqlite_real.get_all_messages = _get_all_messages
-sqlite_real.get_message = lambda mid: next((m for m in _fake_messages if m.id == mid), None)
-sqlite_real.get_config = MagicMock(return_value=type("Cfg", (), {
-    "sign": type("Sign", (), {"name": "Lindsay's Heart"})(),
-    "timezone": "America/Los_Angeles",
-    "filters": [],
-    "rendering": type("R", (), {"mode": "scroll", "speed": 0.04, "color": 0xFF0000})(),
-    "senders": {},
-})())
+sqlite_real.get_message = lambda mid: next(
+    (m for m in _fake_messages if m.id == mid), None
+)
+sqlite_real.get_config = MagicMock(
+    return_value=type(
+        "Cfg",
+        (),
+        {
+            "sign": type("Sign", (), {"name": "Lindsay's Heart"})(),
+            "timezone": "America/Los_Angeles",
+            "filters": [],
+            "rendering": type(
+                "R", (), {"mode": "scroll", "speed": 0.04, "color": 0xFF0000}
+            )(),
+            "senders": {},
+        },
+    )()
+)
 sqlite_real.message_count = lambda: len(_fake_messages)
 sqlite_real.put_message = lambda msg: _add_fake_message(msg.body)
 sqlite_real.put_config = MagicMock()
@@ -140,6 +155,7 @@ sqlite_real.get_messages_since = lambda since: _get_all_messages()
 # Same for s3
 _make_mock("s3")
 import s3 as s3_real
+
 s3_real.log_message = MagicMock()
 s3_real.save_config_snapshot = MagicMock()
 s3_real._s3_bucket = MagicMock(return_value="test-bucket")
@@ -153,6 +169,7 @@ _add_fake_message("second seeded message")
 
 # Point Flask's Jinja loader at the real templates directory
 from jinja2 import FileSystemLoader
+
 mod.app.jinja_env = mod.app.create_jinja_environment()
 mod.app.jinja_env.loader = FileSystemLoader(
     str(REPO_ROOT / "heart-message-manager" / "templates")

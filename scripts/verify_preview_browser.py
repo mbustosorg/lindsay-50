@@ -28,6 +28,7 @@ Note on PyScript bootstrap:
   separate concern that the real-browser reviewer (or a non-headless
   Chromium) needs to verify.
 """
+
 import json
 import sys
 import time
@@ -53,11 +54,13 @@ _polling_lock_marker = []
 
 def curl_inject_sms(body: str, sender: str = "+15551234567") -> int:
     """Inject an SMS via the public webhook (no auth)."""
-    data = urllib.parse.urlencode({
-        "From": sender,
-        "Body": body,
-        "To": "+15559999999",
-    }).encode()
+    data = urllib.parse.urlencode(
+        {
+            "From": sender,
+            "Body": body,
+            "To": "+15559999999",
+        }
+    ).encode()
     req = urllib.request.Request(SMS_URL, data=data, method="POST")
     with urllib.request.urlopen(req, timeout=5) as r:
         return r.status
@@ -111,9 +114,19 @@ def assert_9_2_render(page) -> tuple[bool, str]:
     # 9.2c: image-rendering: pixelated on the canvas (LED look)
     has_pixelated = "image-rendering: pixelated" in html
 
-    ok = all([has_canvas, has_effect, has_message, has_loading,
-              has_preview_js, has_preview_main, has_py_config,
-              has_py_script, has_pixelated])
+    ok = all(
+        [
+            has_canvas,
+            has_effect,
+            has_message,
+            has_loading,
+            has_preview_js,
+            has_preview_main,
+            has_py_config,
+            has_py_script,
+            has_pixelated,
+        ]
+    )
     details = (
         f"canvas={has_canvas} effect={has_effect} message={has_message} "
         f"loading={has_loading} preview_js={has_preview_js} "
@@ -154,14 +167,18 @@ def assert_9_3_sms_within_3s(page) -> tuple[bool, str]:
         page.wait_for_timeout(150)
     shim_state_after = page.evaluate("() => window.__pyscript_shim")
     if observed_at is None:
-        return False, (f"After 4s, #preview-message did not contain "
-                       f"'{unique_body}' (was '{before[:50]}…'); "
-                       f"shim before: {shim_state_before}; "
-                       f"shim after: {shim_state_after}")
+        return False, (
+            f"After 4s, #preview-message did not contain "
+            f"'{unique_body}' (was '{before[:50]}…'); "
+            f"shim before: {shim_state_before}; "
+            f"shim after: {shim_state_after}"
+        )
     elapsed = observed_at - (deadline - 4.0)
-    return True, (f"preview-message picked up '{unique_body}' "
-                  f"after {elapsed:.2f}s (≤3s budget) without reload "
-                  f"(shim calls: {shim_state_after['calls']})")
+    return True, (
+        f"preview-message picked up '{unique_body}' "
+        f"after {elapsed:.2f}s (≤3s budget) without reload "
+        f"(shim calls: {shim_state_after['calls']})"
+    )
 
 
 def assert_9_4_tab_resume(page) -> tuple[bool, str]:
@@ -211,8 +228,10 @@ def assert_9_4_tab_resume(page) -> tuple[bool, str]:
         return False, "canvas missing or unrendered"
     if canvas_pixels == 0:
         return False, "canvas is fully black after 5s — render loop not running"
-    return True, (f"canvas still painting after 5s ({canvas_pixels} "
-                  f"non-zero pixels, hash changed={hash_before != hash_after})")
+    return True, (
+        f"canvas still painting after 5s ({canvas_pixels} "
+        f"non-zero pixels, hash changed={hash_before != hash_after})"
+    )
 
 
 def assert_9_5_five_tabs(p) -> tuple[bool, str]:
@@ -330,8 +349,10 @@ def assert_9_5_five_tabs(p) -> tuple[bool, str]:
         return False, f"tabs {missing} did not pick up '{unique_body}' within 4s"
     start = deadline - 4.0
     times = [(t or 0) - start for t in per_tab_first_seen]
-    return True, (f"all 5 tabs picked up the SMS within 3s "
-                  f"(tab-by-tab seconds: {[f'{t:.2f}' for t in times]})")
+    return True, (
+        f"all 5 tabs picked up the SMS within 3s "
+        f"(tab-by-tab seconds: {[f'{t:.2f}' for t in times]})"
+    )
 
 
 def install_pyscript_shim(page) -> None:

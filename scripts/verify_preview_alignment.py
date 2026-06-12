@@ -15,6 +15,7 @@ Exits 0 on success, non-zero on failure. Intended to be run by hand
 (not part of CI) since the device side imports rgbmatrix, which is
 not installable on a workstation.
 """
+
 import importlib.util
 import os
 import sys
@@ -35,21 +36,43 @@ sys.modules["rgbmatrix.graphics"] = _RG.graphics
 # Bootstrap config so the device's get_config() call in MatrixScroller
 # doesn't blow up (we never reach it, but ScrollerBase.__init__ reads
 # frame_delay directly).
-os.environ.update({
-    "MQTT_CLIENT": "paho", "MQTT_HOST": "localhost", "MQTT_PORT": "1883",
-    "MQTT_USERNAME": "test", "MQTT_PASSWORD": "test", "MQTT_TOPIC": "test",
-    "AWS_ACCESS_KEY_ID": "test", "AWS_SECRET_ACCESS_KEY": "test",
-    "AWS_S3_BUCKET": "test", "AWS_S3_REGION": "us-east-1",
-    "CONFIG_API_URL": "http://localhost", "MESSAGES_API_URL": "http://localhost",
-    "API_KEY": "test",
-})
+os.environ.update(
+    {
+        "MQTT_CLIENT": "paho",
+        "MQTT_HOST": "localhost",
+        "MQTT_PORT": "1883",
+        "MQTT_USERNAME": "test",
+        "MQTT_PASSWORD": "test",
+        "MQTT_TOPIC": "test",
+        "AWS_ACCESS_KEY_ID": "test",
+        "AWS_SECRET_ACCESS_KEY": "test",
+        "AWS_S3_BUCKET": "test",
+        "AWS_S3_REGION": "us-east-1",
+        "CONFIG_API_URL": "http://localhost",
+        "MESSAGES_API_URL": "http://localhost",
+        "API_KEY": "test",
+    }
+)
 from lib_shared import config_reader
+
 config_reader._CONFIG_SINGLETON = None
-config_reader.get_config({
-    "MQTT_CLIENT", "MQTT_HOST", "MQTT_PORT", "MQTT_USERNAME", "MQTT_PASSWORD",
-    "MQTT_TOPIC", "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_S3_BUCKET",
-    "AWS_S3_REGION", "CONFIG_API_URL", "MESSAGES_API_URL", "API_KEY",
-})
+config_reader.get_config(
+    {
+        "MQTT_CLIENT",
+        "MQTT_HOST",
+        "MQTT_PORT",
+        "MQTT_USERNAME",
+        "MQTT_PASSWORD",
+        "MQTT_TOPIC",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_S3_BUCKET",
+        "AWS_S3_REGION",
+        "CONFIG_API_URL",
+        "MESSAGES_API_URL",
+        "API_KEY",
+    }
+)
 
 # Load MatrixScroller via the hyphenated-name loader.
 _spec = importlib.util.spec_from_file_location(
@@ -59,18 +82,24 @@ _mc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mc)
 MatrixScroller, ScrollerBase = _mc.MatrixScroller, _mc.ScrollerBase
 
+
 # Stub Font (we never actually blit; this is just for set_text width math)
 class _StubFont:
     height = 11
     baseline = 9
+
     def CharacterWidth(self, c):
         return 5
+
 
 class _StubCanvas:
     width = 64
     height = 64
+
+
 class _StubDisplay:
     canvas = _StubCanvas()
+
 
 # Build MatrixScroller without invoking __init__'s font load.
 m = MatrixScroller.__new__(MatrixScroller)
@@ -95,24 +124,35 @@ _pv = importlib.util.module_from_spec(_spec2)
 _spec2.loader.exec_module(_pv)
 PreviewScroller = _pv.PreviewScroller
 
+
 class _PreviewDisplay:
     width = 64
     height = 64
 
-p = PreviewScroller(display=_PreviewDisplay(), color=0xFFFFFF,
-                    frame_delay=0.04, offset_seconds=1.0)
+
+p = PreviewScroller(
+    display=_PreviewDisplay(), color=0xFFFFFF, frame_delay=0.04, offset_seconds=1.0
+)
 p.last_tick = 1000.0
 
 # 1. Both subclasses use ScrollerBase.tick (no override) — the alignment
 #    guarantee is structural.
-assert MatrixScroller.tick is ScrollerBase.tick, "MatrixScroller must inherit ScrollerBase.tick"
-assert PreviewScroller.tick is ScrollerBase.tick, "PreviewScroller must inherit ScrollerBase.tick"
+assert (
+    MatrixScroller.tick is ScrollerBase.tick
+), "MatrixScroller must inherit ScrollerBase.tick"
+assert (
+    PreviewScroller.tick is ScrollerBase.tick
+), "PreviewScroller must inherit ScrollerBase.tick"
 print("OK: both subclasses use ScrollerBase.tick (no override)")
 
 # 2. Mock time.monotonic so both see the same clock.
 fake_time = [1000.0]
+
+
 def fake_monotonic():
     return fake_time[0]
+
+
 time.monotonic = fake_monotonic
 ScrollerBase.tick.__globals__["time"] = time  # patch the import inside scroller_base
 
