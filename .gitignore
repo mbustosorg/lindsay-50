@@ -14,3 +14,12 @@ settings.toml
 
 secret_key
 db.sqlite
+
+# Agent Orchestrator runtime state
+.ao/
+.git_wt_initialized
+
+# Worktree-local AO hooks (re-run scripts/install_ao_hooks.sh to install)
+.claude/settings.json
+.claude/activity-updater.sh
+.claude/metadata-updater.sh
