@@ -33,7 +33,8 @@ lindsay-50/
 │   │   ├── nightsky.py
 │   │   ├── png_display.py      # PNG slideshow from design/pngs (crossfade)
 │   │   ├── video_display.py    # Looping video (OpenCV) from design/videos
-│   │   └── honeycomb.py        # Pixelblaze HSV pattern port (numpy + SetImage)
+│   │   ├── honeycomb.py        # Pixelblaze HSV pattern port (numpy + SetImage)
+│   │   └── hyperspace.py       # Star Wars-style jump: 3D starfield → tunnel of streaks
 │   └── settings.toml            # Local config (gitignored)
 ├── lib_shared/                  # Shared code (Flask + Pi device)
 │   ├── models.py               # Message, SignConfig, FilterRule, RenderingSettings
@@ -170,5 +171,5 @@ The scroller adapts to panel height: a 64×64 stack shows two scrolling lines (o
 
 To add a new visual pattern, drop a module in `heart-matrix-controller/patterns/` that subclasses `Effect` (from `rgb_display.py`) and append an instance to the list passed to `EffectCoordinator` in `main.py`. Two flavors:
 
-- **Palette-based** (e.g. `fireworks`, `flame`, `nightsky`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` (fades by scaling the palette) and the default `render(canvas)`.
+- **Palette-based** (e.g. `fireworks`, `flame`, `nightsky`, `hyperspace`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` (fades by scaling the palette) and the default `render(canvas)`. Note: `self.scale` is reserved — `Effect.render()` reads it as an integer pixel-doubling factor (each lit pixel becomes a `scale × scale` block, default 1), so don't reuse the name for an unrelated "scale" of your own (give it a distinct name like `proj_scale`).
 - **Full-color** (e.g. `video_display`, `honeycomb`): override `render(canvas)` to blit a whole RGB frame with `canvas.SetImage(pil_image)` — far faster than per-pixel `SetPixel` and not limited to 256 colors. Override `set_brightness(b)` to store a factor and apply it when blitting (the palette pipeline is bypassed). `png_display` is a hybrid: palette-based but overrides `render` to draw every pixel.

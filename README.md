@@ -159,6 +159,7 @@ message), with the scrolling text composited on top:
 | `png_display` | Slideshow of PNGs in `design/pngs/` (crossfades; `PNG_INTERVAL`, `PNG_FADE`) |
 | `video_display` | Loops a video from `design/videos/` — or `VIDEO_PATH` (`VIDEO_FPS` to override). Needs OpenCV; pre-scale clips to 64×64 with ffmpeg |
 | `honeycomb` | Port of a Pixelblaze HSV pattern (numpy) |
+| `hyperspace` | Star Wars-style jump: a 3D starfield that stretches into a tunnel of streaks and back |
 
 ## Project structure
 
@@ -182,7 +183,8 @@ lindsay-50/
 │   │   ├── nightsky.py
 │   │   ├── png_display.py       # PNG slideshow from design/pngs (crossfade)
 │   │   ├── video_display.py     # Looping video (OpenCV) from design/videos
-│   │   └── honeycomb.py         # Pixelblaze HSV pattern port (numpy + SetImage)
+│   │   ├── honeycomb.py         # Pixelblaze HSV pattern port (numpy + SetImage)
+│   │   └── hyperspace.py        # Star Wars-style jump: 3D starfield → tunnel of streaks
 │   └── settings.toml.example
 ├── lib_shared/                   # Shared code (Flask + Pi device)
 │   ├── models.py                # Message, SignConfig, FilterRule, RenderingSettings
