@@ -30,7 +30,7 @@ class NightSky(Effect):
         self.w = display.canvas.width
         self.h = display.canvas.height
 
-        self.bitmap = Bitmap(self.w, self.h, _PALETTE_SIZE)
+        self.bitmap = Bitmap(self.w, self.h)
         self.palette = Palette(_PALETTE_SIZE)
         self.palette[0] = sky_color
         # Star intensity gradient with a slight cool-white cast.
@@ -163,4 +163,4 @@ class NightSky(Effect):
                 self.next_shoot = now + random.uniform(self.shoot_min, self.shoot_max)
 
         # One atomic update of the whole bitmap.
-        arrayblit(self.bitmap, buf, 0, 0, self.w, self.h)
+        arrayblit(self.bitmap, buf)

@@ -23,7 +23,7 @@ class Bitmap:
     Stores one palette index per pixel in a flat bytearray (row-major).
     """
 
-    def __init__(self, width, height, _palette_size=0):
+    def __init__(self, width, height):
         self.width = width
         self.height = height
         self._buf = bytearray(width * height)
@@ -59,7 +59,7 @@ class Palette:
         return len(self._colors)
 
 
-def arrayblit(bitmap, buf, x=0, y=0, width=None, height=None):
+def arrayblit(bitmap, buf):
     """Copy a flat index buffer into a Bitmap in one shot (full-frame only).
 
     Mirrors bitmaptools.arrayblit for the at-origin, whole-bitmap case the
@@ -77,6 +77,8 @@ class Effect:
     then call `self._init_render()` once the palette is populated.
     """
 
+    bitmap: Bitmap  # subclasses must set
+    palette: Palette  # subclasses must set
     scale = 1
 
     def _init_render(self):

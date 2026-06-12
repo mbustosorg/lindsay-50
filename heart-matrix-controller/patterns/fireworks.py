@@ -38,7 +38,7 @@ class Fireworks(Effect):
         self.last_frame = 0.0
         self.last_spawn = 0.0
 
-        self.bitmap = Bitmap(display.canvas.width, display.canvas.height, _PALETTE_SIZE)
+        self.bitmap = Bitmap(display.canvas.width, display.canvas.height)
         self.palette = Palette(_PALETTE_SIZE)
         self.palette[0] = 0x000000
         for i in range(1, _PALETTE_SIZE):

@@ -111,7 +111,12 @@ class EffectCoordinator:
         self.display.render(self.effects[self.idx], self.scroller)
 
 
-coordinator = EffectCoordinator(display, scroller, [hyperspace, video, png, honeycomb, flame, fireworks, nightsky], fade_seconds=4)
+coordinator = EffectCoordinator(
+    display,
+    scroller,
+    [hyperspace, video, png, honeycomb, flame, fireworks, nightsky],
+    fade_seconds=4,
+)
 
 _message_mgr = MessageManager(
     on_message=lambda msg: coordinator.request_message(msg.body)

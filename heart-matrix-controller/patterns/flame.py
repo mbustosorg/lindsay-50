@@ -75,7 +75,7 @@ class Flame(Effect):
         # the top regardless of how tall the panel is (taller -> gentler).
         self._cool_max = cooling if cooling is not None else max(3, 640 // self.h)
 
-        self.bitmap = Bitmap(self.w, self.h, _PALETTE_SIZE)
+        self.bitmap = Bitmap(self.w, self.h)
         self.palette = Palette(_PALETTE_SIZE)
         self.palette[0] = 0x000000
         for i in range(1, _PALETTE_SIZE):
@@ -149,4 +149,4 @@ class Flame(Effect):
         shift = 8 - (_PALETTE_SIZE.bit_length() - 1)  # 255 -> _PALETTE_SIZE-1
         for i in range(w * h):
             buf[i] = heat[i] >> shift
-        arrayblit(self.bitmap, buf, 0, 0, w, h)
+        arrayblit(self.bitmap, buf)

@@ -58,8 +58,14 @@ def _smoothstep(t):
 
 
 class Hyperspace(Effect):
-    def __init__(self, display, num_stars=80, frame_max_dt=0.1,
-                 core_color=(180, 215, 255), deep_color=(0, 10, 120)):
+    def __init__(
+        self,
+        display,
+        num_stars=80,
+        frame_max_dt=0.1,
+        core_color=(180, 215, 255),
+        deep_color=(0, 10, 120),
+    ):
         self.display = display
         self.w = display.canvas.width
         self.h = display.canvas.height
@@ -73,7 +79,7 @@ class Hyperspace(Effect):
         self.proj_scale = max(self.cx, self.cy)
         self.frame_max_dt = frame_max_dt
 
-        self.bitmap = Bitmap(self.w, self.h, _PALETTE_SIZE)
+        self.bitmap = Bitmap(self.w, self.h)
         self.palette = Palette(_PALETTE_SIZE)
         self.palette[0] = 0x000000
         # Deep blue (faint, distant) -> blue-white (near / streak head).
@@ -81,7 +87,7 @@ class Hyperspace(Effect):
         cr, cg, cb = core_color
         for i in range(1, _PALETTE_SIZE):
             t = i / (_PALETTE_SIZE - 1)
-            e = t ** 0.7  # bias toward the bright end so streaks read crisp
+            e = t**0.7  # bias toward the bright end so streaks read crisp
             r = int(dr + (cr - dr) * e)
             g = int(dg + (cg - dg) * e)
             b = int(db + (cb - db) * e)
@@ -117,7 +123,11 @@ class Hyperspace(Effect):
         rad = random.uniform(0.25, 1.0)
         x = math.cos(ang) * rad
         y = math.sin(ang) * rad
-        z = random.uniform(_ZMIN, _ZMAX) if spread else random.uniform(_SPAWN_ZMIN, _ZMAX)
+        z = (
+            random.uniform(_ZMIN, _ZMAX)
+            if spread
+            else random.uniform(_SPAWN_ZMIN, _ZMAX)
+        )
         sx, sy = self._project(x, y, z)
         star[0] = x
         star[1] = y
@@ -145,8 +155,10 @@ class Hyperspace(Effect):
         Pixels outside the panel are skipped, which also clips the very long
         streaks a near-zero z can produce.
         """
-        x0i = int(round(x0)); y0i = int(round(y0))
-        x1i = int(round(x1)); y1i = int(round(y1))
+        x0i = int(round(x0))
+        y0i = int(round(y0))
+        x1i = int(round(x1))
+        y1i = int(round(y1))
         dx = x1i - x0i
         dy = y1i - y0i
         steps = max(abs(dx), abs(dy))
@@ -175,19 +187,23 @@ class Hyperspace(Effect):
         if self.phase == "starfield":
             self.warp = 0.0
             if elapsed >= _T_STARFIELD:
-                self.phase = "warp_in"; self.phase_start = now
+                self.phase = "warp_in"
+                self.phase_start = now
         elif self.phase == "warp_in":
             self.warp = _smoothstep(elapsed / _T_WARP_IN)
             if elapsed >= _T_WARP_IN:
-                self.phase = "tunnel"; self.phase_start = now
+                self.phase = "tunnel"
+                self.phase_start = now
         elif self.phase == "tunnel":
             self.warp = 1.0
             if elapsed >= _T_TUNNEL:
-                self.phase = "warp_out"; self.phase_start = now
+                self.phase = "warp_out"
+                self.phase_start = now
         else:  # warp_out
             self.warp = 1.0 - _smoothstep(elapsed / _T_WARP_OUT)
             if elapsed >= _T_WARP_OUT:
-                self.phase = "starfield"; self.phase_start = now
+                self.phase = "starfield"
+                self.phase_start = now
 
     def tick(self):
         now = time.monotonic()
@@ -233,4 +249,4 @@ class Hyperspace(Effect):
                 star[3] = sx
                 star[4] = sy
 
-        arrayblit(self.bitmap, self._buf, 0, 0, w, h)
+        arrayblit(self.bitmap, self._buf)
