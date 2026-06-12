@@ -199,3 +199,60 @@ def test_other_routes_have_no_csp_header():
     client = app.test_client()
     response = client.get("/health")
     assert response.headers.get("Content-Security-Policy", "") == ""
+
+
+def test_pyscript_declared_files_all_serve_200():
+    """Regression: every file declared in py-config.toml [files] must be
+    fetchable as a /static/preview/... URL.
+
+    The static/preview/ tree uses symlinks to expose the Python source
+    files to the browser. If any of those symlinks points to a path that
+    doesn't exist, PyScript silently fails to load that module and
+    preview_main.py never gets the chance to expose its globals —
+    leaving the user staring at "Loading preview…" forever (since
+    pyodideReady is never fired).
+
+    This test walks the [files] section of py-config.toml and asserts
+    that Flask serves each declared path with 200. It would have caught
+    the original symlink-resolution bug (../../preview_*.py from
+    static/preview/heart-message-manager/ instead of ../../../).
+    """
+    import tomllib
+
+    auth = _load_test_auth()
+    _make_mock_cfg = auth._make_mock_cfg
+    _load_app_module = auth._load_app_module
+
+    py_config_path = (
+        _PROJECT_ROOT
+        / "heart-message-manager"
+        / "static"
+        / "preview"
+        / "py-config.toml"
+    )
+    cfg = tomllib.loads(py_config_path.read_text())
+    declared = cfg.get("files", {})
+
+    app = _load_app_module(_make_mock_cfg())
+    # main.py is loaded via importlib (see test_auth._load_app_module),
+    # which causes Flask's root_path to fall back to the repo root and
+    # static_folder to point at the wrong directory. Override explicitly,
+    # mirroring what scripts/preview_server.py does for the real server.
+    app.static_folder = str(_PROJECT_ROOT / "heart-message-manager" / "static")
+    app.static_url_path = "/static"
+    app.config["TESTING"] = True
+    client = app.test_client()
+
+    failures = []
+    # The keys in py-config.toml [files] are py-source-paths; the values
+    # are /static/... URLs. We just want to assert each value returns 200.
+    for src_path, static_url in declared.items():
+        path = static_url.split("://", 1)[-1]  # strip scheme if any
+        response = client.get(path)
+        if response.status_code != 200:
+            failures.append((src_path, path, response.status_code))
+
+    assert not failures, (
+        f"{len(failures)} py-config.toml [files] entries do not serve 200; "
+        f"PyScript bootstrap will silently fail. First few: {failures[:3]}"
+    )

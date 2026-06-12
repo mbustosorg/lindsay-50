@@ -1,1 +1,1 @@
-../../../lib_shared/config_reader.py
+../../../../lib_shared/config_reader.py

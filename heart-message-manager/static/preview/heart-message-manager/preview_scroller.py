@@ -1,1 +1,1 @@
-../../preview_scroller.py
+../../../preview_scroller.py

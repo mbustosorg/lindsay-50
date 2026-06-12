@@ -125,3 +125,22 @@ def test_preview_js_does_not_add_cors_headers():
     src = _js_source()
     assert "Access-Control" not in src
     assert "credentials" in src  # but it does pass credentials
+
+
+def test_preview_js_resizes_canvas_on_window_resize():
+    """Regression: the canvas is re-sized on window resize events so it
+    tracks the viewport when the user opens devtools, rotates a tablet,
+    or simply drags the window edge. The previous version only called
+    sizeCanvasToViewport once at init time, so the canvas stayed at
+    whatever size the viewport was at first paint.
+    """
+    src = _js_source()
+    # The listener is attached on `window` for the `resize` event and
+    # calls sizeCanvasToViewport(canvas) (possibly via rAF throttling).
+    assert re.search(
+        r"window\.addEventListener\(\s*[\"']resize[\"']", src
+    ), "preview.js must listen on window 'resize'"
+    # The handler must invoke sizeCanvasToViewport — directly or via rAF
+    assert "sizeCanvasToViewport" in src
+    # And both the canvas and sizeCanvasToViewport must be in scope where
+    # the handler is added (the IIFE binds `canvas` from init()).

@@ -37,6 +37,19 @@
     const canvas = document.getElementById("sign-canvas");
     if (!canvas) return;
     sizeCanvasToViewport(canvas);
+    // Re-size on viewport changes (window resize, devtools open/close,
+    // device rotation on touch). rAF-throttled so a continuous drag fires
+    // sizeCanvasToViewport at most once per frame instead of dozens of
+    // times per second.
+    let resizeScheduled = false;
+    window.addEventListener("resize", () => {
+      if (resizeScheduled) return;
+      resizeScheduled = true;
+      requestAnimationFrame(() => {
+        resizeScheduled = false;
+        sizeCanvasToViewport(canvas);
+      });
+    });
 
     // Wait for PyScript runtime to be ready. PyScript 2024.10+ exposes a
     // `pyodideReady` event when its main module has finished evaluating
