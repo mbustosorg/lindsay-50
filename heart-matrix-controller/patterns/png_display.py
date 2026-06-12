@@ -75,10 +75,13 @@ class PngDisplay(Effect):
         leave the transparent background black, so it reads on the unlit panel.
         """
         from PIL import Image  # lazy: only the Pi needs Pillow
+        from PIL.Image import (
+            Resampling,
+        )  # explicit: Pylance resolves Resampling.LANCZOS
 
         w, h = self._w, self._h
         img = Image.open(path).convert("RGBA")
-        img.thumbnail((w, h), Image.LANCZOS)  # fit within the panel, keep aspect
+        img.thumbnail((w, h), Resampling.LANCZOS)  # fit within the panel, keep aspect
         mask = img.getchannel("A")  # drawing = opaque, background = transparent
 
         frame = Image.new("RGB", (w, h), (0, 0, 0))

@@ -105,6 +105,8 @@ class Honeycomb(Effect):
         from PIL import Image
 
         arr = self._frame
+        if arr is None:
+            return
         if self._brightness < 1.0:
             arr = (arr * self._brightness).astype(np.uint8)
         canvas.SetImage(Image.fromarray(arr))

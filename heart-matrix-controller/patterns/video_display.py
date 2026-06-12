@@ -65,8 +65,11 @@ class VideoDisplay(Effect):
         self._next_frame()
 
     def _next_frame(self):
+        if self._cap is None:  # Pylance narrowing: _cap is typed None in __init__
+            return
         import cv2
         from PIL import Image
+        from PIL.Image import Resampling
 
         ok, frame = self._cap.read()
         if not ok:  # end of file -> loop
@@ -76,7 +79,7 @@ class VideoDisplay(Effect):
                 return
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         img = Image.fromarray(rgb)
-        img.thumbnail((self._w, self._h), Image.LANCZOS)  # fit, keep aspect
+        img.thumbnail((self._w, self._h), Resampling.LANCZOS)  # fit, keep aspect
         canvas_img = Image.new("RGB", (self._w, self._h), (0, 0, 0))
         canvas_img.paste(img, ((self._w - img.width) // 2, (self._h - img.height) // 2))
         self._frame = canvas_img
