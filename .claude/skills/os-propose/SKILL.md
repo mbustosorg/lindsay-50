@@ -5,7 +5,7 @@ license: MIT
 compatibility: Requires gh CLI, openspec CLI.
 metadata:
   author: openspec-generic
-  version: "1.1"
+  version: "1.2"
 ---
 
 Start spec work on a GitHub issue.
@@ -64,15 +64,17 @@ Start spec work on a GitHub issue.
    > "Commit is ready. Mark as ao-ready for implementation?"
 
    If yes:
-   - Remove `status:specifying`, add `status:ao-ready` label to the GH issue
-   - `git push`
+   - Capture the current `main` HEAD SHA: `LOCAL_SHA=$(git rev-parse main)`
+   - `git push origin main` (pushes the spec commit to origin)
+   - **Verify the push landed** — `git fetch origin main && [ "$(git rev-parse origin/main)" = "$LOCAL_SHA" ]`. If the SHA doesn't match, the push was rejected (branch protection, hook, auth, wrong upstream) — surface the error and **do NOT** flip the label to `ao-ready`. Leave the issue at `status:specifying` and tell the user to investigate.
+   - Only after the SHA matches: remove `status:specifying`, add `status:ao-ready` label to the GH issue
 
    If no:
    - Do not push yet — issue stays `status:specifying`, user can push and flip label manually
 
 **Output**
 
-If human confirms:
+If human confirms AND push verified:
 ```
 ## Spec Work Ready
 
@@ -80,7 +82,20 @@ If human confirms:
 **Status:** ao-ready
 **Change:** {change-name}
 
-Committed and pushed. Run /os-spawn when ready to implement.
+Committed and pushed (origin/main @ {sha}). Run /os-spawn when ready to implement.
+```
+
+If human confirms but push failed:
+```
+## Spec Work Blocked — push did not land
+
+**Issue:** #{number}
+**Status:** specifying (NOT ao-ready)
+**Change:** {change-name}
+
+Local commit is at {local-sha}, but origin/main is at {remote-sha}. The push was rejected
+(likely branch protection, hook, or auth). Investigate and re-run, or push manually and
+flip the label with `gh issue edit {number} --remove-label status:specifying --add-label status:ao-ready`.
 ```
 
 If human declines:
