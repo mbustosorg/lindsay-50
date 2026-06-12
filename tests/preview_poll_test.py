@@ -194,6 +194,33 @@ def test_preview_js_uses_card_clientWidth_for_sizing():
     )
 
 
+def test_preview_js_does_not_set_inline_height():
+    """Regression: the JS must NOT set `canvas.style.height` to a pixel
+    value because the template now uses `h-auto aspect-square` on the
+    canvas (CSS-driven square). If the JS set a pixel height, the
+    canvas would be a non-square rectangle when the CSS
+    `max-w-[min(800px,100%)]` clamps the width below the JS-set value.
+
+    The JS should either omit the height assignment entirely, or set
+    it to an empty string (clearing any prior inline height so the
+    CSS `height: auto` takes effect).
+    """
+    src = _js_source()
+    # Find every place that assigns canvas.style.height
+    height_assigns = re.findall(r"canvas\.style\.height\s*=\s*([^;]+);", src)
+    # The JS should explicitly clear any prior inline height (or omit
+    # the assignment entirely). An empty-string clear is fine; a
+    # pixel value is not.
+    for val in height_assigns:
+        stripped = val.strip().strip('"').strip("'")
+        assert "px" not in stripped, (
+            f"canvas.style.height is set to a pixel value ({val!r}); "
+            f"the JS must NOT set a pixel height — the CSS "
+            f"`h-auto aspect-square` handles it. Clear with "
+            f"`canvas.style.height = ''` instead."
+        )
+
+
 def test_preview_js_listens_for_pyscript_py_done_event():
     """Regression: PyScript 2024.9.x's `py:ready` event fires BEFORE the
     main module has evaluated, so the top-level functions exposed by

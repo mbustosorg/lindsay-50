@@ -117,20 +117,25 @@
     // are scaled with nearest-neighbor (image-rendering: pixelated) so
     // each LED is a discrete block.
     //
-    // Width source: prefer the bg-white card's clientWidth (accurate for
-    // the actual content area, accounts for p-12 + p-4 automatically).
-    // Fall back to window.innerWidth if the card isn't found (e.g. the
-    // template changed and the selector no longer matches) — subtract
-    // 160 to leave room for the card's p-12 + the dark div's p-4 so the
-    // canvas doesn't overflow on narrow viewports.
+    // Layout chain: body → main (flex-1, p-8) → card (block, p-12) →
+    //   flex container → dark div (p-4, w-full) → canvas.
+    // The card is a block element, so it's 100% of the main's content
+    // area = (viewport - sidebar) - main padding - card padding. The
+    // dark div has `w-full max-w-full` so it's 100% of the card's
+    // content area. The canvas has `w-full max-w-[min(800px,100%)]
+    // h-auto aspect-square` — it fills the dark div, capped at 800px,
+    // and the height tracks the width via aspect-ratio.
+    //
+    // The canvas's CSS (max-w-[min(800px,100%)]) constrains the width
+    // automatically — the inline width we set here is just a target
+    // that the browser may shrink down via the max-width. We only set
+    // width; height is handled by CSS aspect-square. We also strip any
+    // previous inline height so the CSS height:auto takes effect.
     const max = 800;
     const card = canvas.closest(".bg-white.rounded-2xl");
     let available;
     if (card) {
-      // The card's content area (where the dark div lives) is
-      // clientWidth minus the p-12 (48px on each side). The dark div
-      // adds another p-4 (16px on each side) that the canvas can't
-      // use. So the canvas's max width is card.clientWidth - 96 - 32.
+      // The card's content area minus the dark div's p-4.
       available = Math.max(0, card.clientWidth - 96 - 32);
     } else {
       available = Math.max(0, window.innerWidth - 160);
@@ -139,7 +144,9 @@
     const n = Math.max(1, Math.floor(available / PANEL_W));
     const size = Math.min(max, n * PANEL_W);
     canvas.style.width = size + "px";
-    canvas.style.height = size + "px";
+    // Clear any previously-set inline height so CSS `h-auto aspect-square`
+    // computes the height from the (possibly constrained) width.
+    canvas.style.height = "";
   }
 
   function hideLoading() {

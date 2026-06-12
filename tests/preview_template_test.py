@@ -55,6 +55,52 @@ def test_preview_template_uses_pixelated_image_rendering():
     assert "pixelated" in template
 
 
+def test_preview_template_canvas_is_responsive():
+    """The canvas is CSS-responsive so it scales with the viewport on resize.
+
+    Regression: the previous version had a fixed inline `width: 512px;
+    height: 512px;` on the canvas, so the dark div (bg-slate-900) sized
+    to the canvas and didn't shrink when the viewport narrowed — the
+    user saw a fixed-size preview frame regardless of window width.
+
+    Fix: the dark div is `w-full max-w-full` (constrained to the card's
+    content area) and the canvas uses `max-w-[min(800px,100%)]
+    h-auto aspect-square` so it fills the dark div, caps at 800px, and
+    stays square via aspect-ratio. The inline pixel width/height were
+    removed.
+    """
+    template = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
+    ).read_text()
+    # The dark div (the preview frame) must be width-constrained so it
+    # shrinks with the card. `w-full max-w-full` is the Tailwind for
+    # `width: 100%; max-width: 100%`.
+    assert "w-full max-w-full" in template, (
+        "The dark div (preview frame) must be w-full max-w-full so it "
+        "shrinks with the card on viewport resize"
+    )
+    # The canvas must declare max-w-[min(800px,100%)] so the inline JS-set
+    # width is clamped to both 800px and 100% of the dark div.
+    assert "max-w-[min(800px,100%)]" in template, (
+        "The canvas must cap at min(800px, 100% of dark div) via "
+        "max-w-[min(800px,100%)] so it can't overflow the dark div"
+    )
+    # The canvas must declare aspect-square so the height tracks the
+    # (possibly constrained) width — without this the canvas would be
+    # a non-square rectangle if the JS-set width is clamped by max-w.
+    assert "aspect-square" in template, (
+        "The canvas must declare aspect-square so its height tracks the "
+        "width and it stays square even when the width is constrained"
+    )
+    # The inline pixel width/height must NOT be present anymore.
+    assert "width: 512px" not in template, (
+        "The inline `width: 512px;` on the canvas was removed in favor "
+        "of CSS-driven responsive sizing; its presence means the old "
+        "fixed-size behavior is back"
+    )
+    assert "height: 512px" not in template
+
+
 def test_preview_template_has_status_block():
     """The template shows the current effect name and message body."""
     template = (
