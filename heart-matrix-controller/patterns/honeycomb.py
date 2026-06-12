@@ -37,7 +37,11 @@ def _triangle(v):
 def _hsv_to_rgb(h, s, v):
     """Vectorized HSV->RGB. h,v are arrays in 0..1, s scalar; returns (...,3)."""
     h = (h % 1.0) * 6.0
-    i = np.floor(h).astype(np.int64)
+    # np.choose in numpy 2.x (shipped in Pyodide) requires int32 indices;
+    # int64 raises "Cannot cast array data from dtype('int64') to
+    # dtype('int32')". Cast here so the pattern works in both the
+    # browser (Pyodide) and on the Pi.
+    i = np.floor(h).astype(np.int32)
     f = h - i
     p = v * (1.0 - s)
     q = v * (1.0 - f * s)

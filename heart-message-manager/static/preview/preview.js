@@ -39,19 +39,45 @@
     const canvas = document.getElementById("sign-canvas");
     if (!canvas) return;
     sizeCanvasToViewport(canvas);
-    // Re-size on viewport changes (window resize, devtools open/close,
-    // device rotation on touch). rAF-throttled so a continuous drag fires
-    // sizeCanvasToViewport at most once per frame instead of dozens of
-    // times per second.
-    let resizeScheduled = false;
-    window.addEventListener("resize", () => {
-      if (resizeScheduled) return;
-      resizeScheduled = true;
-      requestAnimationFrame(() => {
-        resizeScheduled = false;
-        sizeCanvasToViewport(canvas);
+    // Re-size on viewport changes. We use a ResizeObserver on the card
+    // (the bg-white rounded-2xl wrapper) rather than the `window.resize`
+    // event because:
+    //   - `window.resize` doesn't fire when the URL bar collapses on
+    //     mobile (the layout viewport changes but the visual viewport
+    //     doesn't), or when the user opens devtools docked to the side
+    //     on some browsers.
+    //   - The actual available width for the canvas is the card's
+    //     content area, not `window.innerWidth`. The card has p-12
+    //     (48px on each side) and the dark div inside it has p-4
+    //     (16px on each side) — using the card's clientWidth avoids
+    //     hardcoding that padding chain and keeps the canvas from
+    //     overflowing the card on narrow viewports.
+    // rAF-throttled so a continuous drag fires sizeCanvasToViewport at
+    // most once per frame instead of dozens of times per second.
+    const card = canvas.closest(".bg-white.rounded-2xl");
+    if (card && typeof ResizeObserver !== "undefined") {
+      let resizeScheduled = false;
+      const ro = new ResizeObserver(() => {
+        if (resizeScheduled) return;
+        resizeScheduled = true;
+        requestAnimationFrame(() => {
+          resizeScheduled = false;
+          sizeCanvasToViewport(canvas);
+        });
       });
-    });
+      ro.observe(card);
+    } else {
+      // Fallback for browsers without ResizeObserver — listen on window.
+      let resizeScheduled = false;
+      window.addEventListener("resize", () => {
+        if (resizeScheduled) return;
+        resizeScheduled = true;
+        requestAnimationFrame(() => {
+          resizeScheduled = false;
+          sizeCanvasToViewport(canvas);
+        });
+      });
+    }
 
     // Wait for PyScript runtime to be ready.
     //
@@ -90,8 +116,26 @@
     // wide monitor but doesn't blow past 800x800 on a 4K screen. Pixels
     // are scaled with nearest-neighbor (image-rendering: pixelated) so
     // each LED is a discrete block.
+    //
+    // Width source: prefer the bg-white card's clientWidth (accurate for
+    // the actual content area, accounts for p-12 + p-4 automatically).
+    // Fall back to window.innerWidth if the card isn't found (e.g. the
+    // template changed and the selector no longer matches) — subtract
+    // 160 to leave room for the card's p-12 + the dark div's p-4 so the
+    // canvas doesn't overflow on narrow viewports.
     const max = 800;
-    const available = Math.min(max, window.innerWidth - 64);
+    const card = canvas.closest(".bg-white.rounded-2xl");
+    let available;
+    if (card) {
+      // The card's content area (where the dark div lives) is
+      // clientWidth minus the p-12 (48px on each side). The dark div
+      // adds another p-4 (16px on each side) that the canvas can't
+      // use. So the canvas's max width is card.clientWidth - 96 - 32.
+      available = Math.max(0, card.clientWidth - 96 - 32);
+    } else {
+      available = Math.max(0, window.innerWidth - 160);
+    }
+    available = Math.min(max, available);
     const n = Math.max(1, Math.floor(available / PANEL_W));
     const size = Math.min(max, n * PANEL_W);
     canvas.style.width = size + "px";

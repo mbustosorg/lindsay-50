@@ -136,17 +136,62 @@ def test_preview_js_resizes_canvas_on_window_resize():
     or simply drags the window edge. The previous version only called
     sizeCanvasToViewport once at init time, so the canvas stayed at
     whatever size the viewport was at first paint.
+
+    v2 prefers a ResizeObserver on the bg-white card (catches viewport
+    changes that window.resize misses, like URL bar collapse on mobile
+    and devtools docked to the side) and falls back to window.resize
+    for browsers without ResizeObserver. The test asserts at least one
+    of those two paths is wired up.
     """
     src = _js_source()
-    # The listener is attached on `window` for the `resize` event and
-    # calls sizeCanvasToViewport(canvas) (possibly via rAF throttling).
-    assert re.search(
-        r"window\.addEventListener\(\s*[\"']resize[\"']", src
-    ), "preview.js must listen on window 'resize'"
+    has_ro = "ResizeObserver" in src and re.search(r"new\s+ResizeObserver\s*\(", src)
+    has_window_resize = re.search(r"window\.addEventListener\(\s*[\"']resize[\"']", src)
+    assert has_ro or has_window_resize, (
+        "preview.js must observe viewport changes via ResizeObserver "
+        "or window.addEventListener('resize', ...)"
+    )
     # The handler must invoke sizeCanvasToViewport — directly or via rAF
     assert "sizeCanvasToViewport" in src
-    # And both the canvas and sizeCanvasToViewport must be in scope where
-    # the handler is added (the IIFE binds `canvas` from init()).
+
+
+def test_preview_js_uses_resize_observer_on_card():
+    """The primary resize path is a ResizeObserver on the bg-white card,
+    not window.resize. This catches viewport changes that window.resize
+    misses (URL bar collapse on mobile, devtools docked to the side)
+    and uses the card's actual clientWidth so the canvas can't overflow
+    the card's content area on narrow viewports.
+    """
+    src = _js_source()
+    assert (
+        "ResizeObserver" in src
+    ), "preview.js should use ResizeObserver for the primary resize path"
+    assert re.search(
+        r"new\s+ResizeObserver\s*\(", src
+    ), "preview.js must instantiate a ResizeObserver"
+    # The observer must be attached to the card, not the canvas itself
+    # (the canvas's parent sizes to the canvas, which would give a
+    # circular reference).
+    assert re.search(r"\.observe\s*\(\s*card\s*\)", src) or re.search(
+        r"ro\.observe\s*\(", src
+    ), "ResizeObserver must be attached to the card element"
+
+
+def test_preview_js_uses_card_clientWidth_for_sizing():
+    """The canvas size is computed from the card's clientWidth (not
+    window.innerWidth) so the canvas can't overflow the card's content
+    area on narrow viewports.
+    """
+    src = _js_source()
+    assert "card.clientWidth" in src, (
+        "sizeCanvasToViewport must read the card's clientWidth to "
+        "compute the canvas size"
+    )
+    # The fallback (no card found) subtracts 160 to leave room for the
+    # card's p-12 (96px) + the dark div's p-4 (32px) padding chain.
+    assert re.search(r"window\.innerWidth\s*-\s*160", src), (
+        "sizeCanvasToViewport must fall back to window.innerWidth - 160 "
+        "when the card isn't found"
+    )
 
 
 def test_preview_js_listens_for_pyscript_py_done_event():
