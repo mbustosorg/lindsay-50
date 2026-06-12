@@ -1,0 +1,34 @@
+# PyScript configuration for the sign-preview page.
+# https://pyscript.com/docs/
+
+[runtime]
+# Pyodide 0.26 — supports py-config.toml in 2024.4+ release line
+src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
+
+[files]
+# Files in the browser-side render path. PyScript fetches them from the
+# /static/ URL when the page loads. Excludes MatrixScroller (rgbmatrix)
+# and PngDisplay / VideoDisplay (filesystem / OpenCV) — those are
+# skipped in the browser (see preview_renderer.PreviewRenderer).
+"heart-matrix-controller/__init__.py" = "/static/preview/heart-matrix-controller/__init__.py"
+"heart-matrix-controller/rgb_display.py" = "/static/preview/heart-matrix-controller/rgb_display.py"
+"heart-matrix-controller/patterns/__init__.py" = "/static/preview/heart-matrix-controller/patterns/__init__.py"
+"heart-matrix-controller/patterns/fireworks.py" = "/static/preview/heart-matrix-controller/patterns/fireworks.py"
+"heart-matrix-controller/patterns/flame.py" = "/static/preview/heart-matrix-controller/patterns/flame.py"
+"heart-matrix-controller/patterns/nightsky.py" = "/static/preview/heart-matrix-controller/patterns/nightsky.py"
+"heart-matrix-controller/patterns/honeycomb.py" = "/static/preview/heart-matrix-controller/patterns/honeycomb.py"
+"lib_shared/__init__.py" = "/static/preview/lib_shared/__init__.py"
+"lib_shared/config_reader.py" = "/static/preview/lib_shared/config_reader.py"
+"lib_shared/scroller_base.py" = "/static/preview/lib_shared/scroller_base.py"
+"heart-message-manager/preview_canvas.py" = "/static/preview/heart-message-manager/preview_canvas.py"
+"heart-message-manager/preview_scroller.py" = "/static/preview/heart-message-manager/preview_scroller.py"
+"heart-message-manager/preview_renderer.py" = "/static/preview/heart-message-manager/preview_renderer.py"
+"heart-message-manager/preview_main.py" = "/static/preview/heart-message-manager/preview_main.py"
+
+# NOTE: do NOT declare [packages] here. PyScript 2024.9.x's TOML→micropip
+# bridge passes the dict to `micropip.install()` as a JsProxy, which
+# micropip then refuses to iterate
+# (`'pyodide.ffi.JsProxy' object is not iterable` from
+# micropip/_commands/install.py:142). Installing the same packages
+# from preview_main.py via `micropip.install([...])` works because we
+# hand micropip a real Python list.

@@ -584,7 +584,7 @@ def testing():
     twilio_token = _cfg.if_exists("TWILIO_AUTH_TOKEN")
     return render_template(
         "testing.html",
-        sign_name=cfg.sign.name, 
+        sign_name=cfg.sign.name,
         twilio_token=twilio_token or "",
     )
 
@@ -593,6 +593,49 @@ def testing():
 def health():
     """Return a minimal 200 response for load-balancer health checks."""
     return "ok"
+
+
+# CSP for the preview page: PyScript loads WebAssembly (needs
+# wasm-unsafe-eval) and pulls its runtime + dependencies from
+# pyscript.net and cdn.jsdelivr.net. The same-origin allowance covers
+# the static files Flask ships under /static/ (the python source for the
+# browser render path).
+#
+# `connect-src` must allow cdn.jsdelivr.net and pyscript.net because
+# Pyodide fetches its WASM, the python stdlib zip, the package lockfile,
+# and MicroPython worker JS from there. Without these, PyScript 2024.9.x
+# silently fails to instantiate Pyodide — the page sits on "Loading
+# preview…" forever and the browser console fills with
+# "Connecting to 'https://cdn.jsdelivr.net/...' violates the
+# Content Security Policy directive: 'connect-src 'self''" errors.
+_PREVIEW_CSP = (
+    "default-src 'self'; "
+    # 'unsafe-inline' + cdn.tailwindcss.com: base.html loads the Tailwind
+    # play CDN and an inline `tailwind.config = {...}` block. The /preview
+    # route is login-protected, so allowing these is safe.
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' "
+    "https://pyscript.net https://cdn.jsdelivr.net "
+    "https://cdn.tailwindcss.com; "
+    "style-src 'self' 'unsafe-inline' "
+    "https://pyscript.net https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self' "
+    "https://cdn.jsdelivr.net https://pyscript.net"
+)
+
+
+@app.after_request
+def _set_preview_csp(response):
+    """Set a permissive CSP on /preview so PyScript + WASM can run.
+
+    All other pages keep the browser's default CSP (none, since we don't
+    set one). Only the preview needs the wasm-unsafe-eval + PyScript CDN
+    exceptions; everywhere else is unaffected.
+    """
+    if request.path == "/preview" or request.path.startswith("/preview/"):
+        response.headers["Content-Security-Policy"] = _PREVIEW_CSP
+    return response
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ class Bitmap:
     Stores one palette index per pixel in a flat bytearray (row-major).
     """
 
-    def __init__(self, width, height, _palette_size=0):
+    def __init__(self, width, height):
         self.width = width
         self.height = height
         self._buf = bytearray(width * height)
@@ -59,7 +59,7 @@ class Palette:
         return len(self._colors)
 
 
-def arrayblit(bitmap, buf, x=0, y=0, width=None, height=None):
+def arrayblit(bitmap, buf):
     """Copy a flat index buffer into a Bitmap in one shot (full-frame only).
 
     Mirrors bitmaptools.arrayblit for the at-origin, whole-bitmap case the
@@ -77,6 +77,8 @@ class Effect:
     then call `self._init_render()` once the palette is populated.
     """
 
+    bitmap: Bitmap  # subclasses must set
+    palette: Palette  # subclasses must set
     scale = 1
 
     def _init_render(self):
@@ -139,15 +141,16 @@ class Display:
         def _opt(key, default):
             val = cfg.if_exists(key)
             return val if val is not None else default
+
         options = RGBMatrixOptions()
         options.rows = int(_opt("MATRIX_ROWS", 32))
         options.cols = int(_opt("MATRIX_COLS", 64))
         options.chain_length = int(_opt("MATRIX_CHAIN", 2))
-        #options.parallel = int(_opt("MATRIX_PARALLEL", 1))
-        #options.hardware_mapping = _opt("MATRIX_HARDWARE_MAPPING", "regular")
+        # options.parallel = int(_opt("MATRIX_PARALLEL", 1))
+        # options.hardware_mapping = _opt("MATRIX_HARDWARE_MAPPING", "regular")
         options.pixel_mapper_config = _opt("MATRIX_PIXEL_MAPPER", "U-mapper")
         options.pwm_bits = int(_opt("MATRIX_PWM_BITS", 10))
-        options.brightness = int(_opt("MATRIX_BRIGHTNESS",100))
+        options.brightness = int(_opt("MATRIX_BRIGHTNESS", 100))
         options.gpio_slowdown = int(_opt("MATRIX_GPIO_SLOWDOWN", 4))
         # Keep root after init (don't drop to 'nobody'); harmless here and avoids
         # surprises if other parts of the process need privileges.
@@ -156,8 +159,16 @@ class Display:
 
         self._matrix = RGBMatrix(options=options)
         self.canvas = self._matrix.CreateFrameCanvas()
-        self.width = options.cols * options.chain_length // 2 if options.pixel_mapper_config == "U-mapper" else options.cols * options.chain_length
-        self.height = options.rows * 2 if options.pixel_mapper_config == "U-mapper" else options.rows * options.parallel
+        self.width = (
+            options.cols * options.chain_length // 2
+            if options.pixel_mapper_config == "U-mapper"
+            else options.cols * options.chain_length
+        )
+        self.height = (
+            options.rows * 2
+            if options.pixel_mapper_config == "U-mapper"
+            else options.rows * options.parallel
+        )
         logger.info("Display initialized: %dx%d", self.width, self.height)
 
     def clear(self):

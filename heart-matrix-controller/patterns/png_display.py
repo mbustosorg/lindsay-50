@@ -46,8 +46,8 @@ class PngDisplay(Effect):
         self._paths = sorted(self._dir.glob("*.png"), key=_natural_key)
 
         self._index = 0
-        self._coord_b = 1.0   # brightness from the EffectCoordinator's global fades
-        self._img_b = 1.0     # internal per-image crossfade level (0..1)
+        self._coord_b = 1.0  # brightness from the EffectCoordinator's global fades
+        self._img_b = 1.0  # internal per-image crossfade level (0..1)
         self._phase = "hold"  # hold -> out -> (swap) -> in -> hold
         self._phase_start = time.monotonic()
 
@@ -57,15 +57,15 @@ class PngDisplay(Effect):
         else:
             logger.warning("PngDisplay: no .png files in %s", self._dir)
             self.bitmap = Bitmap(self._w, self._h)  # all index 0
-            self.palette = Palette(1)               # index 0 -> black
+            self.palette = Palette(1)  # index 0 -> black
             self._init_render()
 
     # -- image loading ------------------------------------------------------
 
     def _load_current(self):
         self._render_image(self._paths[self._index])
-        self._init_render()    # recapture palette for brightness scaling
-        self._apply()          # reapply the current combined fade level
+        self._init_render()  # recapture palette for brightness scaling
+        self._apply()  # reapply the current combined fade level
 
     def _render_image(self, path):
         """Load, fit, and render one PNG as white-on-black into bitmap/palette.
@@ -75,16 +75,19 @@ class PngDisplay(Effect):
         leave the transparent background black, so it reads on the unlit panel.
         """
         from PIL import Image  # lazy: only the Pi needs Pillow
+        from PIL.Image import (
+            Resampling,
+        )  # explicit: Pylance resolves Resampling.LANCZOS
 
         w, h = self._w, self._h
         img = Image.open(path).convert("RGBA")
-        img.thumbnail((w, h), Image.LANCZOS)  # fit within the panel, keep aspect
-        mask = img.getchannel("A")            # drawing = opaque, background = transparent
+        img.thumbnail((w, h), Resampling.LANCZOS)  # fit within the panel, keep aspect
+        mask = img.getchannel("A")  # drawing = opaque, background = transparent
 
         frame = Image.new("RGB", (w, h), (0, 0, 0))
         white = Image.new("RGB", img.size, (255, 255, 255))
         offset = ((w - img.width) // 2, (h - img.height) // 2)
-        frame.paste(white, offset, mask)      # white where the drawing is, black elsewhere
+        frame.paste(white, offset, mask)  # white where the drawing is, black elsewhere
 
         quant = frame.quantize(colors=256)
         pal = quant.getpalette() or []
@@ -132,7 +135,7 @@ class PngDisplay(Effect):
             if t >= 1.0:
                 self._index = (self._index + 1) % len(self._paths)
                 self._img_b = 0.0
-                self._load_current()          # new image, still dark
+                self._load_current()  # new image, still dark
                 self._phase = "in"
                 self._phase_start = time.monotonic()
                 return
@@ -143,7 +146,7 @@ class PngDisplay(Effect):
                 self._phase = "hold"
                 self._phase_start = time.monotonic()
             else:
-                self._img_b = t ** self._gamma
+                self._img_b = t**self._gamma
         self._apply()
 
     def render(self, canvas):
