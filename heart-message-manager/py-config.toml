@@ -25,8 +25,10 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 "heart-message-manager/preview_renderer.py" = "/static/preview/heart-message-manager/preview_renderer.py"
 "heart-message-manager/preview_main.py" = "/static/preview/heart-message-manager/preview_main.py"
 
-[packages]
-# numpy for the Honeycomb effect's vectorized math; Pillow for the
-# PreviewScroller's font rendering and the WebCanvas's image buffer.
-"numpy" = ">=1.26"
-"Pillow" = ">=10.0"
+# NOTE: do NOT declare [packages] here. PyScript 2024.9.x's TOML→micropip
+# bridge passes the dict to `micropip.install()` as a JsProxy, which
+# micropip then refuses to iterate
+# (`'pyodide.ffi.JsProxy' object is not iterable` from
+# micropip/_commands/install.py:142). Installing the same packages
+# from preview_main.py via `micropip.install([...])` works because we
+# hand micropip a real Python list.

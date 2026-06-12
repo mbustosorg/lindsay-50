@@ -55,7 +55,10 @@ def test_preview_js_does_not_call_request_message_on_duplicate():
     """
     src = _js_source()
     dedup_pos = src.find("if (body === lastShownBody) return")
-    call_pos = src.find('window.pyscript.globals.get("request_message")')
+    # PyScript 2024.9.x removed `window.pyscript.globals.get(...)`; the
+    # request_message call now goes through the plain `window.request_message`
+    # bridge that preview_main.py installs on `js.window`.
+    call_pos = src.find("window.request_message(body)")
     assert dedup_pos != -1, "Dedup check missing"
     assert call_pos != -1, "request_message call missing"
     assert dedup_pos < call_pos, (
@@ -146,28 +149,35 @@ def test_preview_js_resizes_canvas_on_window_resize():
     # the handler is added (the IIFE binds `canvas` from init()).
 
 
-def test_preview_js_listens_for_pyscript_py_ready_event():
-    """Regression: PyScript 2024.10+ renamed the runtime-ready event from
-    `pyodideReady` (plain Event on document) to `py:ready` (CustomEvent
-    with bubbles:true on each `<py-script>` element). preview.js must
-    listen for the new name or the page never advances past the
-    "Loading preview…" overlay, even though the Python module loaded
-    fine and all the static file fetches returned 200.
+def test_preview_js_listens_for_pyscript_py_done_event():
+    """Regression: PyScript 2024.9.x's `py:ready` event fires BEFORE the
+    main module has evaluated, so the top-level functions exposed by
+    preview_main.py (request_message, tick, get_frame_rgba) are not yet
+    defined when `py:ready` fires. The post-evaluation event is
+    `py:done` (CustomEvent, bubbles on each `<py-script>` element), and
+    `py:all-done` is the equivalent plain Event fired once all
+    py-script elements are done. preview.js must listen for `py:done`
+    (primary) and `py:all-done` (fallback) or the page never advances
+    past the "Loading preview…" overlay, even though the Python module
+    loaded fine and all the static file fetches returned 200.
 
     The list is also kept as a backwards-compat fallback for older
-    PyScript releases that still fire `pyodideReady`.
+    PyScript releases that still fire `pyodideReady` instead of `py:done`.
     """
     src = _js_source()
     # The new event name (with the colon)
     assert re.search(
-        r"addEventListener\(\s*[\"']py:ready[\"']", src
-    ), "preview.js must listen for PyScript 2024.10+'s 'py:ready' event"
+        r"addEventListener\(\s*[\"']py:done[\"']", src
+    ), "preview.js must listen for PyScript 2024.9.x's 'py:done' event"
+    # The plain-Event equivalent fires once all py-script elements are done
+    assert re.search(
+        r"addEventListener\(\s*[\"']py:all-done[\"']", src
+    ), "preview.js must also listen for 'py:all-done' (plain Event variant)"
     # The legacy event name should still be wired up for older releases
     assert re.search(
         r"addEventListener\(\s*[\"']pyodideReady[\"']", src
     ), "preview.js must keep a 'pyodideReady' fallback for older PyScript"
-    # Both listeners should call the same handler, otherwise the page
-    # would boot twice on a runtime that fires both events.
-    assert src.count("addEventListener") >= 2
-    # The handler name appears at most once as a defined function
-    # (the const onReady is referenced in both addEventListener calls).
+    # All three listeners should call the same handler, otherwise the page
+    # would boot twice on a runtime that fires more than one of the events.
+    assert src.count("addEventListener") >= 3
+    # The handler is referenced in all three addEventListener calls.

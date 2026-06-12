@@ -28,14 +28,21 @@
 
 <!-- PyScript runtime + config. The config declares which Python files
      the browser fetches and which packages to install (Pillow + numpy). -->
-<link rel="stylesheet" href="https://pyscript.net/releases/2024.10.2/core.css">
-<script type="module" src="https://pyscript.net/releases/2024.10.2/core.js"></script>
+<!--
+  PyScript 2024.10.2 has a `o.slice is not a function` regression that
+  crashes the runtime in real browsers before any `py:ready` or `py:done`
+  event fires (window.pyscript never gets set). 2024.9.1 also fails the
+  same way. 2024.9.x is the last release line that boots cleanly with
+  our py-config.toml + py-script/src=… setup, so we pin to it.
+-->
+<link rel="stylesheet" href="https://pyscript.net/releases/2024.9.1/core.css">
+<script type="module" src="https://pyscript.net/releases/2024.9.1/core.js"></script>
 <py-config src="{{ url_for('static', filename='preview/py-config.toml') }}"></py-config>
 
 <!-- Browser-side entry point. PyScript fetches preview_main.py (and its
      declared file dependencies), runs it, and exposes its top-level
      functions on the `pyscript` global so preview.js can call them. -->
-<py-script src="{{ url_for('static', filename='preview/preview_main.py') }}"></py-script>
+<py-script src="{{ url_for('static', filename='preview/heart-message-manager/preview_main.py') }}"></py-script>
 
 <!-- App-side main loop + polling. Loaded after PyScript so it can wait for
      the runtime's `py:ready` event (PyScript 2024.10+; `pyodideReady` on

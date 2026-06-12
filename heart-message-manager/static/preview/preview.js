@@ -2,8 +2,9 @@
 //
 // Three loops run in the browser:
 //   1. PyScript's bootstrap, which loads the runtime + preview_main.py and
-//      fires the `py:ready` event (PyScript 2024.10+) — or
-//      `pyodideReady` (older releases) — when the coordinator is callable.
+//      fires `py:ready` (BEFORE the main module runs) and `py:done`
+//      (AFTER the main module has finished evaluating) — that's when
+//      coordinator.request_message and tick become callable.
 //   2. A requestAnimationFrame loop, capped at 30 FPS, that calls
 //      `coordinator.tick()` and blits the frame buffer to the canvas.
 //   3. A setInterval polling loop that fetches /api/live-messages every
@@ -54,12 +55,21 @@
 
     // Wait for PyScript runtime to be ready.
     //
-    // PyScript 2024.10+ dispatches a CustomEvent named `py:ready` (with
-    // bubbles:true) on each `<py-script>` element when its main module
-    // has finished evaluating — that's when coordinator.request_message
-    // and tick become callable. Older releases (≤ 2024.5.x) used
-    // `pyodideReady` on document. We listen for both so the page works
-    // on either runtime version.
+    // PyScript 2024.9.x dispatches `py:ready` (CustomEvent, bubbles)
+    // on each `<py-script>` element in its `connectedCallback` — BEFORE
+    // the main module's code runs. At that point `window.pyscript` is
+    // not yet populated, so calling `pyscript.globals.get("tick")` will
+    // throw "Cannot read properties of undefined (reading 'globals')".
+    //
+    // The correct post-execution event is `py:done` (CustomEvent, bubbles
+    // on each `<py-script>` element) — fired after the main module has
+    // finished evaluating, at which point the top-level functions
+    // exposed by preview_main.py (request_message, tick, get_frame_rgba)
+    // are callable. `py:all-done` is the equivalent plain Event fired
+    // once all py-script elements are done.
+    //
+    // We listen for `py:done` (primary) and `py:ready` (fallback for
+    // older runtimes that don't fire `py:done`).
     const onReady = () => {
       hideLoading();
       startRenderLoop(canvas);
@@ -69,7 +79,8 @@
       pollLatestMessage();
       setInterval(pollLatestMessage, POLL_MS);
     };
-    document.addEventListener("py:ready", onReady);
+    document.addEventListener("py:done", onReady);
+    document.addEventListener("py:all-done", onReady);
     // Backwards-compat for older PyScript releases.
     document.addEventListener("pyodideReady", onReady);
   }
@@ -102,24 +113,34 @@
     function frame(now) {
       if (now - lastTick >= FRAME_MS) {
         // Call Python: advance the coordinator, then pull the frame buffer.
-        // pyodide.globals.get / .getattr works on PyScript 2024.10+.
+        //
+        // PyScript 2024.9.x removed the `window.pyscript.globals.get("name")`
+        // bridge that older releases exposed. The supported pattern is
+        // for preview_main.py to install its top-level functions on
+        // `js.window`, which is the browser's `window`. The calls below
+        // therefore reach `window.tick`, `window.get_frame_rgba`, etc.
+        // — installed by preview_main.py when the <py-script> body runs.
         try {
-          window.pyscript.globals.get("tick")();
-          const effectName = window.pyscript.globals.get("get_current_effect_name")();
-          const text = window.pyscript.globals.get("get_current_text")();
+          if (typeof window.tick === "function") window.tick();
+          const effectName = typeof window.get_current_effect_name === "function"
+            ? window.get_current_effect_name() : "";
+          const text = typeof window.get_current_text === "function"
+            ? window.get_current_text() : "";
           updateStatus(effectName, text);
 
-          const bytes = window.pyscript.globals.get("get_frame_rgba")();
-          // `bytes` is a Pyodide-converted Uint8Array view; in plain
-          // CPython (impossible here, but defensive) it would be a bytes
-          // object. Build an ImageData the first time, then reuse it.
-          if (imgDataNeedsWipe || !imgData) {
-            imgData = ctx.createImageData(PANEL_W, PANEL_H);
-            imgDataNeedsWipe = false;
+          if (typeof window.get_frame_rgba === "function") {
+            const bytes = window.get_frame_rgba();
+            // `bytes` is a Pyodide-converted Uint8Array view; in plain
+            // CPython (impossible here, but defensive) it would be a bytes
+            // object. Build an ImageData the first time, then reuse it.
+            if (imgDataNeedsWipe || !imgData) {
+              imgData = ctx.createImageData(PANEL_W, PANEL_H);
+              imgDataNeedsWipe = false;
+            }
+            const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+            imgData.data.set(view);
+            ctx.putImageData(imgData, 0, 0);
           }
-          const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-          imgData.data.set(view);
-          ctx.putImageData(imgData, 0, 0);
         } catch (e) {
           console.error("Frame error:", e);
         }
@@ -154,7 +175,11 @@
         if (body === lastShownBody) return;     // dedup
         lastShownBody = body;
         try {
-          window.pyscript.globals.get("request_message")(body);
+          // PyScript 2024.9.x removed `window.pyscript`; preview_main.py
+          // installs `request_message` on the browser `window`.
+          if (typeof window.request_message === "function") {
+            window.request_message(body);
+          }
         } catch (e) {
           console.error("request_message error:", e);
         }

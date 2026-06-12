@@ -600,6 +600,14 @@ def health():
 # pyscript.net and cdn.jsdelivr.net. The same-origin allowance covers
 # the static files Flask ships under /static/ (the python source for the
 # browser render path).
+#
+# `connect-src` must allow cdn.jsdelivr.net and pyscript.net because
+# Pyodide fetches its WASM, the python stdlib zip, the package lockfile,
+# and MicroPython worker JS from there. Without these, PyScript 2024.9.x
+# silently fails to instantiate Pyodide — the page sits on "Loading
+# preview…" forever and the browser console fills with
+# "Connecting to 'https://cdn.jsdelivr.net/...' violates the
+# Content Security Policy directive: 'connect-src 'self''" errors.
 _PREVIEW_CSP = (
     "default-src 'self'; "
     # 'unsafe-inline' + cdn.tailwindcss.com: base.html loads the Tailwind
@@ -612,7 +620,8 @@ _PREVIEW_CSP = (
     "https://pyscript.net https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
     "img-src 'self' data:; "
-    "connect-src 'self'"
+    "connect-src 'self' "
+    "https://cdn.jsdelivr.net https://pyscript.net"
 )
 
 

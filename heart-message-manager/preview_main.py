@@ -17,16 +17,35 @@ are pulled in via the py-config.toml declared packages).
 
 import sys
 
+# Install runtime dependencies BEFORE importing the modules that need
+# them. The Honeycomb effect uses numpy; PreviewScroller + WebCanvas
+# use Pillow. Doing the install in py-config.toml's [packages] section
+# would crash on PyScript 2024.9.x — see the comment in py-config.toml.
+#
+# `pyodide_js.loadPackage` (the JS-side loadPackage, exposed to Python
+# via Pyodide's `pyodide_js` shim) is the supported way to pre-load
+# packages in Pyodide 0.26. Calling micropip.install with the [packages]
+# dict in py-config.toml passes a non-iterable JsProxy and crashes
+# (`'pyodide.ffi.JsProxy' object is not iterable` from
+# micropip/_commands/install.py:142), so we deliberately avoid that
+# path. Top-level await is supported by PyScript 2024.9.x's py-script
+# element (it runs the source via `eval_code_async`).
+from pyodide_js import loadPackage
+
+await loadPackage(["micropip", "numpy", "Pillow"])
+
 # Make lib_shared, heart-matrix-controller, and heart-message-manager all
-# importable. PyScript ships them under their declared URLs (see py-config.toml
-# [files]); once fetched they live in the Pyodide FS and we add their
-# containing dirs to sys.path so plain `import` works.
+# importable. PyScript 2024.9.x's [files] handler writes each entry at
+# the URL path (not the key), so the destination is the same as the
+# URL we declared in py-config.toml — e.g.
+# "/static/preview/heart-message-manager/preview_canvas.py". The PARENT
+# of each package dir is what belongs in sys.path, so plain
+# `import lib_shared` and `import patterns` resolve as packages.
 for path in (
     "/",
-    "/heart-message-manager",
-    "/heart-matrix-controller",
-    "/heart-matrix-controller/patterns",
-    "/lib_shared",
+    "/static/preview",
+    "/static/preview/heart-message-manager",
+    "/static/preview/heart-matrix-controller",
 ):
     if path not in sys.path:
         sys.path.insert(0, path)
@@ -64,9 +83,23 @@ _coordinator = PreviewCoordinator(
 
 # --- JS-callable surface ---
 #
-# The JS main loop in static/preview.js calls these via the PyScript
-# `pyscript` global. We bind them to module-level names so PyScript
-# exposes them automatically.
+# PyScript 2024.9.x removed the `window.pyscript.globals.get("name")`
+# bridge that older releases used. The supported way to expose Python
+# functions to JS is to assign them to `js.window` (the Pyodide proxy
+# for the browser's `window` object) from within Python. The JS side
+# then calls them as plain functions on `window` — no `pyscript` global
+# involved. The function bodies below are still defined later in the
+# file; `_install_js_api()` is called at the very end so the names are
+# in scope.
+import js
+
+
+def _install_js_api() -> None:
+    js.window.tick = tick
+    js.window.request_message = request_message
+    js.window.get_frame_rgba = get_frame_rgba
+    js.window.get_current_text = get_current_text
+    js.window.get_current_effect_name = get_current_effect_name
 
 
 def request_message(body):
@@ -94,3 +127,7 @@ def get_current_effect_name():
 def get_current_text():
     """Return the body of the message currently being scrolled."""
     return _coordinator.current_text
+
+
+# --- Install the JS surface AFTER the functions are defined. ---
+_install_js_api()

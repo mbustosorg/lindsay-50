@@ -53,7 +53,17 @@ class PreviewRenderer:
 
     def _init_effects(self, patterns_module):
         for name in _BROWSER_COMPATIBLE_PATTERNS:
+            # The patterns package's __init__.py is empty, so the Effect
+            # subclasses live one level down (e.g. patterns.fireworks.Fireworks)
+            # — the device's main.py imports them with `from patterns.fireworks
+            # import Fireworks`. We mirror that here: first try
+            # `patterns.<name>` for symmetry, then fall back to
+            # `patterns.<lowercase name>.<Name>`.
             cls = getattr(patterns_module, name, None)
+            if cls is None:
+                submodule = getattr(patterns_module, name.lower(), None)
+                if submodule is not None:
+                    cls = getattr(submodule, name, None)
             if cls is None:
                 log.warning("Pattern %s not found in patterns module — skipping", name)
                 continue
