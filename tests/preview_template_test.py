@@ -144,6 +144,50 @@ def test_preview_template_csp_header_on_preview_route():
     assert "pyscript.net" in csp or "cdn.jsdelivr.net" in csp
 
 
+def test_preview_template_csp_allows_tailwind_cdn():
+    """Regression: /preview's CSP must allow the Tailwind play CDN and
+    inline scripts. base.html loads Tailwind from cdn.tailwindcss.com and
+    defines the theme via an inline `tailwind.config = {...}` block; if
+    either is blocked by CSP, the flex sidebar layout collapses and the
+    SVG nav icons render at full default size, making the page look like
+    a stack of huge static icons.
+    """
+    auth = _load_test_auth()
+    _make_mock_cfg = auth._make_mock_cfg
+    _load_app_module = auth._load_app_module
+
+    app = _load_app_module(_make_mock_cfg())
+    app.config["TESTING"] = True
+    client = app.test_client()
+    client.post("/login", data={"username": "admin", "password": "secret123"})
+
+    response = client.get("/preview")
+    csp = response.headers.get("Content-Security-Policy", "")
+    # The script-src directive must include the Tailwind CDN
+    script_src = _extract_directive(csp, "script-src")
+    assert (
+        "https://cdn.tailwindcss.com" in script_src
+    ), f"script-src must allow cdn.tailwindcss.com; got: {script_src!r}"
+    # And the inline `tailwind.config = {...}` block in base.html
+    assert "'unsafe-inline'" in script_src or "'unsafe-inline'" in csp, (
+        f"script-src must allow inline scripts (for the tailwind.config "
+        f"block in base.html); got: {script_src!r}"
+    )
+
+
+def _extract_directive(csp: str, name: str) -> str:
+    """Return the substring of `csp` for the named directive (e.g. 'script-src').
+
+    CSP directives are separated by ';'. We return everything from the named
+    directive up to the next ';' so callers can assert on individual sources.
+    """
+    parts = [p.strip() for p in csp.split(";")]
+    for p in parts:
+        if p.startswith(name + " ") or p == name:
+            return p
+    return ""
+
+
 def test_other_routes_have_no_csp_header():
     """Non-/preview routes are unaffected — no CSP is set."""
     auth = _load_test_auth()

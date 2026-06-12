@@ -602,8 +602,12 @@ def health():
 # browser render path).
 _PREVIEW_CSP = (
     "default-src 'self'; "
-    "script-src 'self' 'wasm-unsafe-eval' "
-    "https://pyscript.net https://cdn.jsdelivr.net; "
+    # 'unsafe-inline' + cdn.tailwindcss.com: base.html loads the Tailwind
+    # play CDN and an inline `tailwind.config = {...}` block. The /preview
+    # route is login-protected, so allowing these is safe.
+    "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' "
+    "https://pyscript.net https://cdn.jsdelivr.net "
+    "https://cdn.tailwindcss.com; "
     "style-src 'self' 'unsafe-inline' "
     "https://pyscript.net https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
