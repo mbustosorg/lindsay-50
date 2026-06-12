@@ -115,34 +115,33 @@
     // Cap at 800px on the long edge so the preview fits comfortably on a
     // wide monitor but doesn't blow past 800x800 on a 4K screen. Pixels
     // are scaled with nearest-neighbor (image-rendering: pixelated) so
-    // each LED is a discrete block.
+    // each LED is a discrete block at any output size.
+    //
+    // The canvas fills the dark div's content area (card width minus
+    // the dark div's p-4 padding) up to the 800px cap. We do NOT floor
+    // to 64px multiples here — the canvas's CSS `aspect-square` keeps
+    // it square regardless of width, and `image-rendering: pixelated`
+    // scales the 64x64 frame buffer to whatever pixel size we end up
+    // at. Flooring to PANEL_W (64) caused a stair-step effect: the
+    // canvas only re-sized in 64px jumps, so the dark border (p-4
+    // around the canvas) stuck at a fixed width for most of a resize
+    // drag and then snapped suddenly, and the L-R border was visibly
+    // wider than the T-B border for the entire 64px range.
     //
     // Layout chain: body → main (flex-1, p-8) → card (block, p-12) →
     //   flex container → dark div (p-4, w-full) → canvas.
-    // The card is a block element, so it's 100% of the main's content
-    // area = (viewport - sidebar) - main padding - card padding. The
-    // dark div has `w-full max-w-full` so it's 100% of the card's
-    // content area. The canvas has `w-full max-w-[min(800px,100%)]
-    // h-auto aspect-square` — it fills the dark div, capped at 800px,
-    // and the height tracks the width via aspect-ratio.
-    //
-    // The canvas's CSS (max-w-[min(800px,100%)]) constrains the width
-    // automatically — the inline width we set here is just a target
-    // that the browser may shrink down via the max-width. We only set
-    // width; height is handled by CSS aspect-square. We also strip any
-    // previous inline height so the CSS height:auto takes effect.
+    // card.clientWidth = card content + p-12 (48px each side), so
+    // subtracting 96 gets the card's content area; subtracting 32 more
+    // accounts for the dark div's p-4 (16px each side).
     const max = 800;
     const card = canvas.closest(".bg-white.rounded-2xl");
     let available;
     if (card) {
-      // The card's content area minus the dark div's p-4.
       available = Math.max(0, card.clientWidth - 96 - 32);
     } else {
       available = Math.max(0, window.innerWidth - 160);
     }
-    available = Math.min(max, available);
-    const n = Math.max(1, Math.floor(available / PANEL_W));
-    const size = Math.min(max, n * PANEL_W);
+    const size = Math.min(max, available);
     canvas.style.width = size + "px";
     // Clear any previously-set inline height so CSS `h-auto aspect-square`
     // computes the height from the (possibly constrained) width.
