@@ -32,6 +32,7 @@ from patterns.nightsky import NightSky
 from patterns.png_display import PngDisplay
 from patterns.video_display import VideoDisplay
 from patterns.honeycomb import Honeycomb
+from patterns.hyperspace import Hyperspace
 from lib_shared.message_manager import MessageManager
 from lib_shared.mqtt_factory import make_mqtt_client
 
@@ -44,6 +45,7 @@ nightsky = NightSky(display)
 png = PngDisplay(display)
 video = VideoDisplay(display)
 honeycomb = Honeycomb(display)
+hyperspace = Hyperspace(display)
 
 
 class EffectCoordinator:
@@ -107,7 +109,7 @@ class EffectCoordinator:
         self.display.render(self.effects[self.idx], self.scroller)
 
 
-coordinator = EffectCoordinator(display, scroller, [video, png, honeycomb, flame, fireworks, nightsky], fade_seconds=4)
+coordinator = EffectCoordinator(display, scroller, [hyperspace, video, png, honeycomb, flame, fireworks, nightsky], fade_seconds=4)
 
 _message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
 _message_mgr.seed()
