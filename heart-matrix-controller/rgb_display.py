@@ -139,15 +139,16 @@ class Display:
         def _opt(key, default):
             val = cfg.if_exists(key)
             return val if val is not None else default
+
         options = RGBMatrixOptions()
         options.rows = int(_opt("MATRIX_ROWS", 32))
         options.cols = int(_opt("MATRIX_COLS", 64))
         options.chain_length = int(_opt("MATRIX_CHAIN", 2))
-        #options.parallel = int(_opt("MATRIX_PARALLEL", 1))
-        #options.hardware_mapping = _opt("MATRIX_HARDWARE_MAPPING", "regular")
+        # options.parallel = int(_opt("MATRIX_PARALLEL", 1))
+        # options.hardware_mapping = _opt("MATRIX_HARDWARE_MAPPING", "regular")
         options.pixel_mapper_config = _opt("MATRIX_PIXEL_MAPPER", "U-mapper")
         options.pwm_bits = int(_opt("MATRIX_PWM_BITS", 10))
-        options.brightness = int(_opt("MATRIX_BRIGHTNESS",100))
+        options.brightness = int(_opt("MATRIX_BRIGHTNESS", 100))
         options.gpio_slowdown = int(_opt("MATRIX_GPIO_SLOWDOWN", 4))
         # Keep root after init (don't drop to 'nobody'); harmless here and avoids
         # surprises if other parts of the process need privileges.
@@ -156,8 +157,16 @@ class Display:
 
         self._matrix = RGBMatrix(options=options)
         self.canvas = self._matrix.CreateFrameCanvas()
-        self.width = options.cols * options.chain_length // 2 if options.pixel_mapper_config == "U-mapper" else options.cols * options.chain_length
-        self.height = options.rows * 2 if options.pixel_mapper_config == "U-mapper" else options.rows * options.parallel
+        self.width = (
+            options.cols * options.chain_length // 2
+            if options.pixel_mapper_config == "U-mapper"
+            else options.cols * options.chain_length
+        )
+        self.height = (
+            options.rows * 2
+            if options.pixel_mapper_config == "U-mapper"
+            else options.rows * options.parallel
+        )
         logger.info("Display initialized: %dx%d", self.width, self.height)
 
     def clear(self):

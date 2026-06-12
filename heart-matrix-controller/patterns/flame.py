@@ -1,4 +1,3 @@
-
 import math
 import random
 import time
@@ -9,15 +8,15 @@ _PALETTE_SIZE = 64
 # Piecewise-linear keypoints for the heat → color ramp.  Adjust freely; each
 # entry is (t in [0,1], R, G, B).  Order matters and t must be ascending.
 _HEAT_KEYPOINTS = (
-    (0.00, 0, 0, 0),         # black (no heat)
-    (0.10, 30, 0, 30),        # deep purple (almost-extinguished embers)
-    (0.22, 110, 0, 30),       # plum red
-    (0.35, 220, 20, 0),       # bright red
-    (0.50, 255, 100, 0),      # orange
-    (0.65, 255, 200, 0),      # yellow-orange
-    (0.80, 255, 255, 90),     # bright yellow
-    (0.92, 220, 255, 230),    # near-white
-    (1.00, 180, 220, 255),    # cyan-white (hottest core)
+    (0.00, 0, 0, 0),  # black (no heat)
+    (0.10, 30, 0, 30),  # deep purple (almost-extinguished embers)
+    (0.22, 110, 0, 30),  # plum red
+    (0.35, 220, 20, 0),  # bright red
+    (0.50, 255, 100, 0),  # orange
+    (0.65, 255, 200, 0),  # yellow-orange
+    (0.80, 255, 255, 90),  # bright yellow
+    (0.92, 220, 255, 230),  # near-white
+    (1.00, 180, 220, 255),  # cyan-white (hottest core)
 )
 
 
@@ -45,8 +44,16 @@ class Flame(Effect):
     # then is mapped down to the palette's index range when blitted.
     _HEAT_MAX = 255
 
-    def __init__(self, display, frame_delay=0.05, cooling=None, fuel_min=165,
-                 max_brightness=0.7, scale=1, wind_speed=0.4):
+    def __init__(
+        self,
+        display,
+        frame_delay=0.05,
+        cooling=None,
+        fuel_min=165,
+        max_brightness=0.7,
+        scale=1,
+        wind_speed=0.4,
+    ):
         self.display = display
         self.frame_delay = frame_delay
         self.last_frame = 0.0
@@ -82,7 +89,7 @@ class Flame(Effect):
 
         self._init_render()
         self._heat = bytearray(self.w * self.h)  # 0..255 heat field
-        self._buf = bytearray(self.w * self.h)   # palette indices for the blit
+        self._buf = bytearray(self.w * self.h)  # palette indices for the blit
 
     def tick(self):
         now = time.monotonic()
@@ -108,10 +115,10 @@ class Flame(Effect):
         last = w - 1
         for y in range(h - 1):
             row = y * w
-            b1 = row + w                          # one row below (y+1)
-            b2 = b1 + w if y + 2 < h else b1       # two rows below, clamped at base
+            b1 = row + w  # one row below (y+1)
+            b2 = b1 + w if y + 2 < h else b1  # two rows below, clamped at base
             for x in range(w):
-                sx = x - wind_off                  # lean the source column upwind
+                sx = x - wind_off  # lean the source column upwind
                 if sx < 0:
                     sx = 0
                 elif sx > last:
@@ -119,9 +126,13 @@ class Flame(Effect):
                 lx = sx - 1 if sx > 0 else 0
                 rx = sx + 1 if sx < last else last
                 # Mostly straight up, a little from the diagonals -> rising tongues.
-                avg = (heat[b1 + sx] * 4 + heat[b2 + sx] * 2
-                       + heat[b1 + lx] + heat[b1 + rx]) >> 3
-                cool = (rnd(8) * cool_max) >> 8    # 0..cool_max-1, ~uniform
+                avg = (
+                    heat[b1 + sx] * 4
+                    + heat[b2 + sx] * 2
+                    + heat[b1 + lx]
+                    + heat[b1 + rx]
+                ) >> 3
+                cool = (rnd(8) * cool_max) >> 8  # 0..cool_max-1, ~uniform
                 v = avg - cool
                 heat[row + x] = v if v > 0 else 0
 

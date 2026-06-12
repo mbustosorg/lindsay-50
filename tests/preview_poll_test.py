@@ -108,9 +108,9 @@ def test_preview_js_first_poll_runs_immediately():
     immediate_call = src.find("pollLatestMessage()")
     assert interval_call != -1
     assert immediate_call != -1
-    assert immediate_call < interval_call, (
-        "First poll must run immediately at startup, not just on the first tick"
-    )
+    assert (
+        immediate_call < interval_call
+    ), "First poll must run immediately at startup, not just on the first tick"
 
 
 def test_preview_js_initializes_lastShownBody_to_null():

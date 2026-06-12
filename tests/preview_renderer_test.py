@@ -57,24 +57,37 @@ def _make_stub_patterns(effects_spec):
     (MagicMock auto-creates them, which would mask the missing-class path).
     """
     import types
+
     mod = types.ModuleType("patterns")
     for name, raises, msg in effects_spec:
         if raises:
+
             def _make_raising(msg):
                 def _factory(*a, **kw):
                     raise RuntimeError(msg)
+
                 return _factory
+
             setattr(mod, name, _make_raising(msg))
         else:
+
             def _make_factory(name):
                 class _StubPattern:
                     def __init__(self, display):
                         self.display = display
-                    def tick(self): pass
-                    def render(self, canvas): pass
-                    def set_brightness(self, b): pass
+
+                    def tick(self):
+                        pass
+
+                    def render(self, canvas):
+                        pass
+
+                    def set_brightness(self, b):
+                        pass
+
                 _StubPattern.__name__ = name
                 return _StubPattern
+
             setattr(mod, name, _make_factory(name))
     return mod
 
@@ -94,12 +107,14 @@ def _make_display():
 def test_renderer_keeps_effects_that_initialize():
     """Successful constructors are added to the cycle."""
     mod = _load_renderer()
-    patterns = _make_stub_patterns([
-        ("Fireworks", False, None),
-        ("Flame", False, None),
-        ("NightSky", False, None),
-        ("Honeycomb", False, None),
-    ])
+    patterns = _make_stub_patterns(
+        [
+            ("Fireworks", False, None),
+            ("Flame", False, None),
+            ("NightSky", False, None),
+            ("Honeycomb", False, None),
+        ]
+    )
     display, _ = _make_display()
     renderer = mod.PreviewRenderer(display, patterns)
     assert len(renderer.effects) == 4
@@ -108,12 +123,14 @@ def test_renderer_keeps_effects_that_initialize():
 def test_renderer_skips_constructor_that_raises():
     """A failing constructor is excluded; the rest still load."""
     mod = _load_renderer()
-    patterns = _make_stub_patterns([
-        ("Fireworks", False, None),
-        ("Flame", True, "missing dep"),  # fails
-        ("NightSky", False, None),
-        ("Honeycomb", False, None),
-    ])
+    patterns = _make_stub_patterns(
+        [
+            ("Fireworks", False, None),
+            ("Flame", True, "missing dep"),  # fails
+            ("NightSky", False, None),
+            ("Honeycomb", False, None),
+        ]
+    )
     display, _ = _make_display()
     renderer = mod.PreviewRenderer(display, patterns)
     # Flame failed, the other three are in the cycle
@@ -126,20 +143,32 @@ def test_renderer_skips_missing_classes_gracefully():
     # Only provide one pattern; the other three are missing
     patterns = MagicMock()
     patterns.Fireworks = MagicMock(return_value=MagicMock())
+
     # Flame/NightSky/Honeycomb: getattr returns MagicMock (because we
     # didn't set them on the mock). To simulate the real behavior, set
     # them to raise AttributeError via __getattr__.
     def _raise_attribute(name):
         raise AttributeError(name)
+
     patterns.__class__ = type("M", (), {"__getattr__": staticmethod(_raise_attribute)})
     # Easier: build a real dict-backed module
     import types
+
     real_mod = types.ModuleType("patterns")
+
     class Fireworks:
-        def __init__(self, display): pass
-        def tick(self): pass
-        def render(self, canvas): pass
-        def set_brightness(self, b): pass
+        def __init__(self, display):
+            pass
+
+        def tick(self):
+            pass
+
+        def render(self, canvas):
+            pass
+
+        def set_brightness(self, b):
+            pass
+
     real_mod.Fireworks = Fireworks
     display, _ = _make_display()
     renderer = mod.PreviewRenderer(display, real_mod)
@@ -152,12 +181,22 @@ def test_renderer_logs_browser_skipped_patterns():
     # Don't provide PngDisplay / VideoDisplay in the module at all — they
     # shouldn't be constructed (and the missing-class path is logged too).
     import types
+
     patterns = types.ModuleType("patterns")
+
     class Fireworks:
-        def __init__(self, display): pass
-        def tick(self): pass
-        def render(self, canvas): pass
-        def set_brightness(self, b): pass
+        def __init__(self, display):
+            pass
+
+        def tick(self):
+            pass
+
+        def render(self, canvas):
+            pass
+
+        def set_brightness(self, b):
+            pass
+
     patterns.Fireworks = Fireworks
     display, _ = _make_display()
     renderer = mod.PreviewRenderer(display, patterns)
@@ -233,8 +272,11 @@ def _make_coordinator(fade_seconds=0.4, fade_step=0.1):
     fx_b = _StubEffect(display)
     scroller = _StubScroller(display)
     coord = mod.PreviewCoordinator(
-        display, scroller, [fx_a, fx_b],
-        fade_seconds=fade_seconds, fade_step=fade_step,
+        display,
+        scroller,
+        [fx_a, fx_b],
+        fade_seconds=fade_seconds,
+        fade_step=fade_step,
     )
     return coord, fx_a, fx_b, scroller, canvas
 

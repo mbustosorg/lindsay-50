@@ -42,10 +42,10 @@ class PreviewRenderer:
 
     def __init__(self, display, patterns_module):
         """Args:
-            display: a WebDisplay instance.
-            patterns_module: the heart-matrix-controller.patterns module
-                (imported lazily by the browser; we receive the module
-                object so we can introspect its classes by name).
+        display: a WebDisplay instance.
+        patterns_module: the heart-matrix-controller.patterns module
+            (imported lazily by the browser; we receive the module
+            object so we can introspect its classes by name).
         """
         self.display = display
         self.effects = []
@@ -79,8 +79,9 @@ class PreviewCoordinator:
     cadence.
     """
 
-    def __init__(self, display, scroller, effects, fade_seconds=4.0,
-                 fade_step=0.04, gamma=2.2):
+    def __init__(
+        self, display, scroller, effects, fade_seconds=4.0, fade_step=0.04, gamma=2.2
+    ):
         self.display = display
         self.scroller = scroller
         self.effects = effects
@@ -141,7 +142,7 @@ class PreviewCoordinator:
             if now - self.last_step >= self.fade_step or progress >= 1.0:
                 self.last_step = now
                 linear = 1.0 - progress if self.mode == "out" else progress
-                b = linear ** self.gamma
+                b = linear**self.gamma
                 self.effects[self.idx].set_brightness(b)
                 self.scroller.set_brightness(b)
                 log.debug("fade %s linear=%.3f b=%.3f", self.mode, linear, b)

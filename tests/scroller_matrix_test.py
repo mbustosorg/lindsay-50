@@ -111,9 +111,7 @@ def fresh_module(monkeypatch):
     """
     cfg_mock = MagicMock()
     cfg_mock.if_exists = lambda key: None
-    monkeypatch.setattr(
-        "lib_shared.config_reader.get_config", lambda *a, **k: cfg_mock
-    )
+    monkeypatch.setattr("lib_shared.config_reader.get_config", lambda *a, **k: cfg_mock)
     # Reset rgbmatrix DrawText mock so call counts are per-test
     _graphics.DrawText.reset_mock()
     return _load_scroller_module()
@@ -147,9 +145,7 @@ def test_matrix_scroller_set_text_initializes_positions(fresh_module):
     assert s.bottom_x == 64
 
 
-def test_matrix_scroller_tick_advances_x_by_expected_pixels(
-    fresh_module, monkeypatch
-):
+def test_matrix_scroller_tick_advances_x_by_expected_pixels(fresh_module, monkeypatch):
     """0.5s @ frame_delay=0.05 -> 10 pixels of motion, matching the base class."""
     state = {"t": 1000.0}
     monkeypatch.setattr(time, "monotonic", lambda: state["t"])

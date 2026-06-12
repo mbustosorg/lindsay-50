@@ -40,34 +40,44 @@ def _load_test_auth():
 
 def test_preview_template_has_sign_canvas_element():
     """The preview template renders a <canvas id='sign-canvas'> element."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
+    ).read_text()
     assert 'id="sign-canvas"' in template
     assert "<canvas" in template
 
 
 def test_preview_template_uses_pixelated_image_rendering():
     """The canvas element declares image-rendering: pixelated (LED look)."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
+    ).read_text()
     assert "pixelated" in template
 
 
 def test_preview_template_has_status_block():
     """The template shows the current effect name and message body."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
+    ).read_text()
     assert 'id="preview-effect"' in template
     assert 'id="preview-message"' in template
 
 
 def test_preview_template_has_loading_indicator():
     """A 'Loading preview…' indicator that hides once PyScript is ready."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
+    ).read_text()
     assert "Loading preview" in template
     assert 'id="preview-loading"' in template
 
 
 def test_preview_template_includes_pyscript_runtime():
     """The PyScript runtime script + py-config link are present."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
+    ).read_text()
     assert "py-config" in template
     assert "py-script" in template
     assert "pyscript" in template.lower()
@@ -75,13 +85,17 @@ def test_preview_template_includes_pyscript_runtime():
 
 def test_preview_template_loads_preview_main():
     """The <py-script> tag points at the preview_main entry point."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
+    ).read_text()
     assert "preview_main.py" in template
 
 
 def test_preview_template_no_websocket():
     """v1 has no WebSocket — assert neither the JS nor template references one."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
+    ).read_text()
     assert "new WebSocket" not in template
     assert "WebSocket(" not in template
     assert "Flask-Sock" not in template
@@ -91,7 +105,9 @@ def test_preview_template_loaded_by_app():
     """GET /preview returns a 200 with the rendered canvas element."""
     # Build the app via the same loader test_auth uses, so all heavy deps
     # are mocked but the template still renders through Jinja.
-    auth = _load_test_auth(); _make_mock_cfg = auth._make_mock_cfg; _load_app_module = auth._load_app_module
+    auth = _load_test_auth()
+    _make_mock_cfg = auth._make_mock_cfg
+    _load_app_module = auth._load_app_module
 
     app = _load_app_module(_make_mock_cfg())
     app.config["TESTING"] = True
@@ -112,7 +128,9 @@ def test_preview_template_loaded_by_app():
 def test_preview_template_csp_header_on_preview_route():
     """The /preview response carries a Content-Security-Policy header that
     allows wasm-unsafe-eval and the PyScript CDN."""
-    auth = _load_test_auth(); _make_mock_cfg = auth._make_mock_cfg; _load_app_module = auth._load_app_module
+    auth = _load_test_auth()
+    _make_mock_cfg = auth._make_mock_cfg
+    _load_app_module = auth._load_app_module
 
     app = _load_app_module(_make_mock_cfg())
     app.config["TESTING"] = True
@@ -128,7 +146,9 @@ def test_preview_template_csp_header_on_preview_route():
 
 def test_other_routes_have_no_csp_header():
     """Non-/preview routes are unaffected — no CSP is set."""
-    auth = _load_test_auth(); _make_mock_cfg = auth._make_mock_cfg; _load_app_module = auth._load_app_module
+    auth = _load_test_auth()
+    _make_mock_cfg = auth._make_mock_cfg
+    _load_app_module = auth._load_app_module
 
     app = _load_app_module(_make_mock_cfg())
     app.config["TESTING"] = True

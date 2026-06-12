@@ -7,9 +7,17 @@ _PALETTE_SIZE = 32
 
 
 class NightSky(Effect):
-    def __init__(self, display, frame_delay=0.05, num_stars=45,
-                 shoot_min=5.0, shoot_max=15.0, sky_color=0x000000,
-                 twinkle_period=3.0, twinkle_fraction=0.20):
+    def __init__(
+        self,
+        display,
+        frame_delay=0.05,
+        num_stars=45,
+        shoot_min=5.0,
+        shoot_max=15.0,
+        sky_color=0x000000,
+        twinkle_period=3.0,
+        twinkle_fraction=0.20,
+    ):
         self.display = display
         self.frame_delay = frame_delay
         self.shoot_min = shoot_min
@@ -51,13 +59,15 @@ class NightSky(Effect):
         # also stays in the stable region the whole way.
         self.stars = []
         for _ in range(num_stars):
-            self.stars.append([
-                random.randint(0, self.w - 1),
-                random.randint(0, self.h - 1),
-                random.randint(12, 18),
-                random.randint(10, 14),
-                -1.0,
-            ])
+            self.stars.append(
+                [
+                    random.randint(0, self.w - 1),
+                    random.randint(0, self.h - 1),
+                    random.randint(12, 18),
+                    random.randint(10, 14),
+                    -1.0,
+                ]
+            )
 
         # Seed the initial active set with phases offset across [0, period) so
         # they aren't all peaking simultaneously on the first frame.

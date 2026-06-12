@@ -7,6 +7,7 @@ import logging
 # message_manager, and the MQTT client built by mqtt_factory) call get_config()
 # at import time, so it must already exist. Wi-Fi is managed by the Pi OS.
 from lib_shared.config_reader import get_config
+
 REQUIRED_KEYS: set[str] = {
     "MQTT_HOST",
     "MQTT_PORT",
@@ -36,7 +37,6 @@ from patterns.hyperspace import Hyperspace
 from lib_shared.message_manager import MessageManager
 from lib_shared.mqtt_factory import make_mqtt_client
 
-
 display = Display()
 scroller = MatrixScroller(display)
 fireworks = Fireworks(display)
@@ -51,7 +51,9 @@ hyperspace = Hyperspace(display)
 class EffectCoordinator:
     """Toggles between effects and fades the display when a new message arrives."""
 
-    def __init__(self, display, scroller, effects, fade_seconds=0.5, fade_step=0.04, gamma=2.2):
+    def __init__(
+        self, display, scroller, effects, fade_seconds=0.5, fade_step=0.04, gamma=2.2
+    ):
         self.display = display
         self.scroller = scroller
         self.effects = effects
@@ -83,7 +85,7 @@ class EffectCoordinator:
             if now - self.last_step >= self.fade_step or progress >= 1.0:
                 self.last_step = now
                 linear = 1.0 - progress if self.mode == "out" else progress
-                b = linear ** self.gamma
+                b = linear**self.gamma
                 self.effects[self.idx].set_brightness(b)
                 self.scroller.set_brightness(b)
                 log.debug("fade %s linear=%.3f b=%.3f", self.mode, linear, b)
@@ -111,13 +113,16 @@ class EffectCoordinator:
 
 coordinator = EffectCoordinator(display, scroller, [hyperspace, video, png, honeycomb, flame, fireworks, nightsky], fade_seconds=4)
 
-_message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
+_message_mgr = MessageManager(
+    on_message=lambda msg: coordinator.request_message(msg.body)
+)
 _message_mgr.seed()
 
 # Platform MQTT client (paho on the Pi; adafruit available via MQTT_CLIENT)
 _mqtt_client = make_mqtt_client(_message_mgr.dispatch)
 logging.info("Starting MQTT client at boot...")
 _mqtt_client.start()
+
 
 # SIGTERM (systemd stop / `kill`) doesn't raise an exception by default, so the
 # `finally` below would never run. Turn it into SystemExit so cleanup happens on

@@ -21,9 +21,17 @@ log = logging.getLogger("heart")
 
 
 class MatrixScroller(ScrollerBase):
-    def __init__(self, display, color=0xFF0000, frame_delay=0.04, offset_seconds=1.0,
-                 font_path=None):
-        super().__init__(frame_delay=frame_delay, offset_seconds=offset_seconds, color=color)
+    def __init__(
+        self,
+        display,
+        color=0xFF0000,
+        frame_delay=0.04,
+        offset_seconds=1.0,
+        font_path=None,
+    ):
+        super().__init__(
+            frame_delay=frame_delay, offset_seconds=offset_seconds, color=color
+        )
         self.display = display
 
         cfg = get_config()

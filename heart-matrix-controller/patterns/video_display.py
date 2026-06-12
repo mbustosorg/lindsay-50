@@ -32,7 +32,7 @@ class VideoDisplay(Effect):
         self._force_fps = float(cfg.if_exists("VIDEO_FPS") or 0) or fps
 
         self._brightness = 1.0
-        self._frame = None          # current panel-sized PIL RGB image
+        self._frame = None  # current panel-sized PIL RGB image
         self._cap = None
         self._interval = 1.0 / 30.0
         self._last = time.monotonic()
@@ -69,7 +69,7 @@ class VideoDisplay(Effect):
         from PIL import Image
 
         ok, frame = self._cap.read()
-        if not ok:                                   # end of file -> loop
+        if not ok:  # end of file -> loop
             self._cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
             ok, frame = self._cap.read()
             if not ok:

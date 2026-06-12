@@ -584,7 +584,7 @@ def testing():
     twilio_token = _cfg.if_exists("TWILIO_AUTH_TOKEN")
     return render_template(
         "testing.html",
-        sign_name=cfg.sign.name, 
+        sign_name=cfg.sign.name,
         twilio_token=twilio_token or "",
     )
 
@@ -603,9 +603,9 @@ def health():
 _PREVIEW_CSP = (
     "default-src 'self'; "
     "script-src 'self' 'wasm-unsafe-eval' "
-        "https://pyscript.net https://cdn.jsdelivr.net; "
+    "https://pyscript.net https://cdn.jsdelivr.net; "
     "style-src 'self' 'unsafe-inline' "
-        "https://pyscript.net https://fonts.googleapis.com; "
+    "https://pyscript.net https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
     "img-src 'self' data:; "
     "connect-src 'self'"

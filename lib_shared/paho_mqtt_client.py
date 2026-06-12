@@ -46,7 +46,9 @@ class PahoMqttClient:
         """Connect to the broker and run the subscriber loop in a daemon thread."""
         topic = self._feed
         logger.info(
-            "PahoMqttClient will subscribe to topic=%r username=%r", topic, self._username
+            "PahoMqttClient will subscribe to topic=%r username=%r",
+            topic,
+            self._username,
         )
 
         def on_connect(_client, _userdata, _flags, rc):

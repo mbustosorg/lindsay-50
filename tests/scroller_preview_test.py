@@ -62,6 +62,7 @@ class _StubDisplay:
     class _Canvas:
         width = 64
         height = 64
+
     canvas = _Canvas()
     width = 64
     height = 64
@@ -156,13 +157,16 @@ def test_preview_scroller_draw_text_writes_to_canvas_image():
 
 def test_preview_scroller_single_line_layout_for_short_canvas():
     """A 64x16 canvas (height <= 32) uses single-line mode."""
+
     class _ShortDisplay:
         class _Canvas:
             width = 64
             height = 16
+
         canvas = _Canvas()
         width = 64
         height = 16
+
     mod = _load_preview_scroller()
     s = mod.PreviewScroller(_ShortDisplay())
     assert s.single_line is True

@@ -21,8 +21,13 @@ import sys
 # importable. PyScript ships them under their declared URLs (see py-config.toml
 # [files]); once fetched they live in the Pyodide FS and we add their
 # containing dirs to sys.path so plain `import` works.
-for path in ("/", "/heart-message-manager", "/heart-matrix-controller",
-             "/heart-matrix-controller/patterns", "/lib_shared"):
+for path in (
+    "/",
+    "/heart-message-manager",
+    "/heart-matrix-controller",
+    "/heart-matrix-controller/patterns",
+    "/lib_shared",
+):
     if path not in sys.path:
         sys.path.insert(0, path)
 
@@ -52,7 +57,9 @@ _display = WebDisplay(_web_canvas)
 # in the browser (e.g. Honeycomb's numpy import). Failures are logged + skipped.
 _renderer = PreviewRenderer(_display, patterns_module)
 _scroller = PreviewScroller(_display)
-_coordinator = PreviewCoordinator(_display, _scroller, _renderer.effects, fade_seconds=4.0)
+_coordinator = PreviewCoordinator(
+    _display, _scroller, _renderer.effects, fade_seconds=4.0
+)
 
 
 # --- JS-callable surface ---
@@ -60,6 +67,7 @@ _coordinator = PreviewCoordinator(_display, _scroller, _renderer.effects, fade_s
 # The JS main loop in static/preview.js calls these via the PyScript
 # `pyscript` global. We bind them to module-level names so PyScript
 # exposes them automatically.
+
 
 def request_message(body):
     """Hand a new message body to the coordinator. Idempotent for duplicates."""

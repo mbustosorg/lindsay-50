@@ -55,7 +55,7 @@ class Honeycomb(Effect):
     def __init__(self, display, tf=15.0):
         self._w = display.canvas.width
         self._h = display.canvas.height
-        self._tf = tf                       # animation duration; smaller = faster
+        self._tf = tf  # animation duration; smaller = faster
         self._brightness = 1.0
         self._t0 = time.monotonic()
 
@@ -63,7 +63,7 @@ class Honeycomb(Effect):
         m = float(max(self._w, self._h))
         xs = np.arange(self._w) / m
         ys = np.arange(self._h) / m
-        self._X, self._Y = np.meshgrid(xs, ys)   # (h, w)
+        self._X, self._Y = np.meshgrid(xs, ys)  # (h, w)
 
         self._frame = None
         self._compute()
@@ -72,14 +72,14 @@ class Honeycomb(Effect):
         tf = self._tf
         now = time.monotonic() - self._t0
 
-        def T(period_s):                     # Pixelblaze time() over a period in seconds
+        def T(period_s):  # Pixelblaze time() over a period in seconds
             return (now / period_s) % 1.0
 
-        f = _wave(T(tf * 6.6)) * 5.0 + 7.0   # cell density
-        t1 = _wave(T(tf * 9.8)) * PI2        # x shift
-        t2 = _wave(T(tf * 12.5)) * PI2       # y shift
-        t3 = _wave(T(tf * 9.8))              # hue shift
-        t4 = T(tf * 0.66)                    # value shift
+        f = _wave(T(tf * 6.6)) * 5.0 + 7.0  # cell density
+        t1 = _wave(T(tf * 9.8)) * PI2  # x shift
+        t2 = _wave(T(tf * 12.5)) * PI2  # y shift
+        t3 = _wave(T(tf * 9.8))  # hue shift
+        t4 = T(tf * 0.66)  # value shift
 
         z = (1.0 + np.sin(self._X * f + t1) + np.cos(self._Y * f + t2)) * 0.5
         v = _wave(z + t4)
@@ -87,7 +87,7 @@ class Honeycomb(Effect):
         h = _triangle(z) / 2.0 + t3
 
         rgb = _hsv_to_rgb(h, 1.0, np.clip(v, 0.0, 1.0))
-        self._frame = (rgb * 255.0).astype(np.uint8)   # (h, w, 3)
+        self._frame = (rgb * 255.0).astype(np.uint8)  # (h, w, 3)
 
     # -- Effect interface (overridden; no Bitmap/Palette needed) --
 

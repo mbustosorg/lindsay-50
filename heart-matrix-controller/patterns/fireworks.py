@@ -5,8 +5,16 @@ from rgb_display import Bitmap, Palette, Effect
 
 # Saturated hues that read well on HUB75 panels.
 _HUES = (
-    0xFF0000, 0xFF6600, 0xFFCC00, 0xFFFF00, 0x66FF00,
-    0x00FFAA, 0x00CCFF, 0x3366FF, 0xCC00FF, 0xFF00AA,
+    0xFF0000,
+    0xFF6600,
+    0xFFCC00,
+    0xFFFF00,
+    0x66FF00,
+    0x00FFAA,
+    0x00CCFF,
+    0x3366FF,
+    0xCC00FF,
+    0xFF00AA,
     0xFFFFFF,
 )
 
@@ -14,8 +22,14 @@ _PALETTE_SIZE = 32  # index 0 = black background; 1..31 = preassigned hues
 
 
 class Fireworks(Effect):
-    def __init__(self, display, frame_delay=0.05, spawn_seconds=0.8,
-                 sparks_per_burst=18, gravity=0.15):
+    def __init__(
+        self,
+        display,
+        frame_delay=0.05,
+        spawn_seconds=0.8,
+        sparks_per_burst=18,
+        gravity=0.15,
+    ):
         self.display = display
         self.frame_delay = frame_delay
         self.spawn_seconds = spawn_seconds
@@ -70,27 +84,32 @@ class Fireworks(Effect):
             for _ in range(self.sparks_per_burst):
                 angle = random.uniform(0, 6.2832)
                 speed = random.uniform(0.5, 1.8)
-                survivors.append([
-                    ex, ey,
-                    math.cos(angle) * speed,
-                    math.sin(angle) * speed,
-                    # Long enough for sparks to fall through both panels.
-                    random.randint(45, 75),
-                    color_idx,
-                    1,
-                ])
+                survivors.append(
+                    [
+                        ex,
+                        ey,
+                        math.cos(angle) * speed,
+                        math.sin(angle) * speed,
+                        # Long enough for sparks to fall through both panels.
+                        random.randint(45, 75),
+                        color_idx,
+                        1,
+                    ]
+                )
 
         self.particles = survivors
 
     def _spawn_rocket(self):
         # vy_init chosen so apex lands in the upper panel (rows 0..31):
         # apex_y = launch_y - vy_init**2 / (2*gravity)
-        self.particles.append([
-            random.randint(8, self.display.canvas.width - 8),
-            self.display.canvas.height - 1,
-            random.uniform(-0.3, 0.3),
-            random.uniform(-4.2, -3.6),
-            80,
-            random.randint(1, _PALETTE_SIZE - 1),
-            0,
-        ])
+        self.particles.append(
+            [
+                random.randint(8, self.display.canvas.width - 8),
+                self.display.canvas.height - 1,
+                random.uniform(-0.3, 0.3),
+                random.uniform(-4.2, -3.6),
+                80,
+                random.randint(1, _PALETTE_SIZE - 1),
+                0,
+            ]
+        )
