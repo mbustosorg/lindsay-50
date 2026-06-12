@@ -595,5 +595,35 @@ def health():
     return "ok"
 
 
+# CSP for the preview page: PyScript loads WebAssembly (needs
+# wasm-unsafe-eval) and pulls its runtime + dependencies from
+# pyscript.net and cdn.jsdelivr.net. The same-origin allowance covers
+# the static files Flask ships under /static/ (the python source for the
+# browser render path).
+_PREVIEW_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'wasm-unsafe-eval' "
+        "https://pyscript.net https://cdn.jsdelivr.net; "
+    "style-src 'self' 'unsafe-inline' "
+        "https://pyscript.net https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data:; "
+    "connect-src 'self'"
+)
+
+
+@app.after_request
+def _set_preview_csp(response):
+    """Set a permissive CSP on /preview so PyScript + WASM can run.
+
+    All other pages keep the browser's default CSP (none, since we don't
+    set one). Only the preview needs the wasm-unsafe-eval + PyScript CDN
+    exceptions; everywhere else is unaffected.
+    """
+    if request.path == "/preview" or request.path.startswith("/preview/"):
+        response.headers["Content-Security-Policy"] = _PREVIEW_CSP
+    return response
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(_cfg.PORT), debug=True)

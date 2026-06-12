@@ -9,6 +9,35 @@
 </div>
 
 <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-12">
-  <p class="text-center text-slate-400">Placeholder — visual sign preview coming soon</p>
+  <div class="flex flex-col items-center gap-6">
+    <div class="text-slate-500 text-sm">
+      <span class="font-semibold">Effect:</span> <span id="preview-effect">—</span>
+      <span class="mx-3 text-slate-300">|</span>
+      <span class="font-semibold">Now displaying:</span> <span id="preview-message">Idle</span>
+    </div>
+    <div class="relative bg-slate-900 rounded-xl p-4 shadow-2xl">
+      <canvas id="sign-canvas" width="64" height="64"
+              class="block image-rendering-pixelated"
+              style="width: 512px; height: 512px; image-rendering: pixelated;"></canvas>
+      <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
+        Loading preview…
+      </div>
+    </div>
+  </div>
 </div>
+
+<!-- PyScript runtime + config. The config declares which Python files
+     the browser fetches and which packages to install (Pillow + numpy). -->
+<link rel="stylesheet" href="https://pyscript.net/releases/2024.10.2/core.css">
+<script type="module" src="https://pyscript.net/releases/2024.10.2/core.js"></script>
+<py-config src="{{ url_for('static', filename='preview/py-config.toml') }}"></py-config>
+
+<!-- Browser-side entry point. PyScript fetches preview_main.py (and its
+     declared file dependencies), runs it, and exposes its top-level
+     functions on the `pyscript` global so preview.js can call them. -->
+<py-script src="{{ url_for('static', filename='preview/preview_main.py') }}"></py-script>
+
+<!-- App-side main loop + polling. Loaded after PyScript so it can wait for
+     the runtime's `pyodideReady` event. -->
+<script src="{{ url_for('static', filename='preview/preview.js') }}"></script>
 {% endblock %}
