@@ -25,7 +25,7 @@ configure_logging(getattr(logging, os.getenv("LOG_LEVEL", "INFO")))
 log = logging.getLogger("heart")
 
 from rgb_display import Display
-from scroller import Scroller
+from scroller import MatrixScroller
 from patterns.fireworks import Fireworks
 from patterns.flame import Flame
 from patterns.nightsky import NightSky
@@ -38,7 +38,7 @@ from lib_shared.mqtt_factory import make_mqtt_client
 
 
 display = Display()
-scroller = Scroller(display)
+scroller = MatrixScroller(display)
 fireworks = Fireworks(display)
 flame = Flame(display)
 nightsky = NightSky(display)
@@ -92,7 +92,7 @@ class EffectCoordinator:
                 if self.mode == "out":
                     self.idx = (self.idx + 1) % len(self.effects)
                     self.effects[self.idx].set_brightness(0.0)
-                    self.scroller.set_text(self.pending_text)
+                    self.scroller.set_text(self.pending_text, self.display.width)
                     self.pending_text = None
                     self.mode = "in"
                     self.fade_start = now
@@ -103,7 +103,7 @@ class EffectCoordinator:
                     self.mode = "idle"
 
         self.effects[self.idx].tick()
-        self.scroller.tick()
+        self.scroller.tick(self.display.width)
         # Composite the active effect + text onto the panel. SwapOnVSync inside
         # render() blocks until the next refresh, which paces this loop.
         self.display.render(self.effects[self.idx], self.scroller)
