@@ -55,8 +55,10 @@ from preview_canvas import WebCanvas, WebDisplay
 from preview_scroller import PreviewScroller
 from preview_renderer import PreviewRenderer, PreviewCoordinator
 
-# Pattern modules (no rgbmatrix, no OpenCV, no filesystem PNGs).
-from patterns import fireworks, flame, nightsky, honeycomb  # noqa: F401
+# Pattern modules (no rgbmatrix, no OpenCV, no filesystem PNGs). hyperspace is
+# imported so PreviewRenderer can resolve it as a submodule of `patterns`.
+from patterns import fireworks, flame, nightsky, honeycomb, hyperspace  # noqa: F401
+from patterns.heartbeat import Heartbeat
 import patterns as patterns_module
 
 # Lazy bundle the patterns module needs (the renderer looks classes up by
@@ -76,7 +78,13 @@ _display = WebDisplay(_web_canvas)
 # in the browser (e.g. Honeycomb's numpy import). Failures are logged + skipped.
 _renderer = PreviewRenderer(_display, patterns_module)
 _scroller = PreviewScroller(_display)
-_coordinator = PreviewCoordinator(_display, _scroller, _renderer.effects, fade_seconds=4.0)
+_heart = Heartbeat(_display)
+_coordinator = PreviewCoordinator(_display, _scroller, _renderer.effects, heart=_heart)
+
+# Begin the boot splash (beating heart). The first preview.js poll hands in the
+# latest message, which plays once the heart fades out — mirroring the device's
+# "show the last seeded message at startup" behavior.
+_coordinator.start()
 
 
 # --- JS-callable surface ---
