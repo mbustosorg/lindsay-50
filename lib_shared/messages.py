@@ -108,9 +108,7 @@ class FilteredMessages:
             entry.suppressed = bool(suppressing)
             entry.rules = [r.to_dict() for r in suppressing]
             entry.sender_name = self._config.senders.get(entry.message.sender)
-            entry.display_time = _format_display_time(
-                entry.message.received_at, tz_offset
-            )
+            entry.display_time = _format_display_time(entry.message.received_at, tz_offset)
 
     def add(self, message, source="rest"):
         """Add a single message to the store."""
@@ -180,6 +178,4 @@ class InMemoryMessages(FilteredMessages):
         self._enrich_messages(entries)
         if suppress:
             entries = [e for e in entries if not e.suppressed]
-        return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[
-            :limit
-        ]
+        return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[:limit]

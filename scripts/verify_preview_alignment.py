@@ -130,19 +130,13 @@ class _PreviewDisplay:
     height = 64
 
 
-p = PreviewScroller(
-    display=_PreviewDisplay(), color=0xFFFFFF, frame_delay=0.04, offset_seconds=1.0
-)
+p = PreviewScroller(display=_PreviewDisplay(), color=0xFFFFFF, frame_delay=0.04, offset_seconds=1.0)
 p.last_tick = 1000.0
 
 # 1. Both subclasses use ScrollerBase.tick (no override) — the alignment
 #    guarantee is structural.
-assert (
-    MatrixScroller.tick is ScrollerBase.tick
-), "MatrixScroller must inherit ScrollerBase.tick"
-assert (
-    PreviewScroller.tick is ScrollerBase.tick
-), "PreviewScroller must inherit ScrollerBase.tick"
+assert MatrixScroller.tick is ScrollerBase.tick, "MatrixScroller must inherit ScrollerBase.tick"
+assert PreviewScroller.tick is ScrollerBase.tick, "PreviewScroller must inherit ScrollerBase.tick"
 print("OK: both subclasses use ScrollerBase.tick (no override)")
 
 # 2. Mock time.monotonic so both see the same clock.

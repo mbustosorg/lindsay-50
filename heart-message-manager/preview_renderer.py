@@ -89,9 +89,7 @@ class PreviewCoordinator:
     cadence.
     """
 
-    def __init__(
-        self, display, scroller, effects, fade_seconds=4.0, fade_step=0.04, gamma=2.2
-    ):
+    def __init__(self, display, scroller, effects, fade_seconds=4.0, fade_step=0.04, gamma=2.2):
         self.display = display
         self.scroller = scroller
         self.effects = effects

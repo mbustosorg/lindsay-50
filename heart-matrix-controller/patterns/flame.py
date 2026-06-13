@@ -126,12 +126,7 @@ class Flame(Effect):
                 lx = sx - 1 if sx > 0 else 0
                 rx = sx + 1 if sx < last else last
                 # Mostly straight up, a little from the diagonals -> rising tongues.
-                avg = (
-                    heat[b1 + sx] * 4
-                    + heat[b2 + sx] * 2
-                    + heat[b1 + lx]
-                    + heat[b1 + rx]
-                ) >> 3
+                avg = (heat[b1 + sx] * 4 + heat[b2 + sx] * 2 + heat[b1 + lx] + heat[b1 + rx]) >> 3
                 cool = (rnd(8) * cool_max) >> 8  # 0..cool_max-1, ~uniform
                 v = avg - cool
                 heat[row + x] = v if v > 0 else 0

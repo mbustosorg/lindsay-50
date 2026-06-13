@@ -41,9 +41,7 @@ def tz_offset_mins(tz_name: str) -> int:
         return 0
 
 
-def format_from_iso(
-    dt_iso: str, tz_name: str = "UTC", format: str = "%b %d %I:%M %p"
-) -> str:
+def format_from_iso(dt_iso: str, tz_name: str = "UTC", format: str = "%b %d %I:%M %p") -> str:
     """Format an ISO 8601 timestamp in the given timezone.
 
     Args:

@@ -149,9 +149,7 @@ class EffectCoordinator:
         except Exception:
             log.exception("recent_provider failed")
             return None
-        bodies = [
-            e.message.body for e in entries[: self.recent_count] if e.message.body
-        ]
+        bodies = [e.message.body for e in entries[: self.recent_count] if e.message.body]
         if not bodies:
             return None
         choices = [b for b in bodies if b != self.last_shown_text] or bodies
@@ -236,9 +234,7 @@ coordinator = EffectCoordinator(
     recent_provider=lambda: _message_mgr.get_messages(limit=5),
 )
 
-_message_mgr = MessageManager(
-    on_message=lambda msg: coordinator.request_message(msg.body)
-)
+_message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
 _message_mgr.seed()
 
 # Kick off the boot splash, queuing the most recent seeded message to play once
