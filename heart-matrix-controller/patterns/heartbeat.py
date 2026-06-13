@@ -1,9 +1,10 @@
 """Beating red heart — the startup splash.
 
-A filled heart (implicit curve `(x^2+y^2-1)^3 - x^2 y^3 <= 0`) rendered in red,
-pulsing with a "lub-dub" envelope so it reads as a heartbeat: it briefly swells
-and brightens on each beat, then relaxes.  Palette-based like the other
-generative effects, so `Effect` supplies the brightness fade and canvas blit.
+A filled heart built from a 45°-rotated square (a point-down diamond forming
+the body and tip) plus two semicircles on its upper edges (the lobes), rendered
+in red and pulsing with a "lub-dub" envelope so it reads as a heartbeat: it
+briefly swells and brightens on each beat, then relaxes.  Palette-based like the
+other generative effects, so `Effect` supplies the brightness fade and blit.
 
 This isn't part of the normal rotation — `EffectCoordinator` shows it once at
 boot for a few seconds, then fades into the first background effect.
@@ -25,6 +26,11 @@ _DUB_GAIN = 0.6  # the "dub" is softer than the "lub"
 _SIZE_BASE = 0.82  # heart scale between beats
 _SIZE_SWELL = 0.22  # extra scale at a beat's peak
 
+# Half-diagonal (corner distance) of the rotated square, in heart-space units.
+# The two lobes are semicircles of radius _DIAMOND_HALF / sqrt(2) sitting on the
+# square's upper edges, so the heart spans y in [-d, ~1.21d], x in [-1.21d, 1.21d].
+_DIAMOND_HALF = 1.0
+
 
 def _thump(phase, center, width):
     """Gaussian pulse at `center`, measured around the circle (wraps at 1.0)."""
@@ -34,9 +40,32 @@ def _thump(phase, center, width):
 
 
 def _heart_inside(x, y):
-    """True if (x, y) is inside the unit heart `(x^2+y^2-1)^3 - x^2 y^3 <= 0`."""
-    a = x * x + y * y - 1.0
-    return a * a * a - x * x * y * y * y <= 0.0
+    """True if (x, y) is inside the heart.
+
+    Built from a 45°-rotated square plus two semicircles:
+      * the square is the diamond ``|x| + |y| <= d`` (point-down, so its bottom
+        corner is the heart's tip);
+      * each upper edge carries a semicircle of radius ``d / sqrt(2)`` centred
+        on the edge midpoint, bulging outward to form the two lobes — the
+        left edge is ``y - x = d``, the right edge ``x + y = d``.
+
+    Kept in sync with the inlined copy in ``tick`` (this version is used once at
+    construction by ``_curve_center_y``; ``tick`` inlines it for per-pixel speed).
+    """
+    d = _DIAMOND_HALF
+    if abs(x) + abs(y) <= d:  # rotated square (diamond)
+        return True
+    r2 = d * d * 0.5  # (d / sqrt(2)) ** 2
+    half = d * 0.5
+    if y - x >= d:  # outer side of the upper-left edge -> left lobe
+        dx, dy = x + half, y - half
+        if dx * dx + dy * dy <= r2:
+            return True
+    if x + y >= d:  # outer side of the upper-right edge -> right lobe
+        dx, dy = x - half, y - half
+        if dx * dx + dy * dy <= r2:
+            return True
+    return False
 
 
 class Heartbeat(Effect):
@@ -54,10 +83,10 @@ class Heartbeat(Effect):
         self.hcx = (self.w - 1) / 2.0
         self.hcy = (self.h - 1) / 2.0
 
-        # The curve isn't symmetric about its own origin (lobes rise above, the
-        # point dips below), so find its vertical center once and evaluate the
-        # curve shifted by it. Because the pulse scales about that center, the
-        # heart stays panel-centered at every beat size — not just one.
+        # The shape isn't symmetric about its own origin (lobes rise above, the
+        # point dips below), so find its vertical center once and evaluate it
+        # shifted by that. Because the pulse scales about that center, the heart
+        # stays panel-centered at every beat size — not just one.
         self._y_c = self._curve_center_y()
 
         self.bitmap = Bitmap(self.w, self.h)
@@ -124,13 +153,25 @@ class Heartbeat(Effect):
         y_c = self._y_c
         buf = self._buf
         buf[:] = self._zero_buf
+        # Geometry constants for the inlined heart test (see _heart_inside).
+        d = _DIAMOND_HALF
+        half = d * 0.5
+        r2 = d * d * 0.5
         for i in range(len(buf)):
             hx = nx[i] * inv
-            # Shift by the curve's center so the pulse scales about the heart's
+            # Shift by the shape's center so the pulse scales about the heart's
             # middle, keeping it panel-centered at every beat size.
             hy = ny[i] * inv + y_c
-            a = hx * hx + hy * hy - 1.0
-            if a * a * a - hx * hx * hy * hy * hy <= 0.0:
+            inside = abs(hx) + abs(hy) <= d  # rotated square
+            if not inside and hy - hx >= d:  # upper-left lobe
+                dx = hx + half
+                dy = hy - half
+                inside = dx * dx + dy * dy <= r2
+            if not inside and hx + hy >= d:  # upper-right lobe
+                dx = hx - half
+                dy = hy - half
+                inside = dx * dx + dy * dy <= r2
+            if inside:
                 buf[i] = inten
 
         arrayblit(self.bitmap, buf)
