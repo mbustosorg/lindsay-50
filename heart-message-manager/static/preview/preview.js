@@ -19,6 +19,13 @@
   // Configuration — matches the device's native cadence.
   const PANEL_W = 64;
   const PANEL_H = 64;
+  // Each LED is drawn as a fuzzy circle rather than a hard square. CELL is the
+  // backing-store pixels per LED: the 64x64 frame is nearest-neighbor upscaled
+  // to CELL-sized solid squares, then clipped to soft circles by a precomputed
+  // radial-gradient mask. Higher CELL = crisper dots.
+  const CELL = 12;
+  const BACK_W = PANEL_W * CELL;   // 768
+  const BACK_H = PANEL_H * CELL;
   const FRAME_MS = 1000 / 30;     // 30 FPS cap
   const POLL_MS = 3000;            // match templates/testing.html
   const POLL_URL = "/api/live-messages?limit=1&suppress=true";
@@ -30,6 +37,9 @@
   let lastTick = 0;
   let imgData = null;             // reused ImageData for the rAF blit
   let imgDataNeedsWipe = true;
+  let srcCanvas = null;           // 64x64 offscreen holding the raw frame
+  let srcCtx = null;
+  let dotMask = null;             // precomputed grid of soft circles (alpha mask)
 
   // ------------------------------------------------------------------
   // Bootstrap
@@ -38,6 +48,7 @@
   function init() {
     const canvas = document.getElementById("sign-canvas");
     if (!canvas) return;
+    setupFuzzyRendering(canvas);
     sizeCanvasToViewport(canvas);
     // Re-size on viewport changes. We use a ResizeObserver on the card
     // (the bg-white rounded-2xl wrapper) rather than the `window.resize`
@@ -154,6 +165,74 @@
   }
 
   // ------------------------------------------------------------------
+  // Fuzzy-circle ("LED") rendering setup
+  // ------------------------------------------------------------------
+
+  function setupFuzzyRendering(canvas) {
+    // The backing store is the high-res circle canvas; CSS scales it to fit
+    // the viewport. We render circles ourselves, so turn off the browser's
+    // nearest-neighbor upscale (which produced hard squares).
+    canvas.width = BACK_W;
+    canvas.height = BACK_H;
+    canvas.style.imageRendering = "auto";
+
+    // Small offscreen canvas that receives the raw 64x64 frame each tick.
+    srcCanvas = document.createElement("canvas");
+    srcCanvas.width = PANEL_W;
+    srcCanvas.height = PANEL_H;
+    srcCtx = srcCanvas.getContext("2d");
+
+    dotMask = buildDotMask();
+  }
+
+  function buildDotMask() {
+    // One radial-gradient circle per LED cell: opaque core fading to fully
+    // transparent at the cell edge. Used once per frame as a destination-in
+    // alpha mask, so each solid color square becomes a soft circle with dark
+    // gaps between LEDs. Built once — the per-cell gradients are not cheap.
+    const mask = document.createElement("canvas");
+    mask.width = BACK_W;
+    mask.height = BACK_H;
+    const mc = mask.getContext("2d");
+    const r = CELL * 0.5;          // inscribed in the cell -> gaps at corners
+    for (let gy = 0; gy < PANEL_H; gy++) {
+      for (let gx = 0; gx < PANEL_W; gx++) {
+        const cx = gx * CELL + CELL / 2;
+        const cy = gy * CELL + CELL / 2;
+        const g = mc.createRadialGradient(cx, cy, 0, cx, cy, r);
+        g.addColorStop(0.0, "rgba(255,255,255,1)");
+        g.addColorStop(0.55, "rgba(255,255,255,1)");  // solid core
+        g.addColorStop(1.0, "rgba(255,255,255,0)");   // soft, fuzzy edge
+        mc.fillStyle = g;
+        mc.fillRect(gx * CELL, gy * CELL, CELL, CELL);
+      }
+    }
+    return mask;
+  }
+
+  function blitFuzzy(ctx, view) {
+    // 1) put the raw 64x64 frame on the small offscreen canvas
+    if (imgDataNeedsWipe || !imgData) {
+      imgData = srcCtx.createImageData(PANEL_W, PANEL_H);
+      imgDataNeedsWipe = false;
+    }
+    imgData.data.set(view);
+    srcCtx.putImageData(imgData, 0, 0);
+
+    // 2) nearest-neighbor upscale to solid CELL-sized squares (each LED keeps
+    //    its own discrete color — no bleeding into neighbors)
+    ctx.globalCompositeOperation = "source-over";
+    ctx.clearRect(0, 0, BACK_W, BACK_H);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(srcCanvas, 0, 0, PANEL_W, PANEL_H, 0, 0, BACK_W, BACK_H);
+
+    // 3) clip each square to a soft circle via the precomputed dot mask
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.drawImage(dotMask, 0, 0);
+    ctx.globalCompositeOperation = "source-over";
+  }
+
+  // ------------------------------------------------------------------
   // Render loop (rAF, 30 FPS cap)
   // ------------------------------------------------------------------
 
@@ -182,14 +261,9 @@
             const bytes = window.get_frame_rgba();
             // `bytes` is a Pyodide-converted Uint8Array view; in plain
             // CPython (impossible here, but defensive) it would be a bytes
-            // object. Build an ImageData the first time, then reuse it.
-            if (imgDataNeedsWipe || !imgData) {
-              imgData = ctx.createImageData(PANEL_W, PANEL_H);
-              imgDataNeedsWipe = false;
-            }
+            // object. Render it as fuzzy LED circles (see blitFuzzy).
             const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
-            imgData.data.set(view);
-            ctx.putImageData(imgData, 0, 0);
+            blitFuzzy(ctx, view);
           }
         } catch (e) {
           console.error("Frame error:", e);
