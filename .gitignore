@@ -9,6 +9,7 @@ data/
 images/sound*
 .venv/
 test-code/
+.python-version
 
 settings.toml
 
