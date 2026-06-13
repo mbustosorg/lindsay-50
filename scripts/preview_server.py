@@ -129,9 +129,7 @@ def _get_all_messages():
 
 # Patch the sqlite functions on the mod's namespace (it's bound to `import sqlite`)
 sqlite_real.get_all_messages = _get_all_messages
-sqlite_real.get_message = lambda mid: next(
-    (m for m in _fake_messages if m.id == mid), None
-)
+sqlite_real.get_message = lambda mid: next((m for m in _fake_messages if m.id == mid), None)
 sqlite_real.get_config = MagicMock(
     return_value=type(
         "Cfg",
@@ -140,9 +138,7 @@ sqlite_real.get_config = MagicMock(
             "sign": type("Sign", (), {"name": "Lindsay's Heart"})(),
             "timezone": "America/Los_Angeles",
             "filters": [],
-            "rendering": type(
-                "R", (), {"mode": "scroll", "speed": 0.04, "color": 0xFF0000}
-            )(),
+            "rendering": type("R", (), {"mode": "scroll", "speed": 0.04, "color": 0xFF0000})(),
             "senders": {},
         },
     )()
@@ -171,9 +167,7 @@ _add_fake_message("second seeded message")
 from jinja2 import FileSystemLoader
 
 mod.app.jinja_env = mod.app.create_jinja_environment()
-mod.app.jinja_env.loader = FileSystemLoader(
-    str(REPO_ROOT / "heart-message-manager" / "templates")
-)
+mod.app.jinja_env.loader = FileSystemLoader(str(REPO_ROOT / "heart-message-manager" / "templates"))
 
 # Flask derives root_path from the module name, which in this
 # importlib-loaded context is the repo root, not heart-message-manager.

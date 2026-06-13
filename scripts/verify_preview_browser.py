@@ -349,10 +349,7 @@ def assert_9_5_five_tabs(p) -> tuple[bool, str]:
         return False, f"tabs {missing} did not pick up '{unique_body}' within 4s"
     start = deadline - 4.0
     times = [(t or 0) - start for t in per_tab_first_seen]
-    return True, (
-        f"all 5 tabs picked up the SMS within 3s "
-        f"(tab-by-tab seconds: {[f'{t:.2f}' for t in times]})"
-    )
+    return True, (f"all 5 tabs picked up the SMS within 3s " f"(tab-by-tab seconds: {[f'{t:.2f}' for t in times]})")
 
 
 def install_pyscript_shim(page) -> None:

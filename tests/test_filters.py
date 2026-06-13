@@ -30,10 +30,7 @@ def get_messages(msgs, cfg, include_filtered=False, since=None):
     if since is not None:
         result = [e for e in result if e.message.received_at > since]
     if include_filtered:
-        return [
-            {"message": e.message, "suppressed": e.suppressed, "rules": e.rules}
-            for e in result
-        ]
+        return [{"message": e.message, "suppressed": e.suppressed, "rules": e.rules} for e in result]
     return [e.message for e in result]
 
 
@@ -124,9 +121,7 @@ class TestApply:
             assert rule is None
 
     def test_keyword_suppress_case_insensitive(self, default_config):
-        default_config.filters.append(
-            FilterRule(type="keyword", pattern="BADWORD", action="suppress")
-        )
+        default_config.filters.append(FilterRule(type="keyword", pattern="BADWORD", action="suppress"))
         msg = Message(id="1", sender="+1555", body="has badword in it", received_at="")
         suppressed, rule = apply(msg, default_config)
         assert suppressed
@@ -134,9 +129,7 @@ class TestApply:
         assert rule.pattern == "BADWORD"
 
     def test_keyword_no_match(self, default_config):
-        default_config.filters.append(
-            FilterRule(type="keyword", pattern="badword", action="suppress")
-        )
+        default_config.filters.append(FilterRule(type="keyword", pattern="badword", action="suppress"))
         msg = Message(id="1", sender="+1555", body="clean message", received_at="")
         suppressed, rule = apply(msg, default_config)
         assert not suppressed
@@ -180,9 +173,7 @@ class TestApply:
             ],
             senders={},
         )
-        msg = Message(
-            id="1", sender="+15550001111", body="has bad word", received_at=""
-        )
+        msg = Message(id="1", sender="+15550001111", body="has bad word", received_at="")
         suppressed, rule = apply(msg, cfg)
         assert suppressed
         assert rule.type == "keyword"
@@ -202,12 +193,8 @@ class TestGetMessages:
         assert "msg-001" in ids
         assert "msg-003" in ids
 
-    def test_include_filtered_true_returns_dicts(
-        self, sample_messages, config_with_keyword_filter
-    ):
-        result = get_messages(
-            sample_messages, config_with_keyword_filter, include_filtered=True
-        )
+    def test_include_filtered_true_returns_dicts(self, sample_messages, config_with_keyword_filter):
+        result = get_messages(sample_messages, config_with_keyword_filter, include_filtered=True)
         assert isinstance(result, list)
         assert all(isinstance(r, dict) for r in result)
         suppressed_entries = [r for r in result if r["suppressed"]]
@@ -216,19 +203,13 @@ class TestGetMessages:
         assert suppressed_entries[0]["rules"][0]["type"] == "keyword"
 
     def test_since_filters_by_timestamp(self, sample_messages, default_config):
-        result = get_messages(
-            sample_messages, default_config, since="2026-05-08T11:00:00Z"
-        )
+        result = get_messages(sample_messages, default_config, since="2026-05-08T11:00:00Z")
         ids = [m.id for m in result]
         assert ids == ["msg-003"]
 
     def test_since_strictly_after(self, sample_messages, default_config):
-        result = get_messages(
-            sample_messages, default_config, since="2026-05-08T12:00:00Z"
-        )
+        result = get_messages(sample_messages, default_config, since="2026-05-08T12:00:00Z")
         assert [m.id for m in result] == []
 
-        result2 = get_messages(
-            sample_messages, default_config, since="2026-05-08T11:00:00Z"
-        )
+        result2 = get_messages(sample_messages, default_config, since="2026-05-08T11:00:00Z")
         assert [m.id for m in result2] == ["msg-003"]

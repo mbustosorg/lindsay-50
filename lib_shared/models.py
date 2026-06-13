@@ -28,9 +28,7 @@ class MessageEnvelope:
         return cls(type=d["type"], payload=d["payload"])
 
     def to_json(self) -> str:
-        return json.dumps(
-            {"type": self.type, "payload": self.payload}, separators=(",", ":")
-        )
+        return json.dumps({"type": self.type, "payload": self.payload}, separators=(",", ":"))
 
 
 class Message:
@@ -55,9 +53,7 @@ class Message:
 
     @classmethod
     def from_dict(cls, d):
-        return cls(
-            id=d["id"], sender=d["sender"], body=d["body"], received_at=d["received_at"]
-        )
+        return cls(id=d["id"], sender=d["sender"], body=d["body"], received_at=d["received_at"])
 
     def to_dict(self):
         return {
@@ -134,9 +130,7 @@ class FilterRule:
 
     @classmethod
     def from_dict(cls, d):
-        return cls(
-            type=d["type"], pattern=d["pattern"], action=d.get("action", "suppress")
-        )
+        return cls(type=d["type"], pattern=d["pattern"], action=d.get("action", "suppress"))
 
     def to_dict(self):
         return {"type": self.type, "pattern": self.pattern, "action": self.action}
@@ -229,15 +223,9 @@ class SignConfig:
         self.filters = filters or []
         self.senders = senders or {}
         self.rendering = (
-            rendering
-            if isinstance(rendering, RenderingSettings)
-            else RenderingSettings.from_dict(rendering or {})
+            rendering if isinstance(rendering, RenderingSettings) else RenderingSettings.from_dict(rendering or {})
         )
-        self.sign = (
-            sign
-            if isinstance(sign, SignSettings)
-            else SignSettings.from_dict(sign or {})
-        )
+        self.sign = sign if isinstance(sign, SignSettings) else SignSettings.from_dict(sign or {})
         self.timezone = timezone
         self.version = version
         self.tz_offset_mins = tz_offset_mins
@@ -277,11 +265,7 @@ class SignConfig:
             filters=[FilterRule.from_dict(f) for f in data.get("filters", [])],
             senders={s["phone"]: s["name"] for s in data.get("senders", [])},
             rendering=RenderingSettings.from_dict(data.get("rendering")),
-            sign=(
-                SignSettings.from_dict(data.get("sign"))
-                if data.get("sign")
-                else SignSettings()
-            ),
+            sign=(SignSettings.from_dict(data.get("sign")) if data.get("sign") else SignSettings()),
             timezone=data.get("timezone", "US/Pacific"),
             version=data.get("version", 1),
             tz_offset_mins=data.get("tz_offset_mins", 0),
@@ -331,9 +315,7 @@ class SignConfig:
             self.senders = {s["phone"]: s["name"] for s in data.get("senders", [])}
             self.rendering = RenderingSettings.from_dict(data.get("rendering"))
             sign_data = data.get("sign")
-            self.sign = (
-                SignSettings.from_dict(sign_data) if sign_data else SignSettings()
-            )
+            self.sign = SignSettings.from_dict(sign_data) if sign_data else SignSettings()
             self.timezone = data.get("timezone", "US/Pacific")
             self.version = data.get("version", 1)
             self.tz_offset_mins = data.get("tz_offset_mins", 0)

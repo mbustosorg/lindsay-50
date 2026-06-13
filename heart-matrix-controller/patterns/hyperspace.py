@@ -123,11 +123,7 @@ class Hyperspace(Effect):
         rad = random.uniform(0.25, 1.0)
         x = math.cos(ang) * rad
         y = math.sin(ang) * rad
-        z = (
-            random.uniform(_ZMIN, _ZMAX)
-            if spread
-            else random.uniform(_SPAWN_ZMIN, _ZMAX)
-        )
+        z = random.uniform(_ZMIN, _ZMAX) if spread else random.uniform(_SPAWN_ZMIN, _ZMAX)
         sx, sy = self._project(x, y, z)
         star[0] = x
         star[1] = y

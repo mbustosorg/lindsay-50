@@ -130,9 +130,7 @@ def _load_app_module(mock_cfg):
     # Now load main.py
     import importlib.util
 
-    spec = importlib.util.spec_from_file_location(
-        "heart_message_manager_main", str(_MAIN_PATH)
-    )
+    spec = importlib.util.spec_from_file_location("heart_message_manager_main", str(_MAIN_PATH))
     mod = importlib.util.module_from_spec(spec)
 
     # Add sys.modules entry so relative imports inside main.py work
@@ -146,9 +144,7 @@ def _load_app_module(mock_cfg):
     from jinja2 import FileSystemLoader
 
     flask_app.jinja_env = flask_app.create_jinja_environment()
-    flask_app.jinja_env.loader = FileSystemLoader(
-        str(_PROJECT_ROOT / "heart-message-manager" / "templates")
-    )
+    flask_app.jinja_env.loader = FileSystemLoader(str(_PROJECT_ROOT / "heart-message-manager" / "templates"))
 
     return flask_app
 

@@ -153,12 +153,7 @@ def login():
     stored_username = cfg.if_exists("ADMIN_USERNAME")
     stored_password = cfg.if_exists("ADMIN_PASSWORD")
 
-    if (
-        stored_username
-        and stored_password
-        and username == stored_username
-        and password == stored_password
-    ):
+    if stored_username and stored_password and username == stored_username and password == stored_password:
         timeout_mins = 60
         try:
             timeout_mins = int(cfg.if_exists("ADMIN_SESSION_TIMEOUT_MINS") or "60")

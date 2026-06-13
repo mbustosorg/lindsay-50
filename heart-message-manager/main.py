@@ -290,12 +290,7 @@ def api_live_messages():
     assert _message_mgr is not None
     limit = min(100, int(request.args.get("limit", 100)))
     show_suppressed = request.args.get("suppress", "true").lower() != "true"
-    return jsonify(
-        [
-            m.to_dict()
-            for m in _message_mgr.get_messages(limit=limit, suppress=show_suppressed)
-        ]
-    )
+    return jsonify([m.to_dict() for m in _message_mgr.get_messages(limit=limit, suppress=show_suppressed)])
 
 
 @app.route("/api/live-messages/seed", methods=["POST"])
@@ -361,9 +356,7 @@ def api_s3_objects():
         err_str = str(e)
         if "NoSuchBucket" in err_str:
             return (
-                jsonify(
-                    {"error": "Bucket does not exist. Create it in MinIO console."}
-                ),
+                jsonify({"error": "Bucket does not exist. Create it in MinIO console."}),
                 500,
             )
         return jsonify({"error": err_str}), 500
@@ -419,9 +412,7 @@ def _unsuppress_message(msg_id: str) -> bool:
     """Remove type=message filter rule. Returns True if found and removed."""
     cfg = sqlite.get_config()
     original_len = len(cfg.filters)
-    cfg.filters = [
-        f for f in cfg.filters if not (f.type == "message" and f.pattern == msg_id)
-    ]
+    cfg.filters = [f for f in cfg.filters if not (f.type == "message" and f.pattern == msg_id)]
     if len(cfg.filters) == original_len:
         return False
     _save_and_publish(cfg)
@@ -500,9 +491,7 @@ def settings():
             ftype = request.form.get("filter_type", "").strip()
             pattern = request.form.get("filter_pattern", "").strip()
             if ftype in ("keyword", "regex", "sender", "message") and pattern:
-                cfg.filters.append(
-                    FilterRule(type=ftype, pattern=pattern, action="suppress")
-                )
+                cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress"))
                 _save_and_publish(cfg)
                 return redirect(url_for("settings"))
         elif filter_action == "delete":
@@ -526,15 +515,11 @@ def settings():
 
         cfg.rendering.mode = request.form.get("rendering_mode", cfg.rendering.mode)
         try:
-            cfg.rendering.speed = float(
-                request.form.get("rendering_speed", cfg.rendering.speed)
-            )
+            cfg.rendering.speed = float(request.form.get("rendering_speed", cfg.rendering.speed))
         except ValueError:
             pass
         try:
-            cfg.rendering.color = int(
-                request.form.get("rendering_color", str(cfg.rendering.color)), 0
-            )
+            cfg.rendering.color = int(request.form.get("rendering_color", str(cfg.rendering.color)), 0)
         except ValueError:
             pass
 

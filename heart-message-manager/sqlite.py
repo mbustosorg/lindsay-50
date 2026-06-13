@@ -52,9 +52,7 @@ def init_db() -> None:
         )
     """)
     # Index for time-ordered retrieval
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_messages_received_at ON messages(received_at)"
-    )
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_received_at ON messages(received_at)")
     conn.commit()
     conn.close()
 
@@ -78,9 +76,7 @@ def put_message(msg: Message) -> None:
 def get_message(id: str) -> Optional[Message]:
     """Return the message with the given UUID, or None."""
     conn = sqlite3.connect(_db_path())
-    row = conn.execute(
-        "SELECT id, sender, body, received_at FROM messages WHERE id = ?", (id,)
-    ).fetchone()
+    row = conn.execute("SELECT id, sender, body, received_at FROM messages WHERE id = ?", (id,)).fetchone()
     conn.close()
     if row is None:
         return None
@@ -90,9 +86,7 @@ def get_message(id: str) -> Optional[Message]:
 def get_all_messages() -> list[Message]:
     """Return all messages ordered by received_at descending (most recent first)."""
     conn = sqlite3.connect(_db_path())
-    rows = conn.execute(
-        "SELECT id, sender, body, received_at FROM messages ORDER BY received_at DESC"
-    ).fetchall()
+    rows = conn.execute("SELECT id, sender, body, received_at FROM messages ORDER BY received_at DESC").fetchall()
     conn.close()
     return [Message(id=r[0], sender=r[1], body=r[2], received_at=r[3]) for r in rows]
 

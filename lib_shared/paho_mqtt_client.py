@@ -59,9 +59,7 @@ class PahoMqttClient:
                 logger.warning("PahoMqttClient connection failed: rc=%s", rc)
 
         def on_message(_client, _userdata, msg):
-            logger.info(
-                "PahoMqttClient received: topic=%s payload=%r", msg.topic, msg.payload
-            )
+            logger.info("PahoMqttClient received: topic=%s payload=%r", msg.topic, msg.payload)
             self._dispatch(msg.payload.decode(errors="replace"))
 
         def on_disconnect(_client, _userdata, rc):
@@ -83,16 +81,12 @@ class PahoMqttClient:
                     # TLS required for port 8883 (e.g. io.adafruit.com).
                     if self._port == 8883:
                         client.tls_set_context()
-                    logger.info(
-                        "PahoMqttClient connecting to %s:%d...", self._host, self._port
-                    )
+                    logger.info("PahoMqttClient connecting to %s:%d...", self._host, self._port)
                     client.connect(self._host, self._port, keepalive=60)
                     client.loop_forever()
                 except Exception as e:
                     if not stop.is_set():
-                        logger.warning(
-                            "PahoMqttClient error: %s. Reconnecting in 5s...", e
-                        )
+                        logger.warning("PahoMqttClient error: %s. Reconnecting in 5s...", e)
                         time.sleep(5)
                     else:
                         logger.info("PahoMqttClient thread stopping")

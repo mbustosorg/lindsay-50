@@ -164,11 +164,7 @@ class Display:
             if options.pixel_mapper_config == "U-mapper"
             else options.cols * options.chain_length
         )
-        self.height = (
-            options.rows * 2
-            if options.pixel_mapper_config == "U-mapper"
-            else options.rows * options.parallel
-        )
+        self.height = options.rows * 2 if options.pixel_mapper_config == "U-mapper" else options.rows * options.parallel
         logger.info("Display initialized: %dx%d", self.width, self.height)
 
     def clear(self):

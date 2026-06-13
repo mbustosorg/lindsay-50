@@ -62,8 +62,7 @@ def test_preview_js_does_not_call_request_message_on_duplicate():
     assert dedup_pos != -1, "Dedup check missing"
     assert call_pos != -1, "request_message call missing"
     assert dedup_pos < call_pos, (
-        "Dedup check must run before request_message is called; otherwise "
-        "duplicate polls would re-kick the fade."
+        "Dedup check must run before request_message is called; otherwise " "duplicate polls would re-kick the fade."
     )
 
 
@@ -111,9 +110,7 @@ def test_preview_js_first_poll_runs_immediately():
     immediate_call = src.find("pollLatestMessage()")
     assert interval_call != -1
     assert immediate_call != -1
-    assert (
-        immediate_call < interval_call
-    ), "First poll must run immediately at startup, not just on the first tick"
+    assert immediate_call < interval_call, "First poll must run immediately at startup, not just on the first tick"
 
 
 def test_preview_js_initializes_lastShownBody_to_null():
@@ -147,8 +144,7 @@ def test_preview_js_resizes_canvas_on_window_resize():
     has_ro = "ResizeObserver" in src and re.search(r"new\s+ResizeObserver\s*\(", src)
     has_window_resize = re.search(r"window\.addEventListener\(\s*[\"']resize[\"']", src)
     assert has_ro or has_window_resize, (
-        "preview.js must observe viewport changes via ResizeObserver "
-        "or window.addEventListener('resize', ...)"
+        "preview.js must observe viewport changes via ResizeObserver " "or window.addEventListener('resize', ...)"
     )
     # The handler must invoke sizeCanvasToViewport — directly or via rAF
     assert "sizeCanvasToViewport" in src
@@ -162,12 +158,8 @@ def test_preview_js_uses_resize_observer_on_card():
     the card's content area on narrow viewports.
     """
     src = _js_source()
-    assert (
-        "ResizeObserver" in src
-    ), "preview.js should use ResizeObserver for the primary resize path"
-    assert re.search(
-        r"new\s+ResizeObserver\s*\(", src
-    ), "preview.js must instantiate a ResizeObserver"
+    assert "ResizeObserver" in src, "preview.js should use ResizeObserver for the primary resize path"
+    assert re.search(r"new\s+ResizeObserver\s*\(", src), "preview.js must instantiate a ResizeObserver"
     # The observer must be attached to the card, not the canvas itself
     # (the canvas's parent sizes to the canvas, which would give a
     # circular reference).
@@ -183,14 +175,12 @@ def test_preview_js_uses_card_clientWidth_for_sizing():
     """
     src = _js_source()
     assert "card.clientWidth" in src, (
-        "sizeCanvasToViewport must read the card's clientWidth to "
-        "compute the canvas size"
+        "sizeCanvasToViewport must read the card's clientWidth to " "compute the canvas size"
     )
     # The fallback (no card found) subtracts 160 to leave room for the
     # card's p-12 (96px) + the dark div's p-4 (32px) padding chain.
     assert re.search(r"window\.innerWidth\s*-\s*160", src), (
-        "sizeCanvasToViewport must fall back to window.innerWidth - 160 "
-        "when the card isn't found"
+        "sizeCanvasToViewport must fall back to window.innerWidth - 160 " "when the card isn't found"
     )
 
 

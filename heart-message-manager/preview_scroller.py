@@ -36,9 +36,7 @@ class PreviewScroller(ScrollerBase):
         offset_seconds=1.0,
         font_path=None,
     ):
-        super().__init__(
-            frame_delay=frame_delay, offset_seconds=offset_seconds, color=color
-        )
+        super().__init__(frame_delay=frame_delay, offset_seconds=offset_seconds, color=color)
         self.display = display
 
         path = font_path or os.environ.get("PREVIEW_FONT_PATH")

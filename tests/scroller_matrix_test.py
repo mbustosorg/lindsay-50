@@ -76,9 +76,7 @@ class _StubDisplay:
 def _load_scroller_module():
     """Load heart-matrix-controller/scroller.py via importlib (hyphen-safe)."""
     scroller_path = _PROJECT_ROOT / "heart-matrix-controller" / "scroller.py"
-    spec = importlib.util.spec_from_file_location(
-        "heart_matrix_controller.scroller", str(scroller_path)
-    )
+    spec = importlib.util.spec_from_file_location("heart_matrix_controller.scroller", str(scroller_path))
     mod = importlib.util.module_from_spec(spec)
     sys.modules["heart_matrix_controller.scroller"] = mod
     spec.loader.exec_module(mod)

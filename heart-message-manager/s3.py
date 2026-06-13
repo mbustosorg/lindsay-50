@@ -117,9 +117,7 @@ def load_messages_from_s3() -> Iterator[Message]:
             if not key.endswith(".json"):
                 continue
             try:
-                content = (
-                    client.get_object(Bucket=bucket, Key=key)["Body"].read().decode()
-                )
+                content = client.get_object(Bucket=bucket, Key=key)["Body"].read().decode()
                 d = json.loads(content)
                 yield Message(
                     id=d["id"],
@@ -180,7 +178,5 @@ def load_latest_config() -> dict | None:
         return None
 
     latest_key = sorted(keys)[-1]
-    content = (
-        _s3_client().get_object(Bucket=bucket, Key=latest_key)["Body"].read().decode()
-    )
+    content = _s3_client().get_object(Bucket=bucket, Key=latest_key)["Body"].read().decode()
     return json.loads(content)

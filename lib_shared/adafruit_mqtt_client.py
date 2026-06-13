@@ -47,9 +47,7 @@ class AdafruitMqttClient:
             logger.warning("AdafruitMqttClient disconnected: rc=%s", rc)
 
         def on_message(_client, feed_id, payload):
-            logger.info(
-                "AdafruitMqttClient on_message: feed_id=%r payload=%r", feed_id, payload
-            )
+            logger.info("AdafruitMqttClient on_message: feed_id=%r payload=%r", feed_id, payload)
             self._dispatch(payload)
 
         self._client = MQTTClient(self._username, self._key, secure=True)

@@ -16,21 +16,21 @@ from rgb_display import Bitmap, Palette, Effect, arrayblit
 
 _PALETTE_SIZE = 16
 
-_BPM = 66.0            # beats per minute
-_LUB_AT = 0.0          # phase (0..1) of the first, stronger thump
-_DUB_AT = 0.18         # phase of the second, softer thump
-_THUMP_WIDTH = 0.05    # sharpness of each thump (smaller = crisper)
-_DUB_GAIN = 0.6        # the "dub" is softer than the "lub"
+_BPM = 66.0  # beats per minute
+_LUB_AT = 0.0  # phase (0..1) of the first, stronger thump
+_DUB_AT = 0.18  # phase of the second, softer thump
+_THUMP_WIDTH = 0.05  # sharpness of each thump (smaller = crisper)
+_DUB_GAIN = 0.6  # the "dub" is softer than the "lub"
 
-_SIZE_BASE = 0.82      # heart scale between beats
-_SIZE_SWELL = 0.22     # extra scale at a beat's peak
+_SIZE_BASE = 0.82  # heart scale between beats
+_SIZE_SWELL = 0.22  # extra scale at a beat's peak
 
 
 def _thump(phase, center, width):
     """Gaussian pulse at `center`, measured around the circle (wraps at 1.0)."""
     d = abs(phase - center)
     d = min(d, 1.0 - d)
-    return math.exp(-(d / width) ** 2)
+    return math.exp(-((d / width) ** 2))
 
 
 def _heart_inside(x, y):
@@ -108,9 +108,7 @@ class Heartbeat(Effect):
         self.last_frame = now
 
         phase = (now * self._rate) % 1.0
-        beat = _thump(phase, _LUB_AT, _THUMP_WIDTH) + _DUB_GAIN * _thump(
-            phase, _DUB_AT, _THUMP_WIDTH
-        )
+        beat = _thump(phase, _LUB_AT, _THUMP_WIDTH) + _DUB_GAIN * _thump(phase, _DUB_AT, _THUMP_WIDTH)
         if beat > 1.0:
             beat = 1.0
 

@@ -114,9 +114,7 @@ def test_top_x_wraps_to_canvas_width_when_text_fully_off():
     # Tick with a large elapsed time: should wrap back to canvas_width (64)
     with pytest.MonkeyPatch.context() as mp:
         state = {"t": 0.0}
-        mp.setattr(
-            time, "monotonic", lambda: (state.update(t=state["t"] + 1.0) or state["t"])
-        )
+        mp.setattr(time, "monotonic", lambda: (state.update(t=state["t"] + 1.0) or state["t"]))
         s.tick(canvas_width=64)
     assert s.top_x == 64
 

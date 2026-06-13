@@ -68,9 +68,7 @@ class MessageManager:
         )
 
         self._messages.add(msg, source="mqtt")
-        logger.info(
-            "MessageManager routed message id=%s body=%r", msg.id, msg.body[:40]
-        )
+        logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
         if self._on_message:
             self._on_message(msg)
 

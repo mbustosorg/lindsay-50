@@ -76,9 +76,7 @@ _display = WebDisplay(_web_canvas)
 # in the browser (e.g. Honeycomb's numpy import). Failures are logged + skipped.
 _renderer = PreviewRenderer(_display, patterns_module)
 _scroller = PreviewScroller(_display)
-_coordinator = PreviewCoordinator(
-    _display, _scroller, _renderer.effects, fade_seconds=4.0
-)
+_coordinator = PreviewCoordinator(_display, _scroller, _renderer.effects, fade_seconds=4.0)
 
 
 # --- JS-callable surface ---

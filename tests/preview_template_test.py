@@ -40,18 +40,14 @@ def _load_test_auth():
 
 def test_preview_template_has_sign_canvas_element():
     """The preview template renders a <canvas id='sign-canvas'> element."""
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
-    ).read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
     assert 'id="sign-canvas"' in template
     assert "<canvas" in template
 
 
 def test_preview_template_uses_pixelated_image_rendering():
     """The canvas element declares image-rendering: pixelated (LED look)."""
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
-    ).read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
     assert "pixelated" in template
 
 
@@ -69,15 +65,12 @@ def test_preview_template_canvas_is_responsive():
     stays square via aspect-ratio. The inline pixel width/height were
     removed.
     """
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
-    ).read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
     # The dark div (the preview frame) must be width-constrained so it
     # shrinks with the card. `w-full max-w-full` is the Tailwind for
     # `width: 100%; max-width: 100%`.
     assert "w-full max-w-full" in template, (
-        "The dark div (preview frame) must be w-full max-w-full so it "
-        "shrinks with the card on viewport resize"
+        "The dark div (preview frame) must be w-full max-w-full so it " "shrinks with the card on viewport resize"
     )
     # The canvas must declare max-w-[min(800px,100%)] so the inline JS-set
     # width is clamped to both 800px and 100% of the dark div.
@@ -103,27 +96,21 @@ def test_preview_template_canvas_is_responsive():
 
 def test_preview_template_has_status_block():
     """The template shows the current effect name and message body."""
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
-    ).read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
     assert 'id="preview-effect"' in template
     assert 'id="preview-message"' in template
 
 
 def test_preview_template_has_loading_indicator():
     """A 'Loading preview…' indicator that hides once PyScript is ready."""
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
-    ).read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
     assert "Loading preview" in template
     assert 'id="preview-loading"' in template
 
 
 def test_preview_template_includes_pyscript_runtime():
     """The PyScript runtime script + py-config link are present."""
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
-    ).read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
     assert "py-config" in template
     assert "py-script" in template
     assert "pyscript" in template.lower()
@@ -131,17 +118,13 @@ def test_preview_template_includes_pyscript_runtime():
 
 def test_preview_template_loads_preview_main():
     """The <py-script> tag points at the preview_main entry point."""
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
-    ).read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
     assert "preview_main.py" in template
 
 
 def test_preview_template_no_websocket():
     """v1 has no WebSocket — assert neither the JS nor template references one."""
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html"
-    ).read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
     assert "new WebSocket" not in template
     assert "WebSocket(" not in template
     assert "Flask-Sock" not in template
@@ -216,8 +199,7 @@ def test_preview_template_csp_allows_tailwind_cdn():
     ), f"script-src must allow cdn.tailwindcss.com; got: {script_src!r}"
     # And the inline `tailwind.config = {...}` block in base.html
     assert "'unsafe-inline'" in script_src or "'unsafe-inline'" in csp, (
-        f"script-src must allow inline scripts (for the tailwind.config "
-        f"block in base.html); got: {script_src!r}"
+        f"script-src must allow inline scripts (for the tailwind.config " f"block in base.html); got: {script_src!r}"
     )
 
 
@@ -269,13 +251,7 @@ def test_pyscript_declared_files_all_serve_200():
     _make_mock_cfg = auth._make_mock_cfg
     _load_app_module = auth._load_app_module
 
-    py_config_path = (
-        _PROJECT_ROOT
-        / "heart-message-manager"
-        / "static"
-        / "preview"
-        / "py-config.toml"
-    )
+    py_config_path = _PROJECT_ROOT / "heart-message-manager" / "static" / "preview" / "py-config.toml"
     cfg = tomllib.loads(py_config_path.read_text())
     declared = cfg.get("files", {})
 
