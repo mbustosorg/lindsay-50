@@ -1,14 +1,13 @@
 """Scrolling text, rendered with the hzeller rpi-rgb-led-matrix graphics API.
 
-Replaces the displayio Label + terminalio.FONT approach. Two copies of the
-message scroll right-to-left, one centered in each 64x32 panel, the lower one
-lagging by `offset_seconds`. The font is a BDF loaded from FONT_PATH (copy one
-from the rpi-rgb-led-matrix `fonts/` directory).
+Replaces the displayio Label + terminalio.FONT approach. One line of text
+scrolls right-to-left, centered vertically on the full display, in orange. The
+font is a BDF loaded from FONT_PATH (copy one from the rpi-rgb-led-matrix
+`fonts/` directory).
 
-The time/pixel math (text width, x positions, frame pacing, two-line offset)
-lives in `lib_shared.scroller_base.ScrollerBase`. This module is the
-`rgbmatrix`-specific subclass — it loads a BDF font and calls
-`graphics.DrawText` to blit glyphs.
+The time/pixel math (text width, x positions, frame pacing) lives in
+`lib_shared.scroller_base.ScrollerBase`. This module is the `rgbmatrix`-specific
+subclass — it loads a BDF font and calls `graphics.DrawText` to blit glyphs.
 """
 
 import logging
@@ -24,7 +23,7 @@ class MatrixScroller(ScrollerBase):
     def __init__(
         self,
         display,
-        color=0xFF0000,
+        color=0xFF6400,
         frame_delay=0.04,
         offset_seconds=1.0,
         font_path=None,
@@ -47,22 +46,16 @@ class MatrixScroller(ScrollerBase):
         self.compute_layout(display.canvas.width, display.canvas.height)
 
     def compute_layout(self, canvas_width, canvas_height):
-        """Place baselines for the top/bottom 64x32 panels (or single short line)."""
+        """Place the baseline for a single line centered on the full display."""
         half = self.font_height // 2
 
         def baseline_for(center):
             return center + self.font_baseline - half
 
-        # A 64x64 stack shows two lines, one centered in each 64x32 panel
-        # (centers at 16 and 48). A single short panel (<= 32 tall) can't fit
-        # two stacked lines, so draw one line centered on the whole display.
-        self.single_line = canvas_height <= 32
-        if self.single_line:
-            self.top_y = baseline_for(canvas_height // 2)
-            self.bottom_y = self.top_y  # unused
-        else:
-            self.top_y = baseline_for(16)
-            self.bottom_y = baseline_for(48)
+        # Always one line, centered vertically on the whole display.
+        self.single_line = True
+        self.top_y = baseline_for(canvas_height // 2)
+        self.bottom_y = self.top_y  # unused
 
     def measure_text(self, text):
         return sum(self.font.CharacterWidth(ord(ch)) for ch in text)
