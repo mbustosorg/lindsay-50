@@ -3,8 +3,8 @@
 Pillow-backed subclass of ScrollerBase. Loads a TrueType font and blits text
 to a Pillow image (the WebCanvas's underlying buffer). The time/pixel math
 is identical to the device's MatrixScroller — same frame_delay, same
-offset_seconds, same two-line layout — so what scrolls on the preview
-matches what the sign will display, frame for frame.
+offset_seconds, same single orange line centered on the full display — so what
+scrolls on the preview matches what the sign will display, frame for frame.
 
 Lives in heart-message-manager/ because it's a preview-specific deliverable
 (it depends on Pillow, which the device's Python install may not have).
@@ -31,7 +31,7 @@ class PreviewScroller(ScrollerBase):
     def __init__(
         self,
         display,
-        color=0xFF0000,
+        color=0xFF6400,
         frame_delay=0.04,
         offset_seconds=1.0,
         font_path=None,
@@ -55,18 +55,15 @@ class PreviewScroller(ScrollerBase):
         self.compute_layout(display.width, display.height)
 
     def compute_layout(self, canvas_width, canvas_height):
-        """Place baselines for the top/bottom 64x32 panels (or single short line)."""
-        # Centre each line in its 64x32 half (centers at 16 and 48 for a 64-tall canvas)
-        # by setting baseline = vertical center + (font height / 2).
-        # Pillow's text() draws with the y coordinate as the TOP of the glyph,
-        # so top_y = vertical_center - (font_height // 2).
-        self.single_line = canvas_height <= 32
-        if self.single_line:
-            self.top_y = (canvas_height - self.font_height) // 2
-            self.bottom_y = self.top_y  # unused
-        else:
-            self.top_y = max(0, 16 - self.font_height // 2)
-            self.bottom_y = max(0, 48 - self.font_height // 2)
+        """Place the baseline for a single line centered on the full display.
+
+        Pillow's text() draws with the y coordinate as the TOP of the glyph,
+        so top_y = vertical_center - (font_height // 2). Matches the device's
+        MatrixScroller (one centered line).
+        """
+        self.single_line = True
+        self.top_y = (canvas_height - self.font_height) // 2
+        self.bottom_y = self.top_y  # unused
 
     def measure_text(self, text):
         """Return the pixel width of `text` rendered in self.font.
