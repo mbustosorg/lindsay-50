@@ -1,0 +1,8 @@
+# Dev / type-checking dependencies — install with:
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# Not required at runtime. Provides mypy + the type stubs mypy needs
+# to type-check our code.
+
+mypy>=1.10
+types-requests

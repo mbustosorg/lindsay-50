@@ -336,7 +336,7 @@ class TestHealthEndpoint:
 class TestTwilioSignature:
     def test_twilio_valid_signature_accepts_webhook(self, app, client):
         """POST /api/messages with valid X-Twilio-Signature processes webhook."""
-        from twilio.request_validator import RequestValidator
+        from twilio.request_validator import RequestValidator  # type: ignore[import-untyped]
 
         # Heroku sets X-Forwarded-Proto: https, so we reconstruct as https
         url = "https://lindsay-50.herokuapp.com/api/messages"

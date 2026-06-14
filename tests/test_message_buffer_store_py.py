@@ -35,7 +35,7 @@ def test_message_buffer_store_class_exists(monkeypatch):
     _install_js_stub(monkeypatch)
     if "message_buffer_store" in sys.modules:
         del sys.modules["message_buffer_store"]
-    from message_buffer_store import MessageBufferStore
+    from message_buffer_store import MessageBufferStore  # type: ignore[import-not-found]
 
     assert MessageBufferStore is not None
     assert callable(MessageBufferStore)
@@ -47,7 +47,7 @@ def test_message_buffer_store_init_signature(monkeypatch):
     _install_js_stub(monkeypatch)
     if "message_buffer_store" in sys.modules:
         del sys.modules["message_buffer_store"]
-    from message_buffer_store import MessageBufferStore
+    from message_buffer_store import MessageBufferStore  # type: ignore[import-not-found]
 
     sig = inspect.signature(MessageBufferStore.__init__)
     params = list(sig.parameters.keys())
@@ -60,7 +60,7 @@ def test_message_buffer_store_has_required_methods(monkeypatch):
     _install_js_stub(monkeypatch)
     if "message_buffer_store" in sys.modules:
         del sys.modules["message_buffer_store"]
-    from message_buffer_store import MessageBufferStore
+    from message_buffer_store import MessageBufferStore  # type: ignore[import-not-found]
 
     assert hasattr(MessageBufferStore, "hydrate")
     assert hasattr(MessageBufferStore, "wipe")
@@ -75,4 +75,4 @@ def test_message_buffer_store_module_imports_cleanly(monkeypatch):
     _install_js_stub(monkeypatch)
     if "message_buffer_store" in sys.modules:
         del sys.modules["message_buffer_store"]
-    import message_buffer_store  # noqa: F401
+    import message_buffer_store  # type: ignore[import-not-found]  # noqa: F401

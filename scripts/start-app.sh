@@ -87,7 +87,11 @@ PYEOF
         fi
     fi
 
-    # Mosquitto (MQTT broker)
+    # Mosquitto (MQTT broker). Listens on 1883 (plain MQTT, for the device)
+    # AND 9001 (MQTT-over-WebSocket, for the browser's MqttWsClient).
+    # Both listeners accept anonymous connections for local dev — the
+    # browser's MqttWsClient + js.fetch layer is what actually authenticates
+    # the session, not the broker itself.
     if docker ps -a --filter "name=mosquitto-local" --format "{{.Names}}" | grep -q mosquitto-local; then
         if docker ps --filter "name=mosquitto-local" --format "{{.Names}}" | grep -q mosquitto-local; then
             echo "Mosquitto already running"
@@ -95,24 +99,26 @@ PYEOF
             echo "Recreating stale Mosquitto container..."
             docker rm mosquitto-local
             MOSQUITTO_CONF=$(mktemp)
-            printf 'listener 1883\nallow_anonymous true\n' > "$MOSQUITTO_CONF"
+            printf 'listener 1883\nlistener 9001\nprotocol websockets\nallow_anonymous true\n' > "$MOSQUITTO_CONF"
             docker run -d --name mosquitto-local \
                 -p 1883:1883 \
+                -p 9001:9001 \
                 -v "$MOSQUITTO_CONF:/mosquitto.conf" \
                 eclipse-mosquitto \
                 mosquitto -c /mosquitto.conf
-            echo "Mosquitto started on port 1883"
+            echo "Mosquitto started on port 1883 (MQTT) and 9001 (MQTT-over-WebSocket)"
         fi
     else
         echo "Starting Mosquitto..."
         MOSQUITTO_CONF=$(mktemp)
-        printf 'listener 1883\nallow_anonymous true\n' > "$MOSQUITTO_CONF"
+        printf 'listener 1883\nlistener 9001\nprotocol websockets\nallow_anonymous true\n' > "$MOSQUITTO_CONF"
         docker run -d --name mosquitto-local \
             -p 1883:1883 \
+            -p 9001:9001 \
             -v "$MOSQUITTO_CONF:/mosquitto.conf" \
             eclipse-mosquitto \
             mosquitto -c /mosquitto.conf
-        echo "Mosquitto started on port 1883"
+        echo "Mosquitto started on port 1883 (MQTT) and 9001 (MQTT-over-WebSocket)"
     fi
 fi
 

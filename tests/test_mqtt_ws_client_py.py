@@ -51,7 +51,7 @@ def test_mqtt_ws_client_class_exists(monkeypatch):
     # Now import — the wrapper will use the fake js module
     if "mqtt_ws_client" in sys.modules:
         del sys.modules["mqtt_ws_client"]
-    from mqtt_ws_client import MqttWsClient
+    from mqtt_ws_client import MqttWsClient  # type: ignore[import-not-found]
 
     assert MqttWsClient is not None
     assert callable(MqttWsClient)
@@ -63,7 +63,7 @@ def test_mqtt_ws_client_init_signature(monkeypatch):
     _install_js_stub(monkeypatch)
     if "mqtt_ws_client" in sys.modules:
         del sys.modules["mqtt_ws_client"]
-    from mqtt_ws_client import MqttWsClient
+    from mqtt_ws_client import MqttWsClient  # type: ignore[import-not-found]
 
     sig = inspect.signature(MqttWsClient.__init__)
     params = list(sig.parameters.keys())
@@ -81,7 +81,7 @@ def test_mqtt_ws_client_has_start_and_close(monkeypatch):
     _install_js_stub(monkeypatch)
     if "mqtt_ws_client" in sys.modules:
         del sys.modules["mqtt_ws_client"]
-    from mqtt_ws_client import MqttWsClient
+    from mqtt_ws_client import MqttWsClient  # type: ignore[import-not-found]
 
     assert hasattr(MqttWsClient, "start")
     assert hasattr(MqttWsClient, "close")
@@ -94,4 +94,4 @@ def test_mqtt_ws_client_module_imports_cleanly(monkeypatch):
     _install_js_stub(monkeypatch)
     if "mqtt_ws_client" in sys.modules:
         del sys.modules["mqtt_ws_client"]
-    import mqtt_ws_client  # noqa: F401
+    import mqtt_ws_client  # type: ignore[import-not-found]  # noqa: F401
