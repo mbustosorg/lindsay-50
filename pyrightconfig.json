@@ -1,9 +1,11 @@
 {
   "include": ["heart-message-manager", "lib_shared", "heart-matrix-controller", "tests"],
+  "stubPath": "heart-matrix-controller/typings",
   "extraPaths": ["."],
   "venvPath": ".",
   "venv": ".venv",
   "pythonVersion": "3.12",
   "typeCheckingMode": "basic",
-  "reportMissingImports": false
+  "reportMissingImports": false,
+  "reportMissingModuleSource": false
 }

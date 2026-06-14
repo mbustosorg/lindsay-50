@@ -13,7 +13,7 @@ boot for a few seconds, then fades into the first background effect.
 import math
 import time
 
-from rgb_display import Bitmap, Palette, Effect, arrayblit
+from lib_shared.effect_base import Bitmap, Palette, Effect, arrayblit
 
 _PALETTE_SIZE = 16
 
@@ -128,7 +128,7 @@ class Heartbeat(Effect):
                         ymin = y
                     ymax = y
                     break
-        return (ymin + ymax) / 2.0 if ymin is not None else 0.0
+        return (ymin + ymax) / 2.0 if ymin is not None and ymax is not None else 0.0
 
     def tick(self):
         now = time.monotonic()

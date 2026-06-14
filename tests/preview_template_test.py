@@ -45,10 +45,18 @@ def test_preview_template_has_sign_canvas_element():
     assert "<canvas" in template
 
 
-def test_preview_template_uses_pixelated_image_rendering():
-    """The canvas element declares image-rendering: pixelated (LED look)."""
+def test_preview_template_uses_responsive_image_rendering():
+    """The canvas's image-rendering style is responsive to the JS draw path.
+
+    The LED look comes from a JS-side dot-mask that clips each cell to a
+    fuzzy circle (see commit 9f5efb3 "preview: render LEDs as fuzzy
+    circles instead of hard squares"), so the CSS no longer needs
+    `image-rendering: pixelated`. The canvas is the sign-canvas element
+    and declares an image-rendering style (the current value is `auto`).
+    """
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
-    assert "pixelated" in template
+    assert 'id="sign-canvas"' in template
+    assert "image-rendering:" in template
 
 
 def test_preview_template_canvas_is_responsive():
@@ -147,7 +155,10 @@ def test_preview_template_loaded_by_app():
     assert response.status_code == 200
     body = response.data.decode()
     assert 'id="sign-canvas"' in body
-    assert "image-rendering: pixelated" in body
+    # The CSS canvas no longer uses image-rendering: pixelated (commit
+    # 9f5efb3 moved the LED look to a JS-side dot mask) — but the canvas
+    # still declares an image-rendering style.
+    assert "image-rendering:" in body
     assert "Loading preview" in body
     # No WebSocket references in the rendered HTML
     assert "new WebSocket" not in body

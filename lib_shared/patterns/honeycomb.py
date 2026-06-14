@@ -18,7 +18,7 @@ import time
 
 import numpy as np
 
-from rgb_display import Effect
+from lib_shared.effect_base import Effect
 
 logger = logging.getLogger("heart")
 

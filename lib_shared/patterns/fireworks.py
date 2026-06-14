@@ -1,7 +1,7 @@
 import math
 import random
 import time
-from rgb_display import Bitmap, Palette, Effect
+from lib_shared.effect_base import Bitmap, Palette, Effect
 
 # Saturated hues that read well on HUB75 panels.
 _HUES = (

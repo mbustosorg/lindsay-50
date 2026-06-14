@@ -7,24 +7,24 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 
 [files]
 # Files in the browser-side render path. PyScript fetches them from the
-# /static/ URL when the page loads. Excludes MatrixScroller (rgbmatrix)
-# and PngDisplay / VideoDisplay (filesystem / OpenCV) — those are
-# skipped in the browser (see preview_renderer.PreviewRenderer).
-"heart-matrix-controller/__init__.py" = "/static/preview/heart-matrix-controller/__init__.py"
-"heart-matrix-controller/rgb_display.py" = "/static/preview/heart-matrix-controller/rgb_display.py"
-"heart-matrix-controller/patterns/__init__.py" = "/static/preview/heart-matrix-controller/patterns/__init__.py"
-"heart-matrix-controller/patterns/fireworks.py" = "/static/preview/heart-matrix-controller/patterns/fireworks.py"
-"heart-matrix-controller/patterns/flame.py" = "/static/preview/heart-matrix-controller/patterns/flame.py"
-"heart-matrix-controller/patterns/nightsky.py" = "/static/preview/heart-matrix-controller/patterns/nightsky.py"
-"heart-matrix-controller/patterns/honeycomb.py" = "/static/preview/heart-matrix-controller/patterns/honeycomb.py"
-"heart-matrix-controller/patterns/hyperspace.py" = "/static/preview/heart-matrix-controller/patterns/hyperspace.py"
-"heart-matrix-controller/patterns/heartbeat.py" = "/static/preview/heart-matrix-controller/patterns/heartbeat.py"
-"lib_shared/__init__.py" = "/static/preview/lib_shared/__init__.py"
-"lib_shared/config_reader.py" = "/static/preview/lib_shared/config_reader.py"
+# /static/ URL when the page loads. The browser now pulls the shared
+# `lib_shared/` modules (effect primitives, display polymorphism, the
+# EffectsCoordinator, and the patterns) directly — no mirror tree of
+# Pi-side files. PngDisplay / VideoDisplay are not browser-eligible
+# (filesystem assets, OpenCV) so they're not in this list.
+"lib_shared/effect_base.py" = "/static/preview/lib_shared/effect_base.py"
+"lib_shared/display_base.py" = "/static/preview/lib_shared/display_base.py"
+"lib_shared/effects_coordinator.py" = "/static/preview/lib_shared/effects_coordinator.py"
 "lib_shared/scroller_base.py" = "/static/preview/lib_shared/scroller_base.py"
-"heart-message-manager/preview_canvas.py" = "/static/preview/heart-message-manager/preview_canvas.py"
+"lib_shared/patterns/__init__.py" = "/static/preview/lib_shared/patterns/__init__.py"
+"lib_shared/patterns/fireworks.py" = "/static/preview/lib_shared/patterns/fireworks.py"
+"lib_shared/patterns/flame.py" = "/static/preview/lib_shared/patterns/flame.py"
+"lib_shared/patterns/nightsky.py" = "/static/preview/lib_shared/patterns/nightsky.py"
+"lib_shared/patterns/honeycomb.py" = "/static/preview/lib_shared/patterns/honeycomb.py"
+"lib_shared/patterns/hyperspace.py" = "/static/preview/lib_shared/patterns/hyperspace.py"
+"lib_shared/patterns/heartbeat.py" = "/static/preview/lib_shared/patterns/heartbeat.py"
+"heart-message-manager/preview_display.py" = "/static/preview/heart-message-manager/preview_display.py"
 "heart-message-manager/preview_scroller.py" = "/static/preview/heart-message-manager/preview_scroller.py"
-"heart-message-manager/preview_renderer.py" = "/static/preview/heart-message-manager/preview_renderer.py"
 "heart-message-manager/preview_main.py" = "/static/preview/heart-message-manager/preview_main.py"
 
 # NOTE: do NOT declare [packages] here. PyScript 2024.9.x's TOML→micropip

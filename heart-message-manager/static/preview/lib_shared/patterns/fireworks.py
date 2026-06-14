@@ -1,0 +1,1 @@
+../../../../../lib_shared/patterns/fireworks.py
