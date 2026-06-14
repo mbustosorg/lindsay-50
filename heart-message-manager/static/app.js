@@ -5,7 +5,16 @@
 // and wires the shared in-browser state:
 //   - `MessageBufferStore` (IndexedDB) for persistence
 //   - `MqttWsClient` (MQTT-over-WebSocket) for live envelope delivery
-//   - `MessageManager` (PyScript) for dispatch / ring buffer / config
+//   - `MessageManager` (PyScript, on /preview) for the in-memory mirror
+//
+// The single source of truth for the in-browser ring buffer lives in
+// IndexedDB. Every inbound MQTT envelope is parsed, persisted (under
+// the same `messages` / `config` object stores the Python wrapper
+// uses), and then dispatched to per-page callbacks. The same filter
+// + enrichment logic the Python `FilteredMessages` applies is mirrored
+// here so non-PyScript pages (e.g. /testing) can render the same
+// "suppressed / visible / rules" view without spinning up a Python
+// runtime.
 //
 // Lifecycle (per the design's wipe+re-seed triggers):
 //   - App start:    wipe + re-seed from /api/messages + /api/config
@@ -17,8 +26,9 @@
 // (Live / Reconnecting / Paused / Error).
 //
 // Per-page scripts (e.g. the /preview page's PyScript init, the
-// /messages listing refresh) call `window.App.registerOnMessageCallback(...)`
-// to subscribe to the shared MessageManager.
+// /testing page's message feed) call `window.App.registerOnMessageCallback(...)`
+// to subscribe to inbound envelopes and `window.App.getMessages(...)` /
+// `getConfig()` to read the current buffer.
 
 (function () {
   "use strict";
@@ -119,6 +129,94 @@
     return !hasSessionMarker();
   }
 
+  // ---------------------------------------------------------------------------
+  // Filter / enrichment — JS mirror of lib_shared/messages.F filtered_messages.
+  // Kept intentionally small and self-contained. The Python side has the
+  // authoritative version; the two should produce the same suppressed / rules
+  // result for the same config + messages.
+  // ---------------------------------------------------------------------------
+
+  function _matchesFilterRule(msg, rule) {
+    if (!rule || rule.action !== "suppress") return false;
+    const body = (msg.body || "").toString();
+    if (rule.type === "keyword") {
+      return body.toLowerCase().includes((rule.pattern || "").toLowerCase());
+    } else if (rule.type === "regex") {
+      try {
+        return new RegExp("^(?:" + rule.pattern + ")$").test(body);
+      } catch (e) {
+        return false;
+      }
+    } else if (rule.type === "sender") {
+      return msg.sender === rule.pattern;
+    } else if (rule.type === "message") {
+      return msg.id === rule.pattern;
+    }
+    return false;
+  }
+
+  function _applyFilters(msg, rules) {
+    const suppressing = [];
+    for (const rule of rules || []) {
+      if (_matchesFilterRule(msg, rule)) suppressing.push(rule);
+    }
+    return suppressing;
+  }
+
+  function _formatDisplayTime(receivedAt, tzOffsetMins) {
+    if (!receivedAt) return "";
+    // receivedAt is ISO 8601 UTC ("2026-05-22T14:30:00Z"). Apply the
+    // sign's signed UTC offset (in minutes) without depending on the
+    // browser's local timezone.
+    const iso = receivedAt.replace(/Z$/, "");
+    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(iso);
+    if (!m) return receivedAt;
+    const utcEpoch = Date.UTC(
+      parseInt(m[1], 10),
+      parseInt(m[2], 10) - 1,
+      parseInt(m[3], 10),
+      parseInt(m[4], 10),
+      parseInt(m[5], 10),
+      parseInt(m[6], 10)
+    );
+    const localEpoch = utcEpoch + (tzOffsetMins || 0) * 60 * 1000;
+    const d = new Date(localEpoch);
+    const monthAbbr = [
+      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ][d.getUTCMonth()];
+    const day = d.getUTCDate();
+    let hour = d.getUTCHours();
+    const minute = d.getUTCMinutes();
+    const ampm = hour >= 12 ? "PM" : "AM";
+    hour = hour % 12;
+    if (hour === 0) hour = 12;
+    const mm = minute < 10 ? "0" + minute : "" + minute;
+    return monthAbbr + " " + day + " " + hour + ":" + mm + " " + ampm;
+  }
+
+  // Enrich a flat message dict with `source`, `suppressed`, `rules`,
+  // `sender_name`, `display_time` — same shape `FilteredMessages._enrich_messages`
+  // produces on the Python side.
+  function _enrichMessage(msg, config, source) {
+    const rules = _applyFilters(msg, config && config.filters);
+    const sendersList = (config && config.senders) || [];
+    const sendersByPhone = {};
+    for (const s of sendersList) {
+      if (s && s.phone) sendersByPhone[s.phone] = s.name;
+    }
+    return Object.assign({}, msg, {
+      source: source,
+      suppressed: rules.length > 0,
+      rules: rules,
+      sender_name: sendersByPhone[msg.sender] || "",
+      display_time: _formatDisplayTime(
+        msg.received_at,
+        (config && config.tz_offset_mins) || 0
+      ),
+    });
+  }
+
   // Module-scope state — exposed via window.App
   let messageBufferStore = null;
   let mqttWsClient = null;
@@ -154,19 +252,87 @@
     return messageBufferStore;
   }
 
+  // Public: read messages from the IndexedDB ring buffer, with the same
+  // suppression / display-time enrichment the Python side applies. Used
+  // by non-PyScript pages (e.g. /testing) to render the feed.
+  async function getMessages(limit, suppress) {
+    if (suppress === undefined) suppress = true;
+    if (!messageBufferStore) return [];
+    try {
+      const data = await messageBufferStore.hydrate();
+      const messages = (data && data.messages) || [];
+      const config = (data && data.config) || {};
+      const enriched = messages.map((m) =>
+        _enrichMessage(m, config, m.source || "rest")
+      );
+      const filtered = suppress ? enriched.filter((e) => !e.suppressed) : enriched;
+      filtered.sort((a, b) => (a.received_at > b.received_at ? -1 : 1));
+      return limit ? filtered.slice(0, limit) : filtered;
+    } catch (e) {
+      console.warn("getMessages failed:", e);
+      return [];
+    }
+  }
+
+  // Public: read the current config from IndexedDB (or null).
+  async function getConfigNow() {
+    if (!messageBufferStore) return null;
+    try {
+      const data = await messageBufferStore.hydrate();
+      return (data && data.config) || null;
+    } catch (e) {
+      console.warn("getConfig failed:", e);
+      return null;
+    }
+  }
+
+  // Fetch /api/messages with X-API-Key. Returns a list of Message dicts.
+  async function _fetchMessagesFromApi(apiUrl, apiKey) {
+    if (!apiUrl) return [];
+    const res = await fetch(apiUrl, {
+      method: "GET",
+      headers: { "X-API-Key": apiKey || "" },
+    });
+    if (!res.ok) {
+      throw new Error("GET " + apiUrl + " -> HTTP " + res.status);
+    }
+    return await res.json();
+  }
+
+  // Fetch /api/config with X-API-Key. Returns a SignConfig dict.
+  async function _fetchConfigFromApi(apiUrl, apiKey) {
+    if (!apiUrl) return null;
+    const res = await fetch(apiUrl, {
+      method: "GET",
+      headers: { "X-API-Key": apiKey || "" },
+    });
+    if (!res.ok) {
+      throw new Error("GET " + apiUrl + " -> HTTP " + res.status);
+    }
+    return await res.json();
+  }
+
+  // Persist a list of messages (Message.to_dict() shape) into IndexedDB.
+  async function _seedMessages(messages) {
+    if (!messageBufferStore) return;
+    for (const m of messages) {
+      try {
+        await messageBufferStore.putMessage(
+          Object.assign({ source: "rest" }, m)
+        );
+      } catch (e) {
+        // Non-fatal — IndexedDB quota / transient error.
+      }
+    }
+  }
+
   async function wipeAndReseed() {
     if (wipeInProgress) {
       // De-duplicate concurrent wipes.
       return wipeInProgress;
     }
-    const cfg = getConfig();
     wipeInProgress = (async () => {
-      // Wait for PyScript to expose window.messageManager (set by
-      // preview.html's PyScript init). On non-PyScript pages the
-      // manager is constructed lazily when a per-page script asks
-      // for it. For the boot path, we expose a small helper at the
-      // bottom of this file that constructs the manager from
-      // APP_CONFIG + createMqttWsClient + createMessageBufferStore.
+      const cfg = getConfig();
       if (messageBufferStore) {
         try {
           await messageBufferStore.wipe();
@@ -174,11 +340,39 @@
           console.warn("IndexedDB wipe failed:", e);
         }
       }
+      // PyScript pages: ask the in-memory MessageManager to re-seed
+      // (the manager owns its own state and will write through to the
+      // store via putMessage / putConfig).
       if (messageManager && typeof messageManager.seed === "function") {
         try {
           await messageManager.seed();
         } catch (e) {
           console.warn("Re-seed failed:", e);
+        }
+      } else if (messageBufferStore) {
+        // Non-PyScript pages: seed IndexedDB directly from the REST
+        // API. This is the path /testing and other plain-JS pages use.
+        try {
+          const msgs = await _fetchMessagesFromApi(
+            cfg.messagesApiUrl,
+            cfg.apiKey
+          );
+          if (Array.isArray(msgs)) {
+            await _seedMessages(msgs);
+          }
+        } catch (e) {
+          console.warn("Message seed from REST failed:", e);
+        }
+        try {
+          const cfgDict = await _fetchConfigFromApi(
+            cfg.configApiUrl,
+            cfg.apiKey
+          );
+          if (cfgDict) {
+            await messageBufferStore.putConfig(cfgDict);
+          }
+        } catch (e) {
+          console.warn("Config seed from REST failed:", e);
         }
       }
       setSessionMarker();
@@ -188,7 +382,6 @@
     } finally {
       wipeInProgress = null;
     }
-    void cfg;
   }
 
   async function onMqttStatus(state, detail) {
@@ -200,6 +393,20 @@
   }
 
   async function onMqttEnvelope(raw) {
+    // The envelope is JSON: { "type": "message" | "config", "payload": ... }.
+    // Persist to IndexedDB, then fire per-page callbacks. Both branches
+    // share the same store so a PyScript page and a non-PyScript page
+    // see the same data.
+    let envelope;
+    try {
+      envelope = JSON.parse(raw);
+    } catch (e) {
+      console.warn("Invalid MQTT envelope (not JSON):", e);
+      return;
+    }
+    if (!envelope || typeof envelope !== "object") return;
+
+    // Mirror to the in-memory MessageManager (if /preview registered one).
     if (messageManager && typeof messageManager.dispatch === "function") {
       try {
         messageManager.dispatch(raw);
@@ -207,6 +414,26 @@
         console.error("dispatch failed:", e);
       }
     }
+
+    // Persist to IndexedDB.
+    if (messageBufferStore) {
+      try {
+        if (envelope.type === "message" && envelope.payload) {
+          await messageBufferStore.putMessage(
+            Object.assign({ source: "mqtt" }, envelope.payload)
+          );
+        } else if (envelope.type === "config" && envelope.payload) {
+          await messageBufferStore.putConfig(envelope.payload);
+        }
+      } catch (e) {
+        console.warn("IndexedDB persist failed:", e);
+      }
+    }
+
+    // Fire per-page callbacks with the raw payload. The Python on_message
+    // callback signature is `Message`; the JS-side equivalent is the
+    // payload dict (which is `Message.to_dict()` shape — flat fields).
+    dispatchToCallbacks(envelope.payload || envelope);
   }
 
   async function startMqtt() {
@@ -215,13 +442,6 @@
       setStatus("error", { error: "no MQTT_WS_URL in APP_CONFIG" });
       return;
     }
-    // Lazy-import the JS shim via the static asset URL.
-    // (The actual shim is loaded by PyScript on the /preview page; for
-    // non-PyScript pages, we still want the connection — the in-browser
-    // MessageManager registers itself for callbacks. The MqttWsClient
-    // class is only used by the /preview page's PyScript init; the base
-    // template just needs the WS + dispatch. We start the connection
-    // here using the shim directly via dynamic import.)
     try {
       const mod = await import("./mqtt_ws_client.js");
       mqttWsClient = mod.createMqttWsClient({
@@ -260,26 +480,11 @@
         setPersistenceStatus(false, "shim missing");
       }
     }
-    // On every page load, hydrate the in-memory state from IndexedDB
-    // (no wipe on per-page navigation). The wipe only happens on
-    // app start (no session marker) or login or long-disconnect.
-    const wipeNeeded = getInitialWipeNeeded();
     // Wipe + re-seed from REST on first load (and on login via the
     // body attribute). Per-page navigation skips the wipe.
+    const wipeNeeded = getInitialWipeNeeded();
     if (wipeNeeded) {
       await wipeAndReseed();
-    } else {
-      // Hydrate from IndexedDB (per-page navigation)
-      if (messageBufferStore && messageManager) {
-        try {
-          const [messages, config] = await messageBufferStore.hydrate();
-          if (messageManager && typeof messageManager.hydrateFromStore === "function") {
-            messageManager.hydrateFromStore(messages, config);
-          }
-        } catch (e) {
-          console.warn("Hydrate failed:", e);
-        }
-      }
     }
     // Open the WS connection on every page (the buffer is current
     // across the whole app, not just /preview).
@@ -292,6 +497,9 @@
     getMessageManager,
     getMqttWsClient,
     getMessageBufferStore,
+    // Read APIs for non-PyScript pages.
+    getMessages,
+    getConfig: getConfigNow,
     // Allow per-page scripts (e.g. /preview's PyScript init) to
     // install the shared MessageManager once PyScript is ready.
     setMessageManager: function (mgr) {

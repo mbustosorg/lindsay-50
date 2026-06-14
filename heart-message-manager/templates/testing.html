@@ -173,46 +173,46 @@ function escapeHtml(s) {
 
 // ---------------------------------------------------------------------------
 // In-browser state (window.App) — base.html's app.js owns the MQTT-WS client
-// and the in-browser MessageManager. testing.html subscribes to its
-// on_message signal and reads the in-memory config from the manager.
-// No more 3-second polling against /api/live-*.
+// and the IndexedDB-backed message buffer. testing.html subscribes to its
+// on_message signal and reads the buffer via the async getMessages / getConfig
+// APIs. No more 3-second polling against /api/live-*.
 // ---------------------------------------------------------------------------
 
 const APP = window.App || {};
 
-function getInBrowserManager() {
-  return APP.getMessageManager ? APP.getMessageManager() : null;
-}
+// Cache the most recent render data so on_message callbacks can re-render
+// without an extra async round-trip (the page's checkbox / refresh controls
+// re-read via the same path).
+let lastMessages = [];
+let lastConfig = null;
 
-function getInBrowserMessages(suppress) {
-  const mgr = getInBrowserManager();
-  if (!mgr || typeof mgr.get_messages !== 'function') return [];
+async function getInBrowserMessages(suppress) {
+  if (!APP.getMessages) return [];
   try {
-    return mgr.get_messages(100, suppress);
+    return await APP.getMessages(100, suppress);
   } catch (e) {
+    console.warn("getMessages failed:", e);
     return [];
   }
 }
 
-function getInBrowserConfig() {
-  const mgr = getInBrowserManager();
-  if (!mgr || !mgr.config) return null;
+async function getInBrowserConfig() {
+  if (!APP.getConfig) return null;
   try {
-    return mgr.config.to_dict ? mgr.config.to_dict() : mgr.config;
+    return await APP.getConfig();
   } catch (e) {
+    console.warn("getConfig failed:", e);
     return null;
   }
 }
 
-function renderMessages() {
+async function renderMessages() {
   const showSuppressed = document.getElementById('show-suppressed').checked;
   // In our convention: checkbox "checked" = hide suppressed. The
-  // in-browser manager's `get_messages(limit, suppress)` expects the
-  // boolean in the same direction.
-  const entries = getInBrowserMessages(!showSuppressed);
-  entries.sort(function (a, b) {
-    return (a.received_at > b.received_at ? -1 : 1);
-  });
+  // in-browser `getMessages(limit, suppress)` expects the boolean in
+  // the same direction.
+  const entries = await getInBrowserMessages(!showSuppressed);
+  lastMessages = entries;
   document.getElementById('msg-count').textContent = entries.length;
   if (entries.length === 0) {
     document.getElementById('feed-tbody').innerHTML =
@@ -233,7 +233,7 @@ function renderMessages() {
     const statusLabel = item.suppressed ? 'suppressed' : 'visible';
     const statusReason = item.suppressed && rules.length > 0 ? '<div class="text-xs text-red-500 mt-0.5">' + rules.map(function (r) { return r.type; }).join(', ') + '</div>' : '';
     return '<tr class="hover:bg-indigo-50/30 transition-colors cursor-pointer" data-msg=\'' + btoa(JSON.stringify(item)).replace(/'/g, "\\'") + '\' onclick="showMessageModal(this)">' +
-      '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-medium ' + sourceColor + '">' + sourceIcon + ' ' + item.source + '</span></td>' +
+      '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-medium ' + sourceColor + '">' + sourceIcon + ' ' + (item.source || 'rest') + '</span></td>' +
       '<td class="px-6 py-4 text-sm">' + senderDisplay + '</td>' +
       '<td class="px-6 py-4 text-sm text-slate-600 max-w-xs truncate">' + escapeHtml(body) + '</td>' +
       '<td class="px-6 py-4 text-sm text-slate-500 font-mono">' + time + '</td>' +
@@ -242,8 +242,9 @@ function renderMessages() {
   }).join('');
 }
 
-function renderConfig() {
-  const cfg = getInBrowserConfig();
+async function renderConfig() {
+  const cfg = await getInBrowserConfig();
+  lastConfig = cfg;
   if (!cfg) {
     document.getElementById('config-display').textContent = 'Loading…';
     return;
@@ -263,15 +264,18 @@ function renderConfig() {
   }
 }
 
-function refreshFeed() {
-  // The WS-driven path: if the in-browser manager is empty, kick off a
-  // wipe + re-seed. Otherwise, the next envelope or config update will
-  // trigger a re-render via the registered callback.
-  if (getInBrowserMessages(false).length === 0 && APP.wipeAndReseed) {
-    APP.wipeAndReseed();
+async function refreshFeed() {
+  // The WS-driven path: kick off a wipe + re-seed (which fetches the
+  // REST API and repopulates IndexedDB), then re-render from the buffer.
+  if (APP.wipeAndReseed) {
+    try {
+      await APP.wipeAndReseed();
+    } catch (e) {
+      console.warn("wipeAndReseed failed:", e);
+    }
   }
-  renderMessages();
-  renderConfig();
+  await renderMessages();
+  await renderConfig();
 }
 
 // Disable the "Send Webhook" button until the WS reaches `connected`.
@@ -450,7 +454,12 @@ function testingInit() {
       // The in-browser MessageManager keeps a single source of truth
       // for the ring buffer; the WS envelopes from the broker call
       // mgr.dispatch, which appends to the ring and invokes us.
+      // Config envelopes carry a config-shaped payload; re-render the
+      // config panel as well.
       renderMessages();
+      if (msg && msg.filters && msg.senders !== undefined) {
+        renderConfig();
+      }
     });
     renderMessages();
     renderConfig();
