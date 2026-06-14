@@ -36,6 +36,34 @@
     .card-hover { transition: all 0.2s ease; }
     .card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 40px -10px rgba(79, 70, 229, 0.2); }
   </style>
+  {% if current_user.is_authenticated %}
+  <!--
+    APP_CONFIG: server-rendered config for the browser-side bootstrap.
+    Visible only to authenticated users (gated by the @login_required on
+    every admin route). Values are resolved from the Flask process's
+    settings.toml at request time.
+  -->
+  <script>
+    window.APP_CONFIG = {
+      mqttWsUrl:        {{ mqtt_ws.MQTT_WS_URL | tojson }},
+      mqttUsername:     {{ mqtt.MQTT_USERNAME | tojson }},
+      mqttPassword:     {{ mqtt.MQTT_PASSWORD | tojson }},
+      mqttTopic:        {{ mqtt.MQTT_TOPIC | tojson }},
+      messagesApiUrl:   {{ config.MESSAGES_API_URL | tojson }},
+      configApiUrl:     {{ config.CONFIG_API_URL | tojson }},
+      apiKey:           {{ auth.API_SECRET_KEY | tojson }},
+      mqttLongDisconnectMs: {{ mqtt_ws.MQTT_LONG_DISCONNECT_MS | tojson }}
+    };
+  </script>
+  <!-- Native JS shims for IndexedDB persistence + MQTT-over-WebSocket. -->
+  <script type="module">
+    import { createMessageBufferStore } from "{{ url_for('static', filename='message_buffer_store.js') }}";
+    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}";
+    window.createMessageBufferStore = createMessageBufferStore;
+    window.createMqttWsClient = createMqttWsClient;
+  </script>
+  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  {% endif %}
 </head>
 <body class="font-body">
 <div class="flex min-h-screen">
@@ -78,6 +106,13 @@
   </aside>
   <!-- Main -->
   <main class="flex-1 p-8">
+    {% if current_user.is_authenticated %}
+    <div class="flex items-center gap-3 mb-4">
+      <span class="text-xs text-slate-500 font-medium">MQTT:</span>
+      <span id="mqtt-status" class="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">Connecting…</span>
+      <span id="persistence-status" class="hidden px-3 py-1 rounded-full bg-rose-100 text-rose-700 text-xs font-semibold">Persistence unavailable</span>
+    </div>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
 </div>

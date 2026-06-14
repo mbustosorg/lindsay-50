@@ -14,10 +14,12 @@ from typing import Any
 
 class Color:
     """24-bit RGB color object passed to `DrawText`."""
+
     def __init__(self, r: int, g: int, b: int) -> None: ...
 
 class Font:
     """BDF font handle. Load a font from disk with `LoadFont(path)`."""
+
     height: int
     baseline: int
     def __init__(self) -> None: ...

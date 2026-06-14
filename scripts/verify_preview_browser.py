@@ -29,22 +29,17 @@ Note on PyScript bootstrap:
   Chromium) needs to verify.
 """
 
-import json
 import sys
 import time
 import urllib.request
 import urllib.parse
-from datetime import datetime, timezone
-from pathlib import Path
-from threading import Thread
 
-from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+from playwright.sync_api import sync_playwright
 
 BASE = "http://127.0.0.1:5050"
 LOGIN_URL = f"{BASE}/login"
 PREVIEW_URL = f"{BASE}/preview"
 SMS_URL = f"{BASE}/api/messages"
-LIVE_URL = f"{BASE}/api/live-messages?limit=1&suppress=true"
 
 # A separate request counter keyed by (ip, time-bucket) so we can
 # confirm all 5 tabs in 9.5 each fire their own poll on the schedule.
@@ -64,20 +59,6 @@ def curl_inject_sms(body: str, sender: str = "+15551234567") -> int:
     req = urllib.request.Request(SMS_URL, data=data, method="POST")
     with urllib.request.urlopen(req, timeout=5) as r:
         return r.status
-
-
-def curl_live() -> list[dict]:
-    """Hit /api/live-messages with the saved session cookie."""
-    with open("/tmp/cookies.txt") as f:
-        for line in f:
-            if line.startswith("#") or not line.strip():
-                continue
-            cookie = line.strip().split("\t")
-            cookie_header = f"{cookie[5]}={cookie[6]}"
-            break
-    req = urllib.request.Request(LIVE_URL, headers={"Cookie": cookie_header})
-    with urllib.request.urlopen(req, timeout=5) as r:
-        return json.loads(r.read())
 
 
 def login_in_browser(page) -> None:

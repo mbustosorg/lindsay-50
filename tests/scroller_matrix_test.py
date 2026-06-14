@@ -83,21 +83,6 @@ def _load_scroller_module():
     return mod
 
 
-@pytest.fixture(autouse=True)
-def _restore_lib_shared():
-    """test_auth.py replaces sys.modules['lib_shared'] with a Mock. Re-import
-    the real package so the scroller module can resolve its lib_shared imports.
-    """
-    # Drop the Mock'd lib_shared and any of its submodules
-    for mod_name in list(sys.modules):
-        if mod_name == "lib_shared" or mod_name.startswith("lib_shared."):
-            del sys.modules[mod_name]
-    # Re-import the real lib_shared
-    importlib.import_module("lib_shared")
-    importlib.import_module("lib_shared.config_reader")
-    yield
-
-
 @pytest.fixture
 def fresh_module(monkeypatch):
     """Re-import scroller.py with a stubbed get_config so each test is fresh.

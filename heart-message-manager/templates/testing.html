@@ -97,7 +97,7 @@
       <h3 class="font-semibold font-heading text-dark flex items-center gap-2">
         <span class="text-xl">📡</span> Messages Feed
       </h3>
-      <p class="text-slate-500 text-sm mt-1">Live view via REST, with suppression preview</p>
+      <p class="text-slate-500 text-sm mt-1">Live view via in-browser MQTT-WS, with suppression preview</p>
     </div>
     <div class="flex items-center gap-3">
       <label id="show-suppressed-toggle" class="flex items-center gap-2 cursor-pointer select-none">
@@ -128,7 +128,7 @@
       <tbody id="feed-tbody" class="divide-y divide-indigo-50">
         <tr>
           <td colspan="5" class="px-6 py-12 text-center text-slate-400">
-            No messages yet — click Refresh to load
+            No messages yet — the WS is still seeding from the broker
           </td>
         </tr>
       </tbody>
@@ -171,81 +171,129 @@ function escapeHtml(s) {
   return d.innerHTML;
 }
 
-async function refreshFeed() {
-  // Seed ring buffer from REST messages so live feed shows everything
-  try {
-    await fetch('/api/live-messages/seed', { method: 'POST' });
-  } catch (e) { console.error('Seed failed:', e); }
-  fetchMessages();
+// ---------------------------------------------------------------------------
+// In-browser state (window.App) — base.html's app.js owns the MQTT-WS client
+// and the in-browser MessageManager. testing.html subscribes to its
+// on_message signal and reads the in-memory config from the manager.
+// No more 3-second polling against /api/live-*.
+// ---------------------------------------------------------------------------
+
+const APP = window.App || {};
+
+function getInBrowserManager() {
+  return APP.getMessageManager ? APP.getMessageManager() : null;
 }
 
-async function fetchMessages() {
+function getInBrowserMessages(suppress) {
+  const mgr = getInBrowserManager();
+  if (!mgr || typeof mgr.get_messages !== 'function') return [];
   try {
-    const showSuppressed = document.getElementById('show-suppressed').checked;
-    const suppress = showSuppressed ? 'false' : 'true';
-    const liveRes = await fetch('/api/live-messages?suppress=' + suppress);
-    const live = await liveRes.json();
+    return mgr.get_messages(100, suppress);
+  } catch (e) {
+    return [];
+  }
+}
 
-    // Match ring buffer entries to SQLite messages for sender info
-    const entries = [].slice.call(live).sort(function(a, b) {
-      return (a.received_at > b.received_at ? -1 : 1);
-    });
+function getInBrowserConfig() {
+  const mgr = getInBrowserManager();
+  if (!mgr || !mgr.config) return null;
+  try {
+    return mgr.config.to_dict ? mgr.config.to_dict() : mgr.config;
+  } catch (e) {
+    return null;
+  }
+}
 
-    document.getElementById('msg-count').textContent = entries.length;
+function renderMessages() {
+  const showSuppressed = document.getElementById('show-suppressed').checked;
+  // In our convention: checkbox "checked" = hide suppressed. The
+  // in-browser manager's `get_messages(limit, suppress)` expects the
+  // boolean in the same direction.
+  const entries = getInBrowserMessages(!showSuppressed);
+  entries.sort(function (a, b) {
+    return (a.received_at > b.received_at ? -1 : 1);
+  });
+  document.getElementById('msg-count').textContent = entries.length;
+  if (entries.length === 0) {
+    document.getElementById('feed-tbody').innerHTML =
+      '<tr><td colspan="5" class="px-6 py-12 text-center text-slate-400">No messages — the WS is still seeding from the broker</td></tr>';
+    return;
+  }
+  document.getElementById('feed-tbody').innerHTML = entries.map(function (item) {
+    const time = item.display_time || '—';
+    const sourceColor = item.source === 'mqtt' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
+    const sourceIcon = item.source === 'mqtt' ? '📡' : '💾';
+    const body = item.body || '';
+    const sender = item.sender || '—';
+    const senderName = item.sender_name;
+    const senderDisplay = senderName
+      ? '<div class="font-medium">' + escapeHtml(senderName) + '</div><div class="text-xs text-slate-400">' + escapeHtml(sender) + '</div>'
+      : '<div>' + escapeHtml(sender) + '</div>';
+    const rules = item.rules || [];
+    const statusLabel = item.suppressed ? 'suppressed' : 'visible';
+    const statusReason = item.suppressed && rules.length > 0 ? '<div class="text-xs text-red-500 mt-0.5">' + rules.map(function (r) { return r.type; }).join(', ') + '</div>' : '';
+    return '<tr class="hover:bg-indigo-50/30 transition-colors cursor-pointer" data-msg=\'' + btoa(JSON.stringify(item)).replace(/'/g, "\\'") + '\' onclick="showMessageModal(this)">' +
+      '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-medium ' + sourceColor + '">' + sourceIcon + ' ' + item.source + '</span></td>' +
+      '<td class="px-6 py-4 text-sm">' + senderDisplay + '</td>' +
+      '<td class="px-6 py-4 text-sm text-slate-600 max-w-xs truncate">' + escapeHtml(body) + '</td>' +
+      '<td class="px-6 py-4 text-sm text-slate-500 font-mono">' + time + '</td>' +
+      '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-semibold ' + (item.suppressed ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700') + '">' + statusLabel + '</span>' + statusReason + '</td>' +
+      '</tr>';
+  }).join('');
+}
 
-    if (entries.length === 0) {
-      document.getElementById('feed-tbody').innerHTML =
-        '<tr><td colspan="5" class="px-6 py-12 text-center text-slate-400">No messages — click Refresh to seed from REST</td></tr>';
-      return;
-    }
-
-    document.getElementById('feed-tbody').innerHTML = entries.map(function(item) {
-      const time = item.display_time || '—';
-      const sourceColor = item.source === 'mqtt' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
-      const sourceIcon = item.source === 'mqtt' ? '📡' : '💾';
-      const body = item.body || '';
-      const sender = item.sender || '—';
-      const senderName = item.sender_name;
-      const senderDisplay = senderName
-        ? '<div class="font-medium">' + escapeHtml(senderName) + '</div><div class="text-xs text-slate-400">' + escapeHtml(sender) + '</div>'
-        : '<div>' + escapeHtml(sender) + '</div>';
-      const rules = item.rules || [];
-      const statusLabel = item.suppressed ? 'suppressed' : 'visible';
-      const statusReason = item.suppressed && rules.length > 0 ? '<div class="text-xs text-red-500 mt-0.5">' + rules.map(function(r) { return r.type; }).join(', ') + '</div>' : '';
-      return '<tr class="hover:bg-indigo-50/30 transition-colors cursor-pointer" data-msg=\'' + btoa(JSON.stringify(item)).replace(/'/g, "\\'") + '\' onclick="showMessageModal(this)">' +
-        '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-medium ' + sourceColor + '">' + sourceIcon + ' ' + item.source + '</span></td>' +
-        '<td class="px-6 py-4 text-sm">' + senderDisplay + '</td>' +
-        '<td class="px-6 py-4 text-sm text-slate-600 max-w-xs truncate">' + escapeHtml(body) + '</td>' +
-        '<td class="px-6 py-4 text-sm text-slate-500 font-mono">' + time + '</td>' +
-        '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-semibold ' + (item.suppressed ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700') + '">' + statusLabel + '</span>' + statusReason + '</td>' +
-        '</tr>';
+function renderConfig() {
+  const cfg = getInBrowserConfig();
+  if (!cfg) {
+    document.getElementById('config-display').textContent = 'Loading…';
+    return;
+  }
+  document.getElementById('config-display').textContent = JSON.stringify(cfg, null, 2);
+  const list = document.getElementById('filter-list');
+  const filters = cfg.filters || [];
+  if (filters.length === 0) {
+    list.innerHTML = '<li class="text-slate-400 text-sm">No filters</li>';
+  } else {
+    list.innerHTML = filters.map(function (f) {
+      return '<li class="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-50">' +
+        '<span class="px-2 py-1 rounded-lg bg-red-100 text-red-700 text-xs font-semibold">' + f.type + '</span>' +
+        '<code class="text-sm text-slate-600">' + escapeHtml(f.pattern) + '</code>' +
+        '</li>';
     }).join('');
-  } catch (e) {
-    console.error('Fetch failed:', e);
   }
 }
 
-async function fetchConfig() {
-  try {
-    const res = await fetch('/api/live-config');
-    const cfg = await res.json();
-    document.getElementById('config-display').textContent = JSON.stringify(cfg, null, 2);
-
-    const list = document.getElementById('filter-list');
-    const filters = cfg.filters || [];
-    if (filters.length === 0) {
-      list.innerHTML = '<li class="text-slate-400 text-sm">No filters</li>';
-    } else {
-      list.innerHTML = filters.map(f =>
-        '<li class="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-50">' +
-          '<span class="px-2 py-1 rounded-lg bg-red-100 text-red-700 text-xs font-semibold">' + f.type + '</span>' +
-          '<code class="text-sm text-slate-600">' + escapeHtml(f.pattern) + '</code>' +
-        '</li>'
-      ).join('');
-    }
-  } catch (e) {
-    document.getElementById('config-display').textContent = 'Error loading config';
+function refreshFeed() {
+  // The WS-driven path: if the in-browser manager is empty, kick off a
+  // wipe + re-seed. Otherwise, the next envelope or config update will
+  // trigger a re-render via the registered callback.
+  if (getInBrowserMessages(false).length === 0 && APP.wipeAndReseed) {
+    APP.wipeAndReseed();
   }
+  renderMessages();
+  renderConfig();
+}
+
+// Disable the "Send Webhook" button until the WS reaches `connected`.
+// The base template's app.js owns the connection — we just read its
+// status off the status element.
+function updateSendButtonState() {
+  const btn = document.querySelector('#inject-form button[type="submit"]');
+  const statusEl = document.getElementById('mqtt-status');
+  if (!btn || !statusEl) return;
+  const isLive = statusEl.textContent && statusEl.textContent.trim() === 'Live';
+  btn.disabled = !isLive;
+  btn.classList.toggle('opacity-50', !isLive);
+  btn.classList.toggle('cursor-not-allowed', !isLive);
+}
+
+// Watch the status element for changes; update the button state.
+function watchMqttStatus() {
+  const statusEl = document.getElementById('mqtt-status');
+  if (!statusEl || !window.MutationObserver) return;
+  const obs = new MutationObserver(updateSendButtonState);
+  obs.observe(statusEl, { childList: true, characterData: true, subtree: true });
+  updateSendButtonState();
 }
 
 async function fetchS3Objects() {
@@ -352,8 +400,6 @@ const showSuppressedThumb = document.getElementById('show-suppressed-thumb');
 
 function updateSuppressToggle() {
   const checked = showSuppressedInput.checked;
-  // When checked (hide suppressed ON): track turns primary, thumb slides right
-  // When unchecked (show all ON): track is slate-200, thumb slides left
   if (checked) {
     showSuppressedTrack.classList.remove('bg-slate-200');
     showSuppressedTrack.classList.add('bg-primary');
@@ -365,8 +411,11 @@ function updateSuppressToggle() {
   }
 }
 
-showSuppressedInput.addEventListener('change', updateSuppressToggle);
-updateSuppressToggle(); // init
+showSuppressedInput.addEventListener('change', function () {
+  updateSuppressToggle();
+  renderMessages();
+});
+updateSuppressToggle();
 
 // Inject form
 document.getElementById('inject-form').addEventListener('submit', async function(e) {
@@ -378,7 +427,8 @@ document.getElementById('inject-form').addEventListener('submit', async function
     const text = await res.text();
     if (res.ok) {
       form.Body.value = '';
-      // Live feed updates automatically via polling
+      // The envelope arrives via the in-browser WS — renderMessages is
+      // driven by the registered on_message callback below.
     } else {
       showJsonModal('Webhook Error ' + res.status, text, true);
     }
@@ -387,9 +437,36 @@ document.getElementById('inject-form').addEventListener('submit', async function
   }
 });
 
-// Init
-fetchMessages();
-fetchConfig();
-setInterval(fetchMessages, 3000);
+// Init: subscribe to the shared in-browser MessageManager, then render.
+function testingInit() {
+  // The base template's app.js may not be ready yet on this script run
+  // (it's loaded after the inline APP_CONFIG <script> but before this
+  // block). Defer to a microtask so window.App is in place.
+  const tryStart = function () {
+    if (typeof APP.registerOnMessageCallback !== 'function') {
+      return false;
+    }
+    APP.registerOnMessageCallback(function (msg) {
+      // The in-browser MessageManager keeps a single source of truth
+      // for the ring buffer; the WS envelopes from the broker call
+      // mgr.dispatch, which appends to the ring and invokes us.
+      renderMessages();
+    });
+    renderMessages();
+    renderConfig();
+    watchMqttStatus();
+    return true;
+  };
+  if (!tryStart()) {
+    let attempts = 0;
+    const poll = function () {
+      if (tryStart() || ++attempts > 50) return;
+      setTimeout(poll, 50);
+    };
+    poll();
+  }
+}
+
+testingInit();
 </script>
 {% endblock %}

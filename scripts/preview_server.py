@@ -5,18 +5,19 @@ genuine WSGI server (Flask's built-in dev server) instead of a test
 client. The browser can then hit http://localhost:5050/preview with
 a real session cookie.
 
-Heavy deps (MQTT, S3, MessageManager) are stubbed so we don't need
-real network access. The /api/messages webhook is preserved so curl
-can inject messages, and /api/live-messages is preserved so the
-browser polling loop has something to fetch.
+Heavy deps (MQTT, S3) are stubbed so we don't need real network access.
+The /api/messages webhook is preserved so curl can inject messages; the
+browser no longer polls /api/live-messages (that endpoint was removed
+in v2 in favor of browser-side MQTT-WS). The /api/config endpoint is
+preserved so the browser's seed fetch has something to call.
 """
 
 import importlib.util
 import os
 import sys
 import threading
-import time
 import types
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -74,13 +75,15 @@ config_reader_mod = make_mock("lib_shared.config_reader")
 config_reader_mod.get_config = lambda required_keys=None: mock_cfg
 log_setup_mod = make_mock("lib_shared.log_setup")
 log_setup_mod.configure_logging = MagicMock()
+# main.py no longer imports lib_shared.message_manager (v2 removed the
+# Flask-side MessageManager), but we still stub the module in case any
+# helper references it.
 mm_mod = make_mock("lib_shared.message_manager")
 mm_mod.MessageManager = MagicMock()
 mqtt_factory_mod = make_mock("lib_shared.mqtt_factory")
 mqtt_factory_mod.make_mqtt_client = MagicMock()
 
 # heart-message-manager submodules
-# (server_time is a real module; we use the genuine one so s3.py imports work)
 _make_mock("adafruit_mqtt_client")
 paho_mod = types.ModuleType("paho_mqtt_client")
 paho_mod.PahoMqttClient = MagicMock()
@@ -94,10 +97,9 @@ sys.modules["heart-message-manager.main"] = mod
 spec.loader.exec_module(mod)
 
 # Make sqlite.get_messages_since and get_all_messages return a list of
-# fake messages so the live-messages endpoint has something to return.
-# We also want a seeded entry to verify the polling loop picks up changes.
+# fake messages so /api/messages has something to return when the
+# browser's MessageManager seeds itself.
 import sqlite as sqlite_real
-from datetime import datetime, timezone
 
 RealMessage = real_lib_shared_models.Message
 
@@ -175,27 +177,12 @@ mod.app.jinja_env.loader = FileSystemLoader(str(REPO_ROOT / "heart-message-manag
 mod.app.static_folder = str(HMM_DIR / "static")
 mod.app.static_url_path = "/static"
 
-# Patch the MessageManager.dispatch so /api/messages POSTs go through
-# without trying to publish to MQTT. get_messages returns the real
-# Message objects (with to_dict() support) directly from the fake
-# ring buffer.
-_message_mgr = mod._message_mgr
-_message_mgr.dispatch = MagicMock()
-_message_mgr.seed = MagicMock()
-
-
-def _fake_get_messages(limit=100, suppress=False):
-    return _get_all_messages()[:limit]
-
-
-_message_mgr.get_messages = _fake_get_messages
-
 # Start the server
 print(f"Starting preview server on http://localhost:{mock_cfg.PORT}")
 print(f"Login:  POST /login  username=admin  password=secret123")
 print(f"Page:   GET  /preview")
 print(f"Inject: POST /api/messages  From=...&Body=...")
-print(f"Live:   GET  /api/live-messages?limit=1&suppress=true")
+print(f"Seed:   GET  /api/messages  (X-API-Key auth)")
 print(f"PID:    {os.getpid()}")
 
 # Run Flask's dev server (no debug reloader, no signal handler)

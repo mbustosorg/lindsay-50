@@ -50,7 +50,6 @@ _cfg = get_config(REQUIRED_KEYS)
 import sqlite, s3
 from server_time import format_from_iso, now_utc_iso
 from lib_shared.models import SignConfig, FilterRule, Message
-from lib_shared.message_manager import MessageManager
 from lib_shared.models import MessageEnvelope
 
 # App setup
@@ -96,19 +95,17 @@ logger = logging.getLogger(__name__)
 sqlite.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
 
-# MessageManager — owns config + message storage, handles dispatch and seeding.
-# Threaded on Flask (non-blocking), CircuitPython calls seed() synchronously.
-_message_mgr = MessageManager()
-
-import threading
-
-threading.Thread(target=_message_mgr.seed, daemon=True).start()
-
-
-# Platform MQTT client (adafruit on Heroku, paho for local dev)
+# Platform MQTT client (adafruit on Heroku, paho for local dev) — used
+# only as a publisher (no Flask-side subscriber). The device and the
+# browser both subscribe to the broker on their own.
 from lib_shared.mqtt_factory import make_mqtt_client
 
-_mqtt_client = make_mqtt_client(_message_mgr.dispatch)
+
+def _noop_dispatch(_payload: str) -> None:
+    """Flask no longer subscribes to MQTT envelopes; drop them on the floor."""
+
+
+_mqtt_client = make_mqtt_client(_noop_dispatch)
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 
@@ -277,37 +274,7 @@ def api_put_config():
     return jsonify({"status": "ok"})
 
 
-# Testing API into MessageManager
-@app.route("/api/live-messages", methods=["GET"])
-@api_login_required
-def api_live_messages():
-    """Return messages in the live ring buffer, newest first.
-
-    Query params:
-        limit: Maximum number of messages (default 100, max 100).
-        suppress: "true" to exclude suppressed messages, "false" to include all (default "true").
-    """
-    assert _message_mgr is not None
-    limit = min(100, int(request.args.get("limit", 100)))
-    show_suppressed = request.args.get("suppress", "true").lower() != "true"
-    return jsonify([m.to_dict() for m in _message_mgr.get_messages(limit=limit, suppress=show_suppressed)])
-
-
-@app.route("/api/live-messages/seed", methods=["POST"])
-@api_login_required
-def api_live_messages_seed():
-    """Back-populate the live message ring buffer from a REST call."""
-    assert _message_mgr is not None
-    threading.Thread(target=_message_mgr.seed, daemon=True).start()
-    return jsonify({"status": "ok", "seeded": min(50, len(sqlite.get_all_messages()))})
-
-
-@app.route("/api/live-config", methods=["GET"])
-@api_login_required
-def api_live_config():
-    """Return the subscriber's current config buffer."""
-    assert _message_mgr is not None
-    return jsonify(_message_mgr.config.to_dict())
+# Admin API (S3 browser)
 
 
 @app.route("/api/admin/s3-objects")
@@ -621,6 +588,63 @@ def _set_preview_csp(response):
     if request.path == "/preview" or request.path.startswith("/preview/"):
         response.headers["Content-Security-Policy"] = _PREVIEW_CSP
     return response
+
+
+# Context processor — inject the `mqtt`, `mqtt_ws`, `config`, and `auth`
+# namespaces into every template render so `templates/base.html`'s
+# inline `APP_CONFIG` block can pull values from `settings.toml` at
+# request time. The browser's MQTT-WS client and the in-browser
+# MessageManager seed fetch use the same X-API-Key the device uses.
+
+
+def _derive_mqtt_ws_url() -> str:
+    """Derive the MQTT-over-WebSocket URL from MQTT_HOST if not set explicitly.
+
+    Adafruit IO: `wss://io.adafruit.com/mqtt` (port-less, default 443).
+    Local Paho:  `ws://<host>:9001/mqtt` (the operator must run the
+                 broker with `--ws-port 9001` for the WS port to be open).
+    """
+    explicit = _cfg.if_exists("MQTT_WS_URL")
+    if explicit:
+        return explicit
+    mqtt_client = (_cfg.if_exists("MQTT_CLIENT") or "").lower()
+    if mqtt_client == "adafruit":
+        return "wss://io.adafruit.com/mqtt"
+    host = _cfg.if_exists("MQTT_HOST") or "localhost"
+    return f"ws://{host}:9001/mqtt"
+
+
+def _mqtt_long_disconnect_ms() -> int:
+    raw = _cfg.if_exists("MQTT_LONG_DISCONNECT_MS")
+    if raw is None:
+        return 300000
+    try:
+        return int(raw)
+    except ValueError:
+        return 300000
+
+
+@app.context_processor
+def _inject_app_config():
+    """Inject `mqtt_ws`, `mqtt`, `config`, and `auth` into every template."""
+    return {
+        "mqtt_ws": {
+            "MQTT_WS_URL": _derive_mqtt_ws_url(),
+            "MQTT_LONG_DISCONNECT_MS": _mqtt_long_disconnect_ms(),
+        },
+        "mqtt": {
+            "MQTT_USERNAME": _cfg.if_exists("MQTT_USERNAME") or "",
+            "MQTT_PASSWORD": _cfg.if_exists("MQTT_PASSWORD") or "",
+            "MQTT_TOPIC": _cfg.if_exists("MQTT_TOPIC") or "",
+        },
+        "config": {
+            "MESSAGES_API_URL": _cfg.if_exists("MESSAGES_API_URL") or "",
+            "CONFIG_API_URL": _cfg.if_exists("CONFIG_API_URL") or "",
+        },
+        "auth": {
+            "API_SECRET_KEY": _cfg.if_exists("API_SECRET_KEY") or "",
+        },
+    }
 
 
 if __name__ == "__main__":

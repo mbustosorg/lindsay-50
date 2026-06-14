@@ -88,15 +88,6 @@ def _make_effect(name):
 # --- fixtures / helpers -----------------------------------------------------
 
 
-@pytest.fixture(autouse=True)
-def _restore_lib_shared():
-    for name in [k for k in list(sys.modules) if k == "lib_shared" or k.startswith("lib_shared.")]:
-        del sys.modules[name]
-    importlib.import_module("lib_shared")
-    importlib.import_module("lib_shared.config_reader")
-    yield
-
-
 class _Clock:
     """A controllable time source monkey-patches over time.monotonic."""
 
@@ -213,9 +204,7 @@ def test_hold_mode_interrupted_by_new_message():
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
-    coord, display, scroller, fx_a, fx_b, heart = _build(
-        intro_seconds=0.0, fade_seconds=0.05, hold_seconds=999.0
-    )
+    coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05, hold_seconds=999.0)
     coord.request_message("first")  # queue a message so we reach hold
     coord.start(None)
     _drive(clock, coord, 0.2)  # intro → out → in → hold

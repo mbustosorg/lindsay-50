@@ -26,13 +26,12 @@ def _load_display_base():
     )
 
 
-@pytest.fixture(autouse=True)
-def _restore_lib_shared():
-    for name in [k for k in list(sys.modules) if k == "lib_shared" or k.startswith("lib_shared.")]:
-        del sys.modules[name]
-    importlib.import_module("lib_shared")
-    importlib.import_module("lib_shared.config_reader")
-    yield
+# Note: no autouse `_restore_lib_shared` fixture. test_auth.py's
+# `app` fixture already restores the real lib_shared submodules on
+# teardown, so a sibling autouse wipe is redundant (and would force
+# re-imports of `lib_shared.message_manager` and friends, breaking
+# downstream tests that captured a reference to those modules at
+# import time).
 
 
 def test_display_base_cannot_be_instantiated_directly():

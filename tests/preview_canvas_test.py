@@ -12,19 +12,6 @@ _PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 
-@pytest.fixture(autouse=True)
-def _restore_lib_shared():
-    """test_auth.py replaces sys.modules['lib_shared'] with a Mock. Re-import
-    the real package before each test.
-    """
-    for mod_name in list(sys.modules):
-        if mod_name == "lib_shared" or mod_name.startswith("lib_shared."):
-            del sys.modules[mod_name]
-    importlib.import_module("lib_shared")
-    importlib.import_module("lib_shared.config_reader")
-    yield
-
-
 def _load_canvas_module():
     canvas_path = _PROJECT_ROOT / "heart-message-manager" / "preview_display.py"
     spec = importlib.util.spec_from_file_location("heart_message_manager.preview_display", str(canvas_path))

@@ -29,15 +29,6 @@ class _StubDisplay:
     canvas = _StubCanvas()
 
 
-@pytest.fixture(autouse=True)
-def _restore_lib_shared():
-    for name in [k for k in list(sys.modules) if k == "lib_shared" or k.startswith("lib_shared.")]:
-        del sys.modules[name]
-    importlib.import_module("lib_shared")
-    importlib.import_module("lib_shared.config_reader")
-    yield
-
-
 @pytest.mark.parametrize(
     "module_name,class_name",
     [
@@ -85,6 +76,6 @@ def test_patterns_dont_import_rgb_display():
     )
 
     for mod in (fireworks, flame, heartbeat, honeycomb, hyperspace, nightsky, png_display, video_display):
-        assert not hasattr(mod, "rgb_display"), (
-            f"{mod.__name__} still references rgb_display — should be lib_shared.effect_base"
-        )
+        assert not hasattr(
+            mod, "rgb_display"
+        ), f"{mod.__name__} still references rgb_display — should be lib_shared.effect_base"
