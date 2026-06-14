@@ -101,7 +101,7 @@
     </div>
     <div class="flex items-center gap-3">
       <label id="show-suppressed-toggle" class="flex items-center gap-2 cursor-pointer select-none">
-        <input type="checkbox" id="show-suppressed" class="sr-only" onchange="fetchMessages()">
+        <input type="checkbox" id="show-suppressed" class="sr-only" onchange="renderMessages()">
         <span class="text-sm text-slate-600 font-medium">Hide suppressed</span>
         <span id="show-suppressed-track" class="w-10 h-6 bg-slate-200 rounded-full relative transition-colors duration-200">
           <span class="absolute left-0.5 top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-200 translate-x-0" id="show-suppressed-thumb"></span>
@@ -207,11 +207,16 @@ async function getInBrowserConfig() {
 }
 
 async function renderMessages() {
-  const showSuppressed = document.getElementById('show-suppressed').checked;
-  // In our convention: checkbox "checked" = hide suppressed. The
-  // in-browser `getMessages(limit, suppress)` expects the boolean in
-  // the same direction.
-  const entries = await getInBrowserMessages(!showSuppressed);
+  // Checkbox "checked" = hide suppressed messages from the feed;
+  // "unchecked" (default) = include them so the operator can see
+  // what was filtered and why. The ID is `show-suppressed` (legacy
+  // from when this was a "show" toggle) but the visible label and
+  // checked semantic are both "hide". `getInBrowserMessages(limit,
+  // suppress=true)` filters suppressed out; `suppress=false` returns
+  // everything (visible + suppressed), which is what the default
+  // unchecked state should produce.
+  const hideSuppressed = document.getElementById('show-suppressed').checked;
+  const entries = await getInBrowserMessages(hideSuppressed);
   lastMessages = entries;
   document.getElementById('msg-count').textContent = entries.length;
   if (entries.length === 0) {
