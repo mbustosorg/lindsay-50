@@ -287,29 +287,56 @@
   }
 
   // Fetch /api/messages with X-API-Key. Returns a list of Message dicts.
+  // Retries once on network error — fetches fired during page load are
+  // sometimes cancelled by the browser (Chrome logs these as
+  // net::ERR_ABORTED with no HTTP status). A short backoff gives the
+  // page a chance to finish loading before retrying.
   async function _fetchMessagesFromApi(apiUrl, apiKey) {
     if (!apiUrl) return [];
-    const res = await fetch(apiUrl, {
-      method: "GET",
-      headers: { "X-API-Key": apiKey || "" },
-    });
-    if (!res.ok) {
-      throw new Error("GET " + apiUrl + " -> HTTP " + res.status);
+    const attempt = async () => {
+      const res = await fetch(apiUrl, {
+        method: "GET",
+        headers: { "X-API-Key": apiKey || "" },
+      });
+      if (!res.ok) {
+        throw new Error("GET " + apiUrl + " -> HTTP " + res.status);
+      }
+      return await res.json();
+    };
+    try {
+      return await attempt();
+    } catch (e) {
+      if (e instanceof TypeError && /Failed to fetch|NetworkError/i.test(e.message)) {
+        await new Promise((r) => setTimeout(r, 250));
+        return await attempt();
+      }
+      throw e;
     }
-    return await res.json();
   }
 
-  // Fetch /api/config with X-API-Key. Returns a SignConfig dict.
+  // Fetch /api/config with X-API-Key. Returns a SignConfig dict. Same
+  // retry policy as `_fetchMessagesFromApi`.
   async function _fetchConfigFromApi(apiUrl, apiKey) {
     if (!apiUrl) return null;
-    const res = await fetch(apiUrl, {
-      method: "GET",
-      headers: { "X-API-Key": apiKey || "" },
-    });
-    if (!res.ok) {
-      throw new Error("GET " + apiUrl + " -> HTTP " + res.status);
+    const attempt = async () => {
+      const res = await fetch(apiUrl, {
+        method: "GET",
+        headers: { "X-API-Key": apiKey || "" },
+      });
+      if (!res.ok) {
+        throw new Error("GET " + apiUrl + " -> HTTP " + res.status);
+      }
+      return await res.json();
+    };
+    try {
+      return await attempt();
+    } catch (e) {
+      if (e instanceof TypeError && /Failed to fetch|NetworkError/i.test(e.message)) {
+        await new Promise((r) => setTimeout(r, 250));
+        return await attempt();
+      }
+      throw e;
     }
-    return await res.json();
   }
 
   // Persist a list of messages (Message.to_dict() shape) into IndexedDB.
@@ -381,9 +408,15 @@
         // initial seed completes. Without this, the first
         // renderMessages() can run against an empty store mid-seed and
         // miss the populated state.
-        if (seededConfig) {
-          dispatchToCallbacks(seededConfig);
-        }
+        //
+        // Always dispatch, even if the config fetch failed — the
+        // per-page callback handler re-renders messages regardless of
+        // the dispatch payload's shape, so a null/empty seed still
+        // triggers the feed to re-read IndexedDB (which by then has
+        // the seeded messages). Gating on `seededConfig` here would
+        // leave the testing feed stuck on the initial empty render
+        // until the next MQTT envelope arrives.
+        dispatchToCallbacks(seededConfig);
       }
       setSessionMarker();
     })();
@@ -458,10 +491,10 @@
     // path resolves to `/<page>/mqtt_ws_client.js` (next to the current
     // route) rather than `/static/mqtt_ws_client.js`. Hardcode the
     // Flask static path; the server always serves it there.
-    // The `?v=2` matches base.html — bump together when the shim changes
+    // The `?v=3` matches base.html — bump together when the shim changes
     // so a stale browser cache can't pin to a broken encode/decode path.
     const mqttWsUrl =
-      window.location.origin + "/static/mqtt_ws_client.js?v=2";
+      window.location.origin + "/static/mqtt_ws_client.js?v=3";
     try {
       const mod = await import(mqttWsUrl);
       mqttWsClient = mod.createMqttWsClient({

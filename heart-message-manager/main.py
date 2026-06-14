@@ -560,7 +560,15 @@ def health():
 # preview…" forever and the browser console fills with
 # "Connecting to 'https://cdn.jsdelivr.net/...' violates the
 # Content Security Policy directive: 'connect-src 'self''" errors.
-_PREVIEW_CSP = (
+#
+# It must ALSO allow the MQTT-over-WebSocket origin. The browser-side
+# `mqtt_ws_client.js` opens a WS to `MQTT_WS_URL` (derived from
+# `MQTT_HOST` — `ws://localhost:9002` for local dev,
+# `wss://io.adafruit.com` for Adafruit IO). Without this, the browser
+# console fills with "Connecting to 'ws://localhost:9002/mqtt' violates
+# the following Content Security Policy directive" errors and the
+# preview page never receives live envelopes.
+_PREVIEW_CSP_BASE = (
     "default-src 'self'; "
     # 'unsafe-inline' + cdn.tailwindcss.com: base.html loads the Tailwind
     # play CDN and an inline `tailwind.config = {...}` block. The /preview
@@ -579,14 +587,28 @@ _PREVIEW_CSP = (
 
 @app.after_request
 def _set_preview_csp(response):
-    """Set a permissive CSP on /preview so PyScript + WASM can run.
+    """Set a permissive CSP on /preview so PyScript + WASM + MQTT-WS can run.
 
     All other pages keep the browser's default CSP (none, since we don't
     set one). Only the preview needs the wasm-unsafe-eval + PyScript CDN
-    exceptions; everywhere else is unaffected.
+    + MQTT-WS exceptions; everywhere else is unaffected.
     """
     if request.path == "/preview" or request.path.startswith("/preview/"):
-        response.headers["Content-Security-Policy"] = _PREVIEW_CSP
+        from urllib.parse import urlparse
+
+        mqtt_ws_url = _derive_mqtt_ws_url()
+        parsed = urlparse(mqtt_ws_url)
+        # CSP `connect-src` matches scheme + host + port (the path is
+        # irrelevant). Build the origin string and splice it into the
+        # base directive.
+        ws_origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else ""
+        csp = _PREVIEW_CSP_BASE
+        if ws_origin:
+            csp = csp.replace(
+                "connect-src 'self'",
+                f"connect-src 'self' {ws_origin}",
+            )
+        response.headers["Content-Security-Policy"] = csp
     return response
 
 

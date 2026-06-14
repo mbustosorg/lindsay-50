@@ -289,6 +289,16 @@ function updateSendButtonState() {
   btn.disabled = !isLive;
   btn.classList.toggle('opacity-50', !isLive);
   btn.classList.toggle('cursor-not-allowed', !isLive);
+  // When the WS reaches "Live", re-render the feed. This catches the
+  // common case where the initial /api/messages fetch was aborted
+  // mid-page-load (Chrome's net::ERR_ABORTED on requests fired before
+  // the page is fully loaded) — by the time the WS handshake completes,
+  // the IndexedDB seed is current, so a render will paint the actual
+  // messages instead of the "still seeding" placeholder.
+  if (isLive) {
+    renderMessages();
+    renderConfig();
+  }
 }
 
 // Watch the status element for changes; update the button state.

@@ -196,6 +196,32 @@
       // continue — the preview's render loop will still tick.
       console.warn("window.App not available; preview won't receive MQTT envelopes");
     }
+    // Seed the preview with the most recent message from the in-browser
+    // ring buffer. Without this, the preview shows "Idle" until a fresh
+    // MQTT envelope arrives — on a page reload, the buffer is still
+    // populated (it was just wiped + re-seeded from /api/messages), so
+    // the latest body should be kicked onto the coordinator. Skipped
+    // if the buffer is empty (no messages yet) or if a live envelope
+    // arrived before the seed completed (lastShownBody will be set and
+    // dedup will skip the redundant call).
+    seedPreviewFromBuffer();
+  }
+
+  async function seedPreviewFromBuffer() {
+    if (!window.App || typeof window.App.getMessages !== "function") return;
+    try {
+      const msgs = await window.App.getMessages(1, true);
+      if (!msgs || msgs.length === 0) return;
+      const body = msgs[0].body;
+      if (body === undefined || body === null || body === "") return;
+      if (body === lastShownBody) return;       // dedup vs. the live callback
+      lastShownBody = body;
+      if (typeof window.request_message === "function") {
+        window.request_message(body);
+      }
+    } catch (e) {
+      console.warn("seedPreviewFromBuffer failed:", e);
+    }
   }
 
   // ------------------------------------------------------------------
