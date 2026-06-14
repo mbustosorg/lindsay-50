@@ -50,13 +50,13 @@ function encodeRemainingLength(len) {
   return bytes;
 }
 
-function packet(type, variableHeader, payload) {
-  // 1 byte fixed header (type << 4) + variable header + payload
+function packet(type, flags, variableHeader, payload) {
+  // 1 byte fixed header (type << 4 | flags) + variable header + payload
   const vh = variableHeader || new Uint8Array(0);
   const pl = payload || new Uint8Array(0);
   const remainingLen = vh.length + pl.length;
   const header = new Uint8Array(1 + encodeRemainingLength(remainingLen).length);
-  header[0] = (type << 4) & 0xff;
+  header[0] = ((type << 4) | (flags & 0x0f)) & 0xff;
   const rlBytes = encodeRemainingLength(remainingLen);
   for (let i = 0; i < rlBytes.length; i++) header[1 + i] = rlBytes[i];
   const out = new Uint8Array(header.length + vh.length + pl.length);
@@ -111,18 +111,37 @@ function buildConnect(username, password) {
   let payload = clientId;
   if (username) payload = concat(payload, encodeString(username));
   if (password) payload = concat(payload, encodeString(password));
-  return packet(1, vh, payload);
+  return packet(1, 0, vh, payload);
 }
 
 function buildSubscribe(topic) {
   // Variable header: Packet ID (0x0001), then topic filter + requested QoS (0).
   const vh = new Uint8Array([0x00, 0x01]);
   const filter = concat(encodeString(topic), new Uint8Array([0x00])); // QoS 0
-  return packet(8, vh, filter);
+  return packet(8, 0x02, vh, filter);
 }
 
 function buildPingReq() {
-  return packet(12);
+  return packet(12, 0);
+}
+
+// Decode MQTT 3.1.1 §2.2.3 remaining length (variable-length, up to 4 bytes).
+// Returns { value, bytesUsed } where bytesUsed is the total bytes consumed
+// (1 fixed header + N length bytes). Returns null if malformed.
+function decodeRemainingLength(buf) {
+  let multiplier = 1;
+  let value = 0;
+  let bytesUsed = 0;
+  for (let i = 1; i < Math.min(5, buf.length); i++) {
+    const b = buf[i];
+    value += (b & 0x7f) * multiplier;
+    bytesUsed += 1;
+    if ((b & 0x80) === 0) {
+      return { value, bytesUsed: bytesUsed + 1 };
+    }
+    multiplier *= 128;
+  }
+  return null;
 }
 
 // Parse a PUBLISH packet and return the payload as a string + the
@@ -131,17 +150,16 @@ function parsePublish(bytes) {
   // Fixed header byte 0: high nibble = packet type (3), low nibble = flags.
   const type = (bytes[0] >> 4) & 0x0f;
   if (type !== 3) return null;
-  // Skip remaining length (assume 1 byte for our small broker packets).
-  const len = bytes[1];
-  let payloadStart = 2;
-  if (len & 0x80) {
-    // Multi-byte remaining length — not expected for our messages.
-    return null;
-  }
+  // Skip the multi-byte remaining length. We don't need the value here
+  // — the bytes we want to parse (topic + payload) start right after
+  // the remaining-length field and run to the end of the buffer.
+  const decoded = decodeRemainingLength(bytes);
+  if (!decoded) return null;
+  let payloadStart = decoded.bytesUsed;
   // Variable header: Topic Name (2-byte length + string)
   const { value: topic, next: afterTopic } = decodeString(bytes, payloadStart);
-  // Payload follows.
-  const payloadBytes = bytes.slice(afterTopic, 2 + len);
+  // Payload follows to end of frame.
+  const payloadBytes = bytes.slice(afterTopic);
   return { topic, payload: utf8Decode(payloadBytes) };
 }
 
@@ -219,13 +237,77 @@ export function createMqttWsClient({
     if (type === 2) {
       // CONNACK
       receivedConnAck = true;
+      const returnCode = bytes[3] || 0;
+      if (returnCode !== 0) {
+        // Non-zero = connection refused. Surface a useful error so the
+        // MQTT status flips to "Error" and the admin UI sees why.
+        const reasons = {
+          1: "protocol version",
+          2: "client identifier rejected",
+          3: "server unavailable",
+          4: "bad credentials",
+          5: "not authorized",
+        };
+        console.warn(
+          "[mqtt-ws] CONNACK refused:",
+          reasons[returnCode] || `code ${returnCode}`
+        );
+        emitStatus("error", { error: reasons[returnCode] || `code ${returnCode}` });
+      }
     } else if (type === 3) {
       // PUBLISH
-      const parsed = parsePublish(bytes);
-      if (parsed) emitEnvelope(parsed.payload);
+      let parsed = null;
+      try {
+        parsed = parsePublish(bytes);
+      } catch (e) {
+        console.error("[mqtt-ws] PUBLISH parse threw:", e && e.message, e);
+      }
+      if (parsed) {
+        emitEnvelope(parsed.payload);
+      } else {
+        console.warn(
+          "[mqtt-ws] PUBLISH parse failed, bytes=",
+          Array.from(bytes.slice(0, 20))
+            .map((b) => b.toString(16).padStart(2, "0"))
+            .join(" ")
+        );
+      }
+    } else if (type === 9) {
+      // SUBACK — no-op. Granted QoS is in bytes[3]; we don't need to act
+      // on it because QoS 0 is fine for our local UI and the broker
+      // reports success (0x00) for both granted-QoS-0 and granted-QoS-1.
     } else if (type === 13) {
       // PINGRESP — no action
+    } else if (type !== 0) {
+      // type 0 is reserved and shouldn't appear on the wire.
+      console.info(
+        "[mqtt-ws] unknown frame type:",
+        type,
+        "bytes:",
+        Array.from(bytes.slice(0, 20))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join(" ")
+      );
     }
+  }
+
+  function decodeRemainingLength(buf) {
+    // MQTT 3.1.1 §2.2.3: each byte carries 7 bits of the length; the
+    // high bit (0x80) signals "more bytes follow". Up to 4 bytes for
+    // 268 MB payloads, but practically 2 covers anything we'd see.
+    let multiplier = 1;
+    let value = 0;
+    let bytesUsed = 0;
+    for (let i = 1; i < Math.min(5, buf.length); i++) {
+      const b = buf[i];
+      value += (b & 0x7f) * multiplier;
+      bytesUsed += 1;
+      if ((b & 0x80) === 0) {
+        return { value, bytesUsed: bytesUsed + 1 /* include the fixed header byte */ };
+      }
+      multiplier *= 128;
+    }
+    return null; // malformed — 5th continuation bit would overflow
   }
 
   function ingest(chunk) {
@@ -234,11 +316,20 @@ export function createMqttWsClient({
     next.set(buffer, 0);
     next.set(chunk, buffer.length);
     buffer = next;
-    while (buffer.length >= 2) {
-      const len = buffer[1];
-      if (len & 0x80) break; // multi-byte remaining length, wait
-      const total = 2 + len;
-      if (buffer.length < total) break;
+    let safety = 0;
+    while (buffer.length >= 2 && safety++ < 10) {
+      const decoded = decodeRemainingLength(buffer);
+      if (!decoded) {
+        // Need more bytes to finish the remaining-length field, or it's
+        // malformed (>4 bytes, which the broker never produces).
+        if (buffer.length >= 5) {
+          console.warn("[mqtt-ws] malformed remaining length, dropping");
+          buffer = new Uint8Array(0);
+        }
+        break;
+      }
+      const total = decoded.bytesUsed + decoded.value;
+      if (buffer.length < total) break; // partial frame, wait for more
       const frame = buffer.slice(0, total);
       buffer = buffer.slice(total);
       handleFrame(frame);
@@ -303,11 +394,24 @@ export function createMqttWsClient({
       ingest(data);
     };
     socket.onerror = (event) => {
+      // The WebSocket `error` event doesn't carry detail in browsers, but
+      // the immediately-following `close` event will (code 1006 means the
+      // socket was closed without a close frame — typically the broker
+      // dropped the TCP connection or the WS upgrade response was rejected).
+      console.warn("[mqtt-ws] ws error event fired");
       emitStatus("error", { error: "websocket error" });
     };
-    socket.onclose = () => {
-      // Disconnected — start the pause timer. If the elapsed time since
-      // lastConnectedAt exceeds the threshold, the timer fires `paused`.
+    socket.onclose = (event) => {
+      // Disconnected — log the close code/reason to help diagnose
+      // browser-specific failures (e.g. corporate proxies that close
+      // the WS without sending a 101, or Chrome's stricter subprotocol
+      // negotiation on localhost).
+      console.warn(
+        "[mqtt-ws] ws close:",
+        event.code,
+        event.reason,
+        "wasClean=" + event.wasClean
+      );
       startPauseTimer();
       scheduleReconnect();
     };

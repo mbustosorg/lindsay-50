@@ -396,6 +396,7 @@
 
   async function onMqttStatus(state, detail) {
     setStatus(state, detail);
+    console.info("[mqtt-ws]", state, detail || {});
     if (state === "connected" && detail && detail.wasLongDisconnect) {
       // Long disconnect window ended — wipe + re-seed.
       await wipeAndReseed();
