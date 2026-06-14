@@ -1,4 +1,4 @@
-"""Tests for heart-message-manager.preview_canvas.WebCanvas and WebDisplay."""
+"""Tests for heart-message-manager.preview_display.WebCanvas and WebDisplay."""
 
 import importlib.util
 import sys
@@ -26,10 +26,10 @@ def _restore_lib_shared():
 
 
 def _load_canvas_module():
-    canvas_path = _PROJECT_ROOT / "heart-message-manager" / "preview_canvas.py"
-    spec = importlib.util.spec_from_file_location("heart_message_manager.preview_canvas", str(canvas_path))
+    canvas_path = _PROJECT_ROOT / "heart-message-manager" / "preview_display.py"
+    spec = importlib.util.spec_from_file_location("heart_message_manager.preview_display", str(canvas_path))
     mod = importlib.util.module_from_spec(spec)
-    sys.modules["heart_message_manager.preview_canvas"] = mod
+    sys.modules["heart_message_manager.preview_display"] = mod
     spec.loader.exec_module(mod)
     return mod
 

@@ -2,17 +2,20 @@
 
 Runs in PyScript (Pyodide in the browser tab). Boots the WebCanvas /
 WebDisplay, instantiates the effect cycle and scroller, wires up the
-PreviewCoordinator, and exposes two JS-callable functions:
+shared EffectsCoordinator, and exposes JS-callable functions:
 
-    coordinator.request_message(body) — hand a new body to the coordinator
-    coordinator.tick()               — advance one frame
+    request_message(body)        — hand a new body to the coordinator
+    tick()                       — advance one frame
+    get_frame_rgba()             — read the current frame buffer
+    get_current_text()           — read the active message body
+    get_current_effect_name()    — read the active effect class name
 
 The actual main loop lives in static/preview.js, which drives tick() via
 requestAnimationFrame (capped at 30 FPS) and calls request_message() from
 its setInterval poll.
 
-NOTE: no rgbmatrix import anywhere in this file or its imports (Pillow + numpy
-are pulled in via the py-config.toml declared packages).
+NOTE: no rgbmatrix import anywhere in this file or its imports (Pillow +
+numpy are pulled in via the py-config.toml declared packages).
 """
 
 import sys
@@ -38,32 +41,31 @@ await loadPackage(["micropip", "numpy", "Pillow"])
 # importable. PyScript 2024.9.x's [files] handler writes each entry at
 # the URL path (not the key), so the destination is the same as the
 # URL we declared in py-config.toml — e.g.
-# "/static/preview/heart-message-manager/preview_canvas.py". The PARENT
+# "/static/preview/heart-message-manager/preview_display.py". The PARENT
 # of each package dir is what belongs in sys.path, so plain
-# `import lib_shared` and `import patterns` resolve as packages.
+# `import lib_shared` resolves as a package.
 for path in (
     "/",
     "/static/preview",
     "/static/preview/heart-message-manager",
-    "/static/preview/heart-matrix-controller",
+    "/static/preview/lib_shared",
 ):
     if path not in sys.path:
         sys.path.insert(0, path)
 
 # Standard imports from the browser-side render path.
-from preview_canvas import WebCanvas, WebDisplay
+from preview_display import WebCanvas, WebDisplay
 from preview_scroller import PreviewScroller
-from preview_renderer import PreviewRenderer, PreviewCoordinator
+from lib_shared.effects_coordinator import EffectsCoordinator
 
-# Pattern modules (no rgbmatrix, no OpenCV, no filesystem PNGs). hyperspace is
-# imported so PreviewRenderer can resolve it as a submodule of `patterns`.
-from patterns import fireworks, flame, nightsky, honeycomb, hyperspace  # noqa: F401
-from patterns.heartbeat import Heartbeat
-import patterns as patterns_module
-
-# Lazy bundle the patterns module needs (the renderer looks classes up by
-# name on the module).
-import patterns  # noqa: F401  (already imported above, kept for clarity)
+# Standard bitmap patterns the browser preview can run (no filesystem
+# assets, no OpenCV). PngDisplay / VideoDisplay stay Pi-only.
+from lib_shared.patterns.fireworks import Fireworks
+from lib_shared.patterns.flame import Flame
+from lib_shared.patterns.nightsky import NightSky
+from lib_shared.patterns.honeycomb import Honeycomb
+from lib_shared.patterns.hyperspace import Hyperspace
+from lib_shared.patterns.heartbeat import Heartbeat
 
 # The 64x64 logical panel — source of truth matches the device.
 PANEL_WIDTH = 64
@@ -74,17 +76,23 @@ PANEL_HEIGHT = 64
 _web_canvas = WebCanvas(PANEL_WIDTH, PANEL_HEIGHT)
 _display = WebDisplay(_web_canvas)
 
-# PreviewRenderer skips PngDisplay / VideoDisplay; the others may also fail
-# in the browser (e.g. Honeycomb's numpy import). Failures are logged + skipped.
-_renderer = PreviewRenderer(_display, patterns_module)
+# Effects list built by direct instantiation (no try/except hedging —
+# every pattern imported here is known to work in the browser).
+_effects = [
+    Fireworks(_display),
+    Flame(_display),
+    NightSky(_display),
+    Honeycomb(_display),
+    Hyperspace(_display),
+]
 _scroller = PreviewScroller(_display)
 _heart = Heartbeat(_display)
-_coordinator = PreviewCoordinator(_display, _scroller, _renderer.effects, heart=_heart)
+_coordinator = EffectsCoordinator(_display, _scroller, _effects, heart=_heart)
 
 # Begin the boot splash (beating heart). The first preview.js poll hands in the
 # latest message, which plays once the heart fades out — mirroring the device's
 # "show the last seeded message at startup" behavior.
-_coordinator.start()
+_coordinator.start(None)
 
 
 # --- JS-callable surface ---
