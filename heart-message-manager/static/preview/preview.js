@@ -1,17 +1,24 @@
-// Main loop + polling for the sign preview.
+// Main loop for the sign preview.
 //
 // Three loops run in the browser:
-//   1. PyScript's bootstrap, which loads the runtime + preview_main.py and
-//      fires `py:ready` (BEFORE the main module runs) and `py:done`
+//   1. PyScript's bootstrap, which loads the runtime + preview_main.py
+//      and fires `py:ready` (BEFORE the main module runs) and `py:done`
 //      (AFTER the main module has finished evaluating) — that's when
 //      coordinator.request_message and tick become callable.
 //   2. A requestAnimationFrame loop, capped at 30 FPS, that calls
 //      `coordinator.tick()` and blits the frame buffer to the canvas.
-//   3. A setInterval polling loop that fetches /api/live-messages every
-//      3s and hands a new body to the coordinator (with body-dedupe so we
-//      don't re-kick the fade on every tick when nothing has changed).
+//   3. (v2) The base template's `app.js` owns the MQTT-WS client and
+//      the in-browser MessageManager. The preview no longer polls
+//      /api/live-messages — it registers a callback on the shared
+//      MessageManager and drives `coordinator.request_message(body)`
+//      from the `on_message` signal.
 //
-// We DO NOT open a WebSocket. v1 is polling only.
+// We DO NOT open a WebSocket from preview.js. The base template's
+// app.js owns the WS connection. preview.js only:
+//   - Boots the rAF render loop after PyScript is ready.
+//   - Registers a per-page on_message callback that hands the new body
+//     to the coordinator (with a body-dedupe so we don't re-kick the
+//     fade on every tick when nothing has changed).
 
 (function () {
   "use strict";
@@ -27,12 +34,8 @@
   const BACK_W = PANEL_W * CELL;   // 768
   const BACK_H = PANEL_H * CELL;
   const FRAME_MS = 1000 / 30;     // 30 FPS cap
-  const POLL_MS = 3000;            // match templates/testing.html
-  const POLL_URL = "/api/live-messages?limit=1&suppress=true";
 
-  // Module-scope state. `lastShownBody` is the dedup anchor: the polling
-  // loop compares each fetched body against this and only calls
-  // coordinator.request_message() when they differ.
+  // Module-scope state.
   let lastShownBody = null;
   let lastTick = 0;
   let imgData = null;             // reused ImageData for the rAF blit
@@ -40,6 +43,7 @@
   let srcCanvas = null;           // 64x64 offscreen holding the raw frame
   let srcCtx = null;
   let dotMask = null;             // precomputed grid of soft circles (alpha mask)
+  let callbackRegistered = false;
 
   // ------------------------------------------------------------------
   // Bootstrap
@@ -110,11 +114,7 @@
     const onReady = () => {
       hideLoading();
       startRenderLoop(canvas);
-      // First poll + ongoing poll, mirroring the testing page pattern:
-      //   fetchMessages();
-      //   setInterval(fetchMessages, 3000);
-      pollLatestMessage();
-      setInterval(pollLatestMessage, POLL_MS);
+      registerPreviewCallback();
     };
     document.addEventListener("py:done", onReady);
     document.addEventListener("py:all-done", onReady);
@@ -162,6 +162,66 @@
   function hideLoading() {
     const loading = document.getElementById("preview-loading");
     if (loading) loading.style.display = "none";
+  }
+
+  // ------------------------------------------------------------------
+  // Per-page callback: drives coordinator.request_message from the
+  // shared in-browser MessageManager's on_message signal.
+  // ------------------------------------------------------------------
+
+  function registerPreviewCallback() {
+    if (callbackRegistered) return;
+    callbackRegistered = true;
+    // The base template's app.js exposes `window.App.registerOnMessageCallback`.
+    // It wires the in-browser MessageManager's on_message signal to a
+    // user-supplied function. The body of the Message is forwarded to
+    // the PyScript coordinator.
+    if (window.App && typeof window.App.registerOnMessageCallback === "function") {
+      window.App.registerOnMessageCallback((msg) => {
+        const body = msg && msg.body;
+        if (body === undefined || body === null || body === "") return;
+        if (body === lastShownBody) return;     // dedup
+        lastShownBody = body;
+        try {
+          if (typeof window.request_message === "function") {
+            window.request_message(body);
+          }
+        } catch (e) {
+          console.error("request_message error:", e);
+        }
+      });
+    } else {
+      // Fallback: app.js hasn't loaded yet (shouldn't happen in v2
+      // because base.html loads it before this script). Log and
+      // continue — the preview's render loop will still tick.
+      console.warn("window.App not available; preview won't receive MQTT envelopes");
+    }
+    // Seed the preview with the most recent message from the in-browser
+    // ring buffer. Without this, the preview shows "Idle" until a fresh
+    // MQTT envelope arrives — on a page reload, the buffer is still
+    // populated (it was just wiped + re-seeded from /api/messages), so
+    // the latest body should be kicked onto the coordinator. Skipped
+    // if the buffer is empty (no messages yet) or if a live envelope
+    // arrived before the seed completed (lastShownBody will be set and
+    // dedup will skip the redundant call).
+    seedPreviewFromBuffer();
+  }
+
+  async function seedPreviewFromBuffer() {
+    if (!window.App || typeof window.App.getMessages !== "function") return;
+    try {
+      const msgs = await window.App.getMessages(1, true);
+      if (!msgs || msgs.length === 0) return;
+      const body = msgs[0].body;
+      if (body === undefined || body === null || body === "") return;
+      if (body === lastShownBody) return;       // dedup vs. the live callback
+      lastShownBody = body;
+      if (typeof window.request_message === "function") {
+        window.request_message(body);
+      }
+    } catch (e) {
+      console.warn("seedPreviewFromBuffer failed:", e);
+    }
   }
 
   // ------------------------------------------------------------------
@@ -280,37 +340,6 @@
     if (e && effectName !== undefined) e.textContent = effectName || "—";
     const m = document.getElementById("preview-message");
     if (m) m.textContent = (text && text.length) ? text : "Idle";
-  }
-
-  // ------------------------------------------------------------------
-  // Polling (3s, mirrors templates/testing.html)
-  // ------------------------------------------------------------------
-
-  function pollLatestMessage() {
-    fetch(POLL_URL, { credentials: "same-origin" })
-      .then(function (r) { return r.ok ? r.json() : []; })
-      .then(function (data) {
-        if (!Array.isArray(data) || data.length === 0) {
-          // Empty list — keep coordinator state, don't re-kick the fade.
-          return;
-        }
-        const body = data[0].body;
-        if (body === undefined || body === null || body === "") return;
-        if (body === lastShownBody) return;     // dedup
-        lastShownBody = body;
-        try {
-          // PyScript 2024.9.x removed `window.pyscript`; preview_main.py
-          // installs `request_message` on the browser `window`.
-          if (typeof window.request_message === "function") {
-            window.request_message(body);
-          }
-        } catch (e) {
-          console.error("request_message error:", e);
-        }
-      })
-      .catch(function (e) {
-        console.warn("Live-messages poll failed:", e);
-      });
   }
 
   // ------------------------------------------------------------------

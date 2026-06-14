@@ -19,6 +19,7 @@ from typing import Any
 
 class Canvas:
     """Frame canvas owned by `RGBMatrix.CreateFrameCanvas()`."""
+
     width: int
     height: int
     def Clear(self) -> None: ...
@@ -32,6 +33,7 @@ class RGBMatrixOptions:
     time. Typed as primitives — the real options object accepts more keys
     (see hzeller docs) but this project only touches these nine.
     """
+
     rows: int
     cols: int
     chain_length: int
@@ -50,6 +52,7 @@ class RGBMatrix:
     Constructed with `RGBMatrix(options=RGBMatrixOptions(...))`. Owns a
     double-buffered `Canvas` returned by `CreateFrameCanvas()`.
     """
+
     def __init__(self, options: RGBMatrixOptions) -> None: ...
     def CreateFrameCanvas(self) -> Canvas: ...
     def Clear(self) -> None: ...

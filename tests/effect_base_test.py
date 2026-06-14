@@ -25,19 +25,6 @@ def _load_effect_base():
     return mod
 
 
-def _load_lib_shared():
-    """Re-import the real lib_shared package (test_auth.py replaces it with a Mock)."""
-    for name in [k for k in list(sys.modules) if k == "lib_shared" or k.startswith("lib_shared.")]:
-        del sys.modules[name]
-    importlib.import_module("lib_shared")
-
-
-@pytest.fixture(autouse=True)
-def _restore_lib_shared():
-    _load_lib_shared()
-    yield
-
-
 def test_import_does_not_pull_in_rgbmatrix():
     """lib_shared.effect_base must not import rgbmatrix (the patterns use it)."""
     import ast

@@ -28,7 +28,7 @@ class ConfigReader:
 
     def __init__(self, required_keys: set[str] | None = None):
         self._toml = self._load_toml()
-        self._required = required_keys or []
+        self._required: list[str] = list(required_keys) if required_keys else []
         self._validate()
 
     def _load_toml(self) -> dict:

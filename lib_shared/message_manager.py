@@ -1,15 +1,17 @@
 """MessageManager — owns config + message storage, handles dispatch and seeding.
 
-Both Flask and the Raspberry Pi display instantiate this at boot. Seed URLs come
-from cfg internally.
+Both the Raspberry Pi display and the browser's PyScript runtime instantiate
+this. URLs and credentials are injected as constructor parameters so the
+class is config-agnostic; the `is_browser` flag selects between two I/O
+implementations (server: `requests` for the device; browser: `js.fetch` for
+PyScript). Both paths are lazy-imported inside the seed-fetch helper so the
+module is importable in either runtime without a top-level network dependency.
 """
 
+import asyncio
 import json
 import logging
-
-from lib_shared.config_reader import get_config
-
-cfg = get_config()
+from typing import Callable, Optional
 
 from lib_shared.models import MessageEnvelope, Message, SignConfig
 from lib_shared.messages import InMemoryMessages
@@ -17,23 +19,67 @@ from lib_shared.messages import InMemoryMessages
 logger = logging.getLogger(__name__)
 
 
+def _ensure_browser_runtime():
+    """Lazily import `js.fetch` — only available inside a browser runtime (Pyodide)."""
+    global _js_fetch
+    if _js_fetch is None:
+        from js import fetch as _js_fetch  # type: ignore[import-not-found]  # noqa: F811
+    return _js_fetch
+
+
+def _ensure_server_runtime():
+    """Lazily import `requests` — only available in a standard Python runtime."""
+    global _requests
+    if _requests is None:
+        import requests as _requests  # noqa: F811
+    return _requests
+
+
+_js_fetch = None
+_requests = None
+
+
 class MessageManager:
     """Owns SignConfig + InMemoryMessages; handles dispatch, seeding, and storage.
 
-    On Flask: instantiated at boot. Seeds from own REST API.
-    On the Raspberry Pi: same — seeds from the Flask server's REST API.
+    On the Raspberry Pi: constructed with `is_browser=False`; the seed fetch
+    uses `requests` in a worker thread. On the browser (PyScript): constructed
+    with `is_browser=True`; the seed fetch uses `js.fetch` with an `X-API-Key`
+    header (the same value the device uses). The dispatch / ring-buffer /
+    filter / config-update logic is identical in both environments.
     """
 
-    def __init__(self, on_message=None):
-        """Create MessageManager with its own config and message storage.
+    def __init__(
+        self,
+        messages_api_url: str,
+        config_api_url: str,
+        api_key: str,
+        is_browser: bool = False,
+        on_message: Optional[Callable[[Message], None]] = None,
+    ) -> None:
+        """Create MessageManager with explicit URLs and an `is_browser` flag.
 
         Args:
-            on_message: callback(msg: Message) — called when a "message" envelope
-                        arrives over MQTT. The Pi uses this to trigger display updates.
+            messages_api_url: URL of the messages REST endpoint (e.g. /api/messages).
+            config_api_url:   URL of the config REST endpoint (e.g. /api/config).
+            api_key:          the X-API-Key the device uses; the same value is
+                              used for the seed fetch in both environments.
+            is_browser:       True when running in the browser (PyScript / Pyodide);
+                              defaults to False (the device path). The device's
+                              call site does not pass this kwarg; the browser's
+                              call site always passes `is_browser=True` as a
+                              hardcoded literal in PyScript.
+            on_message:       callback(msg: Message) — invoked when a "message"
+                              envelope arrives over MQTT. The Pi uses this to
+                              trigger display updates.
         """
         self._config = SignConfig()
         self._messages = InMemoryMessages(self._config, maxlen=100)
         self._on_message = on_message
+        self._messages_api_url = messages_api_url
+        self._config_api_url = config_api_url
+        self._api_key = api_key
+        self._is_browser = is_browser
 
     @property
     def config(self) -> SignConfig:
@@ -59,7 +105,13 @@ class MessageManager:
             logger.warning("Unknown envelope type: %r", envelope.type)
 
     def _handle_message(self, payload: dict) -> None:
-        """Convert payload dict to Message, store it, and call _on_message callback."""
+        """Convert payload dict to Message, store it, and call _on_message callback.
+
+        Filter rules are evaluated AFTER the message is added to the ring
+        buffer (so the suppressed state is recorded) but BEFORE the
+        on_message callback fires — filtered messages do not trigger
+        on_message per the spec.
+        """
         msg = Message(
             id=payload.get("id", ""),
             sender=payload.get("sender", ""),
@@ -69,30 +121,58 @@ class MessageManager:
 
         self._messages.add(msg, source="mqtt")
         logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
+        # Only fire on_message for non-suppressed messages. The filter
+        # evaluation reuses the same `_apply_filter` the InMemoryMessages
+        # enrichment path uses, so the suppressed flag is consistent.
         if self._on_message:
-            self._on_message(msg)
+            suppressing = self._messages._apply_filter(msg, self._config.filters)
+            if not suppressing:
+                self._on_message(msg)
 
     def _handle_config(self, payload: dict) -> None:
         """Apply a SignConfig dict to the in-memory config (thread-safe update)."""
         self._config.update_from_dict(payload)
         logger.info("MessageManager applied config update")
 
-    def seed(self) -> None:
-        """Back-populate config and messages from the Flask REST API."""
-        import requests as req
+    async def _fetch(self, url: str) -> dict:
+        """One HTTP GET to a JSON endpoint, returning the parsed dict.
 
-        # Seed calls (Flask-to-Flask and Pi-to-Flask) need API key auth.
-        _api_key = cfg.if_exists("API_SECRET_KEY") or ""
-        _headers = {"X-API-Key": _api_key} if _api_key else {}
+        Server: requests.get in a worker thread (sync lib, async-friendly).
+        Browser: js.fetch with the X-API-Key header (already async).
+        """
+        if self._is_browser:
+            js_fetch = _ensure_browser_runtime()
 
-        cfg_api = cfg.get("CONFIG_API_URL")
-        msgs_api = cfg.get("MESSAGES_API_URL")
+            def _call_fetch():
+                return js_fetch(url, method="GET", headers={"X-API-Key": self._api_key})
 
-        if msgs_api:
+            response = await _call_fetch()
+            if not response.ok:
+                raise RuntimeError(f"seed fetch {url} returned HTTP {response.status}")
+
+            def _call_json():
+                return response.json()
+
+            return await _call_json()
+        else:
+            requests = _ensure_server_runtime()
+
+            def _sync_get():
+                r = requests.get(url, headers={"X-API-Key": self._api_key}, timeout=5)
+                r.raise_for_status()
+                return r.json()
+
+            return await asyncio.to_thread(_sync_get)
+
+    async def seed(self) -> None:
+        """Back-populate config and messages from the Flask REST API.
+
+        Uses the internal `_fetch` helper for both endpoints, so the same
+        X-API-Key auth path runs in both the device and the browser.
+        """
+        if self._messages_api_url:
             try:
-                resp = req.get(msgs_api, timeout=10, headers=_headers)
-                resp.raise_for_status()
-                data = resp.json()
+                data = await self._fetch(self._messages_api_url)
                 if isinstance(data, list):
                     self._messages.clear()
                     msgs = [
@@ -112,11 +192,10 @@ class MessageManager:
             except Exception as e:
                 logger.warning("MessageManager message seed failed: %s", e)
 
-        if cfg_api:
+        if self._config_api_url:
             try:
-                resp = req.get(cfg_api, timeout=10, headers=_headers)
-                resp.raise_for_status()
-                self._config.update_from_dict(resp.json())
+                cfg_dict = await self._fetch(self._config_api_url)
+                self._config.update_from_dict(cfg_dict)
                 logger.info("MessageManager seeded config")
             except Exception as e:
                 logger.warning("MessageManager config seed failed: %s", e)

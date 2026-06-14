@@ -1,7 +1,7 @@
 """Shared pytest fixtures for heart-message-manager tests."""
 
+import importlib
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -16,6 +16,39 @@ from lib_shared.models import (
     SignConfig,
     SignSettings,
 )
+
+
+def _ensure_real_lib_shared():
+    """Re-import the real lib_shared package if it was replaced by a Mock.
+
+    `test_auth.py`'s `app` fixture swaps `lib_shared` (and its submodules)
+    for `types.ModuleType` mocks so it can stub out heavy deps while
+    loading main.py. After that fixture tears down, the real submodules
+    are restored — but if a sibling test's autouse fixture runs an
+    unconditional wipe-and-reimport (the previous approach), it drops
+    the real submodules and forces a fresh import, breaking tests that
+    captured references at module load time.
+
+    This helper only wipes when the cached `lib_shared` is a Mock (i.e.
+    the package itself has no `__path__`, which a real package always
+    has). On a clean process the real package is already in sys.modules
+    and the function is a no-op.
+    """
+    cached = sys.modules.get("lib_shared")
+    if cached is None or not hasattr(cached, "__path__"):
+        for name in [k for k in list(sys.modules) if k == "lib_shared" or k.startswith("lib_shared.")]:
+            del sys.modules[name]
+        importlib.import_module("lib_shared")
+
+
+@pytest.fixture(autouse=True)
+def _restore_lib_shared():
+    """Per-test guard: re-import the real `lib_shared` package if a Mock
+    was left in sys.modules. No-op when the package is already real.
+    """
+    _ensure_real_lib_shared()
+    yield
+
 
 # ---------------------------------------------------------------------------
 # Sample data fixtures

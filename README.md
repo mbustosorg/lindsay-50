@@ -79,6 +79,18 @@ Or Flask only, against real S3/AIO:
 ./scripts/start-app.sh --flask-only
 ```
 
+The browser-based admin UI subscribes to the same MQTT broker over a
+WebSocket transport. A local Mosquitto broker must be started with
+`--ws-port 9001` to expose MQTT-over-WebSocket; if you start the broker
+manually (without the bundled script), use:
+
+```bash
+mosquitto -p 1883 --ws-port 9001
+```
+
+`MQTT_WS_URL` in `settings.toml` should then point at
+`ws://localhost:9001/mqtt`.
+
 Flask runs at **http://localhost:5000**
 
 Stop:

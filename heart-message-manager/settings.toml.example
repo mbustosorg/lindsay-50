@@ -79,3 +79,26 @@ ADMIN_PASSWORD = "your-browser-password"
 API_SECRET_KEY = "your-esp32-api-key"
 # Session inactivity timeout in minutes (sliding window).
 ADMIN_SESSION_TIMEOUT_MINS = 60
+
+# -----------------------------------------------------------------------------
+# MQTT-over-WebSocket (browser-side)
+# -----------------------------------------------------------------------------
+# The browser-based admin UI subscribes to the same MQTT broker over a
+# WebSocket transport (in addition to the device's native MQTT
+# connection). The base template inlines the resolved values into
+# `window.APP_CONFIG` and the MqttWsClient opens a WS connection from
+# every admin page.
+[mqtt_ws]
+# Browser-side MQTT-over-WS URL.
+#   Adafruit IO: "wss://io.adafruit.com/mqtt" (TLS, default).
+#   Local Paho:  "ws://<host>:9001/mqtt" (plain WS, see note below).
+# NOTE: a local Mosquitto broker must be started with `--ws-port 9001`
+# to expose the MQTT-over-WS transport. Example:
+#   mosquitto -p 1883 --ws-port 9001
+MQTT_WS_URL = "wss://io.adafruit.com/mqtt"
+
+# How long a disconnect (in ms) is allowed to elapse before the status
+# block transitions to "Paused" and a wipe + re-seed runs on reconnect.
+# Default 300000 ms = 5 minutes. Lower this for tests (e.g. 30000 for
+# the 30-second paused transition verification).
+MQTT_LONG_DISCONNECT_MS = 300000

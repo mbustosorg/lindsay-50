@@ -2,6 +2,7 @@ import os
 import time
 import signal
 import logging
+import asyncio
 
 # Create the config singleton FIRST: modules imported below (rgb_matrix_display,
 # message_manager, and the MQTT client built by mqtt_factory) call get_config()
@@ -59,8 +60,13 @@ coordinator = EffectsCoordinator(
     recent_provider=lambda: _message_mgr.get_messages(limit=5),
 )
 
-_message_mgr = MessageManager(on_message=lambda msg: coordinator.request_message(msg.body))
-_message_mgr.seed()
+_message_mgr = MessageManager(
+    messages_api_url=cfg.MESSAGES_API_URL,
+    config_api_url=cfg.CONFIG_API_URL,
+    api_key=cfg.API_SECRET_KEY,
+    on_message=lambda msg: coordinator.request_message(msg.body),
+)
+asyncio.run(_message_mgr.seed())
 
 # Kick off the boot splash, queuing the most recent seeded message to play once
 # the heart fades out.

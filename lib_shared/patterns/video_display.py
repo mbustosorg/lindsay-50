@@ -53,7 +53,7 @@ class VideoDisplay(Effect):
             logger.warning("VideoDisplay: no video found (VIDEO_PATH=%s)", self._path)
             return
         try:
-            import cv2
+            import cv2  # type: ignore[import-not-found]  # OpenCV ships no type stubs
         except ImportError:
             logger.warning("VideoDisplay: opencv not installed; video disabled")
             return

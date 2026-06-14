@@ -153,11 +153,35 @@ def _load_app_module(mock_cfg):
 def app():
     """Create a test Flask app with auth configured and all heavy deps mocked."""
     mock_cfg = _make_mock_cfg()
-    # Patch the module-level cfg variable in main.py
+    # Save the real lib_shared submodules BEFORE _load_app_module replaces
+    # them with mocks. _load_app_module installs fake ModuleType objects
+    # into sys.modules for "lib_shared", "lib_shared.message_manager",
+    # "lib_shared.mqtt_factory", etc. so it can stub out the heavy deps.
+    # Other test files (e.g. test_message_manager) need the real
+    # lib_shared.message_manager to exist for their own import to work;
+    # if we don't restore after the fixture yields, those tests fail
+    # with `ModuleNotFoundError: No module named 'lib_shared.messages'`
+    # because the cached `lib_shared` parent is now a mock.
+    real_modules = {}
+    for name in list(sys.modules):
+        if name == "lib_shared" or name.startswith("lib_shared."):
+            real_modules[name] = sys.modules[name]
+
     flask_app = _load_app_module(mock_cfg)
     flask_app.config["TESTING"] = True
     flask_app.config["WTF_CSRF_ENABLED"] = False
-    yield flask_app
+    try:
+        yield flask_app
+    finally:
+        # Restore the real modules so subsequent tests in the same pytest
+        # process see the genuine `lib_shared.*` package, not our mocks.
+        for name, real_mod in real_modules.items():
+            sys.modules[name] = real_mod
+        # Drop anything that didn't exist before but was added by the
+        # mocked main.py load.
+        for name in list(sys.modules):
+            if (name == "lib_shared" or name.startswith("lib_shared.")) and name not in real_modules:
+                sys.modules.pop(name, None)
 
 
 @pytest.fixture
@@ -275,18 +299,18 @@ class TestLogout:
 class TestAPIKeyAuth:
     def test_api_key_valid_grants_access(self, app, client, esp32_headers):
         """Valid X-API-Key header grants access to protected API endpoint."""
-        response = client.get("/api/live-messages", headers=esp32_headers)
+        response = client.get("/api/messages", headers=esp32_headers)
         assert response.status_code == 200
 
     def test_api_key_missing_returns_401(self, app, client):
         """Request without X-API-Key returns 401."""
-        response = client.get("/api/live-messages")
+        response = client.get("/api/messages")
         assert response.status_code == 401
         assert response.json == {"error": "missing API key"}
 
     def test_api_key_invalid_returns_401(self, app, client):
         """Wrong X-API-Key value returns 401."""
-        response = client.get("/api/live-messages", headers={"X-API-Key": "wrong-key"})
+        response = client.get("/api/messages", headers={"X-API-Key": "wrong-key"})
         assert response.status_code == 401
         assert response.json == {"error": "missing API key"}
 
@@ -312,7 +336,7 @@ class TestHealthEndpoint:
 class TestTwilioSignature:
     def test_twilio_valid_signature_accepts_webhook(self, app, client):
         """POST /api/messages with valid X-Twilio-Signature processes webhook."""
-        from twilio.request_validator import RequestValidator
+        from twilio.request_validator import RequestValidator  # type: ignore[import-untyped]
 
         # Heroku sets X-Forwarded-Proto: https, so we reconstruct as https
         url = "https://lindsay-50.herokuapp.com/api/messages"

@@ -5,7 +5,7 @@ dispatch_callback(raw_payload).
 """
 
 import logging
-from Adafruit_IO import MQTTClient
+from Adafruit_IO import MQTTClient  # type: ignore[import-untyped]  # Adafruit IO ships no type stubs
 
 from lib_shared.config_reader import get_config
 
