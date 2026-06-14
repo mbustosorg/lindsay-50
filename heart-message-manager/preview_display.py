@@ -97,6 +97,12 @@ class WebDisplay(DisplayBase):
     browser's rAF loop in static/preview.js handles pacing.
     """
 
+    # Narrow the parent's `canvas: object` declaration to the concrete
+    # WebCanvas type so Pylance/pyright see `clear()` / `SetPixel()` etc.
+    # as known attributes on `self.canvas` (otherwise Pylance infers
+    # `object` from the untyped `__init__` parameter).
+    canvas: WebCanvas
+
     def __init__(self, canvas):
         self.canvas = canvas
         self.width = canvas.width

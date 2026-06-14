@@ -12,10 +12,20 @@ is only the rgbmatrix-backed display: it owns the matrix hardware and the
 double-buffered canvas.
 """
 
+from __future__ import annotations
+
 import logging
+from typing import TYPE_CHECKING
 
 from lib_shared.config_reader import get_config
 from lib_shared.display_base import DisplayBase
+
+if TYPE_CHECKING:
+    # The C extension builds only on the Pi. The stub at typings/rgbmatrix/
+    # gives pyright/pylance a typed view; the lazy import inside __init__
+    # below keeps the runtime import contained so importing this module on
+    # macOS doesn't crash before MatrixDisplay() is ever instantiated.
+    from rgbmatrix import Canvas, RGBMatrix
 
 logger = logging.getLogger("heart")
 
@@ -29,8 +39,15 @@ class MatrixDisplay(DisplayBase):
     pixel mapper against your actual wiring.
     """
 
+    # Class-level type annotations let pyright/pylance see the attribute types
+    # despite the runtime import being lazy (inside __init__, since the C
+    # extension only builds on the Pi). The TYPE_CHECKING block at the top of
+    # the file provides the names; these annotations consume them.
+    _matrix: RGBMatrix
+    canvas: Canvas
+
     def __init__(self):
-        from rgbmatrix import RGBMatrix, RGBMatrixOptions
+        from rgbmatrix import RGBMatrix, RGBMatrixOptions  # runtime import
 
         cfg = get_config()
 

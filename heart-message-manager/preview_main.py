@@ -35,7 +35,7 @@ import sys
 # element (it runs the source via `eval_code_async`).
 from pyodide_js import loadPackage
 
-await loadPackage(["micropip", "numpy", "Pillow"])
+await loadPackage(["micropip", "numpy", "Pillow"])  # type: ignore[reportGeneralTypeIssues]  # top-level await: PyScript 2024.9.x runs via `eval_code_async`
 
 # Make lib_shared, heart-matrix-controller, and heart-message-manager all
 # importable. PyScript 2024.9.x's [files] handler writes each entry at

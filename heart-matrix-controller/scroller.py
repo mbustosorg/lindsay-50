@@ -10,8 +10,10 @@ The time/pixel math (text width, x positions, frame pacing) lives in
 subclass — it loads a BDF font and calls `graphics.DrawText` to blit glyphs.
 """
 
+from __future__ import annotations
+
 import logging
-from rgbmatrix import graphics
+from rgbmatrix import graphics  # noqa: F401 — stub for IDE/pyright, real module on the Pi
 
 from lib_shared.config_reader import get_config
 from lib_shared.scroller_base import ScrollerBase

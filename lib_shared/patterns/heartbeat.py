@@ -128,7 +128,7 @@ class Heartbeat(Effect):
                         ymin = y
                     ymax = y
                     break
-        return (ymin + ymax) / 2.0 if ymin is not None else 0.0
+        return (ymin + ymax) / 2.0 if ymin is not None and ymax is not None else 0.0
 
     def tick(self):
         now = time.monotonic()

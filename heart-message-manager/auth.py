@@ -9,7 +9,7 @@ from __future__ import annotations
 import time
 from typing import TYPE_CHECKING
 
-from flask import Blueprint, jsonify, redirect, request, session, url_for
+from flask import Blueprint, redirect, request, session, url_for
 from flask_login import LoginManager, UserMixin, login_required, login_user, logout_user
 
 if TYPE_CHECKING:
@@ -187,13 +187,13 @@ def logout():
 def init_app(app: Flask) -> None:
     """Register auth blueprint and login manager with the Flask app."""
     login_manager.init_app(app)
-    login_manager.login_view = "auth.login"
-    login_manager.login_message = "Please log in to access this page."
+    login_manager.login_view = "auth.login"  # type: ignore[attr-defined]  # Flask-Login stubs typo: login_view is read-only in stubs but writable at runtime
+    login_manager.login_message = "Please log in to access this page."  # type: ignore[attr-defined]  # same Flask-Login stubs limitation
     app.register_blueprint(auth_bp)
 
     # Update last activity on every request after auth check
     @app.after_request
-    def update_last_activity(response):
+    def _update_last_activity(response):  # type: ignore  # Flask registers this via @after_request; never called by name
         if session.get("_last_activity") is not None:
             session["_last_activity"] = time.time()
         return response
