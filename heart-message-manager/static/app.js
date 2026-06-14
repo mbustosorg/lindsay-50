@@ -491,10 +491,10 @@
     // path resolves to `/<page>/mqtt_ws_client.js` (next to the current
     // route) rather than `/static/mqtt_ws_client.js`. Hardcode the
     // Flask static path; the server always serves it there.
-    // The `?v=3` matches base.html — bump together when the shim changes
+    // The `?v=4` matches base.html — bump together when the shim changes
     // so a stale browser cache can't pin to a broken encode/decode path.
     const mqttWsUrl =
-      window.location.origin + "/static/mqtt_ws_client.js?v=3";
+      window.location.origin + "/static/mqtt_ws_client.js?v=4";
     try {
       const mod = await import(mqttWsUrl);
       mqttWsClient = mod.createMqttWsClient({

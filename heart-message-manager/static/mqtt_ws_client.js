@@ -177,6 +177,14 @@ export function createMqttWsClient({
   let backoffIndex = 0;
   let reconnectTimer = null;
   let lastConnectedAt = null;
+  // Timestamp of the FIRST close in the current disconnect cycle.
+  // Drives the pause timer: "paused" is emitted only when the connection
+  // has been actually disconnected for >= threshold ms. Set on the first
+  // onclose of a cycle and cleared on the next successful onopen — not
+  // reset by intermediate close events during the reconnect loop, so
+  // sustained network outages still trigger "paused" even when the WS
+  // cycles through close → connect → close repeatedly.
+  let disconnectedSince = null;
   let pauseTimer = null;
   let receivedConnAck = false;
   let buffer = new Uint8Array(0);
@@ -209,14 +217,25 @@ export function createMqttWsClient({
     }
   }
 
+  // Schedule a "paused" emit at `disconnectedSince + threshold`. The
+  // timer is anchored to the FIRST close in the cycle, not to the
+  // most recent close — so a tight reconnect loop (close → connect →
+  // close, every 1s) still fires "paused" once the total disconnect
+  // duration reaches threshold. If we're already past the threshold
+  // when this is called, fire immediately rather than scheduling
+  // (otherwise repeated calls would create a queue of pending timers).
   function startPauseTimer() {
     clearPauseTimer();
-    if (!lastConnectedAt) return;
+    if (disconnectedSince === null) return;
+    const elapsed = Date.now() - disconnectedSince;
+    if (elapsed >= threshold) {
+      emitStatus("paused", { elapsedMs: elapsed });
+      return;
+    }
     pauseTimer = setTimeout(() => {
       pauseTimer = null;
-      const elapsedMs = Date.now() - lastConnectedAt;
-      emitStatus("paused", { elapsedMs });
-    }, threshold);
+      emitStatus("paused", { elapsedMs: Date.now() - disconnectedSince });
+    }, threshold - elapsed);
   }
 
   function scheduleReconnect() {
@@ -371,10 +390,19 @@ export function createMqttWsClient({
         lastConnectedAt !== null && Date.now() - lastConnectedAt >= threshold;
       lastConnectedAt = Date.now();
       backoffIndex = 0;
+      // We're back — clear the disconnect marker so the next onclose
+      // will start a fresh pause window. Do NOT call startPauseTimer
+      // here: the pause is reserved for "the connection has been
+      // actually disconnected for >= threshold", not "we've been
+      // connected for a long time". The previous version scheduled
+      // a timer on every open, which flipped the status to "Paused"
+      // 5 minutes after each successful reconnect — even when the
+      // WS was still perfectly healthy.
+      disconnectedSince = null;
+      clearPauseTimer();
       const detail = { elapsedMs: wasLongDisconnect ? Date.now() - lastConnectedAt : 0 };
       if (wasLongDisconnect) detail.wasLongDisconnect = true;
       emitStatus("connected", detail);
-      startPauseTimer();
     };
     socket.onmessage = (event) => {
       let data;
@@ -412,6 +440,13 @@ export function createMqttWsClient({
         event.reason,
         "wasClean=" + event.wasClean
       );
+      // Mark the start of the disconnect cycle. If we're already in a
+      // cycle (e.g. the reconnect loop is cycling close → connect →
+      // close), `disconnectedSince` is left as-is so the pause timer
+      // keeps counting from the FIRST close, not the most recent one.
+      if (disconnectedSince === null) {
+        disconnectedSince = Date.now();
+      }
       startPauseTimer();
       scheduleReconnect();
     };
