@@ -1,24 +1,28 @@
-"""Browser-side canvas shim for the sign preview.
+"""Browser-side display for the sign preview.
 
-The existing effect code from heart-matrix-controller/ expects a canvas with
-the rgbmatrix API: `canvas.SetPixel(x, y, r, g, b)` for indexed-palette
-effects and `canvas.SetImage(pil_image, x, y)` for full-color effects
-(honeycomb, video_display). The WebCanvas here is a thin Python class that
-backs those calls with a Pillow Image, so the unmodified effect modules can
-run inside PyScript.
+The existing effect code from lib_shared.patterns/ expects a canvas with the
+rgbmatrix API: `canvas.SetPixel(x, y, r, g, b)` for indexed-palette effects
+and `canvas.SetImage(pil_image, x, y)` for full-color effects (honeycomb,
+video_display). The WebCanvas here is a thin Python class that backs those
+calls with a Pillow Image, so the unmodified effect modules can run inside
+PyScript.
 
 The browser's main loop converts `canvas.to_imagedata()` into a JS ImageData
 and blits it to the HTML5 canvas once per frame. Doing the per-pixel buffer
 work in Python and blitting once at the end is simpler (and just as fast)
 as a per-call JS bridge.
 
-The WebDisplay wrapper is just enough so the patterns' `display.canvas.width`
-and `display.canvas.height` lookups resolve.
+`WebDisplay` is a `DisplayBase` subclass: it owns the WebCanvas and implements
+`render(effect, scroller)` as the same clear → effect.render → scroller.render
+sequence the Pi uses, minus the `SwapOnVSync` step (the browser's rAF loop
+paces itself).
 """
 
 import logging
 
 from PIL import Image
+
+from lib_shared.display_base import DisplayBase
 
 log = logging.getLogger("heart")
 
@@ -77,21 +81,31 @@ class WebCanvas:
         effect render() typically overwrites every pixel it cares about
         (index 0 in the palette is the "background" skip), so an explicit
         clear is not always required — but it is used by the
-        PreviewCoordinator between fades.
+        EffectsCoordinator's `display.render` between frames.
         """
         self.image = Image.new("RGB", (self.width, self.height))
 
 
-class WebDisplay:
-    """Adapter so the patterns' `display.canvas.width/height` lookups work.
+class WebDisplay(DisplayBase):
+    """Browser-side DisplayBase subclass.
 
-    The Pi's `Display` exposes a `canvas` attribute (an rgbmatrix Canvas)
+    The Pi's `MatrixDisplay` exposes a `canvas` attribute (an rgbmatrix Canvas)
     and a `width`/`height`. The patterns access `self.display.canvas.width`
     in their `tick()` methods, so the WebDisplay must have a `.canvas` that
-    exposes those.
+    exposes those. `render(effect, scroller)` composites one frame: clear the
+    canvas, draw the effect, draw the scroller. No `SwapOnVSync` — the
+    browser's rAF loop in static/preview.js handles pacing.
     """
 
     def __init__(self, canvas):
         self.canvas = canvas
         self.width = canvas.width
         self.height = canvas.height
+
+    def clear(self):
+        self.canvas.clear()
+
+    def render(self, effect, scroller):
+        self.canvas.clear()
+        effect.render(self.canvas)
+        scroller.render(self.canvas)

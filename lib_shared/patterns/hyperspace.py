@@ -25,7 +25,7 @@ import math
 import random
 import time
 
-from rgb_display import Bitmap, Palette, Effect, arrayblit
+from lib_shared.effect_base import Bitmap, Palette, Effect, arrayblit
 
 _PALETTE_SIZE = 32
 

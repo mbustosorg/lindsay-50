@@ -14,7 +14,7 @@ import re
 import time
 from pathlib import Path
 
-from rgb_display import Bitmap, Palette, Effect
+from lib_shared.effect_base import Bitmap, Palette, Effect
 from lib_shared.config_reader import get_config
 
 logger = logging.getLogger("heart")

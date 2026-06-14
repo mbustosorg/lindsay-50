@@ -13,7 +13,7 @@ boot for a few seconds, then fades into the first background effect.
 import math
 import time
 
-from rgb_display import Bitmap, Palette, Effect, arrayblit
+from lib_shared.effect_base import Bitmap, Palette, Effect, arrayblit
 
 _PALETTE_SIZE = 16
 
