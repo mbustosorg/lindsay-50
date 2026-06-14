@@ -95,6 +95,13 @@ PYEOF
     # Both listeners accept anonymous connections for local dev — the
     # browser's MqttWsClient + js.fetch layer is what actually authenticates
     # the session, not the broker itself.
+    #
+    # PINNED to eclipse-mosquitto:2.0.22. The 2.1.x line (currently
+    # tagged `latest` on Docker Hub) has a regression where the
+    # `protocol websockets` directive is silently ignored — port 9001
+    # opens as a plain TCP socket and the browser's WS upgrade never
+    # completes (TCP accept succeeds, no HTTP 101 sent). 2.0.22 logs
+    # "Opening websockets listen socket on port 9001" correctly.
     if docker ps -a --filter "name=mosquitto-local" --format "{{.Names}}" | grep -q mosquitto-local; then
         if docker ps --filter "name=mosquitto-local" --format "{{.Names}}" | grep -q mosquitto-local; then
             echo "Mosquitto already running"
@@ -107,7 +114,7 @@ PYEOF
                 -p 1883:1883 \
                 -p 9002:9001 \
                 -v "$MOSQUITTO_CONF:/mosquitto.conf" \
-                eclipse-mosquitto \
+                eclipse-mosquitto:2.0.22 \
                 mosquitto -c /mosquitto.conf
             echo "Mosquitto started on port 1883 (MQTT) and 9002→9001 (MQTT-over-WebSocket)"
         fi
@@ -119,7 +126,7 @@ PYEOF
             -p 1883:1883 \
             -p 9002:9001 \
             -v "$MOSQUITTO_CONF:/mosquitto.conf" \
-            eclipse-mosquitto \
+            eclipse-mosquitto:2.0.22 \
             mosquitto -c /mosquitto.conf
         echo "Mosquitto started on port 1883 (MQTT) and 9002→9001 (MQTT-over-WebSocket)"
     fi
