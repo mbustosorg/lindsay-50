@@ -1,7 +1,7 @@
 // MQTT-over-WebSocket client shim for the browser.
 //
 // Provides a thin native-JS wrapper around a WebSocket that speaks the
-// MQTT 3.1.1 protocol to the broker (Paho on ws://host:9001/mqtt, or
+// MQTT 3.1.1 protocol to the broker (Paho on ws://host:9002/mqtt, or
 // Adafruit IO on wss://io.adafruit.com/mqtt). Decodes PUBLISH payloads
 // as UTF-8 JSON and hands them to the caller via `onEnvelope`.
 //

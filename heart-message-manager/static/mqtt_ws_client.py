@@ -18,7 +18,7 @@ class MqttWsClient:
 
     Args:
         ws_url: The broker's MQTT-over-WebSocket endpoint
-                (e.g. `ws://localhost:9001/mqtt` or `wss://io.adafruit.com/mqtt`).
+                (e.g. `ws://localhost:9002/mqtt` or `wss://io.adafruit.com/mqtt`).
         username: MQTT broker username.
         password: MQTT broker password.
         topic: MQTT topic to subscribe to.

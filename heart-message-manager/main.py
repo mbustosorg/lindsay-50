@@ -601,8 +601,12 @@ def _derive_mqtt_ws_url() -> str:
     """Derive the MQTT-over-WebSocket URL from MQTT_HOST if not set explicitly.
 
     Adafruit IO: `wss://io.adafruit.com/mqtt` (port-less, default 443).
-    Local Paho:  `ws://<host>:9001/mqtt` (the operator must run the
-                 broker with `--ws-port 9001` for the WS port to be open).
+    Local Paho:  `ws://<host>:9002/mqtt` — the broker's container port stays
+                 9001 (the protocol default), but `scripts/start-app.sh`
+                 maps it to host 9002 to avoid colliding with MinIO's
+                 console (which owns host 9001). Override with
+                 `MQTT_WS_URL` in settings.toml if your broker is on a
+                 different port.
     """
     explicit = _cfg.if_exists("MQTT_WS_URL")
     if explicit:
@@ -611,7 +615,7 @@ def _derive_mqtt_ws_url() -> str:
     if mqtt_client == "adafruit":
         return "wss://io.adafruit.com/mqtt"
     host = _cfg.if_exists("MQTT_HOST") or "localhost"
-    return f"ws://{host}:9001/mqtt"
+    return f"ws://{host}:9002/mqtt"
 
 
 def _mqtt_long_disconnect_ms() -> int:

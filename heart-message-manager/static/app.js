@@ -352,6 +352,7 @@
       } else if (messageBufferStore) {
         // Non-PyScript pages: seed IndexedDB directly from the REST
         // API. This is the path /testing and other plain-JS pages use.
+        let seededConfig = null;
         try {
           const msgs = await _fetchMessagesFromApi(
             cfg.messagesApiUrl,
@@ -370,9 +371,18 @@
           );
           if (cfgDict) {
             await messageBufferStore.putConfig(cfgDict);
+            seededConfig = cfgDict;
           }
         } catch (e) {
           console.warn("Config seed from REST failed:", e);
+        }
+        // Fire a synthetic "config" envelope so per-page callbacks
+        // (e.g. testing.html's renderConfig) re-render after the
+        // initial seed completes. Without this, the first
+        // renderMessages() can run against an empty store mid-seed and
+        // miss the populated state.
+        if (seededConfig) {
+          dispatchToCallbacks(seededConfig);
         }
       }
       setSessionMarker();
@@ -442,8 +452,15 @@
       setStatus("error", { error: "no MQTT_WS_URL in APP_CONFIG" });
       return;
     }
+    // Resolve the JS shim against the document origin, not the page's
+    // URL — `import("./...")` uses the document base URL, so a relative
+    // path resolves to `/<page>/mqtt_ws_client.js` (next to the current
+    // route) rather than `/static/mqtt_ws_client.js`. Hardcode the
+    // Flask static path; the server always serves it there.
+    const mqttWsUrl =
+      window.location.origin + "/static/mqtt_ws_client.js";
     try {
-      const mod = await import("./mqtt_ws_client.js");
+      const mod = await import(mqttWsUrl);
       mqttWsClient = mod.createMqttWsClient({
         url: cfg.mqttWsUrl,
         username: cfg.mqttUsername,
@@ -469,9 +486,13 @@
         dbName: "lindsay-50-browser",
       });
     } else {
-      // Fallback: dynamic import for non-PyScript pages.
+      // Fallback: dynamic import for non-PyScript pages. Resolve
+      // against the document origin (the shim is served by Flask at
+      // /static/, not at the page's URL).
       try {
-        const mod = await import("./message_buffer_store.js");
+        const mod = await import(
+          window.location.origin + "/static/message_buffer_store.js"
+        );
         messageBufferStore = mod.createMessageBufferStore({
           dbName: "lindsay-50-browser",
         });
