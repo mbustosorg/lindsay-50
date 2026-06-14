@@ -55,14 +55,18 @@
       mqttLongDisconnectMs: {{ mqtt_ws.MQTT_LONG_DISCONNECT_MS | tojson }}
     };
   </script>
-  <!-- Native JS shims for IndexedDB persistence + MQTT-over-WebSocket. -->
+  <!-- Native JS shims for IndexedDB persistence + MQTT-over-WebSocket.
+       The `?v=2` query string is a cache-buster — bump it whenever the
+       shim changes so browsers don't pin to a stale copy (the WS
+       packet-encode/decode changes in particular are easy to miss
+       when the page is "Live" with a broken client). -->
   <script type="module">
-    import { createMessageBufferStore } from "{{ url_for('static', filename='message_buffer_store.js') }}";
-    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}";
+    import { createMessageBufferStore } from "{{ url_for('static', filename='message_buffer_store.js') }}?v=2";
+    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=2";
     window.createMessageBufferStore = createMessageBufferStore;
     window.createMqttWsClient = createMqttWsClient;
   </script>
-  <script src="{{ url_for('static', filename='app.js') }}"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=2"></script>
   {% endif %}
 </head>
 <body class="font-body">
