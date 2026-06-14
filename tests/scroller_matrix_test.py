@@ -123,14 +123,19 @@ def test_matrix_scroller_inherits_scroller_base(fresh_module):
 
 
 def test_matrix_scroller_init_loads_font_and_sets_layout(fresh_module):
-    """After init, top_y / bottom_y / single_line are populated for 64x64."""
+    """After init, top_y / bottom_y / single_line are populated for 64x64.
+
+    The device renders a single orange line centered on the full display
+    (see MatrixScroller.compute_layout — "Always one line, centered
+    vertically on the whole display."). 64x64 panels show the same single
+    line as a 32x32 panel, not two lines stacked.
+    """
     s = fresh_module.MatrixScroller(_StubDisplay())
-    # 64-tall canvas -> two lines, top_y != bottom_y
-    assert s.single_line is False
-    assert s.top_y != s.bottom_y
-    # Baseline_for(16) = 16 + 10 - 6 = 20; baseline_for(48) = 48 + 10 - 6 = 52
-    assert s.top_y == 20
-    assert s.bottom_y == 52
+    # Single-line layout: top_y == bottom_y, both centered on the panel.
+    assert s.single_line is True
+    assert s.top_y == s.bottom_y
+    # baseline_for(canvas_height // 2) = 32 + 10 - 6 = 36
+    assert s.top_y == 36
 
 
 def test_matrix_scroller_set_text_initializes_positions(fresh_module):
@@ -158,13 +163,15 @@ def test_matrix_scroller_tick_advances_x_by_expected_pixels(fresh_module, monkey
 
 
 def test_matrix_scroller_render_calls_draw_text(fresh_module):
-    """render(canvas) blits the text into the rgbmatrix canvas via DrawText."""
+    """render(canvas) blits the text into the rgbmatrix canvas via DrawText.
+
+    Single-line layout: exactly one DrawText call per frame.
+    """
     s = fresh_module.MatrixScroller(_StubDisplay())
     s.set_text("hi", canvas_width=64)
     fake_canvas = MagicMock()
     s.render(fake_canvas)
-    # Two draws for two lines (64-tall canvas)
-    assert _graphics.DrawText.call_count == 2
+    assert _graphics.DrawText.call_count == 1
     args, _ = _graphics.DrawText.call_args
     assert args[0] is fake_canvas
     # signature: DrawText(canvas, font, x, y, color, text) -> text is args[5]

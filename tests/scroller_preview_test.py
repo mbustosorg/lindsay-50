@@ -83,12 +83,18 @@ def test_preview_scroller_inherits_scroller_base():
     assert issubclass(mod.PreviewScroller, ScrollerBase)
 
 
-def test_preview_scroller_init_computes_two_line_layout():
-    """A 64x64 canvas sets two lines with top_y != bottom_y (single_line=False)."""
+def test_preview_scroller_init_computes_single_line_layout():
+    """A 64x64 canvas uses single-line layout (top_y == bottom_y).
+
+    The browser preview matches the device's MatrixScroller: a single
+    orange line centered on the full display (see PreviewScroller.
+    compute_layout — "Place the baseline for a single line centered on
+    the full display."). 64x64 panels do not stack two lines.
+    """
     mod = _load_preview_scroller()
     s = mod.PreviewScroller(_StubDisplay())
-    assert s.single_line is False
-    assert s.top_y < s.bottom_y
+    assert s.single_line is True
+    assert s.top_y == s.bottom_y
 
 
 def test_preview_scroller_set_text_initializes_positions():
@@ -117,15 +123,20 @@ def test_preview_scroller_tick_advances_x_by_expected_pixels(monkeypatch):
     assert s.top_x == initial_top - 10
 
 
-def test_preview_scroller_baselines_match_two_line_panel_centers():
-    """For 64-tall canvas, top_y is the y of the top line (centered in row 16)."""
+def test_preview_scroller_baselines_match_single_line_panel_center():
+    """For a 64-tall canvas, the single line is centered on the full display.
+
+    The exact pixel offset depends on the default font's metrics, but
+    the line must be in the middle band of the panel — close to height/2.
+    """
     mod = _load_preview_scroller()
     s = mod.PreviewScroller(_StubDisplay())
-    # The exact pixel offsets depend on the default font's metrics, but
-    # they should be in the top half (top_y < height/2) and bottom half
-    # (bottom_y >= height/2).
-    assert s.top_y < 32
-    assert s.bottom_y >= 32
+    # Single-line: top_y == bottom_y. Centered near height/2 (32). The
+    # bundled Pillow default font is ~11px tall, so top_y is roughly
+    # (64 - 11) // 2 = 26; the test asserts a 16..48 band to be robust
+    # to font-metric changes.
+    assert s.top_y == s.bottom_y
+    assert 16 <= s.top_y <= 48
 
 
 def test_preview_scroller_measure_text_uses_pillow_bbox():
