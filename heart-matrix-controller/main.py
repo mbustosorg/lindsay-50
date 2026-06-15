@@ -75,7 +75,14 @@ _startup_text = _recent[0].message.body if _recent else None
 coordinator.start(_startup_text)
 
 # Platform MQTT client (paho on every platform)
-_mqtt_client = PahoMqttClient(_message_mgr.dispatch)
+_mqtt_client = PahoMqttClient(
+    dispatch_callback=_message_mgr.dispatch,
+    host=cfg.MQTT_HOST,
+    port=cfg.MQTT_PORT,
+    username=cfg.MQTT_USERNAME,
+    password=cfg.MQTT_PASSWORD,
+    topic=cfg.MQTT_TOPIC,
+)
 logging.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 

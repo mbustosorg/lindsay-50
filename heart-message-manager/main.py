@@ -104,7 +104,14 @@ def _noop_dispatch(_payload: str) -> None:
     """Flask no longer subscribes to MQTT envelopes; drop them on the floor."""
 
 
-_mqtt_client = PahoMqttClient(_noop_dispatch)
+_mqtt_client = PahoMqttClient(
+    dispatch_callback=_noop_dispatch,
+    host=_cfg.MQTT_HOST,
+    port=_cfg.MQTT_PORT,
+    username=_cfg.MQTT_USERNAME,
+    password=_cfg.MQTT_PASSWORD,
+    topic=_cfg.MQTT_TOPIC,
+)
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 
