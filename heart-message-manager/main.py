@@ -127,7 +127,8 @@ def _mqtt_client_publish_config(cfg_dict: dict) -> None:
     (which fires the publisher before the rest of the file is loaded).
     """
     assert _mqtt_client is not None
-    _mqtt_client.publish_envelope(MessageEnvelope("config", cfg_dict))
+    ok = _mqtt_client.publish_envelope(MessageEnvelope("config", cfg_dict))
+    logger.info("[flask] _mqtt_client_publish_config: publish_envelope returned %s", ok)
 
 
 # Run the config migration on startup: read the latest S3 config, migrate to
@@ -388,12 +389,22 @@ def api_s3_object():
 
 def _save_and_publish(cfg: SignConfig) -> None:
     """Save config to SQLite, snapshot S3, publish to Adafruit IO."""
+    cfg_dict = cfg.to_dict()
     sqlite.put_config(cfg)
     try:
-        s3.save_config_snapshot(cfg.to_dict())
+        s3.save_config_snapshot(cfg_dict)
     except Exception as e:
         logger.warning("Config S3 snapshot failed: %s", e)
-    _mqtt_client_publish_config(cfg.to_dict())
+    logger.info(
+        "[flask] _save_and_publish: publishing config envelope "
+        "rotation=%s text=(speed=%d, color=#%06x) pacing=(fade=%s, hold=%s)",
+        [(e["name"], e["enabled"]) for e in cfg_dict["effect_settings"]["effects"]],
+        cfg_dict["text_settings"]["speed"],
+        cfg_dict["text_settings"]["color"],
+        cfg_dict["effect_settings"]["fade_seconds"],
+        cfg_dict["effect_settings"]["hold_seconds"],
+    )
+    _mqtt_client_publish_config(cfg_dict)
 
 
 # Canonical set of effect class names the device knows about. Mirrors

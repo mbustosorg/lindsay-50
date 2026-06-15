@@ -244,6 +244,10 @@
   }
 
   function dispatchToCallbacks(msg) {
+    console.log(
+      "[app] dispatchToCallbacks: callbacks=" + onMessageCallbacks.length +
+      " msg=" + (msg && Object.keys(msg).slice(0, 5).join(","))
+    );
     for (const cb of onMessageCallbacks) {
       try {
         cb(msg);
@@ -462,7 +466,10 @@
       return;
     }
     if (!envelope || typeof envelope !== "object") return;
-
+    console.log(
+      "[app] onMqttEnvelope: type=" + envelope.type +
+      " payloadKeys=" + (envelope.payload && Object.keys(envelope.payload).join(","))
+    );
     // Mirror to the in-memory MessageManager (if /preview registered one).
     if (messageManager && typeof messageManager.dispatch === "function") {
       try {

@@ -181,13 +181,21 @@
     // re-bind live.
     if (window.App && typeof window.App.registerOnMessageCallback === "function") {
       window.App.registerOnMessageCallback((msg) => {
+        console.log("[preview] onMessage callback fired, msg=", msg,
+          "type=", msg && msg.type,
+          "keys=", msg && typeof msg === "object" ? Object.keys(msg) : null,
+          "has_effect_settings=", !!(msg && msg.effect_settings));
         // A config envelope is identified by presence of effect_settings
         // (the wire-shape marker). Send it to Python; everything else is
         // a message envelope.
         if (msg && msg.effect_settings) {
           try {
+            console.log("[preview] -> calling apply_config");
             if (typeof window.apply_config === "function") {
               window.apply_config(msg);
+              console.log("[preview] apply_config returned");
+            } else {
+              console.warn("[preview] window.apply_config is not a function");
             }
           } catch (e) {
             console.error("apply_config error:", e);

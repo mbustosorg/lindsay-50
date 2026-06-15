@@ -195,17 +195,47 @@ def apply_config(cfg_obj):
     objects, but the coordinator's state machine will replace its
     `.effects` list reference and the next fade picks the head).
     """
-    cfg_dict = _js_to_dict(cfg_obj)
-    new_cfg = SignConfig.from_dict(cfg_dict)
-    # Rebuild the rotation. _display is shared so the new effect instances
-    # draw onto the same canvas the coordinator already composites to.
-    _coordinator.effects = _build_preview_effects(new_cfg.effect_settings)
-    _coordinator.idx = -1
-    _coordinator.apply_settings(new_cfg.effect_settings)
-    # Scroller live updates.
-    ts = new_cfg.text_settings
-    _scroller.set_color(ts.color)
-    _scroller.set_speed(ts.speed)
+    print(f"[preview] apply_config called, cfg_obj type={type(cfg_obj).__name__}")
+    try:
+        cfg_dict = _js_to_dict(cfg_obj)
+        print(
+            f"[preview]   cfg_dict keys={list(cfg_dict.keys()) if isinstance(cfg_dict, dict) else 'NOT-A-DICT'} "
+            f"has_effect_settings={'effect_settings' in cfg_dict if isinstance(cfg_dict, dict) else False} "
+            f"has_text_settings={'text_settings' in cfg_dict if isinstance(cfg_dict, dict) else False}"
+        )
+        new_cfg = SignConfig.from_dict(cfg_dict)
+        print(
+            f"[preview]   parsed SignConfig: effects_rotation="
+            f"{[(e['name'], e['enabled']) for e in new_cfg.effect_settings.effects]} "
+            f"text=(speed={new_cfg.text_settings.speed}, color=#{new_cfg.text_settings.color:06x}) "
+            f"pacing=(fade={new_cfg.effect_settings.fade_seconds}, hold={new_cfg.effect_settings.hold_seconds})"
+        )
+        # Rebuild the rotation. _display is shared so the new effect instances
+        # draw onto the same canvas the coordinator already composites to.
+        new_effects = _build_preview_effects(new_cfg.effect_settings)
+        print(f"[preview]   built {len(new_effects)} effect(s): {[type(e).__name__ for e in new_effects]}")
+        _coordinator.effects = new_effects
+        _coordinator.idx = -1
+        _coordinator.apply_settings(new_cfg.effect_settings)
+        print(
+            f"[preview]   coordinator pacing now: "
+            f"fade={_coordinator.fade_seconds} hold={_coordinator.hold_seconds} "
+            f"intro={_coordinator.intro_seconds} idle={_coordinator.idle_seconds}"
+        )
+        # Scroller live updates.
+        ts = new_cfg.text_settings
+        _scroller.set_color(ts.color)
+        _scroller.set_speed(ts.speed)
+        print(
+            f"[preview]   scroller now: _color=#{_scroller._color:06x} "
+            f"frame_delay={_scroller.frame_delay} offset_seconds={_scroller.offset_seconds}"
+        )
+    except Exception as _exc:
+        import traceback
+
+        print(f"[preview] apply_config RAISED: {_exc!r}")
+        traceback.print_exc()
+        raise
 
 
 def tick():
