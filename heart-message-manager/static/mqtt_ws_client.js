@@ -279,7 +279,7 @@ export function createMqttWsClient({
         // — reset the connection if a non-CONNECT packet arrives
         // before CONNACK is fully processed).
         try {
-          socket && socket.send(buildSubscribe(topic));
+          ws && ws.send(buildSubscribe(topic));
         } catch (e) {
           console.warn("[mqtt-ws] SUBSCRIBE send failed:", e);
         }
