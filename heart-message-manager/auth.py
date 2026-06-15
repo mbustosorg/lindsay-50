@@ -70,7 +70,6 @@ def before_request() -> None:
         try:
             cfg = get_config(
                 {
-                    "MQTT_CLIENT",
                     "MQTT_HOST",
                     "MQTT_PORT",
                     "MQTT_USERNAME",
@@ -132,7 +131,6 @@ def login():
     try:
         cfg = get_config(
             {
-                "MQTT_CLIENT",
                 "MQTT_HOST",
                 "MQTT_PORT",
                 "MQTT_USERNAME",

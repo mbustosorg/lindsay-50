@@ -19,6 +19,7 @@ db.sqlite
 # Agent Orchestrator runtime state
 .ao/
 .git_wt_initialized
+.settings_copy.log
 
 # Worktree-local AO hooks (re-run scripts/install_ao_hooks.sh to install)
 .claude/settings.json

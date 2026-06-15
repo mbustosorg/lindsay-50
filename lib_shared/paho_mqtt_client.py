@@ -1,10 +1,14 @@
 """Paho MQTT client shared by the Flask server and the Raspberry Pi display.
 
-Wraps paho-mqtt. Subscribes in a daemon thread with automatic reconnect and
-calls dispatch_callback(raw_payload) for each incoming message. The Flask
-server also uses publish_envelope() to push envelopes to the broker; the Pi is
-subscribe-only and simply never calls it. TLS is enabled automatically on port
-8883 (e.g. io.adafruit.com).
+Wraps paho-mqtt. The constructor takes connection params (host, port,
+username, password, topic) explicitly so the client doesn't read from
+any config singleton — callers wire these from whatever config source
+they have (TOML, env, secrets manager, hardcoded test values, etc.).
+Subscribes in a daemon thread with automatic reconnect and calls
+dispatch_callback(raw_payload) for each incoming message. The Flask
+server also uses publish_envelope() to push envelopes to the broker;
+the Pi is subscribe-only and simply never calls it. TLS is enabled
+automatically on port 8883 (e.g. io.adafruit.com).
 """
 
 import logging
@@ -12,10 +16,6 @@ import threading
 import time
 
 import paho.mqtt.client as mqtt
-
-from lib_shared.config_reader import get_config
-
-cfg = get_config()
 
 logger = logging.getLogger(__name__)
 
@@ -26,25 +26,32 @@ class PahoMqttClient:
     Calls dispatch_callback(raw_payload) for each incoming message.
     """
 
-    def __init__(self, dispatch_callback):
+    def __init__(self, dispatch_callback, *, host, port, username, password, topic):
         """Initialize the client.
 
         Args:
             dispatch_callback: Callable that accepts a raw MQTT payload string.
+            host: MQTT broker host.
+            port: MQTT broker port (int or numeric string — coerced to int).
+            username: MQTT broker username.
+            password: MQTT broker password.
+            topic: Wire-format topic to subscribe to and publish on. The
+                client does no broker-specific translation; for Adafruit
+                IO this must be the full "{username}/feeds/{feedname}" path.
         """
         self._dispatch = dispatch_callback
         self._thread = None
         self._stop = None
 
-        self._host = cfg.MQTT_HOST
-        self._port = int(cfg.MQTT_PORT)
-        self._username = cfg.MQTT_USERNAME
-        self._password = cfg.MQTT_PASSWORD
-        self._feed = cfg.MQTT_TOPIC
+        self._host = host
+        self._port = int(port)
+        self._username = username
+        self._password = password
+        self._topic = topic
 
     def start(self) -> None:
         """Connect to the broker and run the subscriber loop in a daemon thread."""
-        topic = self._feed
+        topic = self._topic
         logger.info(
             "PahoMqttClient will subscribe to topic=%r username=%r",
             topic,
@@ -93,11 +100,11 @@ class PahoMqttClient:
 
         self._thread = threading.Thread(target=_run, name="paho-mqtt", daemon=True)
         self._thread.start()
-        logger.info("PahoMqttClient started for feed %s", self._feed)
+        logger.info("PahoMqttClient started for feed %s", self._topic)
 
     def publish_envelope(self, envelope) -> bool:
-        """Publish a MessageEnvelope to the broker feed. Returns True on success."""
-        topic = self._feed
+        """Publish a MessageEnvelope to the broker. Returns True on success."""
+        topic = self._topic
         payload = envelope.to_json()
         try:
             client = mqtt.Client(clean_session=True)
