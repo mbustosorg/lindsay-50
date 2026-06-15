@@ -32,7 +32,6 @@ from flask_login import login_required
 from lib_shared.config_reader import get_config
 
 REQUIRED_KEYS: set[str] = {
-    "MQTT_CLIENT",
     "MQTT_HOST",
     "MQTT_PORT",
     "MQTT_USERNAME",
@@ -95,17 +94,24 @@ logger = logging.getLogger(__name__)
 sqlite.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
 
-# Platform MQTT client (adafruit on Heroku, paho for local dev) — used
-# only as a publisher (no Flask-side subscriber). The device and the
-# browser both subscribe to the broker on their own.
-from lib_shared.mqtt_factory import make_mqtt_client
+# Platform MQTT client (paho on every platform) — used only as a publisher
+# (no Flask-side subscriber). The device and the browser both subscribe to
+# the broker on their own.
+from lib_shared.paho_mqtt_client import PahoMqttClient
 
 
 def _noop_dispatch(_payload: str) -> None:
     """Flask no longer subscribes to MQTT envelopes; drop them on the floor."""
 
 
-_mqtt_client = make_mqtt_client(_noop_dispatch)
+_mqtt_client = PahoMqttClient(
+    dispatch_callback=_noop_dispatch,
+    host=_cfg.MQTT_HOST,
+    port=_cfg.MQTT_PORT,
+    username=_cfg.MQTT_USERNAME,
+    password=_cfg.MQTT_PASSWORD,
+    topic=_cfg.MQTT_TOPIC,
+)
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 
@@ -563,11 +569,11 @@ def health():
 #
 # It must ALSO allow the MQTT-over-WebSocket origin. The browser-side
 # `mqtt_ws_client.js` opens a WS to `MQTT_WS_URL` (derived from
-# `MQTT_HOST` — `ws://localhost:9002` for local dev,
-# `wss://io.adafruit.com` for Adafruit IO). Without this, the browser
-# console fills with "Connecting to 'ws://localhost:9002/mqtt' violates
-# the following Content Security Policy directive" errors and the
-# preview page never receives live envelopes.
+# `MQTT_HOST` + `MQTT_WS_PORT` — `ws://localhost:9001` for native
+# Mosquitto, `wss://io.adafruit.com` for Adafruit IO). Without this,
+# the browser console fills with "Connecting to 'ws://<host>:<port>/mqtt'
+# violates the following Content Security Policy directive" errors and
+# the preview page never receives live envelopes.
 _PREVIEW_CSP_BASE = (
     "default-src 'self'; "
     # 'unsafe-inline' + cdn.tailwindcss.com: base.html loads the Tailwind
@@ -620,33 +626,50 @@ def _set_preview_csp(response):
 
 
 def _derive_mqtt_ws_url() -> str:
-    """Derive the MQTT-over-WebSocket URL from MQTT_HOST if not set explicitly.
+    """Derive the MQTT-over-WebSocket URL from MQTT_HOST + MQTT_WS_PORT.
 
-    Adafruit IO: `wss://io.adafruit.com/mqtt` (port-less, default 443).
-    Local Paho:  `ws://<host>:9002/mqtt` — the broker's container port stays
-                 9001 (the protocol default), but `scripts/start-app.sh`
-                 maps it to host 9002 to avoid colliding with MinIO's
-                 console (which owns host 9001). Override with
-                 `MQTT_WS_URL` in settings.toml if your broker is on a
-                 different port.
+    Resolution order:
+      1. `MQTT_WS_URL` (full URL) — wins outright if set.
+      2. `MQTT_WS_PORT` (port only) — combined with `MQTT_HOST`.
+      3. Default port: 9001 for loopback (`127.0.0.1`), 443 for
+         everything else (broker default). Scheme: `ws://` for
+         loopback, `wss://` otherwise.
 
-    Default host is `127.0.0.1`, not `localhost`. The TCP connection
-    lands at the same loopback either way, but Chromium-based
-    browsers with built-in tracker blockers (Arc, in particular) have
-    been observed to block `ws://localhost:9002/mqtt` while letting
-    `ws://127.0.0.1:9002/mqtt` through — the blocker applies
-    heuristics to `localhost` URLs that it doesn't apply to literal
-    IPs. Using the IP sidesteps the false positive. Set `MQTT_HOST` in
-    settings.toml to override.
+    9001 is the protocol default for Mosquitto. The `scripts/start-app.sh`
+    Docker flow maps host 9002 → container 9001 (to avoid MinIO's
+    console on host 9001); if you use that flow, set
+    `MQTT_WS_PORT = "9002"`. For a remote broker on a non-standard
+    port, set `MQTT_WS_PORT` to its WS port.
+
+    The literal `localhost` is rewritten to `127.0.0.1` in the final
+    URL, regardless of whether it came from `MQTT_HOST` or from
+    `MQTT_WS_URL`. The TCP connection lands at the same loopback
+    either way, but Chromium-based browsers with built-in tracker
+    blockers (Arc, in particular) have been observed to block
+    `ws://localhost:9001/mqtt` while letting `ws://127.0.0.1:9001/mqtt`
+    through — the blocker applies heuristics to `localhost` URLs that
+    it doesn't apply to literal IPs. Forcing the IP sidesteps the
+    false positive. Any other host (a real DNS name, a non-loopback
+    IP, IPv6) passes through unchanged.
     """
     explicit = _cfg.if_exists("MQTT_WS_URL")
     if explicit:
-        return explicit
-    mqtt_client = (_cfg.if_exists("MQTT_CLIENT") or "").lower()
-    if mqtt_client == "adafruit":
-        return "wss://io.adafruit.com/mqtt"
+        # See the Arc note in the docstring above.
+        return explicit.replace("localhost", "127.0.0.1")
     host = _cfg.if_exists("MQTT_HOST") or "127.0.0.1"
-    return f"ws://{host}:9002/mqtt"
+    if host == "localhost":
+        host = "127.0.0.1"
+    explicit_port = _cfg.if_exists("MQTT_WS_PORT")
+    if explicit_port:
+        port = str(explicit_port)
+    elif host == "127.0.0.1":
+        port = "9001"
+    else:
+        port = "443"
+    scheme = "ws" if host == "127.0.0.1" else "wss"
+    if scheme == "ws":
+        return f"{scheme}://{host}:{port}/mqtt"
+    return f"{scheme}://{host}:{port}/mqtt" if port != "443" else f"{scheme}://{host}/mqtt"
 
 
 def _mqtt_long_disconnect_ms() -> int:
@@ -670,17 +693,15 @@ def _inject_app_config():
         "mqtt": {
             "MQTT_USERNAME": _cfg.if_exists("MQTT_USERNAME") or "",
             "MQTT_PASSWORD": _cfg.if_exists("MQTT_PASSWORD") or "",
-            # Adafruit IO routes publishes to `username/feeds/<feed>` on the
-            # wire (the Adafruit_IO Python client publishes there directly).
-            # Subscriptions, however, accept BOTH `username/<feed>` and
-            # `username/feeds/<feed>`. The latter is what the broker actually
-            # delivers, so we expose that form to the browser — otherwise
-            # SUBSCRIBE on `username/<feed>` succeeds (SUBACK 0x01) but the
-            # broker never forwards publish frames to that subscription.
-            "MQTT_TOPIC": "{}/feeds/{}".format(
-                _cfg.if_exists("MQTT_USERNAME") or "",
-                _cfg.if_exists("MQTT_TOPIC") or "",
-            ),
+            # The browser subscribes to the exact same wire-format topic
+            # the Flask process publishes on. Paho is a thin wrapper —
+            # it does no broker-specific translation — so the operator
+            # is responsible for setting MQTT_TOPIC to the full path
+            # their broker expects (e.g. for Adafruit IO that's
+            # "{username}/feeds/{feedname}"). The paho subscriber, the
+            # Flask publisher, and the browser all share this single
+            # source of truth, so they always agree.
+            "MQTT_TOPIC": _cfg.if_exists("MQTT_TOPIC") or "",
         },
         "config": {
             "MESSAGES_API_URL": _cfg.if_exists("MESSAGES_API_URL") or "",

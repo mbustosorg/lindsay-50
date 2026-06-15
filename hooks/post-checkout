@@ -53,25 +53,17 @@ if [ -f ".venv/bin/activate" ]; then
     fi
 fi
 
-# Copy settings.toml files from the main worktree (gitignored, so not in repo)
-# The app handles creating secret_key and db.sqlite on first startup
-# Derive main repo: .git file contains "gitdir: /path/to/.git/worktrees/<name>"
-# We need to extract the repo root from this path
-if [ -f ".git" ]; then
-    GITDIR=$(cat ".git" | sed 's/gitdir: //')
-    # Strip /worktrees/<name> to get repo root
-    MAIN_REPO=$(echo "$GITDIR" | sed 's|/.git/worktrees/.*||')
+# Copy settings.toml files from the main worktree (gitignored, so not in
+# repo). The actual copy logic lives in scripts/sync_settings.sh so it
+# can also be run directly to refresh a clobbered settings.toml. The
+# app handles creating secret_key and db.sqlite on first startup.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SYNC_SCRIPT="$SCRIPT_DIR/../scripts/sync_settings.sh"
+if [ -f "$SYNC_SCRIPT" ]; then
+    bash "$SYNC_SCRIPT"
 else
-    MAIN_REPO=$(pwd)
+    echo "⚠️  $SYNC_SCRIPT not found — settings.toml not copied"
 fi
-
-for proj in heart-message-manager heart-matrix-controller; do
-    if [ ! -f "$proj/settings.toml" ] && [ -f "$MAIN_REPO/$proj/settings.toml" ]; then
-        cp "$MAIN_REPO/$proj/settings.toml" "$proj/settings.toml"
-        echo "✅ Copied $proj/settings.toml from main worktree"
-        echo "   ⚠️  Review credentials before running the server!"
-    fi
-done
 
 # ---------------------------------------------------------------------------
 # Mark this worktree as initialized — guard for future checkouts
