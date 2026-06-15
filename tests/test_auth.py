@@ -203,14 +203,18 @@ def esp32_headers():
 
 class TestLoginSuccess:
     def test_login_valid_credentials_redirects_to_dashboard(self, client):
-        """POST /login with correct ADMIN_USERNAME/ADMIN_PASSWORD redirects to /."""
+        """POST /login with correct ADMIN_USERNAME/ADMIN_PASSWORD redirects to /?wipe=1.
+
+        The login route appends `?wipe=1` so the client-side app wipes
+        IndexedDB and re-seeds from REST on this load (see auth.py).
+        """
         response = client.post(
             "/login",
             data={"username": "admin", "password": "secret123"},
             follow_redirects=False,
         )
         assert response.status_code == 302
-        assert response.location == "/"
+        assert response.location == "/?wipe=1"
 
 
 # ---------------------------------------------------------------------------
