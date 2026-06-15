@@ -12,9 +12,12 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 # EffectsCoordinator, and the patterns) directly — no mirror tree of
 # Pi-side files. PngDisplay / VideoDisplay are not browser-eligible
 # (filesystem assets, OpenCV) so they're not in this list.
+"lib_shared/__init__.py" = "/static/preview/lib_shared/__init__.py"
 "lib_shared/effect_base.py" = "/static/preview/lib_shared/effect_base.py"
 "lib_shared/display_base.py" = "/static/preview/lib_shared/display_base.py"
 "lib_shared/effects_coordinator.py" = "/static/preview/lib_shared/effects_coordinator.py"
+"lib_shared/effects_factory.py" = "/static/preview/lib_shared/effects_factory.py"
+"lib_shared/models.py" = "/static/preview/lib_shared/models.py"
 "lib_shared/scroller_base.py" = "/static/preview/lib_shared/scroller_base.py"
 "lib_shared/patterns/__init__.py" = "/static/preview/lib_shared/patterns/__init__.py"
 "lib_shared/patterns/fireworks.py" = "/static/preview/lib_shared/patterns/fireworks.py"
