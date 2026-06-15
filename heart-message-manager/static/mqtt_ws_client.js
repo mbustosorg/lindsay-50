@@ -254,6 +254,9 @@ export function createMqttWsClient({
   function handleFrame(bytes) {
     if (bytes.length < 2) return;
     const type = (bytes[0] >> 4) & 0x0f;
+    if (window.__MQTT_WS_DEBUG) {
+      console.log("[mqtt-ws] frame type=" + type + " len=" + bytes.length + " hex=" + Array.from(bytes.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' '));
+    }
     if (type === 2) {
       // CONNACK
       receivedConnAck = true;
