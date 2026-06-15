@@ -675,17 +675,15 @@ def _inject_app_config():
         "mqtt": {
             "MQTT_USERNAME": _cfg.if_exists("MQTT_USERNAME") or "",
             "MQTT_PASSWORD": _cfg.if_exists("MQTT_PASSWORD") or "",
-            # Adafruit IO routes publishes to `username/feeds/<feed>` on the
-            # wire (the Adafruit_IO Python client publishes there directly).
-            # Subscriptions, however, accept BOTH `username/<feed>` and
-            # `username/feeds/<feed>`. The latter is what the broker actually
-            # delivers, so we expose that form to the browser — otherwise
-            # SUBSCRIBE on `username/<feed>` succeeds (SUBACK 0x01) but the
-            # broker never forwards publish frames to that subscription.
-            "MQTT_TOPIC": "{}/feeds/{}".format(
-                _cfg.if_exists("MQTT_USERNAME") or "",
-                _cfg.if_exists("MQTT_TOPIC") or "",
-            ),
+            # The browser subscribes to the exact same wire-format topic
+            # the Flask process publishes on. Paho is a thin wrapper —
+            # it does no broker-specific translation — so the operator
+            # is responsible for setting MQTT_TOPIC to the full path
+            # their broker expects (e.g. for Adafruit IO that's
+            # "{username}/feeds/{feedname}"). The paho subscriber, the
+            # Flask publisher, and the browser all share this single
+            # source of truth, so they always agree.
+            "MQTT_TOPIC": _cfg.if_exists("MQTT_TOPIC") or "",
         },
         "config": {
             "MESSAGES_API_URL": _cfg.if_exists("MESSAGES_API_URL") or "",
