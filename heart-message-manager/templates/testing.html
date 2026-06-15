@@ -38,6 +38,10 @@
           Send Webhook
         </button>
       </form>
+      <div id="inject-pub-topic-row" class="hidden mt-3 flex items-center gap-2 text-xs text-slate-500">
+        <span class="font-semibold">Publishes to:</span>
+        <code id="inject-pub-topic" class="font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-700 break-all"></code>
+      </div>
       <div id="inject-result" class="mt-4 text-sm text-slate-500"></div>
     </div>
   </div>
@@ -490,6 +494,20 @@ function testingInit() {
     poll();
   }
 }
+
+// Surface the MQTT topic that the "Send Webhook" button will publish to.
+// Read straight from window.APP_CONFIG.mqttTopic (inlined in base.html);
+// never expanded, never transformed — what Flask publishes to is what we
+// show, so the operator can verify the wiring at a glance.
+(function () {
+  const cfg = window.APP_CONFIG || {};
+  const row = document.getElementById("inject-pub-topic-row");
+  const code = document.getElementById("inject-pub-topic");
+  if (row && code && typeof cfg.mqttTopic === "string" && cfg.mqttTopic) {
+    code.textContent = cfg.mqttTopic;
+    row.classList.remove("hidden");
+  }
+})();
 
 testingInit();
 </script>
