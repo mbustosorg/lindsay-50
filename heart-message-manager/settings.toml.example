@@ -90,13 +90,19 @@ ADMIN_SESSION_TIMEOUT_MINS = 60
 # `window.APP_CONFIG` and the MqttWsClient opens a WS connection from
 # every admin page.
 [mqtt_ws]
-# Browser-side MQTT-over-WS URL. Default is derived from `MQTT_HOST`:
-# loopback → `ws://<host>:9002/mqtt`; non-loopback → `wss://<host>/mqtt`.
-# Override here if your broker is on a different port or scheme.
-# NOTE: a local Mosquitto broker must be started with `--ws-port 9001`
+# Full browser-side MQTT-over-WS URL. If set, this wins outright.
+# Leave unset to derive from `MQTT_HOST` + `MQTT_WS_PORT` below.
+# MQTT_WS_URL = "ws://localhost:9001/mqtt"
+
+# Port for the browser-side MQTT-over-WS connection. Default is 9001
+# (the protocol default for Mosquitto) for loopback hosts and 443 for
+# remote brokers. The `scripts/start-app.sh` Docker flow maps host
+# 9002 → container 9001 to avoid MinIO's console on host 9001; set
+# `MQTT_WS_PORT = "9002"` if you use that flow.
+# NOTE: a native Mosquitto broker must be started with `--ws-port 9001`
 # to expose the MQTT-over-WS transport. Example:
 #   mosquitto -p 1883 --ws-port 9001
-MQTT_WS_URL = "wss://io.adafruit.com/mqtt"
+# MQTT_WS_PORT = "9001"
 
 # How long a disconnect (in ms) is allowed to elapse before the status
 # block transitions to "Paused" and a wipe + re-seed runs on reconnect.

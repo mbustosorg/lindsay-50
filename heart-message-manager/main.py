@@ -569,11 +569,11 @@ def health():
 #
 # It must ALSO allow the MQTT-over-WebSocket origin. The browser-side
 # `mqtt_ws_client.js` opens a WS to `MQTT_WS_URL` (derived from
-# `MQTT_HOST` — `ws://localhost:9002` for local dev,
-# `wss://io.adafruit.com` for Adafruit IO). Without this, the browser
-# console fills with "Connecting to 'ws://localhost:9002/mqtt' violates
-# the following Content Security Policy directive" errors and the
-# preview page never receives live envelopes.
+# `MQTT_HOST` + `MQTT_WS_PORT` — `ws://localhost:9001` for native
+# Mosquitto, `wss://io.adafruit.com` for Adafruit IO). Without this,
+# the browser console fills with "Connecting to 'ws://<host>:<port>/mqtt'
+# violates the following Content Security Policy directive" errors and
+# the preview page never receives live envelopes.
 _PREVIEW_CSP_BASE = (
     "default-src 'self'; "
     # 'unsafe-inline' + cdn.tailwindcss.com: base.html loads the Tailwind
@@ -626,21 +626,26 @@ def _set_preview_csp(response):
 
 
 def _derive_mqtt_ws_url() -> str:
-    """Derive the MQTT-over-WebSocket URL from MQTT_HOST if not set explicitly.
+    """Derive the MQTT-over-WebSocket URL from MQTT_HOST + MQTT_WS_PORT.
 
-    Loopback (`127.0.0.1` / `localhost`) → `ws://<host>:9002/mqtt`.
-    Anything else (e.g. `io.adafruit.com`) → `wss://<host>/mqtt` (broker
-    default 443). The container's WS port stays 9001 (the protocol
-    default), but `scripts/start-app.sh` maps it to host 9002 to avoid
-    colliding with MinIO's console (which owns host 9001). Override
-    with `MQTT_WS_URL` in settings.toml if your broker is on a
-    different port or scheme.
+    Resolution order:
+      1. `MQTT_WS_URL` (full URL) — wins outright if set.
+      2. `MQTT_WS_PORT` (port only) — combined with `MQTT_HOST`.
+      3. Default port: 9001 for loopback (`127.0.0.1` / `localhost`),
+         443 for everything else (broker default). Scheme: `ws://` for
+         loopback, `wss://` otherwise.
+
+    9001 is the protocol default for Mosquitto. The `scripts/start-app.sh`
+    Docker flow maps host 9002 → container 9001 (to avoid MinIO's
+    console on host 9001); if you use that flow, set
+    `MQTT_WS_PORT = "9002"`. For a remote broker on a non-standard
+    port, set `MQTT_WS_PORT` to its WS port.
 
     Default host is `127.0.0.1`, not `localhost`. The TCP connection
     lands at the same loopback either way, but Chromium-based
     browsers with built-in tracker blockers (Arc, in particular) have
-    been observed to block `ws://localhost:9002/mqtt` while letting
-    `ws://127.0.0.1:9002/mqtt` through — the blocker applies
+    been observed to block `ws://localhost:9001/mqtt` while letting
+    `ws://127.0.0.1:9001/mqtt` through — the blocker applies
     heuristics to `localhost` URLs that it doesn't apply to literal
     IPs. Using the IP sidesteps the false positive. Set `MQTT_HOST` in
     settings.toml to override.
@@ -649,9 +654,17 @@ def _derive_mqtt_ws_url() -> str:
     if explicit:
         return explicit
     host = _cfg.if_exists("MQTT_HOST") or "127.0.0.1"
-    if host in ("127.0.0.1", "localhost"):
-        return f"ws://{host}:9002/mqtt"
-    return f"wss://{host}/mqtt"
+    explicit_port = _cfg.if_exists("MQTT_WS_PORT")
+    if explicit_port:
+        port = str(explicit_port)
+    elif host in ("127.0.0.1", "localhost"):
+        port = "9001"
+    else:
+        port = "443"
+    scheme = "ws" if host in ("127.0.0.1", "localhost") else "wss"
+    if scheme == "ws":
+        return f"{scheme}://{host}:{port}/mqtt"
+    return f"{scheme}://{host}:{port}/mqtt" if port != "443" else f"{scheme}://{host}/mqtt"
 
 
 def _mqtt_long_disconnect_ms() -> int:
