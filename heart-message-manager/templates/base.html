@@ -56,17 +56,17 @@
     };
   </script>
   <!-- Native JS shims for IndexedDB persistence + MQTT-over-WebSocket.
-       The `?v=7` query string is a cache-buster — bump it whenever the
+       The `?v=8` query string is a cache-buster — bump it whenever the
        shim changes so browsers don't pin to a stale copy (the WS
        packet-encode/decode changes in particular are easy to miss
        when the page is "Live" with a broken client). -->
   <script type="module">
-    import { createMessageBufferStore } from "{{ url_for('static', filename='message_buffer_store.js') }}?v=7";
-    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=7";
+    import { createMessageBufferStore } from "{{ url_for('static', filename='message_buffer_store.js') }}?v=8";
+    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=8";
     window.createMessageBufferStore = createMessageBufferStore;
     window.createMqttWsClient = createMqttWsClient;
   </script>
-  <script src="{{ url_for('static', filename='app.js') }}?v=7"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=8"></script>
   {% endif %}
 </head>
 <body class="font-body">

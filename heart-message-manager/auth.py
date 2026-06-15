@@ -164,7 +164,20 @@ def login():
         _set_session_timeout(timeout_mins)
         login_user(AuthUser(id="admin"))
         next_url = request.args.get("next", url_for("dashboard"))
-        return redirect(next_url)
+        # Append ?wipe=1 so the client-side app knows to wipe the
+        # IndexedDB message buffer and re-seed from REST on this load.
+        # The previous browser session's buffer may contain messages
+        # that were already shown to a different user, or stale config
+        # from a different sign-in. The `wipe=1` query param is the
+        # trigger; app.js removes it from the URL after handling so
+        # subsequent reloads don't re-wipe.
+        from urllib.parse import urlparse, urlunparse, parse_qsl, urlencode
+
+        parsed = urlparse(next_url)
+        qs = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        qs["wipe"] = "1"
+        redirect_url = urlunparse(parsed._replace(query=urlencode(qs)))
+        return redirect(redirect_url)
 
     flash("Invalid username or password.", "error")
     return render_template("login.html"), 200

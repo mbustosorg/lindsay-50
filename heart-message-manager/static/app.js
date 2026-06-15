@@ -115,14 +115,25 @@
     }
   }
 
-  // Detect login (auth blueprint sets `data-wipe-on-load="true"` on body
-  // immediately after a successful login redirect) and clear the marker.
-  function maybeLoginWipe() {
-    const body = document.body;
-    if (body && body.getAttribute("data-wipe-on-load") === "true") {
-      clearSessionMarker();
-      body.removeAttribute("data-wipe-on-load");
+  // Detect login: auth.py appends `?wipe=1` to the post-login redirect
+  // URL. When present, the browser should wipe the IndexedDB message
+  // buffer and re-seed from REST (the previous session's data may
+  // belong to a different user, and the in-memory MessageManager
+  // mirrored to it). The query param is removed from the URL after
+  // handling so a reload doesn't re-trigger the wipe.
+  function consumeLoginWipeParam() {
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.get("wipe") === "1") {
+        url.searchParams.delete("wipe");
+        // Use replaceState so the wipe=1 doesn't end up in browser history.
+        window.history.replaceState({}, "", url.toString());
+        return true;
+      }
+    } catch (e) {
+      // ignore — fall through, no wipe
     }
+    return false;
   }
 
   function getInitialWipeNeeded() {
@@ -514,7 +525,12 @@
   }
 
   async function init() {
-    maybeLoginWipe();
+    // Wipe + re-seed from REST on first load (no session marker) and
+    // immediately after a fresh login (the auth blueprint appends
+    // ?wipe=1 to the post-login redirect URL). Subsequent reloads
+    // while the session is still valid skip the wipe — the buffer is
+    // current.
+    const loginWipe = consumeLoginWipeParam();
     // Initialize IndexedDB store (the shim is loaded by the page's
     // own script tag — see base.html — so it's available globally).
     if (typeof createMessageBufferStore === "function") {
@@ -537,9 +553,10 @@
         setPersistenceStatus(false, "shim missing");
       }
     }
-    // Wipe + re-seed from REST on first load (and on login via the
-    // body attribute). Per-page navigation skips the wipe.
-    const wipeNeeded = getInitialWipeNeeded();
+    // Wipe + re-seed from REST on first load (no session marker) and
+    // immediately after a fresh login. Per-page navigation skips the
+    // wipe.
+    const wipeNeeded = loginWipe || getInitialWipeNeeded();
     if (wipeNeeded) {
       await wipeAndReseed();
     }
