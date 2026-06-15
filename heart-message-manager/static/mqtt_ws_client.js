@@ -273,6 +273,16 @@ export function createMqttWsClient({
           reasons[returnCode] || `code ${returnCode}`
         );
         emitStatus("error", { error: reasons[returnCode] || `code ${returnCode}` });
+      } else {
+        // CONNACK OK — now safe to send SUBSCRIBE. Don't pipeline it
+        // with the CONNECT (some cloud brokers — Adafruit IO included
+        // — reset the connection if a non-CONNECT packet arrives
+        // before CONNACK is fully processed).
+        try {
+          socket && socket.send(buildSubscribe(topic));
+        } catch (e) {
+          console.warn("[mqtt-ws] SUBSCRIBE send failed:", e);
+        }
       }
     } else if (type === 3) {
       // PUBLISH
@@ -370,8 +380,11 @@ export function createMqttWsClient({
     socket.binaryType = "arraybuffer";
     socket.onopen = () => {
       try {
+        // Send only CONNECT here. SUBSCRIBE is deferred until CONNACK
+        // arrives with return code 0 (see handleFrame) — pipelining
+        // CONNECT + SUBSCRIBE causes some cloud brokers (Adafruit IO
+        // included) to close the connection.
         socket.send(buildConnect(username, password));
-        socket.send(buildSubscribe(topic));
         // No ping sent here; broker sends pingreq and we respond with pingresp.
         // (Sending our own ping keeps idle WS alive through corporate proxies
         // that close after ~60s; sent every 30s below.)

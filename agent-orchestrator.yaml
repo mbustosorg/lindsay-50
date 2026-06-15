@@ -1,0 +1,34 @@
+agentRules: |-
+  Always run tests before pushing.
+  Use conventional commits (feat:, fix:, chore:, docs:, refactor:, test:).
+  Link issue numbers in commit messages.
+  Write clear commit messages that explain WHY, not just WHAT.
+
+  Follow Python best practices:
+  - Use type hints for function parameters and return values
+  - Follow PEP 8 style guide
+  - Use f-strings for string formatting
+  - Use context managers (with statements) for resource management
+  - Write docstrings for classes and functions
+  - Prefer composition over inheritance
+
+  Before pushing, run these commands:
+  - black . (format code)
+  - mypy . (type checking)
+
+  ## PR feedback iterations (ongoing)
+
+  When posting or updating a "Session Summary" comment on the PR:
+  - Include: what was completed, what wasn't, why (specific error, design
+  mismatch, or spec gap)
+  - Edit the existing comment rather than posting new ones as iterations
+  happen
+  - Keep the PR comment as the living record of progress
+
+  ## Session close (only when ready to end)
+
+  Before closing the issue or exiting a partially-complete session:
+  1. Update the GH issue description with the final session summary
+  2. Create a follow-on issue via `gh issue create` for any remaining work
+  3. Update tasks.md — check off completed items, add notes on blockers
+  4. Exit the session only after steps 1-3 are complete
