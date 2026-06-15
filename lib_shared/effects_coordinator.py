@@ -38,20 +38,29 @@ log = logging.getLogger("heart")
 def build_effects(
     effect_settings: EffectsSettings,
     effect_class_factory=None,
+    *,
+    display=None,
 ) -> list:
     """Build the effects rotation from a v2 `EffectsSettings` block.
 
     Iterates `effect_settings.effects` in declared order. For each
     enabled entry, calls `effect_class_factory(name)` to resolve the
-    Effect class, then instantiates it (zero-arg). Disabled entries
-    are skipped. Names the factory doesn't recognize are skipped
-    silently (already logged inside the factory).
+    Effect class, then instantiates it with `display` (every Effect
+    constructor takes the display as its first positional arg).
+    Disabled entries are skipped. Names the factory doesn't
+    recognize are skipped silently (already logged inside the
+    factory).
 
     Args:
         effect_settings: The v2 `EffectsSettings` block from `SignConfig`.
         effect_class_factory: Callable `name -> type | None`. Defaults
             to `lib_shared.effects_factory.make_effect_class`. Tests
             can pass a stub that returns simple effect classes.
+        display: The display object handed to each Effect's constructor.
+            Required when `effect_settings` is not None — every Effect
+            subclass needs a display. Callers that fall back to a
+            hard-coded effect (e.g. `Hyperspace(display)`) still need
+            display in scope.
 
     Returns:
         A list of instantiated Effect objects in the order
@@ -64,6 +73,8 @@ def build_effects(
         from lib_shared.effects_factory import make_effect_class
 
         effect_class_factory = make_effect_class
+    if display is None:
+        raise ValueError("build_effects requires `display` to instantiate effects")
     out = []
     for entry in effect_settings.effects:
         if not entry.get("enabled"):
@@ -71,7 +82,7 @@ def build_effects(
         cls = effect_class_factory(entry.get("name", ""))
         if cls is None:
             continue
-        out.append(cls())
+        out.append(cls(display))
     return out
 
 

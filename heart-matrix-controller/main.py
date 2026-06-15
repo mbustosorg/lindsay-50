@@ -58,7 +58,7 @@ def _build_effects(settings):
     (e.g. all effects disabled in the admin UI), so the sign never
     goes dark.
     """
-    out = build_effects(settings)
+    out = build_effects(settings, display=display)
     if not out:
         log.warning("No effects enabled in config; falling back to Hyperspace")
         out = [Hyperspace(display)]

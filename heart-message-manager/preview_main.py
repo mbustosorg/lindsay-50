@@ -102,7 +102,7 @@ def _build_preview_effects(settings: EffectsSettings) -> list:
     None for them at runtime in the browser and the preview falls
     back to Fireworks so the panel never goes blank.
     """
-    out = build_effects(settings)
+    out = build_effects(settings, display=_display)
     if not out:
         # No browser-importable effects enabled in the config; show
         # at least one so the preview isn't a blank panel. Fireworks

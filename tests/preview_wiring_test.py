@@ -89,10 +89,13 @@ class _StubScroller:
 
 
 def _make_effect(name):
-    """A stub Effect class with the given class name (build_effects uses cls())."""
+    """A stub Effect class with the given class name. build_effects
+    instantiates with `cls(display)`, so the stub accepts and stashes
+    the display without using it."""
 
     class _Fx:
-        def __init__(self):
+        def __init__(self, display=None):
+            self.display = display
             self.tick_calls = 0
             self.render_calls = 0
             self.brightness = 1.0
@@ -135,7 +138,7 @@ def test_build_effects_returns_only_enabled():
             {"name": "C", "enabled": True},
         ]
     )
-    out = build_effects(settings, _fx_factory())
+    out = build_effects(settings, _fx_factory(), display=_StubDisplay())
     assert [type(x).__name__ for x in out] == ["A", "C"]
 
 
@@ -149,12 +152,14 @@ def test_build_effects_skips_unknown_names():
             {"name": "B", "enabled": True},
         ]
     )
-    out = build_effects(settings, _fx_factory())
+    out = build_effects(settings, _fx_factory(), display=_StubDisplay())
     assert [type(x).__name__ for x in out] == ["A", "B"]
 
 
 def test_build_effects_none_input_returns_empty():
-    """build_effects(None) returns [] (the caller can supply a fallback)."""
+    """build_effects(None) returns [] (the caller can supply a fallback).
+    None input short-circuits BEFORE display is consulted, so the
+    caller can pass None safely without a display in scope."""
     out = build_effects(None, _fx_factory())
     assert out == []
 
@@ -162,7 +167,7 @@ def test_build_effects_none_input_returns_empty():
 def test_build_effects_empty_list_returns_empty():
     """An effects list of all-disabled entries yields []."""
     settings = EffectsSettings(effects=[])
-    out = build_effects(settings, _fx_factory())
+    out = build_effects(settings, _fx_factory(), display=_StubDisplay())
     assert out == []
 
 
@@ -175,8 +180,19 @@ def test_build_effects_preserves_declaration_order():
             {"name": "B", "enabled": True},
         ]
     )
-    out = build_effects(settings, _fx_factory())
+    out = build_effects(settings, _fx_factory(), display=_StubDisplay())
     assert [type(x).__name__ for x in out] == ["C", "A", "B"]
+
+
+def test_build_effects_requires_display():
+    """build_effects raises ValueError if display is missing — every
+    Effect subclass needs a display, and a silent failure mode
+    (e.g. `None` passed to a `display.canvas.width` access deep in
+    the constructor) would surface much later as a confusing
+    AttributeError on first frame."""
+    settings = EffectsSettings(effects=[{"name": "A", "enabled": True}])
+    with pytest.raises(ValueError, match="display"):
+        build_effects(settings, _fx_factory())
 
 
 # --- EffectsCoordinator.apply_settings --------------------------------------
