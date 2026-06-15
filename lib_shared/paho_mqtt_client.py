@@ -103,7 +103,15 @@ class PahoMqttClient:
         logger.info("PahoMqttClient started for feed %s", self._topic)
 
     def publish_envelope(self, envelope) -> bool:
-        """Publish a MessageEnvelope to the broker. Returns True on success."""
+        """Publish a MessageEnvelope to the broker. Returns True on success.
+
+        Waits for the MQTT CONNACK (rc==0) before publishing, then blocks
+        for up to 5 seconds waiting for the QoS 1 PUBACK. Mirrors the
+        browser-side MqttWsClient pattern: the publish is sent only after
+        the broker has acknowledged the connection, not when the socket
+        opens. Without loop_start() the paho network thread never runs and
+        the queued publish dies in the outgoing buffer.
+        """
         topic = self._topic
         payload = envelope.to_json()
         try:
@@ -111,14 +119,41 @@ class PahoMqttClient:
             client.username_pw_set(self._username, self._password)
             if self._port == 8883:
                 client.tls_set_context()
+            # Wire on_connect so we can fail fast on CONNACK refusal
+            # (wrong creds, broker down, etc) instead of waiting 5s for
+            # the publish-timeout. Same pattern as the SUBSCRIBER's
+            # on_connect above — paho calls it from the network thread.
+            connect_event = threading.Event()
+
+            def _on_connect(_client, _userdata, _flags, rc):
+                if rc == 0:
+                    connect_event.set()
+                else:
+                    logger.warning("PahoMqttClient CONNACK refused: rc=%s", rc)
+
+            client.on_connect = _on_connect  # type: ignore[reportAttributeAccessIssue]
             client.connect(self._host, self._port, keepalive=30)
+            client.loop_start()
+            if not connect_event.wait(timeout=5):
+                logger.warning("PahoMqttClient CONNACK not received within 5s")
+                client.loop_stop()
+                client.disconnect()
+                return False
             result = client.publish(topic, payload.encode(), qos=1)
+            result.wait_for_publish(timeout=5)
             client.loop_stop()
             client.disconnect()
-            if result.rc != mqtt.MQTT_ERR_SUCCESS:
-                logger.warning("PahoMqttClient publish failed: rc=%s", result.rc)
+            if not result.is_published() or result.rc != mqtt.MQTT_ERR_SUCCESS:
+                if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                    logger.warning("PahoMqttClient publish failed: rc=%s", result.rc)
+                else:
+                    logger.warning(
+                        "PahoMqttClient publish not confirmed within 5s (rc=%s, mid=%s)",
+                        result.rc,
+                        result.mid,
+                    )
                 return False
-            logger.info("PahoMqttClient published envelope to %s", topic)
+            logger.info("PahoMqttClient confirmed publish to %s", topic)
             return True
         except Exception as e:
             logger.warning("PahoMqttClient publish failed: %s", e)
