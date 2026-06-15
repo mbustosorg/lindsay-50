@@ -670,7 +670,14 @@ def _inject_app_config():
         "mqtt": {
             "MQTT_USERNAME": _cfg.if_exists("MQTT_USERNAME") or "",
             "MQTT_PASSWORD": _cfg.if_exists("MQTT_PASSWORD") or "",
-            "MQTT_TOPIC": _cfg.if_exists("MQTT_TOPIC") or "",
+            # Adafruit IO requires the full path "username/feedname" for raw
+            # MQTT-over-WebSocket subscriptions. The Adafruit_IO library
+            # prepends the username automatically; the browser client
+            # doesn't, so we build the full path here.
+            "MQTT_TOPIC": "{}/{}".format(
+                _cfg.if_exists("MQTT_USERNAME") or "",
+                _cfg.if_exists("MQTT_TOPIC") or "",
+            ),
         },
         "config": {
             "MESSAGES_API_URL": _cfg.if_exists("MESSAGES_API_URL") or "",

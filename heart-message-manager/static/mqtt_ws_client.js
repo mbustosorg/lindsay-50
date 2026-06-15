@@ -174,6 +174,7 @@ export function createMqttWsClient({
 }) {
   const threshold = longDisconnectMs || 300000; // 5 minutes default
   let ws = null;
+  let pingInterval = null;
   let backoffIndex = 0;
   let reconnectTimer = null;
   let lastConnectedAt = null;
@@ -374,7 +375,8 @@ export function createMqttWsClient({
         // No ping sent here; broker sends pingreq and we respond with pingresp.
         // (Sending our own ping keeps idle WS alive through corporate proxies
         // that close after ~60s; sent every 30s below.)
-        setInterval(() => {
+        if (pingInterval) clearInterval(pingInterval);
+        pingInterval = setInterval(() => {
           try {
             if (socket.readyState === 1) socket.send(buildPingReq());
           } catch (e) {
@@ -430,6 +432,12 @@ export function createMqttWsClient({
       emitStatus("error", { error: "websocket error" });
     };
     socket.onclose = (event) => {
+      // Stop the ping interval on the dead socket — a new one is set up
+      // on the next successful onopen.
+      if (pingInterval) {
+        clearInterval(pingInterval);
+        pingInterval = null;
+      }
       // Disconnected — log the close code/reason to help diagnose
       // browser-specific failures (e.g. corporate proxies that close
       // the WS without sending a 101, or Chrome's stricter subprotocol
