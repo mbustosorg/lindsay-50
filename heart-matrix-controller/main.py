@@ -5,8 +5,8 @@ import logging
 import asyncio
 
 # Create the config singleton FIRST: modules imported below (rgb_matrix_display,
-# message_manager, and the MQTT client built by mqtt_factory) call get_config()
-# at import time, so it must already exist. Wi-Fi is managed by the Pi OS.
+# message_manager, and the MQTT client) call get_config() at import time, so it
+# must already exist. Wi-Fi is managed by the Pi OS.
 from lib_shared.config_reader import get_config
 
 REQUIRED_KEYS: set[str] = {
@@ -37,7 +37,7 @@ from lib_shared.patterns.honeycomb import Honeycomb
 from lib_shared.patterns.hyperspace import Hyperspace
 from lib_shared.patterns.heartbeat import Heartbeat
 from lib_shared.message_manager import MessageManager
-from lib_shared.mqtt_factory import make_mqtt_client
+from lib_shared.paho_mqtt_client import PahoMqttClient
 from lib_shared.effects_coordinator import EffectsCoordinator
 
 display = MatrixDisplay()
@@ -74,8 +74,8 @@ _recent = _message_mgr.get_messages(limit=1)
 _startup_text = _recent[0].message.body if _recent else None
 coordinator.start(_startup_text)
 
-# Platform MQTT client (paho on the Pi; adafruit available via MQTT_CLIENT)
-_mqtt_client = make_mqtt_client(_message_mgr.dispatch)
+# Platform MQTT client (paho on every platform)
+_mqtt_client = PahoMqttClient(_message_mgr.dispatch)
 logging.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 

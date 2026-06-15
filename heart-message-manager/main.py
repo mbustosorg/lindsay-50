@@ -32,7 +32,6 @@ from flask_login import login_required
 from lib_shared.config_reader import get_config
 
 REQUIRED_KEYS: set[str] = {
-    "MQTT_CLIENT",
     "MQTT_HOST",
     "MQTT_PORT",
     "MQTT_USERNAME",
@@ -95,17 +94,17 @@ logger = logging.getLogger(__name__)
 sqlite.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
 
-# Platform MQTT client (adafruit on Heroku, paho for local dev) — used
-# only as a publisher (no Flask-side subscriber). The device and the
-# browser both subscribe to the broker on their own.
-from lib_shared.mqtt_factory import make_mqtt_client
+# Platform MQTT client (paho on every platform) — used only as a publisher
+# (no Flask-side subscriber). The device and the browser both subscribe to
+# the broker on their own.
+from lib_shared.paho_mqtt_client import PahoMqttClient
 
 
 def _noop_dispatch(_payload: str) -> None:
     """Flask no longer subscribes to MQTT envelopes; drop them on the floor."""
 
 
-_mqtt_client = make_mqtt_client(_noop_dispatch)
+_mqtt_client = PahoMqttClient(_noop_dispatch)
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 
@@ -622,13 +621,13 @@ def _set_preview_csp(response):
 def _derive_mqtt_ws_url() -> str:
     """Derive the MQTT-over-WebSocket URL from MQTT_HOST if not set explicitly.
 
-    Adafruit IO: `wss://io.adafruit.com/mqtt` (port-less, default 443).
-    Local Paho:  `ws://<host>:9002/mqtt` — the broker's container port stays
-                 9001 (the protocol default), but `scripts/start-app.sh`
-                 maps it to host 9002 to avoid colliding with MinIO's
-                 console (which owns host 9001). Override with
-                 `MQTT_WS_URL` in settings.toml if your broker is on a
-                 different port.
+    Loopback (`127.0.0.1` / `localhost`) → `ws://<host>:9002/mqtt`.
+    Anything else (e.g. `io.adafruit.com`) → `wss://<host>/mqtt` (broker
+    default 443). The container's WS port stays 9001 (the protocol
+    default), but `scripts/start-app.sh` maps it to host 9002 to avoid
+    colliding with MinIO's console (which owns host 9001). Override
+    with `MQTT_WS_URL` in settings.toml if your broker is on a
+    different port or scheme.
 
     Default host is `127.0.0.1`, not `localhost`. The TCP connection
     lands at the same loopback either way, but Chromium-based
@@ -642,11 +641,10 @@ def _derive_mqtt_ws_url() -> str:
     explicit = _cfg.if_exists("MQTT_WS_URL")
     if explicit:
         return explicit
-    mqtt_client = (_cfg.if_exists("MQTT_CLIENT") or "").lower()
-    if mqtt_client == "adafruit":
-        return "wss://io.adafruit.com/mqtt"
     host = _cfg.if_exists("MQTT_HOST") or "127.0.0.1"
-    return f"ws://{host}:9002/mqtt"
+    if host in ("127.0.0.1", "localhost"):
+        return f"ws://{host}:9002/mqtt"
+    return f"wss://{host}/mqtt"
 
 
 def _mqtt_long_disconnect_ms() -> int:

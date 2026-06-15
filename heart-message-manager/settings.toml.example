@@ -41,10 +41,6 @@ AWS_S3_BUCKET = "YOUR_S3_BUCKET_NAME"
 # Adafruit IO — for MQTT publishing (both REST and MQTT use the same credentials)
 # -----------------------------------------------------------------------------
 
-# MQTT client: "adafruit" (Adafruit IO MQTT with TLS) or "paho" (raw paho-mqtt, for local dev).
-# Flask and subscriber use the same client.
-MQTT_CLIENT = "adafruit"
-
 # Adafruit IO over MQTT.
 # MQTT_HOST Default: io.adafruit.com (Adafruit IO cloud with TLS on port 8883).
 #   Local dev with Mosquitto: localhost, port 1883 (no TLS).
@@ -89,9 +85,9 @@ ADMIN_SESSION_TIMEOUT_MINS = 60
 # `window.APP_CONFIG` and the MqttWsClient opens a WS connection from
 # every admin page.
 [mqtt_ws]
-# Browser-side MQTT-over-WS URL.
-#   Adafruit IO: "wss://io.adafruit.com/mqtt" (TLS, default).
-#   Local Paho:  "ws://<host>:9001/mqtt" (plain WS, see note below).
+# Browser-side MQTT-over-WS URL. Default is derived from `MQTT_HOST`:
+# loopback → `ws://<host>:9002/mqtt`; non-loopback → `wss://<host>/mqtt`.
+# Override here if your broker is on a different port or scheme.
 # NOTE: a local Mosquitto broker must be started with `--ws-port 9001`
 # to expose the MQTT-over-WS transport. Example:
 #   mosquitto -p 1883 --ws-port 9001
