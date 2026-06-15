@@ -8,6 +8,13 @@ font is a BDF loaded from FONT_PATH (copy one from the rpi-rgb-led-matrix
 The time/pixel math (text width, x positions, frame pacing) lives in
 `lib_shared.scroller_base.ScrollerBase`. This module is the `rgbmatrix`-specific
 subclass — it loads a BDF font and calls `graphics.DrawText` to blit glyphs.
+
+v2 config: the v1 per-field kwargs (color, frame_delay, offset_seconds) are
+still accepted for backwards compatibility, but the recommended entry point
+is to pass a `text_settings` (`lib_shared.models.TextSettings`) instance,
+which is unpacked into the base class's fields. The device's main loop applies
+new text_settings from incoming config envelopes by mutating `self._color`,
+`self.frame_delay`, and `self.offset_seconds` in place.
 """
 
 from __future__ import annotations
@@ -16,6 +23,7 @@ import logging
 from rgbmatrix import graphics  # noqa: F401 — stub for IDE/pyright, real module on the Pi
 
 from lib_shared.config_reader import get_config
+from lib_shared.models import TextSettings
 from lib_shared.scroller_base import ScrollerBase
 
 log = logging.getLogger("heart")
@@ -25,11 +33,16 @@ class MatrixScroller(ScrollerBase):
     def __init__(
         self,
         display,
-        color=0xFF6400,
-        frame_delay=0.04,
-        offset_seconds=1.0,
-        font_path=None,
+        color: int = 0xFF6400,
+        frame_delay: float = 0.04,
+        offset_seconds: float = 1.0,
+        font_path: str | None = None,
+        text_settings: TextSettings | None = None,
     ):
+        if text_settings is not None:
+            color = text_settings.color
+            frame_delay = text_settings.frame_delay
+            offset_seconds = text_settings.offset_seconds
         super().__init__(frame_delay=frame_delay, offset_seconds=offset_seconds, color=color)
         self.display = display
 

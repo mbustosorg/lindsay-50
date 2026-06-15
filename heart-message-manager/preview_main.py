@@ -14,6 +14,11 @@ The actual main loop lives in static/preview.js, which drives tick() via
 requestAnimationFrame (capped at 30 FPS) and calls request_message() from
 its setInterval poll.
 
+The effect list is now built from a v2 `EffectsSettings` block (the same
+shape `lib_shared.models` exposes to the device). Entries whose names refer
+to Pi-only patterns (PngDisplay, VideoDisplay) are filtered out for the
+browser preview; everything else instantiates directly.
+
 NOTE: no rgbmatrix import anywhere in this file or its imports (Pillow +
 numpy are pulled in via the py-config.toml declared packages).
 """
@@ -57,6 +62,7 @@ for path in (
 from preview_display import WebCanvas, WebDisplay
 from preview_scroller import PreviewScroller
 from lib_shared.effects_coordinator import EffectsCoordinator
+from lib_shared.models import EffectsSettings
 
 # Standard bitmap patterns the browser preview can run (no filesystem
 # assets, no OpenCV). PngDisplay / VideoDisplay stay Pi-only.
@@ -67,6 +73,16 @@ from lib_shared.patterns.honeycomb import Honeycomb
 from lib_shared.patterns.hyperspace import Hyperspace
 from lib_shared.patterns.heartbeat import Heartbeat
 
+# Effect-class map keyed on the canonical name; the preview picks only
+# the entries the browser can run (no filesystem or OpenCV dependencies).
+_PREVIEW_EFFECT_CLASSES = {
+    "Fireworks": Fireworks,
+    "Flame": Flame,
+    "NightSky": NightSky,
+    "Honeycomb": Honeycomb,
+    "Hyperspace": Hyperspace,
+}
+
 # The 64x64 logical panel — source of truth matches the device.
 PANEL_WIDTH = 64
 PANEL_HEIGHT = 64
@@ -76,18 +92,28 @@ PANEL_HEIGHT = 64
 _web_canvas = WebCanvas(PANEL_WIDTH, PANEL_HEIGHT)
 _display = WebDisplay(_web_canvas)
 
-# Effects list built by direct instantiation (no try/except hedging —
-# every pattern imported here is known to work in the browser).
-_effects = [
-    Fireworks(_display),
-    Flame(_display),
-    NightSky(_display),
-    Honeycomb(_display),
-    Hyperspace(_display),
-]
+
+def _build_preview_effects(settings: EffectsSettings) -> list:
+    """Build the rotation list from the v2 EffectsSettings, filtered to
+    browser-safe effects (no filesystem / OpenCV dependencies)."""
+    out = []
+    for entry in settings.effects or []:
+        if not entry.get("enabled"):
+            continue
+        cls = _PREVIEW_EFFECT_CLASSES.get(entry["name"])
+        if cls is None:
+            continue
+        out.append(cls(_display))
+    if not out:
+        out = [Fireworks(_display)]
+    return out
+
+
+_settings = EffectsSettings()
+_effects = _build_preview_effects(_settings)
 _scroller = PreviewScroller(_display)
 _heart = Heartbeat(_display)
-_coordinator = EffectsCoordinator(_display, _scroller, _effects, heart=_heart)
+_coordinator = EffectsCoordinator(_display, _scroller, _effects, heart=_heart, settings=_settings)
 
 # Begin the boot splash (beating heart). The first preview.js poll hands in the
 # latest message, which plays once the heart fades out — mirroring the device's
@@ -120,7 +146,7 @@ def request_message(body):
     """Hand a new message body to the coordinator. Idempotent for duplicates."""
     if body is None:
         body = ""
-    _coordinator.request_message(body)
+    _coordinator.set_text(body)
 
 
 def tick():

@@ -93,11 +93,23 @@ def seed_config():
     return {
         "filters": [],
         "senders": [],
-        "rendering": {"mode": "scroll", "speed": 0.5, "color": 16777215},
+        "effect_settings": {
+            "effects": [{"name": "Hyperspace", "enabled": True}],
+            "fade_seconds": 2.0,
+            "hold_seconds": 15.0,
+            "intro_seconds": 5.0,
+            "idle_seconds": 300.0,
+            "recent_count": 5,
+        },
+        "text_settings": {
+            "frame_delay": 0.04,
+            "offset_seconds": 1.0,
+            "color": 16711680,
+            "text_effect": "scroll",
+        },
         "sign": {"name": "Test Sign"},
         "timezone": "US/Pacific",
-        "version": 1,
-        "tz_offset_mins": -420,
+        "version": 2,
     }
 
 
@@ -409,17 +421,33 @@ class TestDispatchMessage:
             {
                 "filters": [],
                 "senders": [],
-                "rendering": {"mode": "fireworks", "speed": 0.5, "color": 16777215},
+                "effect_settings": {
+                    "effects": [
+                        {"name": "Hyperspace", "enabled": True},
+                        {"name": "Fireworks", "enabled": True},
+                    ],
+                    "fade_seconds": 2.0,
+                    "hold_seconds": 15.0,
+                    "intro_seconds": 5.0,
+                    "idle_seconds": 300.0,
+                    "recent_count": 5,
+                },
+                "text_settings": {
+                    "frame_delay": 0.04,
+                    "offset_seconds": 1.0,
+                    "color": 16711680,
+                    "text_effect": "scroll",
+                },
                 "sign": {"name": "Updated"},
                 "timezone": "US/Pacific",
-                "version": 1,
-                "tz_offset_mins": -420,
+                "version": 2,
             }
         )
         mgr.dispatch(env)
         # Config updated
         assert mgr.config.sign.name == "Updated"
-        assert mgr.config.rendering.mode == "fireworks"
+        names = [e["name"] for e in mgr.config.effect_settings.effects]
+        assert "Fireworks" in names
         # on_message NOT called
         cb.assert_not_called()
 

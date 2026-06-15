@@ -10,11 +10,12 @@ import pytest
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib_shared.models import (
+    EffectsSettings,
     FilterRule,
     Message,
-    RenderingSettings,
     SignConfig,
     SignSettings,
+    TextSettings,
 )
 
 
@@ -82,10 +83,11 @@ def sample_messages():
 @pytest.fixture
 def default_config():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )
 
@@ -93,10 +95,11 @@ def default_config():
 @pytest.fixture
 def config_with_keyword_filter():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[FilterRule(type="keyword", pattern="badword", action="suppress")],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )
 
@@ -104,10 +107,11 @@ def config_with_keyword_filter():
 @pytest.fixture
 def config_with_sender_filter():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[FilterRule(type="sender", pattern="+15550001111", action="suppress")],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )
 
@@ -115,10 +119,11 @@ def config_with_sender_filter():
 @pytest.fixture
 def config_with_regex_filter():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[FilterRule(type="regex", pattern=r"^\s*$", action="suppress")],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )
 
@@ -126,9 +131,10 @@ def config_with_regex_filter():
 @pytest.fixture
 def config_with_message_filter():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[FilterRule(type="message", pattern="msg-002", action="suppress")],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )

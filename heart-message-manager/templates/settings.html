@@ -40,26 +40,75 @@
     </div>
   </div>
 
-  <!-- Rendering Defaults -->
+  <!-- Effects -->
   <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
     <h3 class="font-heading font-semibold text-dark text-lg mb-4 flex items-center gap-2">
-      <span>🎨</span> Rendering Defaults
+      <span>✨</span> Effects
     </h3>
-    <div class="grid grid-cols-3 gap-6">
+
+    <div class="mb-6">
+      <h4 class="font-heading font-semibold text-dark text-base mb-3">Effects List</h4>
+      <p class="text-sm text-slate-500 mb-3">Background effects that cycle between messages. Enabled effects are rotated in the order shown.</p>
+      <div class="space-y-2">
+        {% for entry in cfg.effect_settings.effects %}
+        <label class="flex items-center gap-3 px-4 py-2 rounded-xl border border-indigo-100 hover:bg-indigo-50/40 transition-colors cursor-pointer">
+          <input type="checkbox" name="effect_name" value="{{ entry.name }}"{% if entry.enabled %} checked{% endif %} class="w-4 h-4 rounded text-primary focus:ring-primary">
+          <span class="font-medium text-dark">{{ entry.name }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div>
+      <h4 class="font-heading font-semibold text-dark text-base mb-3">Settings</h4>
+      <div class="grid grid-cols-3 gap-6">
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-2">Fade (s)</label>
+          <input type="number" name="effect_settings_fade_seconds" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.1" min="0" value="{{ cfg.effect_settings.fade_seconds }}">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-2">Hold (s)</label>
+          <input type="number" name="effect_settings_hold_seconds" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.1" min="0" value="{{ cfg.effect_settings.hold_seconds }}">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-2">Intro (s)</label>
+          <input type="number" name="effect_settings_intro_seconds" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.1" min="0" value="{{ cfg.effect_settings.intro_seconds }}">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-2">Idle (s)</label>
+          <input type="number" name="effect_settings_idle_seconds" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.1" min="0" value="{{ cfg.effect_settings.idle_seconds }}">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-2">Recent Count</label>
+          <input type="number" name="effect_settings_recent_count" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" min="1" value="{{ cfg.effect_settings.recent_count }}">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Text -->
+  <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
+    <h3 class="font-heading font-semibold text-dark text-lg mb-4 flex items-center gap-2">
+      <span>✍️</span> Text
+    </h3>
+    <div class="grid grid-cols-2 gap-6">
       <div>
-        <label class="block text-sm font-medium text-slate-600 mb-2">Mode</label>
-        <select name="rendering_mode" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
-          <option value="scroll"{% if cfg.rendering.mode == 'scroll' %} selected{% endif %}>scroll</option>
-          <option value="static"{% if cfg.rendering.mode == 'static' %} selected{% endif %}>static</option>
-        </select>
+        <label class="block text-sm font-medium text-slate-600 mb-2">Frame Delay (s)</label>
+        <input type="number" name="text_settings_frame_delay" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.001" min="0" value="{{ cfg.text_settings.frame_delay }}">
       </div>
       <div>
-        <label class="block text-sm font-medium text-slate-600 mb-2">Speed (0.01–1.0)</label>
-        <input type="number" name="rendering_speed" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.001" min="0.01" max="1.0" value="{{ cfg.rendering.speed }}">
+        <label class="block text-sm font-medium text-slate-600 mb-2">Offset (s)</label>
+        <input type="number" name="text_settings_offset_seconds" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.01" min="0" value="{{ cfg.text_settings.offset_seconds }}">
       </div>
       <div>
         <label class="block text-sm font-medium text-slate-600 mb-2">Color (hex)</label>
-        <input type="text" name="rendering_color" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ '#%06x'|format(cfg.rendering.color) }}">
+        <input type="text" name="text_settings_color" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ '#%06x'|format(cfg.text_settings.color) }}">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-2">Text Effect</label>
+        <select name="text_settings_text_effect" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
+          <option value="scroll"{% if cfg.text_settings.text_effect == 'scroll' %} selected{% endif %}>scroll</option>
+        </select>
       </div>
     </div>
   </div>

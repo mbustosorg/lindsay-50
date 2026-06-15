@@ -70,6 +70,14 @@ def _load_app_module(mock_cfg):
     models_mod.Message = MagicMock()
     models_mod.MessageEnvelope = MagicMock()
     models_mod.MessageView = MagicMock()
+    models_mod._DEFAULT_EFFECTS_LIST_FULL = []
+
+    # Mock the v2 config migration module (heart-message-manager/main.py
+    # imports it at module level). The startup migration runs at app load
+    # time, so the call must be a no-op MagicMock.
+    cm_mod = _make_mock("lib_shared.config_migrations")
+    cm_mod.migrate = MagicMock(side_effect=lambda d, current_version: d or {})
+    cm_mod.migrate_on_startup = MagicMock()
 
     mm_mod = _make_mock("lib_shared.message_manager")
     mm_mod.MessageManager = MagicMock()
@@ -105,6 +113,7 @@ def _load_app_module(mock_cfg):
     sqlite_mod.message_count = MagicMock(return_value=0)
     sqlite_mod.put_message = MagicMock()
     sqlite_mod.get_message = MagicMock(return_value=None)
+    sqlite_mod.put_config = MagicMock()
     sys.modules["sqlite"] = sqlite_mod
 
     s3_mod = types.ModuleType("s3")

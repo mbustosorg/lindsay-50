@@ -28,19 +28,6 @@ def now_utc_iso() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def tz_offset_mins(tz_name: str) -> int:
-    """Compute the UTC offset in minutes for a timezone, including DST.
-
-    Returns 0 as a fallback if the timezone is unknown or unavailable.
-    """
-    try:
-        now = datetime.now(ZoneInfo(tz_name))
-        offset = ZoneInfo(tz_name).utcoffset(now)
-        return int(offset.total_seconds() / 60) if offset else 0
-    except Exception:
-        return 0
-
-
 def format_from_iso(dt_iso: str, tz_name: str = "UTC", format: str = "%b %d %I:%M %p") -> str:
     """Format an ISO 8601 timestamp in the given timezone.
 

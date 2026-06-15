@@ -2,6 +2,7 @@
 
 import json
 import threading
+from typing import List, Optional
 
 
 class MessageEnvelope:
@@ -157,33 +158,199 @@ class SignSettings:
         return {"name": self.name}
 
 
-class RenderingSettings:
-    """LED rendering defaults: mode, speed, color."""
+# ---------------------------------------------------------------------------
+# EffectsSettings + TextSettings — v2 config blocks
+# ---------------------------------------------------------------------------
 
-    def __init__(self, mode: str = "scroll", speed: float = 0.5, color: int = 0xFFFFFF):
-        """Initialize RenderingSettings.
+# Canonical full 7-effect list. The 5 historically-defaulted effects are
+# enabled; the 2 asset-dependent effects (VideoDisplay, PngDisplay) are
+# disabled by default because they need operator-supplied asset files.
+_DEFAULT_EFFECTS_LIST_FULL: List[dict] = [
+    {"name": "Hyperspace", "enabled": True},
+    {"name": "VideoDisplay", "enabled": False},
+    {"name": "PngDisplay", "enabled": False},
+    {"name": "Honeycomb", "enabled": True},
+    {"name": "Flame", "enabled": True},
+    {"name": "Fireworks", "enabled": True},
+    {"name": "NightSky", "enabled": True},
+]
+
+
+class EffectsSettings:
+    """Effects subsystem config: rotation list + pacing + recent_count.
+
+    Groups every input the `EffectsCoordinator` consumes so the coordinator
+    takes one focused argument instead of the full SignConfig.
+    """
+
+    def __init__(
+        self,
+        effects: Optional[List[dict]] = None,
+        fade_seconds: float = 2.0,
+        hold_seconds: float = 15.0,
+        intro_seconds: float = 5.0,
+        idle_seconds: float = 300.0,
+        recent_count: int = 5,
+    ):
+        """Initialize EffectsSettings.
 
         Args:
-            mode: LED effect — "scroll" (default), "fireworks", "flame", etc.
-            speed: Scroll/animation speed from 0.0 (slow) to 1.0 (fast).
-            color: 24-bit RGB color value (default 0xFFFFFF white).
+            effects: List of `{"name": str, "enabled": bool}` dicts. Defaults
+                to the canonical 7-entry list.
+            fade_seconds: Seconds for one full fade (default 2.0).
+            hold_seconds: Seconds to keep a message fully visible (default 15.0).
+            intro_seconds: Seconds to show the boot-splash heart (default 5.0).
+            idle_seconds: Seconds of idleness before a random message plays (default 300.0).
+            recent_count: Size of the idle-rotation recent-messages pool (default 5).
         """
-        self.mode = mode
-        self.speed = speed
-        self.color = color
+        self.effects = list(effects) if effects is not None else [dict(e) for e in _DEFAULT_EFFECTS_LIST_FULL]
+        self.fade_seconds = fade_seconds
+        self.hold_seconds = hold_seconds
+        self.intro_seconds = intro_seconds
+        self.idle_seconds = idle_seconds
+        self.recent_count = recent_count
 
     @classmethod
     def from_dict(cls, d):
-        if d is None:
-            return cls()
+        """Parse from a dict (wire shape).
+
+        Args:
+            d: dict with optional keys: effects, fade_seconds, hold_seconds,
+                intro_seconds, idle_seconds, recent_count.
+
+        Returns:
+            A new EffectsSettings instance.
+
+        Raises:
+            ValueError: on a malformed effects list (entries missing name/enabled,
+                or non-dict entries). The Flask validation layer is responsible
+                for rejecting unknown effect names; this method accepts any
+                name string.
+        """
+        d = d or {}
+        effects = d.get("effects", _DEFAULT_EFFECTS_LIST_FULL)
+        if not isinstance(effects, list) or not all(
+            isinstance(n, dict) and isinstance(n.get("name"), str) and isinstance(n.get("enabled"), bool)
+            for n in effects
+        ):
+            raise ValueError("effects must be a list of {name: str, enabled: bool} objects")
         return cls(
-            mode=d.get("mode", "scroll"),
-            speed=d.get("speed", 0.5),
-            color=d.get("color", 0xFFFFFF),
+            effects=[{"name": n["name"], "enabled": n["enabled"]} for n in effects],
+            fade_seconds=float(d.get("fade_seconds", 2.0)),
+            hold_seconds=float(d.get("hold_seconds", 15.0)),
+            intro_seconds=float(d.get("intro_seconds", 5.0)),
+            idle_seconds=float(d.get("idle_seconds", 300.0)),
+            recent_count=int(d.get("recent_count", 5)),
         )
 
     def to_dict(self):
-        return {"mode": self.mode, "speed": self.speed, "color": self.color}
+        """Serialize to a dict (wire shape)."""
+        return {
+            "effects": self.effects,
+            "fade_seconds": self.fade_seconds,
+            "hold_seconds": self.hold_seconds,
+            "intro_seconds": self.intro_seconds,
+            "idle_seconds": self.idle_seconds,
+            "recent_count": self.recent_count,
+        }
+
+    def validate(self):
+        """Raise ValueError on out-of-range values.
+
+        Raises:
+            ValueError: on negative pacing durations, recent_count < 1, or
+                a malformed effects list.
+        """
+        if self.fade_seconds < 0 or self.hold_seconds < 0 or self.intro_seconds < 0 or self.idle_seconds < 0:
+            raise ValueError("pacing durations must be non-negative")
+        if self.recent_count < 1:
+            raise ValueError("recent_count must be a positive integer")
+        if not isinstance(self.effects, list) or not all(
+            isinstance(n, dict) and isinstance(n.get("name"), str) and isinstance(n.get("enabled"), bool)
+            for n in self.effects
+        ):
+            raise ValueError("effects must be a list of {name: str, enabled: bool} objects")
+
+
+class TextSettings:
+    """Text rendering config: scroll speed, offset, color, text_effect.
+
+    Named "text_settings" (not "scroller_settings") because the scroller is
+    just one text effect — future text effects (swirl, bounce) will share
+    the same block.
+    """
+
+    # v1 supports "scroll" only; more values land as future text effects.
+    TEXT_EFFECTS: tuple = ("scroll",)
+
+    def __init__(
+        self,
+        frame_delay: float = 0.04,
+        offset_seconds: float = 1.0,
+        color: int = 0xFF0000,
+        text_effect: str = "scroll",
+    ):
+        """Initialize TextSettings.
+
+        Args:
+            frame_delay: Seconds per pixel of scroll motion (default 0.04).
+            offset_seconds: Two-line offset (default 1.0).
+            color: 24-bit RGB color value (default 0xFF0000 red).
+            text_effect: One of TEXT_EFFECTS (currently "scroll").
+        """
+        self.frame_delay = frame_delay
+        self.offset_seconds = offset_seconds
+        self.color = color
+        self.text_effect = text_effect
+
+    @classmethod
+    def from_dict(cls, d):
+        """Parse from a dict (wire shape).
+
+        Args:
+            d: dict with optional keys: frame_delay, offset_seconds, color, text_effect.
+
+        Returns:
+            A new TextSettings instance.
+
+        Raises:
+            ValueError: on an unknown text_effect value.
+        """
+        d = d or {}
+        text_effect = d.get("text_effect", "scroll")
+        if text_effect not in cls.TEXT_EFFECTS:
+            raise ValueError(f"text_effect must be one of {cls.TEXT_EFFECTS}, got {text_effect!r}")
+        return cls(
+            frame_delay=float(d.get("frame_delay", 0.04)),
+            offset_seconds=float(d.get("offset_seconds", 1.0)),
+            color=int(d.get("color", 0xFF0000)),
+            text_effect=text_effect,
+        )
+
+    def to_dict(self):
+        """Serialize to a dict (wire shape)."""
+        return {
+            "frame_delay": self.frame_delay,
+            "offset_seconds": self.offset_seconds,
+            "color": self.color,
+            "text_effect": self.text_effect,
+        }
+
+    def validate(self):
+        """Raise ValueError on out-of-range values.
+
+        Raises:
+            ValueError: on negative frame_delay/offset_seconds, color outside
+                0–0xFFFFFF, or an unknown text_effect.
+        """
+        if self.frame_delay < 0:
+            raise ValueError("frame_delay must be non-negative")
+        if self.offset_seconds < 0:
+            raise ValueError("offset_seconds must be non-negative")
+        if not (0 <= self.color <= 0xFFFFFF):
+            raise ValueError("color must be in range 0..0xFFFFFF")
+        if self.text_effect not in self.TEXT_EFFECTS:
+            raise ValueError(f"text_effect must be one of {self.TEXT_EFFECTS}")
 
 
 class SignConfig:
@@ -191,21 +358,27 @@ class SignConfig:
 
     filters: list of FilterRule objects
     senders: dict of phone -> name
-    rendering: RenderingSettings
-    sign: Sign object with .name attribute
+    sign: SignSettings
+    timezone: IANA timezone string
+    effect_settings: EffectsSettings
+    text_settings: TextSettings
 
     Thread-safe: guards mutations with a reentrant lock.
     """
+
+    # Wire-format schema version. Bump on breaking changes; pair with
+    # a new entry in lib_shared.config_migrations.MIGRATIONS.
+    CURRENT_VERSION: int = 2
 
     def __init__(
         self,
         filters=None,
         senders=None,
-        rendering=None,
         sign=None,
-        timezone="US/Pacific",
-        version=1,
-        tz_offset_mins: int = 0,
+        timezone: str = "US/Pacific",
+        version: int = CURRENT_VERSION,
+        effect_settings=None,
+        text_settings=None,
         allowed_senders=None,
     ):
         """Initialize a SignConfig.
@@ -213,22 +386,26 @@ class SignConfig:
         Args:
             filters: List of FilterRule objects (default empty).
             senders: Dict mapping phone number -> display name (default empty).
-            rendering: RenderingSettings instance or dict (default built from empty dict).
             sign: SignSettings instance or dict (default built from empty dict).
             timezone: IANA timezone string (default "US/Pacific").
-            version: Config schema version (default 1).
-            tz_offset_mins: Manual UTC offset in minutes (default 0).
+            version: Config schema version (default CURRENT_VERSION = 2).
+            effect_settings: EffectsSettings instance or dict (default built from empty dict).
+            text_settings: TextSettings instance or dict (default built from empty dict).
             allowed_senders: Deprecated, ignored (kept for backward compat with tests).
         """
         self.filters = filters or []
         self.senders = senders or {}
-        self.rendering = (
-            rendering if isinstance(rendering, RenderingSettings) else RenderingSettings.from_dict(rendering or {})
-        )
         self.sign = sign if isinstance(sign, SignSettings) else SignSettings.from_dict(sign or {})
         self.timezone = timezone
         self.version = version
-        self.tz_offset_mins = tz_offset_mins
+        self.effect_settings = (
+            effect_settings
+            if isinstance(effect_settings, EffectsSettings)
+            else EffectsSettings.from_dict(effect_settings or {})
+        )
+        self.text_settings = (
+            text_settings if isinstance(text_settings, TextSettings) else TextSettings.from_dict(text_settings or {})
+        )
         self._lock = threading.RLock()
 
     def _with_lock(self, fn):
@@ -254,39 +431,49 @@ class SignConfig:
     def from_dict(cls, data):
         """Deserialize a SignConfig from a dict (the same shape as to_dict()).
 
+        Runs the migration registry at the top so older wire shapes are
+        transparently brought up to CURRENT_VERSION.
+
         Args:
-            data: dict with optional keys: filters, senders, rendering, sign,
-                  timezone, version, tz_offset_mins.
+            data: dict with optional keys: filters, senders, sign, timezone,
+                version, effect_settings, text_settings.
 
         Returns:
             A new SignConfig instance.
         """
+        # Defense-in-depth: bring older payloads forward before parsing.
+        from lib_shared.config_migrations import migrate
+
+        if data is not None:
+            data = migrate(data, current_version=cls.CURRENT_VERSION)
+        else:
+            data = {}
         return cls(
             filters=[FilterRule.from_dict(f) for f in data.get("filters", [])],
             senders={s["phone"]: s["name"] for s in data.get("senders", [])},
-            rendering=RenderingSettings.from_dict(data.get("rendering")),
             sign=(SignSettings.from_dict(data.get("sign")) if data.get("sign") else SignSettings()),
             timezone=data.get("timezone", "US/Pacific"),
-            version=data.get("version", 1),
-            tz_offset_mins=data.get("tz_offset_mins", 0),
+            version=data.get("version", cls.CURRENT_VERSION),
+            effect_settings=data.get("effect_settings"),
+            text_settings=data.get("text_settings"),
         )
 
     def to_dict(self):
         """Serialize the config to a dict suitable for JSON or S3 storage.
 
         Returns:
-            dict with keys: filters, senders, rendering, sign, timezone,
-            tz_offset_mins, version.
+            dict with keys: filters, senders, sign, timezone, effect_settings,
+            text_settings, version.
         """
         return self._with_lock(
             lambda: {
                 "filters": [f.to_dict() for f in self.filters],
                 "senders": [{"phone": p, "name": n} for p, n in self.senders.items()],
-                "rendering": self.rendering.to_dict(),
                 "sign": self.sign.to_dict(),
                 "timezone": self.timezone,
-                "tz_offset_mins": self.tz_offset_mins,
                 "version": self.version,
+                "effect_settings": self.effect_settings.to_dict(),
+                "text_settings": self.text_settings.to_dict(),
             }
         )
 
@@ -299,25 +486,44 @@ class SignConfig:
         def _do():
             self.filters = other.filters
             self.senders = other.senders
-            self.rendering = other.rendering
             self.sign = other.sign
             self.timezone = other.timezone
             self.version = other.version
-            self.tz_offset_mins = other.tz_offset_mins
+            self.effect_settings = other.effect_settings
+            self.text_settings = other.text_settings
 
         self._with_lock(_do)
 
     def update_from_dict(self, data: dict) -> None:
-        """Replace all fields from a dict (mutates self). Thread-safe."""
+        """Replace all fields from a dict (mutates self). Thread-safe.
+
+        Runs the migration registry at the top so older wire shapes (a v1
+        payload arriving over MQTT, for example) are transparently brought
+        up to CURRENT_VERSION before the field-by-field update runs.
+        """
+        from lib_shared.config_migrations import migrate
+
+        if data is not None:
+            data = migrate(data, current_version=self.CURRENT_VERSION)
+        else:
+            data = {}
 
         def _do():
             self.filters = [FilterRule.from_dict(f) for f in data.get("filters", [])]
             self.senders = {s["phone"]: s["name"] for s in data.get("senders", [])}
-            self.rendering = RenderingSettings.from_dict(data.get("rendering"))
             sign_data = data.get("sign")
             self.sign = SignSettings.from_dict(sign_data) if sign_data else SignSettings()
             self.timezone = data.get("timezone", "US/Pacific")
-            self.version = data.get("version", 1)
-            self.tz_offset_mins = data.get("tz_offset_mins", 0)
+            self.version = data.get("version", self.CURRENT_VERSION)
+            # Only overwrite the new blocks if the incoming payload carries them.
+            # This keeps the existing in-memory values when a v1 partial update
+            # arrives (the migration fills defaults, so the blocks are present
+            # — but we still want the caller's intent to "leave it alone" honored).
+            if "effect_settings" in data:
+                es = data["effect_settings"]
+                self.effect_settings = es if isinstance(es, EffectsSettings) else EffectsSettings.from_dict(es or {})
+            if "text_settings" in data:
+                ts = data["text_settings"]
+                self.text_settings = ts if isinstance(ts, TextSettings) else TextSettings.from_dict(ts or {})
 
         self._with_lock(_do)
