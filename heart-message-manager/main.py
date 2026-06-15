@@ -631,8 +631,8 @@ def _derive_mqtt_ws_url() -> str:
     Resolution order:
       1. `MQTT_WS_URL` (full URL) — wins outright if set.
       2. `MQTT_WS_PORT` (port only) — combined with `MQTT_HOST`.
-      3. Default port: 9001 for loopback (`127.0.0.1` / `localhost`),
-         443 for everything else (broker default). Scheme: `ws://` for
+      3. Default port: 9001 for loopback (`127.0.0.1`), 443 for
+         everything else (broker default). Scheme: `ws://` for
          loopback, `wss://` otherwise.
 
     9001 is the protocol default for Mosquitto. The `scripts/start-app.sh`
@@ -641,27 +641,32 @@ def _derive_mqtt_ws_url() -> str:
     `MQTT_WS_PORT = "9002"`. For a remote broker on a non-standard
     port, set `MQTT_WS_PORT` to its WS port.
 
-    Default host is `127.0.0.1`, not `localhost`. The TCP connection
-    lands at the same loopback either way, but Chromium-based
-    browsers with built-in tracker blockers (Arc, in particular) have
-    been observed to block `ws://localhost:9001/mqtt` while letting
-    `ws://127.0.0.1:9001/mqtt` through — the blocker applies
-    heuristics to `localhost` URLs that it doesn't apply to literal
-    IPs. Using the IP sidesteps the false positive. Set `MQTT_HOST` in
-    settings.toml to override.
+    The literal `localhost` is rewritten to `127.0.0.1` in the final
+    URL, regardless of whether it came from `MQTT_HOST` or from
+    `MQTT_WS_URL`. The TCP connection lands at the same loopback
+    either way, but Chromium-based browsers with built-in tracker
+    blockers (Arc, in particular) have been observed to block
+    `ws://localhost:9001/mqtt` while letting `ws://127.0.0.1:9001/mqtt`
+    through — the blocker applies heuristics to `localhost` URLs that
+    it doesn't apply to literal IPs. Forcing the IP sidesteps the
+    false positive. Any other host (a real DNS name, a non-loopback
+    IP, IPv6) passes through unchanged.
     """
     explicit = _cfg.if_exists("MQTT_WS_URL")
     if explicit:
-        return explicit
+        # See the Arc note in the docstring above.
+        return explicit.replace("localhost", "127.0.0.1")
     host = _cfg.if_exists("MQTT_HOST") or "127.0.0.1"
+    if host == "localhost":
+        host = "127.0.0.1"
     explicit_port = _cfg.if_exists("MQTT_WS_PORT")
     if explicit_port:
         port = str(explicit_port)
-    elif host in ("127.0.0.1", "localhost"):
+    elif host == "127.0.0.1":
         port = "9001"
     else:
         port = "443"
-    scheme = "ws" if host in ("127.0.0.1", "localhost") else "wss"
+    scheme = "ws" if host == "127.0.0.1" else "wss"
     if scheme == "ws":
         return f"{scheme}://{host}:{port}/mqtt"
     return f"{scheme}://{host}:{port}/mqtt" if port != "443" else f"{scheme}://{host}/mqtt"
