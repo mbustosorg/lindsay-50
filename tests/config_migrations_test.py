@@ -74,7 +74,7 @@ def test_migrate_v1_adds_text_settings():
     out = migrate({"version": 1, "filters": [], "senders": []}, current_version=2)
     assert "text_settings" in out
     ts = out["text_settings"]
-    assert ts["frame_delay"] == 0.04
+    assert ts["speed"] == 3
     assert ts["color"] == 0xFF0000
 
 

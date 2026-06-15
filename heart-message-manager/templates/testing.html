@@ -158,13 +158,6 @@
 <script>
 let s3Loaded = false;
 
-function toggleSection(name) {
-  const section = document.getElementById(name + '-section');
-  const chevron = document.getElementById(name + '-chevron');
-  section.classList.toggle('hidden');
-  chevron.classList.toggle('rotate-180');
-}
-
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;

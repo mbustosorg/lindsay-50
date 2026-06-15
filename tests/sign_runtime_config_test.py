@@ -54,6 +54,12 @@ def test_to_dict_omits_legacy_fields():
     assert "text_settings" in d
 
 
+def test_default_text_settings_speed_is_3():
+    """Default TextSettings carries speed=3 (Medium)."""
+    c = SignConfig()
+    assert c.text_settings.speed == 3
+
+
 def test_from_dict_default():
     """from_dict({}) yields a default SignConfig."""
     c = SignConfig.from_dict({})

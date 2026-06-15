@@ -35,6 +35,46 @@ from lib_shared.models import EffectsSettings
 log = logging.getLogger("heart")
 
 
+def build_effects(
+    effect_settings: EffectsSettings,
+    effect_class_factory=None,
+) -> list:
+    """Build the effects rotation from a v2 `EffectsSettings` block.
+
+    Iterates `effect_settings.effects` in declared order. For each
+    enabled entry, calls `effect_class_factory(name)` to resolve the
+    Effect class, then instantiates it (zero-arg). Disabled entries
+    are skipped. Names the factory doesn't recognize are skipped
+    silently (already logged inside the factory).
+
+    Args:
+        effect_settings: The v2 `EffectsSettings` block from `SignConfig`.
+        effect_class_factory: Callable `name -> type | None`. Defaults
+            to `lib_shared.effects_factory.make_effect_class`. Tests
+            can pass a stub that returns simple effect classes.
+
+    Returns:
+        A list of instantiated Effect objects in the order
+        declared in `effect_settings.effects`. Enabled effects
+        only. May be empty if all effects are disabled or unknown.
+    """
+    if effect_settings is None:
+        return []
+    if effect_class_factory is None:
+        from lib_shared.effects_factory import make_effect_class
+
+        effect_class_factory = make_effect_class
+    out = []
+    for entry in effect_settings.effects:
+        if not entry.get("enabled"):
+            continue
+        cls = effect_class_factory(entry.get("name", ""))
+        if cls is None:
+            continue
+        out.append(cls())
+    return out
+
+
 class EffectsCoordinator:
     """Drives the boot splash, message lifecycle, and idle rotation.
 
@@ -154,6 +194,28 @@ class EffectsCoordinator:
     def request_message(self, text):
         """Deprecated alias for `set_text`; kept so old call sites compile."""
         self.set_text(text)
+
+    def apply_settings(self, effect_settings: EffectsSettings) -> None:
+        """Live-update pacing + recent_count from a v2 `EffectsSettings`.
+
+        Called when a config envelope arrives over MQTT/WS; mutates
+        the coordinator's pacing attributes in place. Does NOT touch
+        the effects rotation — that's a separate `build_effects` call
+        that the caller (Pi main.py / preview_main.py) is expected to
+        make, then assign to `coordinator.effects`.
+        """
+        if effect_settings is None:
+            return
+        self.fade_seconds = effect_settings.fade_seconds
+        self.hold_seconds = effect_settings.hold_seconds
+        self.intro_seconds = effect_settings.intro_seconds
+        self.idle_seconds = effect_settings.idle_seconds
+        self.recent_count = effect_settings.recent_count
+        # Resize the in-memory recent deque. Existing entries are kept
+        # up to the new maxlen; older ones are dropped automatically.
+        if self.recent_provider is None:
+            existing = list(self._recent)
+            self._recent = deque(existing, maxlen=self.recent_count)
 
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""

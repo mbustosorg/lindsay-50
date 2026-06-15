@@ -1,11 +1,8 @@
 """Tests for lib_shared.models.TextSettings (v2 config block).
 
-Covers:
-- Default values (frame_delay, offset_seconds, color, text_effect)
-- TEXT_EFFECTS whitelist
-- Round-trip via from_dict / to_dict
-- Validation (out-of-range pacing, bad color, unknown text_effect)
-- Wire shape
+The wire shape is `speed` (1..5) + `color` + `text_effect`; the device
+translates speed → frame_delay / offset_seconds inside the scroller
+(see tests/text_speed_test.py for the mapping table).
 """
 
 import pytest
@@ -14,10 +11,9 @@ from lib_shared.models import TextSettings
 
 
 def test_default_values():
-    """The historic per-field defaults are preserved."""
+    """The historic defaults (color, text_effect) and the new speed=3 default."""
     s = TextSettings()
-    assert s.frame_delay == 0.04
-    assert s.offset_seconds == 1.0
+    assert s.speed == 3
     assert s.color == 0xFF0000
     assert s.text_effect == "scroll"
 
@@ -27,18 +23,17 @@ def test_text_effects_whitelist():
     assert TextSettings.TEXT_EFFECTS == ("scroll",)
 
 
-def test_to_dict_contains_all_fields():
-    """to_dict emits the four-field wire shape."""
+def test_to_dict_contains_only_three_fields():
+    """to_dict emits the three-field wire shape (no frame_delay / offset_seconds)."""
     d = TextSettings().to_dict()
-    assert set(d.keys()) == {"frame_delay", "offset_seconds", "color", "text_effect"}
+    assert set(d.keys()) == {"speed", "color", "text_effect"}
 
 
 def test_round_trip_default():
     """from_dict(to_dict(s)) == s (defaults)."""
     s = TextSettings()
     s2 = TextSettings.from_dict(s.to_dict())
-    assert s2.frame_delay == s.frame_delay
-    assert s2.offset_seconds == s.offset_seconds
+    assert s2.speed == s.speed
     assert s2.color == s.color
     assert s2.text_effect == s.text_effect
 
@@ -46,7 +41,7 @@ def test_round_trip_default():
 def test_from_dict_accepts_empty_dict():
     """An empty dict yields the canonical defaults."""
     s = TextSettings.from_dict({})
-    assert s.frame_delay == 0.04
+    assert s.speed == 3
     assert s.color == 0xFF0000
 
 
@@ -54,20 +49,19 @@ def test_from_dict_none_uses_defaults():
     """from_dict(None) yields the canonical defaults."""
     s = TextSettings.from_dict(None)
     assert s.color == 0xFF0000
+    assert s.speed == 3
 
 
 def test_from_dict_with_custom_values():
     """from_dict picks up custom field values."""
     s = TextSettings.from_dict(
         {
-            "frame_delay": 0.02,
-            "offset_seconds": 2.5,
+            "speed": 5,
             "color": 0x00FF00,
             "text_effect": "scroll",
         }
     )
-    assert s.frame_delay == 0.02
-    assert s.offset_seconds == 2.5
+    assert s.speed == 5
     assert s.color == 0x00FF00
     assert s.text_effect == "scroll"
 
@@ -78,16 +72,65 @@ def test_from_dict_rejects_unknown_text_effect():
         TextSettings.from_dict({"text_effect": "spiral"})
 
 
-def test_validate_negative_frame_delay_raises():
-    """validate() raises on negative frame_delay."""
-    s = TextSettings(frame_delay=-0.01)
+def test_from_dict_rejects_speed_zero():
+    """from_dict raises ValueError when speed < 1."""
+    with pytest.raises(ValueError):
+        TextSettings.from_dict({"speed": 0})
+
+
+def test_from_dict_rejects_speed_six():
+    """from_dict raises ValueError when speed > 5."""
+    with pytest.raises(ValueError):
+        TextSettings.from_dict({"speed": 6})
+
+
+def test_from_dict_rejects_speed_non_int():
+    """from_dict raises ValueError when speed is a non-int (str, float)."""
+    with pytest.raises(ValueError):
+        TextSettings.from_dict({"speed": "fast"})
+    with pytest.raises(ValueError):
+        TextSettings.from_dict({"speed": 3.0})
+
+
+def test_from_dict_rejects_speed_bool():
+    """from_dict raises ValueError on bool (Python's bool is an int subclass)."""
+    with pytest.raises(ValueError):
+        TextSettings.from_dict({"speed": True})
+
+
+def test_from_dict_ignores_legacy_frame_delay():
+    """Old v2 payloads with frame_delay / offset_seconds don't crash; the
+    new `speed` defaults to 3 and the technical fields are silently dropped.
+    """
+    s = TextSettings.from_dict({"frame_delay": 0.02, "offset_seconds": 2.5, "color": 0x00FF00})
+    assert s.speed == 3
+    assert s.color == 0x00FF00
+
+
+def test_validate_speed_zero_raises():
+    """validate() raises when speed is out of range (0)."""
+    s = TextSettings(speed=0)
     with pytest.raises(ValueError):
         s.validate()
 
 
-def test_validate_negative_offset_raises():
-    """validate() raises on negative offset_seconds."""
-    s = TextSettings(offset_seconds=-1.0)
+def test_validate_speed_six_raises():
+    """validate() raises when speed is out of range (6)."""
+    s = TextSettings(speed=6)
+    with pytest.raises(ValueError):
+        s.validate()
+
+
+def test_validate_speed_non_int_raises():
+    """validate() raises on non-int speeds."""
+    s = TextSettings(speed="fast")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        s.validate()
+
+
+def test_validate_speed_bool_rejected():
+    """validate() rejects bool (which is technically int in Python)."""
+    s = TextSettings(speed=True)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         s.validate()
 
@@ -115,12 +158,6 @@ def test_validate_color_zero_accepted():
 def test_validate_color_max_accepted():
     """validate() accepts color == 0xFFFFFF (white)."""
     s = TextSettings(color=0xFFFFFF)
-    s.validate()  # no raise
-
-
-def test_validate_zero_pacing_accepted():
-    """Zero frame_delay / offset_seconds are valid."""
-    s = TextSettings(frame_delay=0.0, offset_seconds=0.0)
     s.validate()  # no raise
 
 

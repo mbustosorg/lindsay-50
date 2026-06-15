@@ -52,6 +52,7 @@ from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.models import MessageEnvelope
 from lib_shared.models import _DEFAULT_EFFECTS_LIST_FULL
+from lib_shared.scroller_base import ScrollerBase
 
 # App setup
 app = Flask(__name__)
@@ -488,11 +489,11 @@ def _build_sign_config_from_request(data: dict) -> tuple:
     if ts is not None:
         if not isinstance(ts, dict):
             return None, (jsonify({"error": "text_settings must be an object"}), 400)
-        for field in ("frame_delay", "offset_seconds"):
-            v = ts.get(field)
-            if v is not None and (not isinstance(v, (int, float)) or v < 0):
+        speed = ts.get("speed")
+        if speed is not None:
+            if isinstance(speed, bool) or not isinstance(speed, int) or not (1 <= speed <= 5):
                 return None, (
-                    jsonify({"error": f"text_settings.{field}: must be a non-negative number"}),
+                    jsonify({"error": "text_settings.speed: must be an integer in 1..5"}),
                     400,
                 )
         color = ts.get("color")
@@ -634,18 +635,14 @@ def settings():
             except ZoneInfoNotFoundError:
                 pass  # ignore invalid timezone, keep current value
 
-        # Text settings: frame delay, offset, color, text effect.
+        # Text settings: speed (1..5), color, text effect.
         ts_form = cfg.text_settings
-        fd = request.form.get("text_settings_frame_delay")
-        if fd is not None and fd != "":
+        speed_raw = request.form.get("text_settings_speed")
+        if speed_raw is not None and speed_raw != "":
             try:
-                ts_form.frame_delay = float(fd)
-            except ValueError:
-                pass
-        off = request.form.get("text_settings_offset_seconds")
-        if off is not None and off != "":
-            try:
-                ts_form.offset_seconds = float(off)
+                speed_val = int(speed_raw)
+                if 1 <= speed_val <= 5:
+                    ts_form.speed = speed_val
             except ValueError:
                 pass
         color = request.form.get("text_settings_color")
@@ -708,6 +705,7 @@ def settings():
         "settings.html",
         cfg=cfg,
         sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
+        speed_labels=ScrollerBase.SPEED_LABELS,
     )
 
 

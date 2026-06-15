@@ -195,8 +195,7 @@ def test_valid_v2_payload_returns_200(client, esp32_headers):
             "recent_count": 5,
         },
         "text_settings": {
-            "frame_delay": 0.04,
-            "offset_seconds": 1.0,
+            "speed": 3,
             "color": 0xFF0000,
             "text_effect": "scroll",
         },
@@ -353,22 +352,52 @@ def test_text_settings_must_be_object(client, esp32_headers):
     assert response.status_code == 400
 
 
-def test_text_settings_negative_frame_delay_rejected(client, esp32_headers):
+def test_text_settings_speed_zero_rejected(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"text_settings": {"frame_delay": -0.01}},
+        json={"text_settings": {"speed": 0}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
 
 
-def test_text_settings_negative_offset_rejected(client, esp32_headers):
+def test_text_settings_speed_six_rejected(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"text_settings": {"offset_seconds": -1.0}},
+        json={"text_settings": {"speed": 6}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
+
+
+def test_text_settings_speed_non_int_rejected(client, esp32_headers):
+    response = client.put(
+        "/api/config",
+        json={"text_settings": {"speed": "fast"}},
+        headers=esp32_headers,
+    )
+    assert response.status_code == 400
+
+
+def test_text_settings_speed_bool_rejected(client, esp32_headers):
+    """bool is an int subclass in Python; the API must reject it explicitly."""
+    response = client.put(
+        "/api/config",
+        json={"text_settings": {"speed": True}},
+        headers=esp32_headers,
+    )
+    assert response.status_code == 400
+
+
+def test_text_settings_speed_in_range_accepted(client, esp32_headers):
+    """All five legal speeds (1..5) are accepted."""
+    for speed in (1, 2, 3, 4, 5):
+        response = client.put(
+            "/api/config",
+            json={"text_settings": {"speed": speed}},
+            headers=esp32_headers,
+        )
+        assert response.status_code == 200, f"speed {speed} unexpectedly rejected"
 
 
 def test_text_settings_color_too_high_rejected(client, esp32_headers):

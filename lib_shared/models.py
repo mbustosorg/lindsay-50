@@ -273,33 +273,38 @@ class EffectsSettings:
 
 
 class TextSettings:
-    """Text rendering config: scroll speed, offset, color, text_effect.
+    """Text rendering config: scroll speed, color, text_effect.
 
-    Named "text_settings" (not "scroller_settings") because the scroller is
-    just one text effect — future text effects (swirl, bounce) will share
-    the same block.
+    `speed` is the user-facing knob (1=Low to 5=High). The underlying
+    `frame_delay` / `offset_seconds` are derived from it by the scroller
+    (see `ScrollerBase.SPEED_TABLE`). The wire shape stores `speed` only
+    — the technical pacing values are device-local.
+
+    Named "text_settings" (not "scroller_settings") because the scroller
+    is just one text effect — future text effects (swirl, bounce) will
+    share the same block.
     """
 
     # v1 supports "scroll" only; more values land as future text effects.
     TEXT_EFFECTS: tuple = ("scroll",)
+    MIN_SPEED = 1
+    MAX_SPEED = 5
+    DEFAULT_SPEED = 3
 
     def __init__(
         self,
-        frame_delay: float = 0.04,
-        offset_seconds: float = 1.0,
+        speed: int = DEFAULT_SPEED,
         color: int = 0xFF0000,
         text_effect: str = "scroll",
     ):
         """Initialize TextSettings.
 
         Args:
-            frame_delay: Seconds per pixel of scroll motion (default 0.04).
-            offset_seconds: Two-line offset (default 1.0).
+            speed: 1..5 scroll speed (1=Low, 3=Medium default, 5=High).
             color: 24-bit RGB color value (default 0xFF0000 red).
             text_effect: One of TEXT_EFFECTS (currently "scroll").
         """
-        self.frame_delay = frame_delay
-        self.offset_seconds = offset_seconds
+        self.speed = speed
         self.color = color
         self.text_effect = text_effect
 
@@ -308,21 +313,28 @@ class TextSettings:
         """Parse from a dict (wire shape).
 
         Args:
-            d: dict with optional keys: frame_delay, offset_seconds, color, text_effect.
+            d: dict with optional keys: speed, color, text_effect. Legacy
+                `frame_delay` / `offset_seconds` keys are silently ignored —
+                the new defaults are sensible and the user said v2 payloads
+                are disposable.
 
         Returns:
             A new TextSettings instance.
 
         Raises:
-            ValueError: on an unknown text_effect value.
+            ValueError: on an unknown text_effect, or on an out-of-range
+                or non-integer `speed` (callers like the admin validation
+                helper catch and translate to a 400).
         """
         d = d or {}
         text_effect = d.get("text_effect", "scroll")
         if text_effect not in cls.TEXT_EFFECTS:
             raise ValueError(f"text_effect must be one of {cls.TEXT_EFFECTS}, got {text_effect!r}")
+        speed = d.get("speed", cls.DEFAULT_SPEED)
+        if isinstance(speed, bool) or not isinstance(speed, int) or not cls.MIN_SPEED <= speed <= cls.MAX_SPEED:
+            raise ValueError(f"speed must be an integer in {cls.MIN_SPEED}..{cls.MAX_SPEED}, got {speed!r}")
         return cls(
-            frame_delay=float(d.get("frame_delay", 0.04)),
-            offset_seconds=float(d.get("offset_seconds", 1.0)),
+            speed=speed,
             color=int(d.get("color", 0xFF0000)),
             text_effect=text_effect,
         )
@@ -330,8 +342,7 @@ class TextSettings:
     def to_dict(self):
         """Serialize to a dict (wire shape)."""
         return {
-            "frame_delay": self.frame_delay,
-            "offset_seconds": self.offset_seconds,
+            "speed": self.speed,
             "color": self.color,
             "text_effect": self.text_effect,
         }
@@ -340,13 +351,15 @@ class TextSettings:
         """Raise ValueError on out-of-range values.
 
         Raises:
-            ValueError: on negative frame_delay/offset_seconds, color outside
-                0–0xFFFFFF, or an unknown text_effect.
+            ValueError: on speed outside 1..5, color outside 0..0xFFFFFF,
+                or an unknown text_effect.
         """
-        if self.frame_delay < 0:
-            raise ValueError("frame_delay must be non-negative")
-        if self.offset_seconds < 0:
-            raise ValueError("offset_seconds must be non-negative")
+        if (
+            isinstance(self.speed, bool)
+            or not isinstance(self.speed, int)
+            or not self.MIN_SPEED <= self.speed <= self.MAX_SPEED
+        ):
+            raise ValueError(f"speed must be an integer in {self.MIN_SPEED}..{self.MAX_SPEED}")
         if not (0 <= self.color <= 0xFFFFFF):
             raise ValueError("color must be in range 0..0xFFFFFF")
         if self.text_effect not in self.TEXT_EFFECTS:

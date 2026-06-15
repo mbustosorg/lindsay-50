@@ -46,19 +46,6 @@
       <span>✨</span> Effects
     </h3>
 
-    <div class="mb-6">
-      <h4 class="font-heading font-semibold text-dark text-base mb-3">Effects List</h4>
-      <p class="text-sm text-slate-500 mb-3">Background effects that cycle between messages. Enabled effects are rotated in the order shown.</p>
-      <div class="space-y-2">
-        {% for entry in cfg.effect_settings.effects %}
-        <label class="flex items-center gap-3 px-4 py-2 rounded-xl border border-indigo-100 hover:bg-indigo-50/40 transition-colors cursor-pointer">
-          <input type="checkbox" name="effect_name" value="{{ entry.name }}"{% if entry.enabled %} checked{% endif %} class="w-4 h-4 rounded text-primary focus:ring-primary">
-          <span class="font-medium text-dark">{{ entry.name }}</span>
-        </label>
-        {% endfor %}
-      </div>
-    </div>
-
     <div>
       <h4 class="font-heading font-semibold text-dark text-base mb-3">Settings</h4>
       <div class="grid grid-cols-3 gap-6">
@@ -84,6 +71,28 @@
         </div>
       </div>
     </div>
+
+    {# --- Effects List (drawer — collapsed by default to keep the page tight) --- #}
+    <div class="mt-6 -mx-6 -mb-6 rounded-b-2xl border-t border-indigo-50">
+      <button class="w-full px-6 py-4 flex items-center justify-between text-left hover:bg-indigo-50/50 transition-colors"
+              onclick="toggleSection('effects-list')">
+        <span class="font-semibold font-heading text-dark text-base">Effects List</span>
+        <svg id="effects-list-chevron" class="w-5 h-5 text-slate-400 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+        </svg>
+      </button>
+      <div id="effects-list-section" class="hidden px-6 pb-6">
+        <p class="text-sm text-slate-500 mb-3">Background effects that cycle between messages. Enabled effects are rotated in the order shown.</p>
+        <div class="space-y-2">
+          {% for entry in cfg.effect_settings.effects %}
+          <label class="flex items-center gap-3 px-4 py-2 rounded-xl border border-indigo-100 hover:bg-indigo-50/40 transition-colors cursor-pointer">
+            <input type="checkbox" name="effect_name" value="{{ entry.name }}"{% if entry.enabled %} checked{% endif %} class="w-4 h-4 rounded text-primary focus:ring-primary">
+            <span class="font-medium text-dark">{{ entry.name }}</span>
+          </label>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Text -->
@@ -93,16 +102,19 @@
     </h3>
     <div class="grid grid-cols-2 gap-6">
       <div>
-        <label class="block text-sm font-medium text-slate-600 mb-2">Frame Delay (s)</label>
-        <input type="number" name="text_settings_frame_delay" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.001" min="0" value="{{ cfg.text_settings.frame_delay }}">
+        <label class="block text-sm font-medium text-slate-600 mb-2">Speed</label>
+        <select name="text_settings_speed" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
+          {% for i in range(1, 6) %}
+          <option value="{{ i }}"{% if cfg.text_settings.speed == i %} selected{% endif %}>{{ speed_labels[i - 1] }}</option>
+          {% endfor %}
+        </select>
       </div>
       <div>
-        <label class="block text-sm font-medium text-slate-600 mb-2">Offset (s)</label>
-        <input type="number" name="text_settings_offset_seconds" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.01" min="0" value="{{ cfg.text_settings.offset_seconds }}">
-      </div>
-      <div>
-        <label class="block text-sm font-medium text-slate-600 mb-2">Color (hex)</label>
-        <input type="text" name="text_settings_color" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ '#%06x'|format(cfg.text_settings.color) }}">
+        <label class="block text-sm font-medium text-slate-600 mb-2">Color</label>
+        <div class="flex gap-2 items-center">
+          <input type="color" id="text-color-picker" class="h-12 w-16 rounded-xl border border-indigo-200 cursor-pointer" value="{{ '#%06x'|format(cfg.text_settings.color) }}">
+          <input type="text" name="text_settings_color" id="text-color-hex" class="flex-1 px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-mono" value="{{ '#%06x'|format(cfg.text_settings.color) }}">
+        </div>
       </div>
       <div>
         <label class="block text-sm font-medium text-slate-600 mb-2">Text Effect</label>
@@ -222,5 +234,32 @@ function addSenderRow() {
   tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
   tbody.appendChild(tr);
 }
+
+// Bidirectional wiring for the text color control: <input type="color">
+// and the hex text field mirror each other. Only the hex field has
+// name= and POSTs to /settings; the color picker is purely a UI affordance.
+(function () {
+  const picker = document.getElementById('text-color-picker');
+  const hex = document.getElementById('text-color-hex');
+  if (!picker || !hex) return;
+
+  const HEX_RE = /^#[0-9a-fA-F]{6}$/;
+
+  function normalizeHex(value) {
+    if (!value) return null;
+    let v = value.trim();
+    if (v.length > 0 && v[0] !== '#') v = '#' + v;
+    return HEX_RE.test(v) ? v.toLowerCase() : null;
+  }
+
+  picker.addEventListener('input', function () {
+    hex.value = picker.value.toLowerCase();
+  });
+
+  hex.addEventListener('input', function () {
+    const normalized = normalizeHex(hex.value);
+    if (normalized) picker.value = normalized;
+  });
+})();
 </script>
 {% endblock %}

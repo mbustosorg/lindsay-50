@@ -175,9 +175,25 @@
     // The base template's app.js exposes `window.App.registerOnMessageCallback`.
     // It wires the in-browser MessageManager's on_message signal to a
     // user-supplied function. The body of the Message is forwarded to
-    // the PyScript coordinator.
+    // the PyScript coordinator; config-shaped payloads (carrying
+    // effect_settings / text_settings blocks) are routed to the
+    // Python-side `apply_config` so the preview rotation + scroller
+    // re-bind live.
     if (window.App && typeof window.App.registerOnMessageCallback === "function") {
       window.App.registerOnMessageCallback((msg) => {
+        // A config envelope is identified by presence of effect_settings
+        // (the wire-shape marker). Send it to Python; everything else is
+        // a message envelope.
+        if (msg && msg.effect_settings) {
+          try {
+            if (typeof window.apply_config === "function") {
+              window.apply_config(msg);
+            }
+          } catch (e) {
+            console.error("apply_config error:", e);
+          }
+          return;
+        }
         const body = msg && msg.body;
         if (body === undefined || body === null || body === "") return;
         if (body === lastShownBody) return;     // dedup
@@ -205,6 +221,10 @@
     // arrived before the seed completed (lastShownBody will be set and
     // dedup will skip the redundant call).
     seedPreviewFromBuffer();
+    // Seed the preview with the current config (effect rotation, scroller
+    // color/speed). Idempotent: apply_config replaces the rotation in
+    // place and the scroller re-binds, so a second call is safe.
+    seedPreviewFromConfig();
   }
 
   async function seedPreviewFromBuffer() {
@@ -221,6 +241,19 @@
       }
     } catch (e) {
       console.warn("seedPreviewFromBuffer failed:", e);
+    }
+  }
+
+  async function seedPreviewFromConfig() {
+    if (!window.App || typeof window.App.getConfig !== "function") return;
+    try {
+      const cfg = await window.App.getConfig();
+      if (!cfg) return;
+      if (typeof window.apply_config === "function") {
+        window.apply_config(cfg);
+      }
+    } catch (e) {
+      console.warn("seedPreviewFromConfig failed:", e);
     }
   }
 

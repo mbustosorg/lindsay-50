@@ -27,64 +27,38 @@ log = logging.getLogger("heart")
 
 from rgb_matrix_display import MatrixDisplay
 from scroller import MatrixScroller
-from lib_shared.patterns.fireworks import Fireworks
-from lib_shared.patterns.flame import Flame
-from lib_shared.patterns.nightsky import NightSky
-from lib_shared.patterns.png_display import PngDisplay
-from lib_shared.patterns.video_display import VideoDisplay
-from lib_shared.patterns.honeycomb import Honeycomb
 from lib_shared.patterns.hyperspace import Hyperspace
 from lib_shared.patterns.heartbeat import Heartbeat
 from lib_shared.message_manager import MessageManager
 from lib_shared.paho_mqtt_client import PahoMqttClient
-from lib_shared.effects_coordinator import EffectsCoordinator
-from lib_shared.models import TextSettings
+from lib_shared.effects_coordinator import EffectsCoordinator, build_effects
+from lib_shared.models import EffectsSettings, TextSettings
 
 display = MatrixDisplay()
-# The scroller takes its text settings from the v2 config. We pass defaults
-# here; `coordinator` reads `text_settings` from the same config and pushes
-# color / frame_delay / offset_seconds updates through `_apply_text_settings`
-# whenever a new config envelope arrives.
+# The scroller takes its text settings from the v2 config. The boot-time
+# defaults are the same TextSettings().to_dict() values the admin UI
+# would write; the v2 envelope that arrives over MQTT shortly after
+# re-binds color and speed via `scroller.set_color()` and
+# `scroller.set_speed()`.
 text_settings = TextSettings()
 scroller = MatrixScroller(
     display,
     color=text_settings.color,
-    frame_delay=text_settings.frame_delay,
-    offset_seconds=text_settings.offset_seconds,
+    speed=text_settings.speed,
 )
 heartbeat = Heartbeat(display)
-
-
-# Map from canonical effect name to its concrete class. The key matches
-# `_DEFAULT_EFFECTS_LIST_FULL` in lib_shared.models so config-driven
-# enabled flags and rotation order stay aligned with the Flask admin UI.
-_EFFECT_CLASSES = {
-    "Hyperspace": Hyperspace,
-    "VideoDisplay": VideoDisplay,
-    "PngDisplay": PngDisplay,
-    "Honeycomb": Honeycomb,
-    "Flame": Flame,
-    "Fireworks": Fireworks,
-    "NightSky": NightSky,
-}
 
 
 def _build_effects(settings):
     """Build the rotation list from the v2 EffectsSettings config.
 
-    Reads `settings.effects` (a list of {name, enabled} dicts) and instantiates
-    one of each enabled name in the listed order. Unknown names are skipped
-    with a warning; disabled entries are dropped entirely.
+    Delegates to `build_effects` (the shared orchestrator) which uses
+    `lib_shared.effects_factory.make_effect_class` to resolve each
+    enabled name. Falls back to Hyperspace if the result is empty
+    (e.g. all effects disabled in the admin UI), so the sign never
+    goes dark.
     """
-    out = []
-    for entry in settings.effects or []:
-        if not entry.get("enabled"):
-            continue
-        cls = _EFFECT_CLASSES.get(entry["name"])
-        if cls is None:
-            log.warning("Unknown effect in config: %r (skipped)", entry.get("name"))
-            continue
-        out.append(cls(display))
+    out = build_effects(settings)
     if not out:
         log.warning("No effects enabled in config; falling back to Hyperspace")
         out = [Hyperspace(display)]
@@ -93,8 +67,6 @@ def _build_effects(settings):
 
 # Boot with the default effect settings (the v2 config arrives over MQTT
 # shortly after and refreshes the rotation + scroller + pacing).
-from lib_shared.models import EffectsSettings
-
 _boot_settings = EffectsSettings()
 effects = _build_effects(_boot_settings)
 
@@ -132,22 +104,18 @@ def _on_config_update(cfg_dict):
     new_effects = _build_effects(new_cfg.effect_settings)
     coordinator.effects = new_effects
     coordinator.idx = -1  # next fade picks the head of the new list
-    # Re-bind pacing knobs.
-    coordinator.fade_seconds = new_cfg.effect_settings.fade_seconds
-    coordinator.hold_seconds = new_cfg.effect_settings.hold_seconds
-    coordinator.intro_seconds = new_cfg.effect_settings.intro_seconds
-    coordinator.idle_seconds = new_cfg.effect_settings.idle_seconds
-    coordinator.recent_count = new_cfg.effect_settings.recent_count
-    # Re-size the recent-messages deque.
-    from collections import deque
-
-    coordinator._recent = deque(coordinator._recent, maxlen=new_cfg.effect_settings.recent_count)
+    # Re-bind pacing + recent_count in place.
+    coordinator.apply_settings(new_cfg.effect_settings)
     # Apply text settings to the scroller.
     ts = new_cfg.text_settings
-    scroller._color = ts.color
-    scroller.frame_delay = ts.frame_delay
-    scroller.offset_seconds = ts.offset_seconds
-    log.info("Applied config update: %d effects, text_color=#%06x", len(new_effects), ts.color)
+    scroller.set_color(ts.color)
+    scroller.set_speed(ts.speed)
+    log.info(
+        "Applied config update: %d effects, text_color=#%06x, speed=%d",
+        len(new_effects),
+        ts.color,
+        ts.speed,
+    )
 
 
 # Wrap MessageManager's dispatch so a config envelope also triggers

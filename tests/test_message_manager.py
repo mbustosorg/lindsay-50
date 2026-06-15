@@ -102,8 +102,7 @@ def seed_config():
             "recent_count": 5,
         },
         "text_settings": {
-            "frame_delay": 0.04,
-            "offset_seconds": 1.0,
+            "speed": 3,
             "color": 16711680,
             "text_effect": "scroll",
         },
@@ -433,8 +432,7 @@ class TestDispatchMessage:
                     "recent_count": 5,
                 },
                 "text_settings": {
-                    "frame_delay": 0.04,
-                    "offset_seconds": 1.0,
+                    "speed": 3,
                     "color": 16711680,
                     "text_effect": "scroll",
                 },
