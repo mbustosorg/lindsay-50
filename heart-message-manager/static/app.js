@@ -118,6 +118,19 @@
     if (typeof window._seed === "function") {
       try {
         await window._seed();
+        // Probe buffer state right after seed resolves — tells us
+        // whether the in-browser MessageManager is actually populated
+        // (testing.html renders from the same path; if this is empty
+        // the page table is also empty).
+        let probeLen = -1;
+        try {
+          if (window._message_manager) {
+            probeLen = (await window._message_manager.get_messages(100, false)).length;
+          }
+        } catch (e) {
+          console.warn("[DEBUG app.js] post-seed probe failed:", e);
+        }
+        console.log("[DEBUG app.js] seed complete; buffer probe length=", probeLen);
       } catch (e) {
         console.warn("seed failed:", e);
       }
