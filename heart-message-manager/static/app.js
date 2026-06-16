@@ -103,15 +103,26 @@
     // `@login_required` on every admin route, so this only runs
     // for authenticated users). Covers login (which always
     // redirects to a fresh page) and full-page-reload (Pi-reboot
-    // analog). The PyScript side does the actual seeding; if
-    // PyScript hasn't finished loading yet the call is a no-op
-    // (it'll run again on the next page load).
+    // analog). The PyScript side does the actual seeding; PyScript
+    // 2024.9.x loads asynchronously and may not have installed
+    // `window._seed` by the time `DOMContentLoaded` fires, so we
+    // poll for it (cap ~5s) before falling back. The 5s window
+    // covers PyScript's normal bootstrap on a cold load (micropip
+    // + numpy + Pillow + the in-browser render path) — a slow
+    // load surfaces as a "No messages" placeholder that fills in
+    // when the seed resolves, not as a permanently-empty feed.
+    const seedDeadline = Date.now() + 5000;
+    while (typeof window._seed !== "function" && Date.now() < seedDeadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
     if (typeof window._seed === "function") {
       try {
         await window._seed();
       } catch (e) {
         console.warn("seed failed:", e);
       }
+    } else {
+      console.warn("window._seed never appeared; skipping in-browser seed");
     }
   }
 

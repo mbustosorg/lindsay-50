@@ -2,9 +2,17 @@
 
 The app-scoped `EffectsCoordinator` is created at PyScript load
 time by `app_main.py` and exposed on `window._coordinator`. This
-file runs after `app_main.py` (PyScript evaluates them in document
-order) and binds the coordinator to the page-local render layer
-that the canvas needs to exist before any frame can composite.
+file runs after `app_main.py` and binds the coordinator to the
+page-local render layer that the canvas needs to exist before
+any frame can composite.
+
+PyScript 2024.9.x evaluates each `<py-script>` element as its
+own async task — there is no guarantee they run in document
+order, and `preview_main.py` has been observed to start before
+`app_main.py` has finished assigning `window._coordinator`. The
+waiter in `_wait_for_coordinator()` polls `js.window._coordinator`
+for up to ~5 seconds (250 iterations × 20 ms) before giving up,
+which covers PyScript's normal bootstrap latency.
 
 Owns (per-page, not app-scoped):
   - the `WebCanvas` + `WebDisplay` (backed by the HTML5 `<canvas>`)
@@ -89,30 +97,44 @@ PANEL_WIDTH = 64
 PANEL_HEIGHT = 64
 
 
+# Module-level slot for the bound coordinator. `_bootstrap()`
+# writes the app-scoped coordinator here once the wait resolves;
+# the JS-callable surface reads from it. A dict (rather than
+# the bare name `_coord`) makes the write/read split explicit
+# and avoids the "local variable referenced before assignment"
+# class of bug if a JS callback ever lands mid-bootstrap.
+_coord_ref: dict = {}
+
+
 def _coordinator():
     """Return the app-scoped `EffectsCoordinator` set by `app_main.py`.
 
-    `app_main.py` runs first (loaded earlier in base.html's script
-    sequence) and assigns `window._coordinator`. Preview.js's rAF
-    loop calls `window.tick()` once per frame, which delegates to
-    the same coordinator; this file binds the page-local render
-    layer onto it once and never touches it again.
+    `app_main.py` runs as its own async PyScript task and assigns
+    `window._coordinator`. By the time `_bootstrap()` calls this,
+    the wait above has already confirmed the property is set.
     """
     coord = getattr(js.window, "_coordinator", None)
     if coord is None:
-        raise RuntimeError("app_main.py did not install window._coordinator — " "preview_main.py must run after it")
+        raise RuntimeError("app_main.py did not install window._coordinator")
     return coord
 
 
 def _message_manager():
-    """Return the app-scoped MessageManager (for `get_messages` / `get_config`)."""
+    """Return the app-scoped MessageManager (for `get_messages` / `get_config`).
+
+    Same ordering concern as `_coordinator()` — `app_main.py`
+    installs both. The boot waiter below blocks on
+    `_coordinator` first, which `app_main.py` installs
+    immediately after `_message_manager` in the same script, so
+    by the time we get here `_message_manager` is set too.
+    """
     mgr = getattr(js.window, "_message_manager", None)
     if mgr is None:
-        raise RuntimeError("app_main.py did not install window._message_manager — " "preview_main.py must run after it")
+        raise RuntimeError("app_main.py did not install window._message_manager")
     return mgr
 
 
-# --- Build the page-local render layer ---
+# --- Build the page-local render layer (before awaiting the coordinator) ---
 
 _web_canvas = WebCanvas(PANEL_WIDTH, PANEL_HEIGHT)
 _display = WebDisplay(_web_canvas)
@@ -134,38 +156,89 @@ _scroller = PreviewScroller(
 _heart = Heartbeat(_display)
 
 
-# --- Bind the render layer to the app-scoped coordinator ---
-
-_coord = _coordinator()
-_coord.bind(
-    display=_display,
-    scroller=_scroller,
-    effects=_effects,
-    heart=_heart,
-)
+import asyncio  # noqa: E402
 
 
-# Begin the boot splash. The latest seeded message (if any) plays
-# once the heart fades out — mirroring the device's "show the last
-# seeded message at startup" behavior.
-async def _start_with_latest_seeded_message() -> None:
+async def _wait_for_coordinator(timeout_s: float = 5.0, poll_ms: int = 20) -> None:
+    """Poll `js.window._coordinator` until `app_main.py` sets it.
+
+    PyScript 2024.9.x evaluates each `<py-script>` element as
+    its own async task; there is no in-order guarantee. The
+    preview's py-script element sits below the app's, but
+    `app_main.py` is heavy (it imports `MessageManager`, builds
+    the WS client, and posts a `loadPackage` await) — long
+    enough that `preview_main.py` has been observed to reach
+    its top-level statements first. This waiter closes that
+    race without requiring a JS-side event hook.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    poll_s = poll_ms / 1000.0
+    attempts = 0
+    while True:
+        if getattr(js.window, "_coordinator", None) is not None:
+            if attempts > 0:
+                print(f"[preview] coordinator appeared after {attempts} polls ({attempts * poll_s:.2f}s)")
+            return
+        if asyncio.get_event_loop().time() >= deadline:
+            raise RuntimeError(
+                f"app_main.py did not install window._coordinator within {timeout_s}s "
+                f"({int(timeout_s / poll_s)} polls) — preview_main.py cannot bind"
+            )
+        attempts += 1
+        await asyncio.sleep(poll_s)
+
+
+async def _bootstrap() -> None:
+    """Wait for `app_main.py`, then bind + start the preview.
+
+    Everything that depends on the app-scoped coordinator /
+    message manager lives inside this coroutine. The wait
+    resolves the document-order race; the bind mirrors the
+    device's startup sequence; the start kicks the boot splash
+    with the latest seeded message (if any).
+    """
+    await _wait_for_coordinator()
+
+    # --- Bind the render layer to the app-scoped coordinator ---
+    coord = _coordinator()
+    coord.bind(
+        display=_display,
+        scroller=_scroller,
+        effects=_effects,
+        heart=_heart,
+    )
+    _coord_ref["coord"] = coord
+
+    # Begin the boot splash. The latest seeded message (if any) plays
+    # once the heart fades out — mirroring the device's "show the last
+    # seeded message at startup" behavior.
     try:
         entries = _message_manager().get_messages(limit=1, suppress=True)
     except Exception:
         entries = []
     startup_text = entries[0].message.body if entries else None
-    _coord.start(startup_text)
+    coord.start(startup_text)
+
+    # Install the JS surface last, once the coordinator is bound
+    # and the boot has been kicked. Any `tick()` / `request_message`
+    # / `apply_config` call that lands after this returns is safe.
+    _install_js_api()
+    print("[preview] bootstrap complete; JS surface installed")
 
 
-# Kick off the boot in a microtask so the `seed()` (already
-# triggered by app.js on `DOMContentLoaded`) has a chance to land
-# before we read the ring buffer. If the seed is in flight the
-# buffer is empty; we boot splash, and the first live envelope
-# after the seed completes kicks the most recent body through
-# `set_text`.
-import asyncio  # noqa: E402
+asyncio.ensure_future(_bootstrap())
 
-asyncio.ensure_future(_start_with_latest_seeded_message())
+
+def _coord():
+    """Return the bound coordinator, or None if bootstrap is still in flight.
+
+    JS-callable surface (tick, apply_config, request_message) calls
+    this on every invocation. The `None` branch is rare — those
+    callbacks only run after `_install_js_api()` lands, which
+    `_bootstrap()` only does after the coord is in the slot — but
+    guarding makes the surface idempotent if a stray call sneaks in.
+    """
+    return _coord_ref.get("coord")
 
 
 # --- JS-callable surface ---
@@ -190,7 +263,9 @@ def request_message(body):
     """Hand a new message body to the coordinator. Idempotent for duplicates."""
     if body is None:
         body = ""
-    _coord.set_text(body)
+    coord = _coord()
+    if coord is not None:
+        coord.set_text(body)
 
 
 def _js_to_dict(obj):
@@ -218,6 +293,10 @@ def apply_config(cfg_obj):
     state machine will replace its `.effects` list reference and
     the next fade picks the head).
     """
+    coord = _coord()
+    if coord is None:
+        print("[preview] apply_config called before bootstrap complete — ignoring")
+        return
     try:
         cfg_dict = _js_to_dict(cfg_obj)
         new_cfg = SignConfig.from_dict(cfg_dict)
@@ -225,9 +304,9 @@ def apply_config(cfg_obj):
         # instances draw onto the same canvas the coordinator already
         # composites to.
         new_effects = build_effects(new_cfg.effect_settings, display=_display)
-        _coord.effects = new_effects
-        _coord.idx = -1
-        _coord.apply_settings(new_cfg.effect_settings)
+        coord.effects = new_effects
+        coord.idx = -1
+        coord.apply_settings(new_cfg.effect_settings)
         # Scroller live updates.
         ts = new_cfg.text_settings
         _scroller.set_color(ts.color)
@@ -247,7 +326,9 @@ def tick():
     loop in preview.js can fire before this file finishes
     evaluating if the user re-loads the page mid-bootstrap).
     """
-    _coord.tick()
+    coord = _coord()
+    if coord is not None:
+        coord.tick()
 
 
 def get_frame_rgba():
@@ -257,14 +338,11 @@ def get_frame_rgba():
 
 def get_current_effect_name():
     """Return the class name of the active effect (status block)."""
-    return _coord.current_effect_name
+    coord = _coord()
+    return coord.current_effect_name if coord is not None else ""
 
 
 def get_current_text():
     """Return the body of the message currently being scrolled."""
-    return _coord.current_text
-
-
-# Install the JS surface AFTER the functions are defined so the names
-# are in scope at lookup time.
-_install_js_api()
+    coord = _coord()
+    return coord.current_text if coord is not None else ""
