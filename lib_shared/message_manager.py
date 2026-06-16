@@ -36,7 +36,42 @@ def _ensure_server_runtime():
 
 
 _js_fetch = None
+_js_object_from_entries = None
+_to_js = None
 _requests = None
+
+
+def _ensure_js_object_from_entries():
+    """Lazily import `js.Object.fromEntries` — only available inside a browser runtime.
+
+    `RequestInit.headers` is stricter than a destructure-params
+    case: a bare Python dict crossing the Pyodide boundary becomes
+    a JsProxy, and `fetch` rejects it with
+    "Failed to read the 'headers' property from 'RequestInit':
+    The provided value cannot be converted to a sequence". We
+    need a real JS object — we build one via
+    `Object.fromEntries([[k, v], ...])`.
+    """
+    global _js_object_from_entries
+    if _js_object_from_entries is None:
+        from js import Object as _js_object  # type: ignore[import-not-found]
+
+        _js_object_from_entries = _js_object.fromEntries
+    return _js_object_from_entries
+
+
+def _ensure_to_js():
+    """Lazily import `pyodide.ffi.to_js` — only available inside a browser runtime.
+
+    Used to convert Python `[[k, v], ...]` lists to JS arrays of
+    [k, v] pairs that `Object.fromEntries` can consume. Kept
+    lazy so the module is importable in non-Pyodide runtimes
+    (server-side tests, the device).
+    """
+    global _to_js
+    if _to_js is None:
+        from pyodide.ffi import to_js as _to_js  # type: ignore[import-not-found]
+    return _to_js
 
 
 class MessageManager:
@@ -142,9 +177,28 @@ class MessageManager:
         """
         if self._is_browser:
             js_fetch = _ensure_browser_runtime()
+            # Pyodide 0.26's `RequestInit.headers` is stricter than
+            # the destructure-params case we hit in the WS shim — a
+            # bare Python dict crossing the boundary becomes a
+            # JsProxy, and `fetch` rejects it with
+            # "Failed to read the 'headers' property from 'RequestInit':
+            # The provided value cannot be converted to a sequence"
+            # (the live symptom was a `MessageManager message seed
+            # failed: TypeError: ...` log every page load, with the
+            # in-memory ring buffer permanently empty). Build a real
+            # JS object via `Object.fromEntries([[k, v], ...])` and
+            # convert the `[[k, v]]` Python list to a JS array via
+            # `to_js` so `fetch` sees a plain record it can convert
+            # to a Headers instance.
+            js_from_entries = _ensure_js_object_from_entries()
+            to_js = _ensure_to_js()
 
             def _call_fetch():
-                return js_fetch(url, method="GET", headers={"X-API-Key": self._api_key})
+                return js_fetch(
+                    url,
+                    method="GET",
+                    headers=js_from_entries(to_js([["X-API-Key", self._api_key]])),
+                )
 
             response = await _call_fetch()
             if not response.ok:

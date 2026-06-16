@@ -315,7 +315,14 @@ class TestFetchServerPath:
 
 class TestFetchBrowserPath:
     def test_fetch_uses_js_fetch_with_api_key_header(self, messages_api_url, config_api_url, api_key):
-        """Browser path lazily imports js.fetch and calls it with the X-API-Key header."""
+        """Browser path lazily imports js.fetch and calls it with the X-API-Key header.
+
+        The headers are converted to a JS object via
+        `Object.fromEntries(to_js([['X-API-Key', api_key]]))`
+        because `RequestInit.headers` rejects a bare Python
+        dict (Pyodide JsProxy) at the property-access layer —
+        see message_manager.py for the full note.
+        """
         # Build a mock response: .ok = True, .json() returns a coroutine
         mock_response = MagicMock()
         mock_response.ok = True
@@ -326,15 +333,39 @@ class TestFetchBrowserPath:
 
         mock_response.json = _json_coro
 
+        # Sentinel headers object the test can recognize.
+        sentinel_headers = object()
+
+        # Mock helpers: `to_js` and `Object.fromEntries` are
+        # module-globals; capture the array passed to fromEntries
+        # so the test can assert on the underlying key/value.
+        from_entries_calls = []
+        to_js_calls = []
+
+        def _fake_to_js(pairs):
+            to_js_calls.append(pairs)
+            return pairs  # identity — we read it back below
+
+        def _fake_from_entries(js_pairs):
+            from_entries_calls.append(js_pairs)
+            return sentinel_headers
+
         # Build a mock fetch: returns the response directly (no need to await the call)
         async def _fetch_call(url, method=None, headers=None):
             assert url == messages_api_url
             assert method == "GET"
-            assert headers == {"X-API-Key": api_key}
+            # The headers arg is the result of `js.Object.fromEntries(...)`,
+            # which our mock returns as the sentinel — and the API key
+            # reached it via the converted `[["X-API-Key", api_key]]` list.
+            assert headers is sentinel_headers
+            assert to_js_calls == [[["X-API-Key", api_key]]]
+            assert from_entries_calls == [[["X-API-Key", api_key]]]
             return mock_response
 
         mm = _mm()
         mm._js_fetch = _fetch_call
+        mm._js_object_from_entries = _fake_from_entries
+        mm._to_js = _fake_to_js
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -346,6 +377,8 @@ class TestFetchBrowserPath:
             assert result == {"ok": True}
         finally:
             mm._js_fetch = None  # reset for other tests
+            mm._js_object_from_entries = None
+            mm._to_js = None
 
     def test_fetch_browser_raises_on_non_ok_response(self, messages_api_url, config_api_url, api_key):
         """Browser path raises RuntimeError on non-ok response."""
@@ -356,8 +389,16 @@ class TestFetchBrowserPath:
         async def _fetch_call(url, method=None, headers=None):
             return mock_response
 
+        def _fake_to_js(pairs):
+            return pairs
+
+        def _fake_from_entries(_js_pairs):
+            return object()
+
         mm = _mm()
         mm._js_fetch = _fetch_call
+        mm._js_object_from_entries = _fake_from_entries
+        mm._to_js = _fake_to_js
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -369,6 +410,8 @@ class TestFetchBrowserPath:
                 asyncio.run(mgr._fetch(messages_api_url))
         finally:
             mm._js_fetch = None
+            mm._js_object_from_entries = None
+            mm._to_js = None
 
 
 # ---------------------------------------------------------------------------
