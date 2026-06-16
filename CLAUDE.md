@@ -130,6 +130,18 @@ SMS → Twilio → POST /api/messages → Flask
 - `heart-matrix-controller/main.py` — Pi entrypoint; seeds, starts MQTT, runs `EffectCoordinator.tick()` which advances + composites each frame.
 - `lib_shared/message_manager.py` — Shared `MessageManager`; Flask seeds from REST API, the Pi seeds from Flask's REST API.
 
+## Browser runtime: PyScript, not a separate JS app
+
+The browser preview runs Python via [PyScript](https://pyscript.net/) (Pyodide 0.26 / PyScript 2024.9.x). This is a deliberate architectural choice, not an implementation detail:
+
+- `lib_shared/` is shared across THREE runtimes: the Flask server, the Raspberry Pi device, and the browser. The browser reuses the same Python classes the server and Pi use — `MessageManager`, `FilteredMessages`, `EffectsCoordinator`, the patterns, the scroller, the message models. As much of the server-side code as possible runs in the browser unchanged.
+- Browser-specific I/O is done via Pyodide's `js.X` proxy: `js.fetch` for HTTP, `js.indexedDB` for persistence, `js.window` for cross-realm references. Classes in `lib_shared/` access browser APIs through this proxy — but the classes themselves stay Python.
+- `heart-message-manager/static/*.py` are PyScript wrappers around native JS shims (e.g. `MessageBufferStore.py` wraps `message_buffer_store.js`'s IDB shim; `MqttWsClient.py` wraps `mqtt_ws_client.js`'s MQTT-WS shim). They give Python code a clean interface to browser-only APIs. **They are not ports of `lib_shared/` classes** — if a `*.py` under `static/` shadows a `lib_shared/` class with the same name, that's a bug.
+- Adding a new storage backend for the message service means adding a new Python class to `lib_shared/messages.py` (or wherever the storage lives) that subclasses `FilteredMessages` and uses `js.X` for browser I/O if needed. It does NOT mean creating a JS implementation. The current pair is `InMemoryMessages` (server, Pi) and `IndexedDBMessages` (browser, uses `js.indexedDB`) — both Python, both in `lib_shared/`.
+- The `is_browser` flag in `MessageManager` already drives the seed-fetch runtime (`js.fetch` vs `requests`); the same flag (or a `storage=` kwarg) drives the storage backend pick at construction time.
+
+If a design conversation drifts toward "let's write a JS version of `MessageManager`" or "let's add a JS class in `static/` that does what `lib_shared/X.py` does", that is a sign the design has lost the plot. Reset, and reuse the Python.
+
 ## Raspberry Pi 4 setup
 
 Wi-Fi is managed by the Pi OS (`nmcli` / `raspi-config`), not this process. The LED panel is driven by the [hzeller rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library (its Python bindings, `rgbmatrix`, are pulled in by `requirements.txt`).
