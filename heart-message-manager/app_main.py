@@ -168,23 +168,36 @@ async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
         entries = _message_manager.get_messages(limit=limit, suppress=suppress)
         out = []
         for i, entry in enumerate(entries):
-            if i < 2:
+            # Defensive: an entry can be a MessageView (normal path)
+            # or, in odd cases, a raw dict (e.g. a partial seed that
+            # stored dicts instead of Message objects). Handle both.
+            if hasattr(entry, "message"):
+                d = entry.message.to_dict() if hasattr(entry.message, "to_dict") else dict(entry.message)
+            else:
+                d = dict(entry) if isinstance(entry, dict) else {}
+            d["source"] = getattr(entry, "source", "rest")
+            d["suppressed"] = bool(getattr(entry, "suppressed", False))
+            rules = getattr(entry, "rules", None) or []
+            d["rules"] = [r.to_dict() if hasattr(r, "to_dict") else r for r in rules]
+            d["sender_name"] = getattr(entry, "sender_name", "") or ""
+            d["display_time"] = getattr(entry, "display_time", "") or ""
+            if i < 3:
                 print(
-                    f"[DEBUG] entry[{i}] type={type(entry).__name__} "
-                    f"hasattr_message={hasattr(entry, 'message')} "
-                    f"entry.message type={type(getattr(entry, 'message', None)).__name__}",
+                    f"[DEBUG] entry[{i}] entry_type={type(entry).__name__} "
+                    f"message.id={d.get('id')!r} "
+                    f"rules_type={type(rules[0]).__name__ if rules else 'N/A'} "
+                    f"hasattr_to_dict={hasattr(rules[0], 'to_dict') if rules else 'N/A'}",
                     flush=True,
                 )
-            d = entry.message.to_dict()
-            d["source"] = entry.source
-            d["suppressed"] = bool(entry.suppressed)
-            d["rules"] = [r.to_dict() for r in (entry.rules or [])]
-            d["sender_name"] = entry.sender_name or ""
-            d["display_time"] = entry.display_time or ""
             out.append(d)
         return to_js(out)
     except Exception as e:
-        print(f"[app_main] _get_messages_js failed: {e!r}")
+        import traceback
+
+        print(
+            f"[app_main] _get_messages_js failed: {e!r}\n" f"{traceback.format_exc()}",
+            flush=True,
+        )
         return to_js([])
 
 
