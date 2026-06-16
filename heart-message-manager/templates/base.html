@@ -54,6 +54,7 @@
       apiKey:           {{ auth.API_SECRET_KEY | tojson }},
       mqttLongDisconnectMs: {{ mqtt_ws.MQTT_LONG_DISCONNECT_MS | tojson }}
     };
+    console.log("[DEBUG base.html] APP_CONFIG =", JSON.stringify(window.APP_CONFIG, null, 2));
   </script>
   <!-- Native JS shim for MQTT-over-WebSocket. The `?v=9` query string
        is a cache-buster — bump it whenever the shim changes so

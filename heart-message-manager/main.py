@@ -859,7 +859,9 @@ def _derive_mqtt_ws_url() -> str:
     explicit = _cfg.if_exists("MQTT_WS_URL")
     if explicit:
         # See the Arc note in the docstring above.
-        return explicit.replace("localhost", "127.0.0.1")
+        derived = explicit.replace("localhost", "127.0.0.1")
+        print(f"[DEBUG] _derive_mqtt_ws_url: explicit={explicit!r} -> {derived!r}")
+        return derived
     host = _cfg.if_exists("MQTT_HOST") or "127.0.0.1"
     if host == "localhost":
         host = "127.0.0.1"
@@ -872,8 +874,13 @@ def _derive_mqtt_ws_url() -> str:
         port = "443"
     scheme = "ws" if host == "127.0.0.1" else "wss"
     if scheme == "ws":
-        return f"{scheme}://{host}:{port}/mqtt"
-    return f"{scheme}://{host}:{port}/mqtt" if port != "443" else f"{scheme}://{host}/mqtt"
+        derived = f"{scheme}://{host}:{port}/mqtt"
+    elif port != "443":
+        derived = f"{scheme}://{host}:{port}/mqtt"
+    else:
+        derived = f"{scheme}://{host}/mqtt"
+    print(f"[DEBUG] _derive_mqtt_ws_url: host={host!r} port={port!r} -> {derived!r}")
+    return derived
 
 
 def _mqtt_long_disconnect_ms() -> int:

@@ -216,6 +216,9 @@ async def _seed() -> None:
 # ---------------------------------------------------------------------------
 
 _cfg = _app_config()
+print(f"[DEBUG app_main.py] _app_config() returned keys={list(_cfg.keys())}")
+print(f"[DEBUG app_main.py] _cfg['mqttWsUrl'] = {_cfg.get('mqttWsUrl')!r}")
+print(f"[DEBUG app_main.py] _cfg['mqttTopic'] = {_cfg.get('mqttTopic')!r}")
 
 _message_manager = MessageManager(
     messages_api_url=str(_cfg.get("messagesApiUrl") or ""),
@@ -229,6 +232,7 @@ _coordinator = EffectsCoordinator()
 
 _mqtt_ws_client = None
 _mqtt_ws_url = str(_cfg.get("mqttWsUrl") or "")
+print(f"[DEBUG app_main.py] _mqtt_ws_url (str-converted) = {_mqtt_ws_url!r}")
 if _mqtt_ws_url:
     _mqtt_ws_client = createMqttWsClient(
         {
