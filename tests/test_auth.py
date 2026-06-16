@@ -57,8 +57,14 @@ def _load_app_module(mock_cfg):
         sys.modules[name] = mod
         return mod
 
-    # Mock lib_shared submodules
+    # Mock lib_shared submodules. The parent `lib_shared` mock gets a
+    # real `__path__` so Python's import system can resolve any
+    # submodules we DON'T mock (e.g. `lib_shared.scroller_base`) from
+    # the real filesystem; without `__path__`, the import falls through
+    # with `'lib_shared' is not a package` because a bare
+    # `types.ModuleType` carries no package metadata.
     lib_shared = _make_mock("lib_shared")
+    lib_shared.__path__ = [str(_PROJECT_ROOT / "lib_shared")]
     config_reader_mod = _make_mock("lib_shared.config_reader")
     config_reader_mod.get_config = lambda required_keys=None: mock_cfg
     log_setup_mod = _make_mock("lib_shared.log_setup")

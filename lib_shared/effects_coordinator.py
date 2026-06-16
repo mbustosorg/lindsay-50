@@ -251,9 +251,12 @@ class EffectsCoordinator:
         self.recent_count = effect_settings.recent_count
         # Resize the in-memory recent deque. Existing entries are kept
         # up to the new maxlen; older ones are dropped automatically.
-        if self.recent_provider is None:
-            existing = list(self._recent)
-            self._recent = deque(existing, maxlen=self.recent_count)
+        # Always rebuild — the deque is small (max ~dozens of bodies)
+        # and the test suite expects `coord._recent.maxlen` to track
+        # `recent_count` even when a `recent_provider` is configured
+        # (the deque is unused in that case but must stay consistent).
+        existing = list(self._recent)
+        self._recent = deque(existing, maxlen=self.recent_count)
 
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""
