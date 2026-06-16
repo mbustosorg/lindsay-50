@@ -153,19 +153,15 @@ def _on_message_js(msg) -> None:
 
 
 async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
-    """JS-callable: return enriched message entries (newest first).
-
-    Mirrors the old `messageBufferStore.hydrate()` contract so
-    `testing.html` (and the future `preview.js` hydration path)
-    can read from the in-memory ring buffer. Returns a list of
-    flat dicts — the JS side does its own enrichment (or the
-    same fields the Python `FilteredMessages._enrich_messages`
-    computes; the two are intended to agree).
-    """
+    """JS-callable: return enriched message entries (newest first)."""
+    print(f"[app_main] _get_messages_js called: limit={limit} suppress={suppress}", flush=True)
     if _message_manager is None:
+        print("[app_main] _get_messages_js: _message_manager is None", flush=True)
         return to_js([])
     try:
+        buf_len = len(_message_manager._messages._msgs)
         entries = _message_manager.get_messages(limit=limit, suppress=suppress)
+        print(f"[app_main] _get_messages_js: buffer={buf_len} returned={len(entries)}", flush=True)
         out = []
         for entry in entries:
             d = entry.message.to_dict()
@@ -183,10 +179,19 @@ async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
 
 async def _get_config_js() -> object:
     """JS-callable: return the current SignConfig as a plain dict."""
+    print(f"[app_main] _get_config_js called", flush=True)
     if _message_manager is None:
+        print("[app_main] _get_config_js: _message_manager is None", flush=True)
         return to_js({})
     try:
         cfg = _message_manager.get_config()
+        is_default = isinstance(cfg, SignConfig) and not cfg.filters and not cfg.senders
+        print(
+            f"[app_main] _get_config_js: cfg={type(cfg).__name__} is_default={is_default} "
+            f"filters={len(cfg.filters) if isinstance(cfg, SignConfig) else '?'} "
+            f"senders={len(cfg.senders) if isinstance(cfg, SignConfig) else '?'}",
+            flush=True,
+        )
         return to_js(cfg.to_dict() if isinstance(cfg, SignConfig) else dict(cfg))
     except Exception as e:
         print(f"[app_main] _get_config_js failed: {e!r}")
@@ -194,21 +199,17 @@ async def _get_config_js() -> object:
 
 
 async def _seed() -> None:
-    """Seed the in-memory MessageManager from the Flask REST API.
-
-    Called once per page load by `static/app.js`'s `init()` (the
-    "auth-aware" trigger — `app.js` only loads when
-    `current_user.is_authenticated` is true, so the seed runs on
-    every login and every full-page-reload). The MessageManager
-    swallows per-endpoint failures internally, so a partial seed
-    is non-fatal.
-    """
+    """Seed the in-browser MessageManager from the Flask REST API."""
+    print(f"[app_main] _seed() entered; _message_manager={_message_manager!r}", flush=True)
     if _message_manager is None:
+        print("[app_main] _seed() bailing: _message_manager is None", flush=True)
         return
     try:
         await _message_manager.seed()
+        buf_len = len(_message_manager._messages._msgs)
+        print(f"[app_main] _seed() DONE; buffer len={buf_len}", flush=True)
     except Exception as e:
-        print(f"[app_main] seed failed: {e!r}")
+        print(f"[app_main] _seed() raised: {e!r}", flush=True)
 
 
 # ---------------------------------------------------------------------------
