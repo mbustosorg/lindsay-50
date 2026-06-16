@@ -243,11 +243,22 @@ if _mqtt_ws_url:
         "onEnvelope": create_proxy(_on_envelope_js),
         "onStatus": create_proxy(_on_status_js),
     }
+    # `to_js` converts the Python dict to a real JS object — required
+    # because the JS shim's `createMqttWsClient({url, topic, ...})`
+    # destructures its argument. A bare Python dict crosses the
+    # Pyodide boundary as a JsProxy, and JS destructuring on a
+    # JsProxy silently yields `undefined` for every key (the live
+    # symptom was `new WebSocket(undefined, ...)` resolving to
+    # `ws://localhost:3100/undefined` because the browser
+    # stringifies `undefined` into the URL). `to_js` with
+    # `dict_converter=js.Object.fromEntries` produces a plain
+    # JS object whose properties the destructuring can read.
+    _client_opts_js = to_js(_client_opts, dict_converter=js.Object.fromEntries)
     print(
         f"[DEBUG app_main.py] createMqttWsClient opts keys={list(_client_opts.keys())}, "
         f"url={_client_opts['url']!r}, topic={_client_opts['topic']!r}"
     )
-    _mqtt_ws_client = createMqttWsClient(_client_opts)
+    _mqtt_ws_client = createMqttWsClient(_client_opts_js)
     # Start the WS connection; the shim handles reconnect / pause /
     # status internally. Any envelope that lands calls
     # `_message_manager.dispatch(raw)` which fires `_on_message_js`
