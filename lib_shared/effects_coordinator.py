@@ -51,21 +51,32 @@ def build_effects(
     recognize are skipped silently (already logged inside the
     factory).
 
+    If the resulting rotation is empty (every entry disabled or every
+    name unknown), falls back to the first canonical effect from the
+    declared rotation order so the sign never goes dark. The fallback
+    is deterministic — same config always picks the same fallback —
+    so the sign's idle behavior is predictable across reloads. If
+    even the fallback is unresolvable (every canonical name is
+    unknown to the factory), the rotation stays empty; callers that
+    need a non-empty list at any cost should provide their own
+    effects.
+
     Args:
-        effect_settings: The v2 `EffectsSettings` block from `SignConfig`.
+        effect_settings: The v2 `EffectsSettings` block from `SignConfig`,
+            or None (returns [] — there's no settings to derive a
+            fallback from).
         effect_class_factory: Callable `name -> type | None`. Defaults
             to `lib_shared.effects_factory.make_effect_class`. Tests
             can pass a stub that returns simple effect classes.
         display: The display object handed to each Effect's constructor.
             Required when `effect_settings` is not None — every Effect
-            subclass needs a display. Callers that fall back to a
-            hard-coded effect (e.g. `Hyperspace(display)`) still need
-            display in scope.
+            subclass needs a display.
 
     Returns:
         A list of instantiated Effect objects in the order
         declared in `effect_settings.effects`. Enabled effects
-        only. May be empty if all effects are disabled or unknown.
+        only. Empty when `effect_settings is None` or when the
+        fallback is also unresolvable.
     """
     if effect_settings is None:
         return []
@@ -83,6 +94,22 @@ def build_effects(
         if cls is None:
             continue
         out.append(cls(display))
+    if not out:
+        # Fallback: the first canonical effect (the head of the
+        # declared rotation order). Resolved through the same
+        # factory so an unknown canonical name is caught and
+        # skipped — the rotation stays empty in that case (better
+        # dark panel than a crash). Deterministic: same config
+        # always picks the same fallback, so the sign's idle
+        # behavior is predictable across reloads.
+        for entry in effect_settings.effects:
+            cls = effect_class_factory(entry.get("name", ""))
+            if cls is not None:
+                log.warning(
+                    "build_effects: rotation empty after filter, " "falling back to first canonical effect %r",
+                    entry.get("name"),
+                )
+                return [cls(display)]
     return out
 
 

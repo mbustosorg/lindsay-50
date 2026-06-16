@@ -27,8 +27,10 @@ the preview call it. It delegates to
 mapping; that factory's per-name import scope means the browser
 preview can request any effect by name and the factory's import
 will only fail (return None) for the Pi-only effects that need
-filesystem assets / OpenCV — which the preview then filters out
-by falling back to Fireworks.
+filesystem assets / OpenCV. The shared builder falls back to the
+first canonical effect if the rotation ends up empty (e.g. all
+effects disabled in the admin UI), so the preview panel is never
+blank.
 
 NOTE: no rgbmatrix import anywhere in this file or its imports (Pillow +
 numpy are pulled in via the py-config.toml declared packages).
@@ -76,8 +78,8 @@ from lib_shared.effects_coordinator import EffectsCoordinator, build_effects
 from lib_shared.models import EffectsSettings, SignConfig, TextSettings
 
 # Standard bitmap patterns the browser preview can run (no filesystem
-# assets, no OpenCV). PngDisplay / VideoDisplay stay Pi-only.
-from lib_shared.patterns.fireworks import Fireworks
+# assets, no OpenCV). PngDisplay / VideoDisplay stay Pi-only; the
+# shared `build_effects` factory filters them out by name.
 from lib_shared.patterns.heartbeat import Heartbeat
 
 # The 64x64 logical panel — source of truth matches the device.
@@ -90,34 +92,14 @@ _web_canvas = WebCanvas(PANEL_WIDTH, PANEL_HEIGHT)
 _display = WebDisplay(_web_canvas)
 
 
-def _build_preview_effects(settings: EffectsSettings) -> list:
-    """Build the rotation list from the v2 EffectsSettings config.
-
-    Delegates to `build_effects` (the shared orchestrator) which uses
-    `lib_shared.effects_factory.make_effect_class` to resolve each
-    enabled name. The factory's per-name import scope means PngDisplay
-    and VideoDisplay are only imported if those effects are actually
-    requested — the browser preview would fail their import (no
-    OpenCV / filesystem assets in PyScript), so the factory returns
-    None for them at runtime in the browser and the preview falls
-    back to Fireworks so the panel never goes blank.
-    """
-    out = build_effects(settings, display=_display)
-    if not out:
-        # No browser-importable effects enabled in the config; show
-        # at least one so the preview isn't a blank panel. Fireworks
-        # is the most representative fallback (always-on, no asset
-        # deps).
-        out = [Fireworks(_display)]
-    return out
-
-
 # Module-level state. The boot path uses the canonical defaults (the
 # admin UI would write the same shape); a live config envelope that
 # arrives over MQTT/WS re-binds in place via `apply_config` below.
+# The shared `build_effects` falls back to the first canonical effect
+# if the rotation ends up empty, so the preview panel is never blank.
 _settings = EffectsSettings()
 _text_settings = TextSettings()
-_effects = _build_preview_effects(_settings)
+_effects = build_effects(_settings, display=_display)
 _scroller = PreviewScroller(
     _display,
     color=_text_settings.color,
@@ -212,7 +194,7 @@ def apply_config(cfg_obj):
         )
         # Rebuild the rotation. _display is shared so the new effect instances
         # draw onto the same canvas the coordinator already composites to.
-        new_effects = _build_preview_effects(new_cfg.effect_settings)
+        new_effects = build_effects(new_cfg.effect_settings, display=_display)
         print(f"[preview]   built {len(new_effects)} effect(s): {[type(e).__name__ for e in new_effects]}")
         _coordinator.effects = new_effects
         _coordinator.idx = -1

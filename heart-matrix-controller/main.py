@@ -27,7 +27,6 @@ log = logging.getLogger("heart")
 
 from rgb_matrix_display import MatrixDisplay
 from scroller import MatrixScroller
-from lib_shared.patterns.hyperspace import Hyperspace
 from lib_shared.patterns.heartbeat import Heartbeat
 from lib_shared.message_manager import MessageManager
 from lib_shared.paho_mqtt_client import PahoMqttClient
@@ -49,26 +48,12 @@ scroller = MatrixScroller(
 heartbeat = Heartbeat(display)
 
 
-def _build_effects(settings):
-    """Build the rotation list from the v2 EffectsSettings config.
-
-    Delegates to `build_effects` (the shared orchestrator) which uses
-    `lib_shared.effects_factory.make_effect_class` to resolve each
-    enabled name. Falls back to Hyperspace if the result is empty
-    (e.g. all effects disabled in the admin UI), so the sign never
-    goes dark.
-    """
-    out = build_effects(settings, display=display)
-    if not out:
-        log.warning("No effects enabled in config; falling back to Hyperspace")
-        out = [Hyperspace(display)]
-    return out
-
-
 # Boot with the default effect settings (the v2 config arrives over MQTT
-# shortly after and refreshes the rotation + scroller + pacing).
+# shortly after and refreshes the rotation + scroller + pacing). The
+# shared `build_effects` falls back to the first canonical effect if
+# the rotation ends up empty, so the sign never goes dark.
 _boot_settings = EffectsSettings()
-effects = _build_effects(_boot_settings)
+effects = build_effects(_boot_settings, display=display)
 
 coordinator = EffectsCoordinator(
     display,
@@ -101,7 +86,7 @@ def _on_config_update(cfg_dict):
     from lib_shared.models import SignConfig
 
     new_cfg = SignConfig.from_dict(cfg_dict or {})
-    new_effects = _build_effects(new_cfg.effect_settings)
+    new_effects = build_effects(new_cfg.effect_settings, display=display)
     coordinator.effects = new_effects
     coordinator.idx = -1  # next fade picks the head of the new list
     # Re-bind pacing + recent_count in place.
