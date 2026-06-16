@@ -244,6 +244,13 @@ class MessageManager:
         if self._messages_api_url:
             try:
                 data = await self._fetch(self._messages_api_url)
+                print(f"[seed] _fetch returned type={type(data).__name__} "
+                      f"isinstance(list)={isinstance(data, list)} "
+                      f"len={len(data) if isinstance(data, list) else 'N/A'}",
+                      flush=True)
+                if isinstance(data, list) and data:
+                    print(f"[seed] first item keys={list(data[0].keys()) if isinstance(data[0], dict) else type(data[0]).__name__}",
+                          flush=True)
                 if isinstance(data, list):
                     self._messages.clear()
                     msgs = [
@@ -256,11 +263,16 @@ class MessageManager:
                         for item in data[-100:]
                     ]
                     self._messages.add_many(msgs, source="rest")
+                    print(f"[seed] add_many added {len(msgs)} msgs; "
+                          f"buffer len={len(self._messages._msgs)}",  # type: ignore[attr-defined]
+                          flush=True)
                 logger.info(
                     "MessageManager seeded %d messages",
                     len(data) if isinstance(data, list) else 0,
                 )
             except Exception as e:
+                import traceback
+                print(f"[seed] EXCEPTION: {e!r}\n{traceback.format_exc()}", flush=True)
                 logger.warning("MessageManager message seed failed: %s", e)
 
         if self._config_api_url:

@@ -224,11 +224,14 @@ async def _seed() -> None:
     is non-fatal.
     """
     if _message_manager is None:
+        print("[app_main] _seed called but _message_manager is None", flush=True)
         return
     try:
         await _message_manager.seed()
+        msgs_len = len(_message_manager._msgs._msgs)  # type: ignore[attr-defined]
+        print(f"[app_main] _seed done; buffer length={msgs_len}", flush=True)
     except Exception as e:
-        print(f"[app_main] seed failed: {e!r}")
+        print(f"[app_main] seed failed: {e!r}", flush=True)
 
 
 # ---------------------------------------------------------------------------
