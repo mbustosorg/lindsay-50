@@ -234,17 +234,20 @@ _mqtt_ws_client = None
 _mqtt_ws_url = str(_cfg.get("mqttWsUrl") or "")
 print(f"[DEBUG app_main.py] _mqtt_ws_url (str-converted) = {_mqtt_ws_url!r}")
 if _mqtt_ws_url:
-    _mqtt_ws_client = createMqttWsClient(
-        {
-            "url": _mqtt_ws_url,
-            "username": str(_cfg.get("mqttUsername") or ""),
-            "password": str(_cfg.get("mqttPassword") or ""),
-            "topic": str(_cfg.get("mqttTopic") or ""),
-            "longDisconnectMs": int(_cfg.get("mqttLongDisconnectMs") or 300000),
-            "onEnvelope": create_proxy(_on_envelope_js),
-            "onStatus": create_proxy(_on_status_js),
-        }
+    _client_opts = {
+        "url": _mqtt_ws_url,
+        "username": str(_cfg.get("mqttUsername") or ""),
+        "password": str(_cfg.get("mqttPassword") or ""),
+        "topic": str(_cfg.get("mqttTopic") or ""),
+        "longDisconnectMs": int(_cfg.get("mqttLongDisconnectMs") or 300000),
+        "onEnvelope": create_proxy(_on_envelope_js),
+        "onStatus": create_proxy(_on_status_js),
+    }
+    print(
+        f"[DEBUG app_main.py] createMqttWsClient opts keys={list(_client_opts.keys())}, "
+        f"url={_client_opts['url']!r}, topic={_client_opts['topic']!r}"
     )
+    _mqtt_ws_client = createMqttWsClient(_client_opts)
     # Start the WS connection; the shim handles reconnect / pause /
     # status internally. Any envelope that lands calls
     # `_message_manager.dispatch(raw)` which fires `_on_message_js`
