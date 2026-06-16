@@ -184,9 +184,16 @@ let lastMessages = [];
 let lastConfig = null;
 
 async function getInBrowserMessages(suppress) {
+  console.log("[DEBUG get] APP.getMessages typeof=", typeof APP.getMessages,
+              "isAppGetMessagesNative=",
+              APP.getMessages && APP.getMessages.toString().slice(0, 80));
   if (!APP.getMessages) return [];
   try {
-    return await APP.getMessages(100, suppress);
+    const result = await APP.getMessages(100, suppress);
+    console.log("[DEBUG get] returned typeof=", typeof result,
+                "isArray=", Array.isArray(result),
+                "length=", result && result.length);
+    return result;
   } catch (e) {
     console.warn("getMessages failed:", e);
     return [];
@@ -214,6 +221,10 @@ async function renderMessages() {
   // unchecked state should produce.
   const hideSuppressed = document.getElementById('show-suppressed').checked;
   const entries = await getInBrowserMessages(hideSuppressed);
+  console.log("[DEBUG render] entries typeof=", typeof entries,
+              "Array.isArray=", Array.isArray(entries),
+              "length=", entries && entries.length,
+              "first=", entries && entries[0]);
   lastMessages = entries;
   document.getElementById('msg-count').textContent = entries.length;
   if (entries.length === 0) {
@@ -221,27 +232,38 @@ async function renderMessages() {
       '<tr><td colspan="5" class="px-6 py-12 text-center text-slate-400">No messages — the WS is still seeding from the broker</td></tr>';
     return;
   }
-  document.getElementById('feed-tbody').innerHTML = entries.map(function (item) {
-    const time = item.display_time || '—';
-    const sourceColor = item.source === 'mqtt' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
-    const sourceIcon = item.source === 'mqtt' ? '📡' : '💾';
-    const body = item.body || '';
-    const sender = item.sender || '—';
-    const senderName = item.sender_name;
-    const senderDisplay = senderName
-      ? '<div class="font-medium">' + escapeHtml(senderName) + '</div><div class="text-xs text-slate-400">' + escapeHtml(sender) + '</div>'
-      : '<div>' + escapeHtml(sender) + '</div>';
-    const rules = item.rules || [];
-    const statusLabel = item.suppressed ? 'suppressed' : 'visible';
-    const statusReason = item.suppressed && rules.length > 0 ? '<div class="text-xs text-red-500 mt-0.5">' + rules.map(function (r) { return r.type; }).join(', ') + '</div>' : '';
-    return '<tr class="hover:bg-indigo-50/30 transition-colors cursor-pointer" data-msg=\'' + btoa(JSON.stringify(item)).replace(/'/g, "\\'") + '\' onclick="showMessageModal(this)">' +
-      '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-medium ' + sourceColor + '">' + sourceIcon + ' ' + (item.source || 'rest') + '</span></td>' +
-      '<td class="px-6 py-4 text-sm">' + senderDisplay + '</td>' +
-      '<td class="px-6 py-4 text-sm text-slate-600 max-w-xs truncate">' + escapeHtml(body) + '</td>' +
-      '<td class="px-6 py-4 text-sm text-slate-500 font-mono">' + time + '</td>' +
-      '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-semibold ' + (item.suppressed ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700') + '">' + statusLabel + '</span>' + statusReason + '</td>' +
-      '</tr>';
-  }).join('');
+  let html;
+  try {
+    html = entries.map(function (item) {
+      const time = item.display_time || '—';
+      const sourceColor = item.source === 'mqtt' ? 'bg-green-100 text-green-700' : 'bg-slate-100 text-slate-600';
+      const sourceIcon = item.source === 'mqtt' ? '📡' : '💾';
+      const body = item.body || '';
+      const sender = item.sender || '—';
+      const senderName = item.sender_name;
+      const senderDisplay = senderName
+        ? '<div class="font-medium">' + escapeHtml(senderName) + '</div><div class="text-xs text-slate-400">' + escapeHtml(sender) + '</div>'
+        : '<div>' + escapeHtml(sender) + '</div>';
+      const rules = item.rules || [];
+      const statusLabel = item.suppressed ? 'suppressed' : 'visible';
+      const statusReason = item.suppressed && rules.length > 0 ? '<div class="text-xs text-red-500 mt-0.5">' + rules.map(function (r) { return r.type; }).join(', ') + '</div>' : '';
+      return '<tr class="hover:bg-indigo-50/30 transition-colors cursor-pointer" data-msg=\'' + btoa(JSON.stringify(item)).replace(/'/g, "\\'") + '\' onclick="showMessageModal(this)">' +
+        '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-medium ' + sourceColor + '">' + sourceIcon + ' ' + (item.source || 'rest') + '</span></td>' +
+        '<td class="px-6 py-4 text-sm">' + senderDisplay + '</td>' +
+        '<td class="px-6 py-4 text-sm text-slate-600 max-w-xs truncate">' + escapeHtml(body) + '</td>' +
+        '<td class="px-6 py-4 text-sm text-slate-500 font-mono">' + time + '</td>' +
+        '<td class="px-6 py-4"><span class="px-2 py-1 rounded-lg text-xs font-semibold ' + (item.suppressed ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700') + '">' + statusLabel + '</span>' + statusReason + '</td>' +
+        '</tr>';
+    }).join('');
+  } catch (e) {
+    console.error("[DEBUG render] map failed:", e, "entries[0]=", entries[0]);
+    document.getElementById('feed-tbody').innerHTML =
+      '<tr><td colspan="5" class="px-6 py-12 text-center text-red-500">Render error: ' + escapeHtml(String(e)) + '</td></tr>';
+    return;
+  }
+  console.log("[DEBUG render] html length=", html.length, "preview=", html.slice(0, 200));
+  document.getElementById('feed-tbody').innerHTML = html;
+  console.log("[DEBUG render] tbody after set:", document.getElementById('feed-tbody').innerHTML.slice(0, 200));
 }
 
 async function renderConfig() {
