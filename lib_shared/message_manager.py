@@ -207,7 +207,24 @@ class MessageManager:
             def _call_json():
                 return response.json()
 
-            return await _call_json()
+            # `response.json()` resolves to a Pyodide JsProxy of a
+            # JS object/array, not a real Python dict. The messages
+            # seed path happens to cope (it iterates as a list and
+            # calls .get on dict-like proxies), but the config seed
+            # path passes the result directly to
+            # `SignConfig.update_from_dict`, which calls `dict(...)`
+            # on it — and a JsProxy of a plain object doesn't
+            # implement `keys()` the way Python's dict-ctor expects,
+            # so it raises
+            # `MessageManager config seed failed: get`
+            # (the bare `.get` method name is what `dict.__init__`
+            # tries first, before falling back to iter). Convert to
+            # a real Python object via `.to_py()` so downstream
+            # code can treat it as a plain dict/list.
+            raw = await _call_json()
+            if hasattr(raw, "to_py"):
+                return raw.to_py()
+            return raw
         else:
             requests = _ensure_server_runtime()
 
