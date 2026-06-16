@@ -229,7 +229,38 @@ _coordinator = EffectsCoordinator()
 
 _mqtt_ws_client = None
 _mqtt_ws_url = str(_cfg.get("mqttWsUrl") or "")
-if _mqtt_ws_url:
+# Defensive: reject URLs that don't look like `ws(s)://host[:port]/path`.
+# Flask's `tojson` of an `Undefined` Jinja value renders as JSON `null`
+# (caught by the `or ""` above) — but a `MQTT_WS_URL` env var set to a
+# literal template placeholder (e.g. `ws://localhost:${PORT}/mqtt` where
+# the shell never expanded `$PORT`, or a copy-paste of `ws://host:port/<topic>`
+# with `<topic>` left as a literal `undefined`) passes the truthy check
+# and would otherwise hand `new WebSocket("ws://localhost:3100/undefined")`
+# to the browser, which fails the handshake with a useless console error.
+def _looks_like_ws_url(raw: str) -> bool:
+    if not raw:
+        return False
+    lowered = raw.lower()
+    if not (lowered.startswith("ws://") or lowered.startswith("wss://")):
+        return False
+    # Reject URLs that still contain placeholder tokens. The common
+    # failure modes are literal "undefined" (JS) and literal "null" (JSON
+    # null rendered into a string) appearing in the path or the host.
+    if "undefined" in raw or "${" in raw or "<" in raw or "{" in raw:
+        return False
+    return True
+
+
+if _mqtt_ws_url and not _looks_like_ws_url(_mqtt_ws_url):
+    print(
+        f"[app_main] MQTT_WS_URL is malformed: {_mqtt_ws_url!r}. "
+        "Skipping MQTT-WS client. Check the MQTT_WS_URL setting in "
+        "heart-message-manager/settings.toml (or the equivalent env "
+        "var). The Flask context processor derives it from MQTT_HOST + "
+        "MQTT_WS_PORT; set MQTT_WS_URL only if you need a non-default "
+        "broker WS endpoint."
+    )
+elif _mqtt_ws_url:
     _mqtt_ws_client = createMqttWsClient(
         {
             "url": _mqtt_ws_url,
