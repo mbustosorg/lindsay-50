@@ -10,10 +10,7 @@ Covers:
 """
 
 import importlib
-import os
 import sys
-import time
-from collections import deque
 from pathlib import Path
 
 import pytest
@@ -226,32 +223,6 @@ def test_apply_settings_mutates_pacing():
     assert coord.hold_seconds == 7.0
     assert coord.intro_seconds == 2.0
     assert coord.idle_seconds == 120.0
-
-
-def test_apply_settings_resizes_recent_deque():
-    """apply_settings rebuilds the in-memory deque with the new maxlen."""
-    coord = _build_coord(recent_count=5)
-    # Seed a few entries (bypassing the dedup). A deque trims from the
-    # head on append once it hits maxlen, so 6 appends into a maxlen=5
-    # deque leaves the 5 most recent — "b" through "f".
-    for body in ("a", "b", "c", "d", "e", "f"):
-        coord._recent.append(body)
-    assert list(coord._recent) == ["b", "c", "d", "e", "f"]
-
-    coord.apply_settings(EffectsSettings(recent_count=3))
-    assert coord._recent.maxlen == 3
-    # The most recent 3 entries are retained.
-    assert list(coord._recent) == ["d", "e", "f"]
-
-
-def test_apply_settings_preserves_recent_when_provider_set():
-    """When a recent_provider is configured, the in-memory deque is
-    never used — apply_settings does not touch it (no AttributeError)."""
-    coord = _build_coord(recent_provider=lambda: [])
-    coord.apply_settings(EffectsSettings(recent_count=99))
-    # _recent is still the original deque, untouched.
-    assert isinstance(coord._recent, deque)
-    assert coord._recent.maxlen == coord.recent_count
 
 
 def test_apply_settings_none_is_noop():

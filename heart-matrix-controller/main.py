@@ -60,7 +60,6 @@ coordinator = EffectsCoordinator(
     scroller,
     effects,
     heart=heartbeat,
-    recent_provider=lambda: _message_mgr.get_messages(limit=5),
     settings=_boot_settings,
 )
 

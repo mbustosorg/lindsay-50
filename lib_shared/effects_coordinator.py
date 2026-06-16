@@ -15,20 +15,21 @@ The composite step (clear canvas, draw effect, draw scroller, swap to panel)
 is polymorphism on the `display` (a `DisplayBase` subclass), not the
 coordinator — `tick()` ends with one line: `self.display.render(...)`.
 
-The Pi hands the coordinator a `recent_provider` callable (e.g. one that
-queries the `MessageManager` for the last few bodies). The browser doesn't
-have that — it relies on an internal `deque` populated by `set_text`.
-The class supports both via the optional `recent_provider` argument.
+The render layer is OPTIONAL: an unbound coordinator (`bind(...)` not yet
+called) is the shape `app_main.py` instantiates at PyScript startup. The
+preview page's `preview_main.py` is the per-page shim that calls
+`bind(display, scroller, effects, heart)` once the page-local canvas +
+scroller + effects are constructed. `tick()` is a no-op when the
+coordinator has no render layer (the app is alive on every admin page
+but the canvas only exists on /preview).
 
-Pacing + recent_count come from an `EffectsSettings` block (the v2 config
-shape), passed as `settings` (an `EffectsSettings` instance or `None` for
+Pacing comes from an `EffectsSettings` block (the v2 config shape),
+passed as `settings` (an `EffectsSettings` instance or `None` for
 the historic per-kwarg defaults).
 """
 
 import logging
-import random
 import time
-from collections import deque
 
 from lib_shared.models import EffectsSettings
 
@@ -116,22 +117,15 @@ def build_effects(
 class EffectsCoordinator:
     """Drives the boot splash, message lifecycle, and idle rotation.
 
-    Used directly by both the Pi entrypoint and the browser preview; no
-    subclass. The Pi passes a `recent_provider` callable that reads from
-    its message store; the browser omits it and the coordinator uses its
-    own internal deque of bodies handed in via `set_text`.
+    Used directly by both the Pi entrypoint and the browser preview;
+    no subclass. The coordinator is constructed unbound (no
+    `display`/`scroller`/`effects`/`heart`); the page that owns the
+    canvas (the preview's `preview_main.py`) calls `bind(...)` once
+    those objects are in scope. `tick()` no-ops when the coordinator
+    is unbound so an admin page that loaded the app-scoped
+    coordinator can run a no-rAF idle without crashing.
 
     Args:
-        display: a `DisplayBase` subclass (`MatrixDisplay` on the Pi,
-            `WebDisplay` in the browser).
-        scroller: a scroller with `tick(width)`, `render(canvas)`,
-            `set_text(text, width)`, and `set_brightness(b)`.
-        effects: list of `Effect` instances for the rotation cycle.
-        heart: the boot-splash effect (shown at intro).
-        recent_provider: optional callable returning recent message entries
-            (each with a `.message.body` attribute) for the idle random
-            pick. If `None`, the coordinator uses its internal `_recent`
-            deque populated by `set_text`.
         settings: optional `EffectsSettings` instance supplying
             `fade_seconds`, `hold_seconds`, `intro_seconds`,
             `idle_seconds`, and `recent_count`. When omitted, defaults
@@ -141,21 +135,23 @@ class EffectsCoordinator:
             `settings` is None).
         intro_seconds: seconds to show the boot-splash heart (used when
             `settings` is None).
-        idle_seconds: seconds of idleness before a random message plays
-            (used when `settings` is None).
-        recent_count: size of the internal recent-messages deque (used when
-            `settings` is None).
+        idle_seconds: seconds of idleness before... no longer used for
+            a random pick (the in-memory deque is gone) but kept on
+            the dataclass for compat with the historic per-kwarg
+            defaults.
+        recent_count: retained on the dataclass for compat with the
+            historic per-kwarg defaults; no longer used at runtime
+            (no in-memory recent deque, no `recent_provider`).
         fade_step: throttle (seconds) between palette writes during a fade.
         gamma: gamma exponent applied to the linear fade progress.
     """
 
     def __init__(
         self,
-        display,
-        scroller,
-        effects,
-        heart,
-        recent_provider=None,
+        display=None,
+        scroller=None,
+        effects=None,
+        heart=None,
         settings: EffectsSettings | None = None,
         fade_seconds: float = 2.0,
         hold_seconds: float = 15.0,
@@ -167,9 +163,8 @@ class EffectsCoordinator:
     ):
         self.display = display
         self.scroller = scroller
-        self.effects = effects
+        self.effects = list(effects) if effects is not None else []
         self.heart = heart
-        self.recent_provider = recent_provider
         if settings is not None:
             self.fade_seconds = settings.fade_seconds
             self.hold_seconds = settings.hold_seconds
@@ -189,7 +184,7 @@ class EffectsCoordinator:
         self.gamma = gamma
 
         self.idx = -1  # first message shown advances this to 0
-        self.current = heart  # effect being rendered right now
+        self.current = heart  # effect being rendered right now (may be None)
         self.mode = "intro"
         self.fade_start = 0.0
         self.last_step = 0.0
@@ -197,16 +192,61 @@ class EffectsCoordinator:
         self.pending_text = None  # next message body to show (None = nothing)
         self.showing_text = False
         self.last_shown_text = None
-        # Browser-side recent-message buffer. The Pi uses `recent_provider`
-        # instead, so this deque is never consulted when a provider is set.
-        self._recent: deque = deque(maxlen=self.recent_count)
+
+    def is_bound(self) -> bool:
+        """True when the coordinator has a render layer (display + scroller + effects + heart).
+
+        An unbound coordinator is a no-op: `tick()` returns without
+        touching state. The Pi always binds before its first tick
+        (it constructs the display + scroller + effects in the
+        same module-level pass). The browser's `app_main.py`
+        instantiates the coordinator unbound; the preview page
+        binds once the canvas is in scope.
+        """
+        return self.display is not None and self.scroller is not None and bool(self.effects) and self.heart is not None
+
+    def bind(
+        self,
+        display,
+        scroller,
+        effects,
+        heart=None,
+    ) -> None:
+        """Attach (or swap) the render layer.
+
+        Replaces `display`/`scroller`/`effects`/`heart` in place.
+        `heart` defaults to the head of the new effects list when
+        not supplied (preview uses the first effect as the
+        boot-splash; the Pi passes an explicit Heartbeat instance).
+
+        Safe to call mid-life: the next `tick()` uses the new
+        layer. The Pi's `main.py` calls it once at startup; the
+        browser's `preview_main.py` calls it once the page-local
+        canvas is constructed.
+        """
+        self.display = display
+        self.scroller = scroller
+        self.effects = list(effects) if effects is not None else []
+        self.heart = heart if heart is not None else (self.effects[0] if self.effects else None)
+        if self.current is None:
+            self.current = self.heart
+            if self.heart is not None:
+                self.heart.set_brightness(1.0)
+            self.phase_start = time.monotonic()
 
     def start(self, startup_text):
-        """Begin the boot splash, queuing the seeded message to show after it."""
+        """Begin the boot splash, queuing the seeded message to show after it.
+
+        No-op when the coordinator is unbound — the app-scoped
+        coordinator on non-preview admin pages is constructed
+        without a render layer; `start()` is only meaningful on
+        the preview's per-page shim.
+        """
+        if not self.is_bound():
+            return
+        assert self.heart is not None
         if startup_text:
             self.pending_text = startup_text
-            if self.recent_provider is None and startup_text not in self._recent:
-                self._recent.append(startup_text)
         self.current = self.heart
         self.heart.set_brightness(1.0)
         self.mode = "intro"
@@ -215,26 +255,14 @@ class EffectsCoordinator:
     def set_text(self, text):
         """Queue a freshly-arrived message; shown at the next stable point.
 
-        Empty / None bodies are ignored. When no `recent_provider` is set
-        (browser path), the body is also appended to the internal deque
-        (deduped against the most recent entry) so the idle random pick has
-        material to choose from.
+        Empty / None bodies are ignored.
         """
         if not text:
             return
         self.pending_text = text
-        if self.recent_provider is None:
-            if not self._recent or self._recent[-1] != text:
-                self._recent.append(text)
-
-    # Backwards-compat alias for the pre-v2 entrypoint. New code calls
-    # `set_text`; existing tests still call `request_message`.
-    def request_message(self, text):
-        """Deprecated alias for `set_text`; kept so old call sites compile."""
-        self.set_text(text)
 
     def apply_settings(self, effect_settings: EffectsSettings) -> None:
-        """Live-update pacing + recent_count from a v2 `EffectsSettings`.
+        """Live-update pacing from a v2 `EffectsSettings`.
 
         Called when a config envelope arrives over MQTT/WS; mutates
         the coordinator's pacing attributes in place. Does NOT touch
@@ -249,14 +277,6 @@ class EffectsCoordinator:
         self.intro_seconds = effect_settings.intro_seconds
         self.idle_seconds = effect_settings.idle_seconds
         self.recent_count = effect_settings.recent_count
-        # Resize the in-memory recent deque. Existing entries are kept
-        # up to the new maxlen; older ones are dropped automatically.
-        # Always rebuild — the deque is small (max ~dozens of bodies)
-        # and the test suite expects `coord._recent.maxlen` to track
-        # `recent_count` even when a `recent_provider` is configured
-        # (the deque is unused in that case but must stay consistent).
-        existing = list(self._recent)
-        self._recent = deque(existing, maxlen=self.recent_count)
 
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""
@@ -267,10 +287,12 @@ class EffectsCoordinator:
             self.last_step = now
             linear = (1.0 - progress) if fading_out else progress
             b = linear**self.gamma
-            if fade_effect:
-                self.current.set_brightness(b)
-            if fade_text:
-                self.scroller.set_brightness(b)
+            current = self.current
+            scroller = self.scroller
+            if fade_effect and current is not None:
+                current.set_brightness(b)
+            if fade_text and scroller is not None:
+                scroller.set_brightness(b)
         return progress >= 1.0
 
     def _begin_out(self, now):
@@ -278,33 +300,41 @@ class EffectsCoordinator:
         self.fade_start = now
         self.last_step = 0.0
 
-    def _random_recent(self):
-        """A random body from the last `recent_count` messages (avoid repeat)."""
-        if self.recent_provider is not None:
-            try:
-                entries = self.recent_provider() or []
-            except Exception:
-                log.exception("recent_provider failed")
-                return None
-            bodies = [e.message.body for e in entries[: self.recent_count] if e.message.body]
-        else:
-            bodies = [b for b in self._recent if b]
-        if not bodies:
-            return None
-        choices = [b for b in bodies if b != self.last_shown_text] or bodies
-        return random.choice(choices)
-
     @property
     def current_effect_name(self):
         """The class name of the active effect (browser status block)."""
+        if self.current is None:
+            return ""
         return type(self.current).__name__
 
     @property
     def current_text(self):
         """The body of the message currently being scrolled (or '' for idle)."""
+        if self.scroller is None:
+            return ""
         return self.scroller.text or ""
 
     def tick(self):
+        """Advance the state machine one frame.
+
+        No-op when the coordinator is unbound (an admin page
+        without a canvas). When bound, the lifecycle runs
+        intro → out → in → hold → text_out → background, the
+        current effect's `tick()` advances, the scroller
+        scrolls, and `display.render(...)` composites the
+        frame.
+        """
+        if not self.is_bound():
+            return
+        # Local aliases for the bound layer — Pyright doesn't narrow
+        # `self.display` etc. through `is_bound()`, but the guard above
+        # makes these accesses safe.
+        display = self.display
+        scroller = self.scroller
+        effects = self.effects
+        assert display is not None
+        assert scroller is not None
+        assert effects
         now = time.monotonic()
         mode = self.mode
 
@@ -316,18 +346,18 @@ class EffectsCoordinator:
             # Cross-fade the current effect + any text to black, then swap in
             # the next effect and (if queued) the next message.
             if self._step_fade(now, fading_out=True):
-                self.idx = (self.idx + 1) % len(self.effects)
-                self.current = self.effects[self.idx]
+                self.idx = (self.idx + 1) % len(effects)
+                self.current = effects[self.idx]
                 self.current.set_brightness(0.0)
                 text = self.pending_text
                 self.pending_text = None
                 if text:
-                    self.scroller.set_text(text, self.display.width)
-                    self.scroller.set_brightness(0.0)
+                    scroller.set_text(text, display.width)
+                    scroller.set_brightness(0.0)
                     self.showing_text = True
                     self.last_shown_text = text
                 else:
-                    self.scroller.set_text("", self.display.width)
+                    scroller.set_text("", display.width)
                     self.showing_text = False
                 self.mode = "in"
                 self.fade_start = now
@@ -335,8 +365,9 @@ class EffectsCoordinator:
 
         elif mode == "in":
             if self._step_fade(now, fading_out=False):
+                assert self.current is not None
                 self.current.set_brightness(1.0)
-                self.scroller.set_brightness(1.0)
+                scroller.set_brightness(1.0)
                 self.phase_start = now
                 self.mode = "hold" if self.showing_text else "background"
 
@@ -351,8 +382,8 @@ class EffectsCoordinator:
         elif mode == "text_out":
             # Only the text fades; the background effect stays lit.
             if self._step_fade(now, fading_out=True, fade_effect=False):
-                self.scroller.set_text("", self.display.width)
-                self.scroller.set_brightness(1.0)
+                scroller.set_text("", display.width)
+                scroller.set_brightness(1.0)
                 self.showing_text = False
                 self.phase_start = now
                 self.mode = "background"
@@ -360,17 +391,12 @@ class EffectsCoordinator:
         elif mode == "background":
             if self.pending_text is not None:
                 self._begin_out(now)  # show the queued message
-            elif now - self.phase_start >= self.idle_seconds:
-                text = self._random_recent()
-                if text:
-                    self.pending_text = text
-                    self._begin_out(now)
-                else:
-                    self.phase_start = now  # nothing to show; reset the timer
 
-        self.current.tick()
-        self.scroller.tick(self.display.width)
+        current = self.current
+        assert current is not None
+        current.tick()
+        scroller.tick(display.width)
         # Composite the active effect + scroller onto the panel. The display
         # owns the clear/draw/swap sequence (and, on the Pi, the SwapOnVSync
         # pacing).
-        self.display.render(self.current, self.scroller)
+        display.render(current, scroller)

@@ -2,8 +2,8 @@
 
 Covers the lifecycle state machine: intro → out → in → hold → text_out →
 background; the brightness-ramp endpoints; the pending_text consume-on-
-transition behavior; the request_message deque dedup; and the display.render
-call per tick.
+transition behavior; the optional render layer (`bind`); and the
+display.render call per tick.
 """
 
 import importlib
@@ -106,8 +106,13 @@ def _build(
     intro_seconds=0.0,
     hold_seconds=10.0,
     idle_seconds=300.0,
-    recent_provider=None,
 ):
+    """Build a coordinator with a stub render layer already attached.
+
+    The default shape every state-machine test uses. Tests that
+    need the unbound form (the `bind()` tests + no-op-when-unbound
+    tests) call `_build_unbound()` instead.
+    """
     display = _StubDisplay()
     scroller = _StubScroller()
     fx_a = _make_effect("A")()
@@ -118,13 +123,34 @@ def _build(
         scroller=scroller,
         effects=[fx_a, fx_b],
         heart=heart,
-        recent_provider=recent_provider,
         fade_seconds=fade_seconds,
         hold_seconds=hold_seconds,
         intro_seconds=intro_seconds,
         idle_seconds=idle_seconds,
     )
     return coord, display, scroller, fx_a, fx_b, heart
+
+
+def _build_unbound(
+    fade_seconds=0.05,
+    intro_seconds=0.0,
+    hold_seconds=10.0,
+    idle_seconds=300.0,
+):
+    """Build a coordinator with NO render layer attached.
+
+    Mirrors the shape `app_main.py` instantiates at PyScript startup,
+    before the preview page's `preview_main.py` calls `bind(...)`.
+    Returns only the coordinator (no display/scroller/effects stubs)
+    because the test only needs to assert state, not the layer.
+    """
+    coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(
+        fade_seconds=fade_seconds,
+        hold_seconds=hold_seconds,
+        intro_seconds=intro_seconds,
+        idle_seconds=idle_seconds,
+    )
+    return coord
 
 
 def _drive(clock, coord, seconds, step=0.01):
@@ -175,7 +201,7 @@ def test_idx_advances_on_fade_out_complete():
     _drive(clock, coord, 0.1)  # out + in
     assert coord.idx == 0
     # Trigger another out: send a message and let it complete
-    coord.request_message("hi")
+    coord.set_text("hi")
     _drive(clock, coord, 0.1)  # out + in
     assert coord.idx == 1
     assert coord.current is fx_b
@@ -183,14 +209,14 @@ def test_idx_advances_on_fade_out_complete():
 
 
 def test_pending_text_consumed_on_out_to_in():
-    """request_message(text) sets pending_text; the next out → in consumes it."""
+    """set_text(text) sets pending_text; the next out → in consumes it."""
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
     coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05)
     coord.start(None)
     _drive(clock, coord, 0.05)  # intro → out
-    coord.request_message("hello")
+    coord.set_text("hello")
     assert coord.pending_text == "hello"
     _drive(clock, coord, 0.1)  # out completes; consumes pending_text
     assert coord.pending_text is None
@@ -205,11 +231,11 @@ def test_hold_mode_interrupted_by_new_message():
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
     coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05, hold_seconds=999.0)
-    coord.request_message("first")  # queue a message so we reach hold
+    coord.set_text("first")  # queue a message so we reach hold
     coord.start(None)
     _drive(clock, coord, 0.2)  # intro → out → in → hold
     assert coord.mode == "hold"
-    coord.request_message("second")
+    coord.set_text("second")
     clock.advance(0.001)
     coord.tick()
     # Immediately transitioned to out without waiting for hold_seconds
@@ -218,21 +244,13 @@ def test_hold_mode_interrupted_by_new_message():
     monkey.undo()
 
 
-def test_request_message_empty_is_noop():
+def test_set_text_empty_is_noop():
     """Empty / None body doesn't kick a fade or alter pending_text."""
     coord, *_ = _build()
-    coord.request_message("")
-    coord.request_message(None)
+    coord.set_text("")
+    coord.set_text(None)
     assert coord.pending_text is None
     assert coord.mode == "intro"
-
-
-def test_request_message_dedupes_internal_deque():
-    """Two consecutive request_message calls with the same body store it once in _recent."""
-    coord, *_ = _build()
-    coord.request_message("hello")
-    coord.request_message("hello")
-    assert list(coord._recent).count("hello") == 1
 
 
 def test_brightness_ramp_endpoints():
@@ -266,24 +284,6 @@ def test_tick_calls_display_render_exactly_once():
         assert scr is scroller
 
 
-def test_recent_provider_used_when_set():
-    """When recent_provider is given, _random_recent reads from it (not the deque)."""
-    fake_entry = type("E", (), {"message": type("M", (), {"body": "from-provider"})()})()
-    coord, *_ = _build(recent_provider=lambda: [fake_entry])
-    coord.request_message("from-deque")
-    body = coord._random_recent()
-    # recent_provider wins
-    assert body == "from-provider"
-
-
-def test_internal_deque_used_when_no_recent_provider():
-    """When recent_provider is None, _random_recent reads from the internal deque."""
-    coord, *_ = _build()
-    coord.request_message("queued")
-    body = coord._random_recent()
-    assert body == "queued"
-
-
 def test_current_effect_name_and_text():
     """current_effect_name / current_text mirror the active effect + scroller text."""
     clock = _Clock()
@@ -298,4 +298,133 @@ def test_current_effect_name_and_text():
     assert coord.current_effect_name == "A"
     # current_text reflects the scroller's text (or '' when nothing is shown)
     assert coord.current_text == ""
+    monkey.undo()
+
+
+# --- optional render layer (bind / unbound) ---------------------------------
+
+
+def test_unbound_coordinator_starts_unbound():
+    """A coordinator constructed without a render layer is unbound."""
+    coord = _build_unbound()
+    assert coord.is_bound() is False
+    assert coord.display is None
+    assert coord.scroller is None
+    assert coord.effects == []
+    assert coord.heart is None
+
+
+def test_tick_is_noop_when_unbound():
+    """tick() on an unbound coordinator returns without touching state or crashing.
+
+    The app-scoped coordinator (instantiated by `app_main.py` on every
+    admin page) is unbound until the preview's `preview_main.py`
+    calls `bind(...)`. The rAF loop in preview.js is gated on
+    `window._coordinator.is_bound()`, but defensive no-ops keep the
+    coordinator safe if anything else accidentally calls `tick()`.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    coord = _build_unbound()
+    # Drive a few frames — nothing should change.
+    for _ in range(5):
+        clock.advance(0.1)
+        coord.tick()
+    assert coord.mode == "intro"  # untouched
+    assert coord.idx == -1
+    assert coord.pending_text is None
+    monkey.undo()
+
+
+def test_start_is_noop_when_unbound():
+    """start() is a no-op on an unbound coordinator.
+
+    `start()` is documented as "only meaningful on the preview's
+    per-page shim" — the app-scoped coordinator's role is to own
+    the singletons, not drive frames. Calling it before `bind()`
+    should not raise.
+    """
+    coord = _build_unbound()
+    coord.start("hello")
+    assert coord.pending_text is None
+    assert coord.mode == "intro"
+
+
+def test_bind_attaches_render_layer():
+    """bind(display, scroller, effects, heart) makes is_bound() True and
+    sets current to the new heart (so the next tick starts cleanly)."""
+    coord = _build_unbound()
+    display = _StubDisplay()
+    scroller = _StubScroller()
+    fx_a = _make_effect("A")()
+    heart = _make_effect("Heart")()
+    coord.bind(display=display, scroller=scroller, effects=[fx_a], heart=heart)
+    assert coord.is_bound() is True
+    assert coord.display is display
+    assert coord.scroller is scroller
+    assert coord.effects == [fx_a]
+    assert coord.heart is heart
+    assert coord.current is heart
+    assert heart.brightness == pytest.approx(1.0, abs=1e-6)
+
+
+def test_bind_defaults_heart_to_first_effect():
+    """When heart= is omitted, bind() defaults it to the head of effects.
+
+    The Pi passes an explicit Heartbeat (different from the effects
+    rotation); the browser preview's `preview_main.py` passes the
+    first effect as the heart, so the default saves that caller
+    from a redundant arg.
+    """
+    coord = _build_unbound()
+    display = _StubDisplay()
+    scroller = _StubScroller()
+    fx_a = _make_effect("A")()
+    fx_b = _make_effect("B")()
+    coord.bind(display=display, scroller=scroller, effects=[fx_a, fx_b])
+    assert coord.heart is fx_a
+
+
+def test_bind_swaps_render_layer_mid_life():
+    """bind() called again replaces the render layer; the next tick
+    uses the new layer (state machine continues from where it is).
+
+    This is the contract the /preview page relies on: it constructs
+    its own canvas + scroller + effects and calls `bind()` once the
+    page-local objects are ready, even though the coordinator has
+    been alive since `app_main.py` loaded.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+
+    # First layer — runs the boot splash.
+    coord, display1, scroller1, fx_a1, fx_b1, heart1 = _build(intro_seconds=0.0, fade_seconds=0.05)
+    coord.start(None)
+    _drive(clock, coord, 0.1)  # intro → out → in
+    assert coord.idx == 0
+    assert coord.current is fx_a1
+    render_count_before = len(display1.render_calls)
+    assert render_count_before > 0
+
+    # Swap in a fresh layer mid-life. State machine stays put;
+    # the next tick uses the new display / scroller / effects.
+    display2 = _StubDisplay()
+    scroller2 = _StubScroller()
+    fx_c = _make_effect("C")()
+    fx_d = _make_effect("D")()
+    heart2 = _make_effect("Heart2")()
+    coord.bind(display=display2, scroller=scroller2, effects=[fx_c, fx_d], heart=heart2)
+    assert coord.is_bound() is True
+    assert coord.display is display2
+    assert coord.scroller is scroller2
+    assert coord.effects == [fx_c, fx_d]
+    assert coord.heart is heart2
+
+    # Drive more — only the new display's render_calls grow.
+    _drive(clock, coord, 0.1)
+    assert len(display2.render_calls) > 0
+    # First display did not get any more render() calls after the swap.
+    assert len(display1.render_calls) == render_count_before
     monkey.undo()
