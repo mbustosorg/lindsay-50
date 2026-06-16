@@ -90,7 +90,7 @@ class MessageManager:
         config_api_url: str,
         api_key: str,
         is_browser: bool = False,
-        on_message: Optional[Callable[[Message], None]] = None,
+        on_change: Optional[Callable[[], None]] = None,
     ) -> None:
         """Create MessageManager with explicit URLs and an `is_browser` flag.
 
@@ -104,17 +104,35 @@ class MessageManager:
                               call site does not pass this kwarg; the browser's
                               call site always passes `is_browser=True` as a
                               hardcoded literal in PyScript.
-            on_message:       callback(msg: Message) — invoked when a "message"
-                              envelope arrives over MQTT. The Pi uses this to
-                              trigger display updates.
+            on_change:        parameterless callback invoked after any state
+                              mutation (message added, config updated, seed
+                              completed). The Pi's rAF loop and the browser's
+                              per-page `reRender` both rely on this. Exceptions
+                              from the callback are swallowed so a faulty
+                              listener never breaks the buffer write.
         """
         self._config = SignConfig()
         self._messages = InMemoryMessages(self._config, maxlen=100)
-        self._on_message = on_message
+        self._on_change = on_change
         self._messages_api_url = messages_api_url
         self._config_api_url = config_api_url
         self._api_key = api_key
         self._is_browser = is_browser
+
+    def _emit_change(self) -> None:
+        """Fire the `on_change` callback if registered.
+
+        Exceptions are swallowed — a faulty listener must never break
+        the buffer write. The callback is parameterless; listeners
+        re-read state via `get_messages` / `get_config` if they need
+        to know what changed.
+        """
+        if self._on_change is None:
+            return
+        try:
+            self._on_change()
+        except Exception as e:
+            logger.warning("MessageManager on_change callback raised: %s", e)
 
     @property
     def config(self) -> SignConfig:
@@ -140,12 +158,14 @@ class MessageManager:
             logger.warning("Unknown envelope type: %r", envelope.type)
 
     def _handle_message(self, payload: dict) -> None:
-        """Convert payload dict to Message, store it, and call _on_message callback.
+        """Convert payload dict to Message, store it, and emit change.
 
-        Filter rules are evaluated AFTER the message is added to the ring
-        buffer (so the suppressed state is recorded) but BEFORE the
-        on_message callback fires — filtered messages do not trigger
-        on_message per the spec.
+        The buffer's `add` does its own duplicate-suppression
+        (silently drops re-deliveries). Whether a message is
+        filtered (suppressed) is computed at READ time, not write
+        time, so the change event fires for every new message —
+        listeners that care about suppression re-read with
+        `get_messages(limit, suppress=True)`.
         """
         msg = Message(
             id=payload.get("id", ""),
@@ -156,18 +176,13 @@ class MessageManager:
 
         self._messages.add(msg, source="mqtt")
         logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
-        # Only fire on_message for non-suppressed messages. The filter
-        # evaluation reuses the same `_apply_filter` the InMemoryMessages
-        # enrichment path uses, so the suppressed flag is consistent.
-        if self._on_message:
-            suppressing = self._messages._apply_filter(msg, self._config.filters)
-            if not suppressing:
-                self._on_message(msg)
+        self._emit_change()
 
     def _handle_config(self, payload: dict) -> None:
-        """Apply a SignConfig dict to the in-memory config (thread-safe update)."""
+        """Apply a SignConfig dict to the in-memory config and emit change."""
         self._config.update_from_dict(payload)
         logger.info("MessageManager applied config update")
+        self._emit_change()
 
     async def _fetch(self, url: str) -> dict:
         """One HTTP GET to a JSON endpoint, returning the parsed dict.
@@ -240,14 +255,12 @@ class MessageManager:
 
         Uses the internal `_fetch` helper for both endpoints, so the same
         X-API-Key auth path runs in both the device and the browser.
+        Emits `on_change` once at the end so listeners see the post-seed
+        state in a single event (not one per endpoint).
         """
         if self._messages_api_url:
             try:
                 data = await self._fetch(self._messages_api_url)
-                print(f"[seed] _fetch returned type={type(data).__name__} "
-                      f"isinstance(list)={isinstance(data, list)} "
-                      f"len={len(data) if isinstance(data, list) else 'N/A'}",
-                      flush=True)
                 if isinstance(data, list):
                     self._messages.clear()
                     msgs = [
@@ -265,7 +278,6 @@ class MessageManager:
                     len(data) if isinstance(data, list) else 0,
                 )
             except Exception as e:
-                print(f"[seed] EXCEPTION: {e!r}", flush=True)
                 logger.warning("MessageManager message seed failed: %s", e)
 
         if self._config_api_url:
@@ -275,6 +287,8 @@ class MessageManager:
                 logger.info("MessageManager seeded config")
             except Exception as e:
                 logger.warning("MessageManager config seed failed: %s", e)
+
+        self._emit_change()
 
     def get_messages(self, limit: int = 100, suppress: bool = True):
         """Return messages from the ring buffer.

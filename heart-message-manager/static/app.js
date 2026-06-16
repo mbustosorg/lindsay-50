@@ -15,12 +15,15 @@
 //     `app.js` only loads when `current_user.is_authenticated` is
 //     true — every login and every full-page-reload fires it.
 //
-//   - `window.App.registerOnMessageCallback(cb)` lets per-page
-//     scripts (e.g. /preview's PyScript init, the /testing page's
-//     message feed) subscribe to inbound MQTT envelopes. The
-//     `dispatchToCallbacks` fan-out is fed by the PyScript-side
+//   - `window.App.registerOnChange(cb)` lets per-page scripts
+//     (e.g. /preview, /testing) subscribe to the universal
+//     "something changed in MessageManager" event. The
+//     `dispatchChange` fan-out is fed by the PyScript-side
 //     MessageManager (`app_main.py` wires MqttWsClient →
-//     MessageManager.dispatch → on_message → window.App._dispatchToCallbacks).
+//     MessageManager.dispatch → on_change → window.App._dispatchChange).
+//     One event covers all mutations: WS message envelope, WS
+//     config envelope, seed completion. The page re-renders
+//     whatever on its DOM could be affected by any state change.
 //
 //   - `window.App.getMessages(limit, suppress)` and
 //     `window.App.getConfig()` are read APIs that delegate to
@@ -32,8 +35,8 @@
 // backward compat with any code that may have referenced them.
 //
 // Per-page scripts that need to load on every admin page can
-// call `window.App.registerOnMessageCallback(...)` to subscribe
-// to inbound envelopes and `window.App.getMessages(...)` /
+// call `window.App.registerOnChange(...)` to subscribe to
+// state changes and `window.App.getMessages(...)` /
 // `getConfig()` to read the current buffer.
 
 (function () {
@@ -55,24 +58,25 @@
     void error;
   }
 
-  // Per-page callback registration. The PyScript-side
-  // `app_main.py._on_message_js` calls `App._dispatchToCallbacks`
-  // on every inbound message envelope; the registered callbacks
-  // here fan that out to per-page listeners.
-  const onMessageCallbacks = [];
+  // Per-page callback registration for the universal change
+  // event. The PyScript-side `app_main.py._on_change_js` calls
+  // `App._dispatchChange` after every MessageManager mutation;
+  // the registered callbacks here fan that out to per-page
+  // listeners (e.g. /testing's `reRender`).
+  const onChangeCallbacks = [];
 
-  function registerOnMessageCallback(cb) {
+  function registerOnChange(cb) {
     if (typeof cb === "function") {
-      onMessageCallbacks.push(cb);
+      onChangeCallbacks.push(cb);
     }
   }
 
-  function dispatchToCallbacks(msg) {
-    for (const cb of onMessageCallbacks) {
+  function dispatchChange() {
+    for (const cb of onChangeCallbacks) {
       try {
-        cb(msg);
+        cb();
       } catch (e) {
-        console.error("onMessage callback error:", e);
+        console.error("onChange callback error:", e);
       }
     }
   }
@@ -108,9 +112,9 @@
     // `window._seed` by the time `DOMContentLoaded` fires, so we
     // poll for it (cap ~5s) before falling back. The 5s window
     // covers PyScript's normal bootstrap on a cold load (micropip
-    // + numpy + Pillow + the in-browser render path) — a slow
-    // load surfaces as a "No messages" placeholder that fills in
-    // when the seed resolves, not as a permanently-empty feed.
+    // + numpy + Pillow + the in-browser render path) — the
+    // change event fires when the seed resolves, so per-page
+    // `reRender` listeners will paint the actual messages.
     const seedDeadline = Date.now() + 5000;
     while (typeof window._seed !== "function" && Date.now() < seedDeadline) {
       await new Promise((r) => setTimeout(r, 50));
@@ -118,19 +122,6 @@
     if (typeof window._seed === "function") {
       try {
         await window._seed();
-        // Probe buffer state right after seed resolves — tells us
-        // whether the in-browser MessageManager is actually populated
-        // (testing.html renders from the same path; if this is empty
-        // the page table is also empty).
-        let probeLen = -1;
-        try {
-          if (window._message_manager) {
-            probeLen = (await window._message_manager.get_messages(100, false)).length;
-          }
-        } catch (e) {
-          console.warn("[DEBUG app.js] post-seed probe failed:", e);
-        }
-        console.log("[DEBUG app.js] seed complete; buffer probe length=", probeLen);
       } catch (e) {
         console.warn("seed failed:", e);
       }
@@ -141,18 +132,18 @@
 
   // expose the registration surface for per-page scripts.
   // `getMessages` / `getConfig` are JS-side wrappers that delegate
-  // to the PyScript-side MessageManager; `_dispatchToCallbacks` is
-  // what `app_main.py` calls on each inbound envelope to fan out
-  // to the registered per-page callbacks.
+  // to the PyScript-side MessageManager; `registerOnChange` and
+  // `_dispatchChange` form the universal state-change event
+  // surface (see top-of-file comment).
   window.App = {
-    registerOnMessageCallback,
+    registerOnChange,
     getMessages,
     getConfig: getConfigNow,
     // PyScript-side fan-out entry point. The MessageManager's
-    // on_message callback calls this; per-page listeners
-    // (e.g. preview.js's callback) are reached via
-    // `dispatchToCallbacks`.
-    _dispatchToCallbacks: dispatchToCallbacks,
+    // on_change callback calls this; per-page listeners
+    // (e.g. testing.html's `reRender`) are reached via
+    // `dispatchChange`.
+    _dispatchChange: dispatchChange,
   };
 
   if (document.readyState === "loading") {

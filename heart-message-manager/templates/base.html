@@ -66,7 +66,7 @@
     import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=10";
     window.createMqttWsClient = createMqttWsClient;
   </script>
-  <script src="{{ url_for('static', filename='app.js') }}?v=11"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=12"></script>
   <script>
     // Generic collapse/expand helper for the card-with-chevron drawer
     // pattern used on the Settings (Effects List) and Testing (Current
@@ -104,7 +104,7 @@
   <link rel="stylesheet" href="https://pyscript.net/releases/2024.9.1/core.css">
   <script type="module" src="https://pyscript.net/releases/2024.9.1/core.js"></script>
   <py-config src="{{ url_for('static', filename='preview/py-config.toml') }}?v=11"></py-config>
-  <py-script src="{{ url_for('static', filename='preview/heart-message-manager/app_main.py') }}?v=16"></py-script>
+  <py-script src="{{ url_for('static', filename='preview/heart-message-manager/app_main.py') }}?v=18"></py-script>
   {% endif %}
 </head>
 <body class="font-body">

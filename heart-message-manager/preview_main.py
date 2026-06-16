@@ -33,10 +33,11 @@ The actual main loop lives in `static/preview/preview.js`, which
 drives `tick()` via requestAnimationFrame (capped at 30 FPS). The
 shared `MqttWsClient` (started by `app_main.py`) feeds
 `window._message_manager.dispatch(raw)` on each inbound envelope;
-that fan-out fires `window.App._dispatchToCallbacks` and the
-preview's `registerOnMessageCallback` listener (set up in
-preview.js) hands new bodies to `coordinator.set_text` via
-`window.request_message` and config envelopes to `apply_config`.
+the MessageManager's universal `on_change` fan-out fires
+`window.App._dispatchChange`, and the preview's
+`registerOnChange` listener (set up in preview.js) re-pushes the
+current SignConfig and the most recent message into the
+coordinator via `apply_config` and `request_message`.
 
 The effect list, scroller color, and scroller speed all come
 from the v2 `SignConfig` exposed by `window._message_manager`.

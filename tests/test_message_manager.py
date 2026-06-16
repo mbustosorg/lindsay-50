@@ -119,7 +119,7 @@ def seed_config():
 
 class TestConstructor:
     def test_constructor_accepts_required_kwargs(self, messages_api_url, config_api_url, api_key):
-        """Constructor accepts (messages_api_url, config_api_url, api_key, is_browser, on_message)."""
+        """Constructor accepts (messages_api_url, config_api_url, api_key, is_browser, on_change)."""
         mm = _mm()
         mgr = mm.MessageManager(
             messages_api_url=messages_api_url,
@@ -132,7 +132,7 @@ class TestConstructor:
         # is_browser defaults to False (the device's value)
         assert mgr._is_browser is False
         # No callback by default
-        assert mgr._on_message is None
+        assert mgr._on_change is None
         # Public surface exposed
         assert mgr.config is not None
         assert mgr.messages is not None
@@ -150,17 +150,17 @@ class TestConstructor:
         )
         assert mgr._is_browser is True
 
-    def test_constructor_with_on_message(self, messages_api_url, config_api_url, api_key):
-        """on_message callback is stored."""
+    def test_constructor_with_on_change(self, messages_api_url, config_api_url, api_key):
+        """on_change callback is stored (parameterless)."""
         cb = MagicMock()
         mm = _mm()
         mgr = mm.MessageManager(
             messages_api_url=messages_api_url,
             config_api_url=config_api_url,
             api_key=api_key,
-            on_message=cb,
+            on_change=cb,
         )
-        assert mgr._on_message is cb
+        assert mgr._on_change is cb
 
 
 # ---------------------------------------------------------------------------
@@ -415,20 +415,20 @@ class TestFetchBrowserPath:
 
 
 # ---------------------------------------------------------------------------
-# dispatch — message and config envelopes, filter rules, on_message callback
+# dispatch — message and config envelopes, filter rules, on_change event
 # ---------------------------------------------------------------------------
 
 
 class TestDispatchMessage:
     def test_dispatch_message_envelope_routes_to_ring(self, messages_api_url, config_api_url, api_key):
-        """A type=message envelope is added to the ring buffer and on_message is invoked."""
+        """A type=message envelope is added to the ring buffer and on_change is invoked."""
         cb = MagicMock()
         mm = _mm()
         mgr = mm.MessageManager(
             messages_api_url=messages_api_url,
             config_api_url=config_api_url,
             api_key=api_key,
-            on_message=cb,
+            on_change=cb,
         )
         env = _make_env(
             {
@@ -443,21 +443,21 @@ class TestDispatchMessage:
         assert len(msgs) == 1
         assert msgs[0].message.id == "x1"
         assert msgs[0].message.body == "hi"
+        # on_change fires once after the buffer write
         cb.assert_called_once()
-        # The callback received the Message object
-        cb_arg = cb.call_args[0][0]
-        assert cb_arg.id == "x1"
-        assert cb_arg.body == "hi"
+        # The callback is parameterless — listeners re-read state
+        cb_arg = cb.call_args[0]
+        assert cb_arg == ()
 
-    def test_dispatch_does_not_invoke_on_message_on_config(self, messages_api_url, config_api_url, api_key):
-        """A type=config envelope updates the config but does NOT invoke on_message."""
+    def test_dispatch_invokes_on_change_on_config(self, messages_api_url, config_api_url, api_key):
+        """A type=config envelope updates the config and on_change IS invoked."""
         cb = MagicMock()
         mm = _mm()
         mgr = mm.MessageManager(
             messages_api_url=messages_api_url,
             config_api_url=config_api_url,
             api_key=api_key,
-            on_message=cb,
+            on_change=cb,
         )
         env = _make_config_env(
             {
@@ -489,8 +489,9 @@ class TestDispatchMessage:
         assert mgr.config.sign.name == "Updated"
         names = [e["name"] for e in mgr.config.effect_settings.effects]
         assert "Fireworks" in names
-        # on_message NOT called
-        cb.assert_not_called()
+        # on_change WAS called (the universal change event covers
+        # both message arrivals and config updates)
+        cb.assert_called_once()
 
     def test_dispatch_malformed_envelope_is_dropped(self, messages_api_url, config_api_url, api_key):
         """A malformed envelope is dropped without raising."""
@@ -500,7 +501,7 @@ class TestDispatchMessage:
             messages_api_url=messages_api_url,
             config_api_url=config_api_url,
             api_key=api_key,
-            on_message=cb,
+            on_change=cb,
         )
         # Not valid JSON
         mgr.dispatch("not json")
@@ -529,15 +530,21 @@ class TestDispatchMessage:
 
 
 class TestDispatchFilterRules:
-    def test_filtered_message_does_not_invoke_on_message(self, messages_api_url, config_api_url, api_key):
-        """A message matching a filter rule is added but on_message is NOT invoked."""
+    def test_filtered_message_invokes_on_change(self, messages_api_url, config_api_url, api_key):
+        """A message matching a filter rule is added; on_change fires.
+
+        The old per-message callback skipped filtered messages. The
+        new universal `on_change` fires for every state change —
+        the suppression flag is computed at read time, so a
+        listener that cares re-reads with `get_messages(suppress=True)`.
+        """
         cb = MagicMock()
         mm = _mm()
         mgr = mm.MessageManager(
             messages_api_url=messages_api_url,
             config_api_url=config_api_url,
             api_key=api_key,
-            on_message=cb,
+            on_change=cb,
         )
         mgr.config.filters.append(FilterRule(type="keyword", pattern="spam", action="suppress"))
         env = _make_env(
@@ -553,18 +560,18 @@ class TestDispatchFilterRules:
         msgs_all = mgr.get_messages(limit=10, suppress=False)
         assert len(msgs_all) == 1
         assert msgs_all[0].suppressed is True
-        # but on_message was not called
-        cb.assert_not_called()
+        # on_change WAS called (universal change event covers all writes)
+        cb.assert_called_once()
 
-    def test_non_filtered_message_invokes_on_message(self, messages_api_url, config_api_url, api_key):
-        """A non-matching message invokes on_message and is not suppressed."""
+    def test_non_filtered_message_invokes_on_change(self, messages_api_url, config_api_url, api_key):
+        """A non-matching message invokes on_change and is not suppressed."""
         cb = MagicMock()
         mm = _mm()
         mgr = mm.MessageManager(
             messages_api_url=messages_api_url,
             config_api_url=config_api_url,
             api_key=api_key,
-            on_message=cb,
+            on_change=cb,
         )
         mgr.config.filters.append(FilterRule(type="keyword", pattern="spam", action="suppress"))
         env = _make_env(
@@ -579,6 +586,164 @@ class TestDispatchFilterRules:
         cb.assert_called_once()
         msgs_all = mgr.get_messages(limit=10, suppress=False)
         assert msgs_all[0].suppressed is False
+
+
+# ---------------------------------------------------------------------------
+# on_change — universal change event
+# ---------------------------------------------------------------------------
+
+
+class TestOnChange:
+    def test_handle_message_emits_change(self, messages_api_url, config_api_url, api_key):
+        """`_handle_message` invokes the parameterless on_change callback once per write."""
+        cb = MagicMock()
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=cb,
+        )
+        mgr._handle_message(
+            {
+                "id": "m1",
+                "sender": "+15551234567",
+                "body": "hi",
+                "received_at": "2026-06-01T12:00:00Z",
+            }
+        )
+        cb.assert_called_once_with()
+        # Listener is parameterless — no args
+        assert cb.call_args.args == ()
+
+    def test_handle_message_suppressed_still_emits_change(self, messages_api_url, config_api_url, api_key):
+        """Suppressed messages still fire on_change — suppression is computed at read time."""
+        cb = MagicMock()
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=cb,
+        )
+        mgr.config.filters.append(FilterRule(type="keyword", pattern="spam", action="suppress"))
+        mgr._handle_message(
+            {
+                "id": "m1",
+                "sender": "+15551234567",
+                "body": "this is spam",
+                "received_at": "2026-06-01T12:00:00Z",
+            }
+        )
+        cb.assert_called_once()
+        # The message is in the ring, with suppressed=True
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].suppressed is True
+
+    def test_handle_config_emits_change(self, messages_api_url, config_api_url, api_key):
+        """`_handle_config` invokes on_change after updating the SignConfig."""
+        cb = MagicMock()
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=cb,
+        )
+        mgr._handle_config(
+            {
+                "filters": [],
+                "senders": [],
+                "effect_settings": {
+                    "effects": [{"name": "Fireworks", "enabled": True}],
+                    "fade_seconds": 2.0,
+                    "hold_seconds": 15.0,
+                    "intro_seconds": 5.0,
+                    "idle_seconds": 300.0,
+                    "recent_count": 5,
+                },
+                "text_settings": {
+                    "speed": 3,
+                    "color": 16711680,
+                    "text_effect": "scroll",
+                },
+                "sign": {"name": "Updated"},
+                "timezone": "US/Pacific",
+                "version": 2,
+            }
+        )
+        cb.assert_called_once()
+        assert mgr.config.sign.name == "Updated"
+
+    def test_seed_emits_change_once(self, messages_api_url, config_api_url, api_key, seed_messages, seed_config):
+        """A successful seed of both endpoints fires on_change exactly once."""
+        cb = MagicMock()
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=cb,
+        )
+
+        async def mock_fetch(url):
+            return seed_messages if url == messages_api_url else seed_config
+
+        mgr._fetch = mock_fetch  # type: ignore[assignment]
+        asyncio.run(mgr.seed())
+        cb.assert_called_once()
+        # And the buffer is populated
+        assert len(mgr.get_messages(limit=10, suppress=False)) == 2
+
+    def test_partial_seed_still_emits_change(self, messages_api_url, config_api_url, api_key, seed_messages):
+        """If only one endpoint succeeds, on_change still fires once."""
+        cb = MagicMock()
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=cb,
+        )
+
+        async def mock_fetch(url):
+            if url == messages_api_url:
+                return seed_messages
+            raise RuntimeError("config endpoint down")
+
+        mgr._fetch = mock_fetch  # type: ignore[assignment]
+        asyncio.run(mgr.seed())
+        # Buffer populated, config not, but on_change still fired
+        cb.assert_called_once()
+        assert len(mgr.get_messages(limit=10, suppress=False)) == 2
+
+    def test_swallowed_callback_exception(self, messages_api_url, config_api_url, api_key):
+        """A faulty callback must not break the buffer write."""
+
+        def boom():
+            raise RuntimeError("listener bug")
+
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=boom,
+        )
+        mgr._handle_message(
+            {
+                "id": "m1",
+                "sender": "+15551234567",
+                "body": "hi",
+                "received_at": "2026-06-01T12:00:00Z",
+            }
+        )
+        # The message still made it into the buffer despite the
+        # listener raising.
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.id == "m1"
 
     def test_get_messages_with_suppress_true_excludes_suppressed(self, messages_api_url, config_api_url, api_key):
         """get_messages(suppress=True) excludes suppressed messages."""

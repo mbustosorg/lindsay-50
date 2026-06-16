@@ -4,10 +4,10 @@ The admin app loads on every authenticated page. The script owns three
 app-scoped singletons that any page can reach through the `window`:
 
   - `window._message_manager` — `MessageManager(is_browser=True)` with an
-    `on_message` callback that fans out to the existing JS-side
-    `dispatchToCallbacks` (preserves the `window.App.registerOnMessageCallback`
-    API for /preview and /testing). Holds the in-browser copy of the
-    SignConfig and the message ring buffer.
+    `on_change` callback that fans out to the JS-side `_dispatchChange`
+    (preserves the `window.App.registerOnChange` API for /preview and
+    /testing). Holds the in-browser copy of the SignConfig and the
+    message ring buffer.
 
   - `window._coordinator` — `EffectsCoordinator` constructed WITHOUT a
     render layer. The /preview page (`preview_main.py`) creates its
@@ -65,7 +65,7 @@ from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]
 
 from lib_shared.message_manager import MessageManager
 from lib_shared.effects_coordinator import EffectsCoordinator
-from lib_shared.models import Message, SignConfig
+from lib_shared.models import SignConfig
 
 # The existing JS-side `mqtt_ws_client.js` shim is loaded by `base.html`
 # before this script runs. We import it via the `js` global and wrap it
@@ -129,27 +129,21 @@ def _on_status_js(state, detail) -> None:
         pass
 
 
-def _on_message_js(msg) -> None:
-    """MessageManager → JS: fan out to the page-level callbacks.
+def _on_change_js() -> None:
+    """MessageManager → JS: fan out the universal change event.
 
-    The MessageManager hands us a Python `Message`; the JS-side
-    per-page callbacks (`registerOnMessageCallback`) expect a
-    flat `Message.to_dict()` shape. Convert via `to_js` so the
-    JS proxy sees a real object, not a JsProxy of a Python class.
-    Config envelopes don't fire this callback (the MessageManager
-    routes them through `_handle_config`); the live preview.js
-    checks for `effect_settings` in the payload to distinguish.
+    The callback is parameterless. The JS-side `App` shim
+    (`static/app.js`) maintains a list of per-page listeners
+    registered via `App.registerOnChange(cb)`. Each listener
+    re-renders whatever on its page could be affected by a
+    state change (the page's `reRender` aggregator, typically).
     """
     try:
-        payload = msg.to_dict() if isinstance(msg, Message) else dict(msg)
-    except Exception:
-        return
-    try:
         app = getattr(js.window, "App", None)
-        if app is not None and hasattr(app, "_dispatchToCallbacks"):
-            app._dispatchToCallbacks(to_js(payload))
+        if app is not None and hasattr(app, "_dispatchChange"):
+            app._dispatchChange()
     except Exception as e:
-        print(f"[app_main] _on_message_js failed: {e!r}")
+        print(f"[app_main] _on_change_js failed: {e!r}")
 
 
 async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
@@ -167,7 +161,7 @@ async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
     try:
         entries = _message_manager.get_messages(limit=limit, suppress=suppress)
         out = []
-        for i, entry in enumerate(entries):
+        for entry in entries:
             # Defensive: an entry can be a MessageView (normal path)
             # or, in odd cases, a raw dict (e.g. a partial seed that
             # stored dicts instead of Message objects). Handle both.
@@ -181,14 +175,6 @@ async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
             d["rules"] = [r.to_dict() if hasattr(r, "to_dict") else r for r in rules]
             d["sender_name"] = getattr(entry, "sender_name", "") or ""
             d["display_time"] = getattr(entry, "display_time", "") or ""
-            if i < 3:
-                print(
-                    f"[DEBUG] entry[{i}] entry_type={type(entry).__name__} "
-                    f"message.id={d.get('id')!r} "
-                    f"rules_type={type(rules[0]).__name__ if rules else 'N/A'} "
-                    f"hasattr_to_dict={hasattr(rules[0], 'to_dict') if rules else 'N/A'}",
-                    flush=True,
-                )
             out.append(d)
         return to_js(out)
     except Exception as e:
@@ -242,7 +228,7 @@ _message_manager = MessageManager(
     config_api_url=str(_cfg.get("configApiUrl") or ""),
     api_key=str(_cfg.get("apiKey") or ""),
     is_browser=True,
-    on_message=_on_message_js,
+    on_change=create_proxy(_on_change_js),
 )
 
 _coordinator = EffectsCoordinator()
@@ -273,8 +259,8 @@ if _mqtt_ws_url:
     _mqtt_ws_client = createMqttWsClient(_client_opts_js)
     # Start the WS connection; the shim handles reconnect / pause /
     # status internally. Any envelope that lands calls
-    # `_message_manager.dispatch(raw)` which fires `_on_message_js`
-    # which fans out to `window.App._dispatchToCallbacks`.
+    # `_message_manager.dispatch(raw)` which fires `_on_change_js`
+    # which fans out to `window.App._dispatchChange`.
     _mqtt_ws_client.start()
 
 
@@ -287,7 +273,7 @@ js.window._coordinator = _coordinator
 if _mqtt_ws_client is not None:
     js.window._mqtt_ws_client = _mqtt_ws_client
 js.window._seed = create_proxy(_seed)
-# JS-side read APIs — preserve the old `window.App.getMessages` /
+# JS-side read APIs — preserve the `window.App.getMessages` /
 # `getConfig` surface so `testing.html` (and any future per-page
 # hydration path in `preview.js`) can read from the in-memory ring
 # buffer / SignConfig without owning IndexedDB.
@@ -295,13 +281,12 @@ _app = getattr(js.window, "App", None)
 if _app is not None:
     _app.getMessages = create_proxy(_get_messages_js)
     _app.getConfig = create_proxy(_get_config_js)
-    # The MessageManager's on_message callback fires this; per-page
-    # listeners (e.g. `registerOnMessageCallback` from
-    # `static/preview/preview.js`) stay subscribed.
-    if not hasattr(_app, "_dispatchToCallbacks"):
-        # Belt-and-suspenders: the existing app.js's `dispatchToCallbacks`
-        # is a closure, not a method. Forward through `App` by aliasing.
+    # The MessageManager's on_change callback (via the proxy
+    # `_on_change_js` above) calls this; per-page listeners
+    # registered via `App.registerOnChange` are reached through
+    # the JS-side `dispatchChange` fan-out.
+    if not hasattr(_app, "_dispatchChange"):
         try:
-            _app._dispatchToCallbacks = _app.dispatchToCallbacks
+            _app._dispatchChange = _app.dispatchChange
         except Exception:
             pass
