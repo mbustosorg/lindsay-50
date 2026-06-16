@@ -57,8 +57,14 @@ def _load_app_module(mock_cfg):
         sys.modules[name] = mod
         return mod
 
-    # Mock lib_shared submodules
+    # Mock lib_shared submodules. The parent `lib_shared` mock gets a
+    # real `__path__` so Python's import system can resolve any
+    # submodules we DON'T mock (e.g. `lib_shared.scroller_base`) from
+    # the real filesystem; without `__path__`, the import falls through
+    # with `'lib_shared' is not a package` because a bare
+    # `types.ModuleType` carries no package metadata.
     lib_shared = _make_mock("lib_shared")
+    lib_shared.__path__ = [str(_PROJECT_ROOT / "lib_shared")]
     config_reader_mod = _make_mock("lib_shared.config_reader")
     config_reader_mod.get_config = lambda required_keys=None: mock_cfg
     log_setup_mod = _make_mock("lib_shared.log_setup")
@@ -70,6 +76,14 @@ def _load_app_module(mock_cfg):
     models_mod.Message = MagicMock()
     models_mod.MessageEnvelope = MagicMock()
     models_mod.MessageView = MagicMock()
+    models_mod._DEFAULT_EFFECTS_LIST_FULL = []
+
+    # Mock the v2 config migration module (heart-message-manager/main.py
+    # imports it at module level). The startup migration runs at app load
+    # time, so the call must be a no-op MagicMock.
+    cm_mod = _make_mock("lib_shared.config_migrations")
+    cm_mod.migrate = MagicMock(side_effect=lambda d, current_version: d or {})
+    cm_mod.migrate_on_startup = MagicMock()
 
     mm_mod = _make_mock("lib_shared.message_manager")
     mm_mod.MessageManager = MagicMock()
@@ -105,6 +119,7 @@ def _load_app_module(mock_cfg):
     sqlite_mod.message_count = MagicMock(return_value=0)
     sqlite_mod.put_message = MagicMock()
     sqlite_mod.get_message = MagicMock(return_value=None)
+    sqlite_mod.put_config = MagicMock()
     sys.modules["sqlite"] = sqlite_mod
 
     s3_mod = types.ModuleType("s3")

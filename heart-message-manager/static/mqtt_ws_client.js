@@ -202,6 +202,8 @@ export function createMqttWsClient({
   }
 
   function emitEnvelope(rawString) {
+    const preview = rawString.length > 200 ? rawString.slice(0, 200) + "..." : rawString;
+    console.log("[mqtt-ws] emitEnvelope: " + preview);
     if (typeof onEnvelope === "function") {
       try {
         onEnvelope(rawString);
@@ -423,6 +425,7 @@ export function createMqttWsClient({
       emitStatus("connected", detail);
     };
     socket.onmessage = (event) => {
+      console.log("[mqtt-ws] socket.onmessage fired, data type=" + (event.data && event.data.constructor && event.data.constructor.name));
       let data;
       if (event.data instanceof ArrayBuffer) {
         data = new Uint8Array(event.data);

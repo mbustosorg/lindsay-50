@@ -19,14 +19,6 @@ sys.modules["lib_shared.models"] = lib_shared_models
 _sqlite = importlib.import_module("heart-message-manager.sqlite")
 storage = _sqlite
 
-from lib_shared.models import (
-    FilterRule,
-    Message,
-    RenderingSettings,
-    SignConfig,
-    SignSettings,
-)
-
 
 @pytest.fixture
 def temp_db(tmp_path):

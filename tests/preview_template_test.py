@@ -15,6 +15,52 @@ _PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
 
+def _snapshot_sys_modules():
+    """Return a snapshot of sys.modules so we can restore it after a
+    test that calls `_load_app_module` (which installs fake ModuleType
+    objects into sys.modules for `lib_shared.*` and a few entry-level
+    modules). Without the restore, tests that run after this one in
+    the same pytest process see the mocks — which break real-package
+    imports in tests like test_message_manager and
+    scroller_matrix_test.
+    """
+    return {name: mod for name, mod in sys.modules.items()}
+
+
+def _restore_sys_modules(snapshot):
+    """Restore sys.modules to the state captured by `_snapshot_sys_modules`.
+
+    Modules that were in the snapshot keep their value; modules added
+    during the test (mock modules, app module) are dropped.
+    """
+    for name in list(sys.modules):
+        if name not in snapshot:
+            sys.modules.pop(name, None)
+    for name, mod in snapshot.items():
+        sys.modules[name] = mod
+
+
+class _AppLoader:
+    """Context manager around `test_auth._load_app_module` that snapshots
+    sys.modules on entry and restores it on exit, so the lib_shared mocks
+    the loader installs don't leak into downstream tests.
+    """
+
+    def __init__(self, auth):
+        self._auth = auth
+        self._snapshot = None
+
+    def __enter__(self):
+        self._snapshot = _snapshot_sys_modules()
+        app = self._auth._load_app_module(self._auth._make_mock_cfg())
+        app.config["TESTING"] = True
+        return app
+
+    def __exit__(self, *exc):
+        _restore_sys_modules(self._snapshot)
+        return False
+
+
 def _load_test_auth():
     """Import test_auth.py as a module (it doesn't auto-import on sys.path)."""
     auth_path = _PROJECT_ROOT / "tests" / "test_auth.py"
@@ -128,47 +174,41 @@ def test_preview_template_no_websocket():
 def test_preview_template_loaded_by_app():
     """GET /preview returns a 200 with the rendered canvas element."""
     # Build the app via the same loader test_auth uses, so all heavy deps
-    # are mocked but the template still renders through Jinja.
+    # are mocked but the template still renders through Jinja. The
+    # _AppLoader wrapper snapshots and restores sys.modules so the
+    # loader's lib_shared mocks don't leak into downstream tests.
     auth = _load_test_auth()
-    _make_mock_cfg = auth._make_mock_cfg
-    _load_app_module = auth._load_app_module
-
-    app = _load_app_module(_make_mock_cfg())
-    app.config["TESTING"] = True
-    client = app.test_client()
-    # Need to log in first
-    client.post("/login", data={"username": "admin", "password": "secret123"})
-    response = client.get("/preview")
-    assert response.status_code == 200
-    body = response.data.decode()
-    assert 'id="sign-canvas"' in body
-    # The CSS canvas no longer uses image-rendering: pixelated (commit
-    # 9f5efb3 moved the LED look to a JS-side dot mask) — but the canvas
-    # still declares an image-rendering style.
-    assert "image-rendering:" in body
-    assert "Loading preview" in body
-    # No WebSocket references in the rendered HTML
-    assert "new WebSocket" not in body
-    assert "Flask-Sock" not in body
+    with _AppLoader(auth) as app:
+        client = app.test_client()
+        # Need to log in first
+        client.post("/login", data={"username": "admin", "password": "secret123"})
+        response = client.get("/preview")
+        assert response.status_code == 200
+        body = response.data.decode()
+        assert 'id="sign-canvas"' in body
+        # The CSS canvas no longer uses image-rendering: pixelated (commit
+        # 9f5efb3 moved the LED look to a JS-side dot mask) — but the canvas
+        # still declares an image-rendering style.
+        assert "image-rendering:" in body
+        assert "Loading preview" in body
+        # No WebSocket references in the rendered HTML
+        assert "new WebSocket" not in body
+        assert "Flask-Sock" not in body
 
 
 def test_preview_template_csp_header_on_preview_route():
     """The /preview response carries a Content-Security-Policy header that
     allows wasm-unsafe-eval and the PyScript CDN."""
     auth = _load_test_auth()
-    _make_mock_cfg = auth._make_mock_cfg
-    _load_app_module = auth._load_app_module
+    with _AppLoader(auth) as app:
+        client = app.test_client()
+        client.post("/login", data={"username": "admin", "password": "secret123"})
 
-    app = _load_app_module(_make_mock_cfg())
-    app.config["TESTING"] = True
-    client = app.test_client()
-    client.post("/login", data={"username": "admin", "password": "secret123"})
-
-    response = client.get("/preview")
-    csp = response.headers.get("Content-Security-Policy", "")
-    assert "wasm-unsafe-eval" in csp
-    # PyScript CDN allowed in script-src
-    assert "pyscript.net" in csp or "cdn.jsdelivr.net" in csp
+        response = client.get("/preview")
+        csp = response.headers.get("Content-Security-Policy", "")
+        assert "wasm-unsafe-eval" in csp
+        # PyScript CDN allowed in script-src
+        assert "pyscript.net" in csp or "cdn.jsdelivr.net" in csp
 
 
 def test_preview_template_csp_allows_tailwind_cdn():
@@ -180,25 +220,22 @@ def test_preview_template_csp_allows_tailwind_cdn():
     a stack of huge static icons.
     """
     auth = _load_test_auth()
-    _make_mock_cfg = auth._make_mock_cfg
-    _load_app_module = auth._load_app_module
+    with _AppLoader(auth) as app:
+        client = app.test_client()
+        client.post("/login", data={"username": "admin", "password": "secret123"})
 
-    app = _load_app_module(_make_mock_cfg())
-    app.config["TESTING"] = True
-    client = app.test_client()
-    client.post("/login", data={"username": "admin", "password": "secret123"})
-
-    response = client.get("/preview")
-    csp = response.headers.get("Content-Security-Policy", "")
-    # The script-src directive must include the Tailwind CDN
-    script_src = _extract_directive(csp, "script-src")
-    assert (
-        "https://cdn.tailwindcss.com" in script_src
-    ), f"script-src must allow cdn.tailwindcss.com; got: {script_src!r}"
-    # And the inline `tailwind.config = {...}` block in base.html
-    assert "'unsafe-inline'" in script_src or "'unsafe-inline'" in csp, (
-        f"script-src must allow inline scripts (for the tailwind.config " f"block in base.html); got: {script_src!r}"
-    )
+        response = client.get("/preview")
+        csp = response.headers.get("Content-Security-Policy", "")
+        # The script-src directive must include the Tailwind CDN
+        script_src = _extract_directive(csp, "script-src")
+        assert (
+            "https://cdn.tailwindcss.com" in script_src
+        ), f"script-src must allow cdn.tailwindcss.com; got: {script_src!r}"
+        # And the inline `tailwind.config = {...}` block in base.html
+        assert "'unsafe-inline'" in script_src or "'unsafe-inline'" in csp, (
+            f"script-src must allow inline scripts (for the tailwind.config "
+            f"block in base.html); got: {script_src!r}"
+        )
 
 
 def _extract_directive(csp: str, name: str) -> str:
@@ -217,14 +254,10 @@ def _extract_directive(csp: str, name: str) -> str:
 def test_other_routes_have_no_csp_header():
     """Non-/preview routes are unaffected — no CSP is set."""
     auth = _load_test_auth()
-    _make_mock_cfg = auth._make_mock_cfg
-    _load_app_module = auth._load_app_module
-
-    app = _load_app_module(_make_mock_cfg())
-    app.config["TESTING"] = True
-    client = app.test_client()
-    response = client.get("/health")
-    assert response.headers.get("Content-Security-Policy", "") == ""
+    with _AppLoader(auth) as app:
+        client = app.test_client()
+        response = client.get("/health")
+        assert response.headers.get("Content-Security-Policy", "") == ""
 
 
 def test_pyscript_declared_files_all_serve_200():
@@ -246,33 +279,29 @@ def test_pyscript_declared_files_all_serve_200():
     import tomllib
 
     auth = _load_test_auth()
-    _make_mock_cfg = auth._make_mock_cfg
-    _load_app_module = auth._load_app_module
-
     py_config_path = _PROJECT_ROOT / "heart-message-manager" / "static" / "preview" / "py-config.toml"
     cfg = tomllib.loads(py_config_path.read_text())
     declared = cfg.get("files", {})
 
-    app = _load_app_module(_make_mock_cfg())
-    # main.py is loaded via importlib (see test_auth._load_app_module),
-    # which causes Flask's root_path to fall back to the repo root and
-    # static_folder to point at the wrong directory. Override explicitly,
-    # mirroring what scripts/preview_server.py does for the real server.
-    app.static_folder = str(_PROJECT_ROOT / "heart-message-manager" / "static")
-    app.static_url_path = "/static"
-    app.config["TESTING"] = True
-    client = app.test_client()
+    with _AppLoader(auth) as app:
+        # main.py is loaded via importlib (see test_auth._load_app_module),
+        # which causes Flask's root_path to fall back to the repo root and
+        # static_folder to point at the wrong directory. Override explicitly,
+        # mirroring what scripts/preview_server.py does for the real server.
+        app.static_folder = str(_PROJECT_ROOT / "heart-message-manager" / "static")
+        app.static_url_path = "/static"
+        client = app.test_client()
 
-    failures = []
-    # The keys in py-config.toml [files] are py-source-paths; the values
-    # are /static/... URLs. We just want to assert each value returns 200.
-    for src_path, static_url in declared.items():
-        path = static_url.split("://", 1)[-1]  # strip scheme if any
-        response = client.get(path)
-        if response.status_code != 200:
-            failures.append((src_path, path, response.status_code))
+        failures = []
+        # The keys in py-config.toml [files] are py-source-paths; the values
+        # are /static/... URLs. We just want to assert each value returns 200.
+        for src_path, static_url in declared.items():
+            path = static_url.split("://", 1)[-1]  # strip scheme if any
+            response = client.get(path)
+            if response.status_code != 200:
+                failures.append((src_path, path, response.status_code))
 
-    assert not failures, (
-        f"{len(failures)} py-config.toml [files] entries do not serve 200; "
-        f"PyScript bootstrap will silently fail. First few: {failures[:3]}"
-    )
+        assert not failures, (
+            f"{len(failures)} py-config.toml [files] entries do not serve 200; "
+            f"PyScript bootstrap will silently fail. First few: {failures[:3]}"
+        )

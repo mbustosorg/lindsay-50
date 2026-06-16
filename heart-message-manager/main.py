@@ -48,8 +48,11 @@ _cfg = get_config(REQUIRED_KEYS)
 
 import sqlite, s3
 from server_time import format_from_iso, now_utc_iso
+from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.models import MessageEnvelope
+from lib_shared.models import _DEFAULT_EFFECTS_LIST_FULL
+from lib_shared.scroller_base import ScrollerBase
 
 # App setup
 app = Flask(__name__)
@@ -114,6 +117,32 @@ _mqtt_client = PahoMqttClient(
 )
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
+
+
+def _mqtt_client_publish_config(cfg_dict: dict) -> None:
+    """Publish a config dict as a `type="config"` envelope to MQTT.
+
+    Defined here (before the `migrate_on_startup` call) so the migration's
+    `mqtt_publisher` lambda can forward to it on the fresh-install path
+    (which fires the publisher before the rest of the file is loaded).
+    """
+    assert _mqtt_client is not None
+    ok = _mqtt_client.publish_envelope(MessageEnvelope("config", cfg_dict))
+    logger.info("[flask] _mqtt_client_publish_config: publish_envelope returned %s", ok)
+
+
+# Run the config migration on startup: read the latest S3 config, migrate to
+# CURRENT_VERSION if needed, and write back to SQLite, MQTT, and S3. The
+# running code only ever sees the current version after this runs once.
+# Exception propagates (S3 read failure aborts startup) — the migration does
+# not silently swallow S3 read errors. Must run AFTER the MQTT client is
+# constructed so the publish step has something to publish through.
+migrate_on_startup(
+    s3_getter=s3.load_latest_config,
+    sqlite_writer=sqlite.put_config,
+    mqtt_publisher=lambda cfg_dict: _mqtt_client_publish_config(cfg_dict),
+    s3_writer=s3.save_config_snapshot,
+)
 
 
 # Inbound Twilio webhook handler
@@ -275,7 +304,9 @@ def api_put_config():
     if not isinstance(data, dict):
         return jsonify({"error": "expected JSON object"}), 400
 
-    cfg = SignConfig.from_dict(data)
+    cfg, err = _build_sign_config_from_request(data)
+    if err is not None or cfg is None:
+        return err if err is not None else (jsonify({"error": "invalid config"}), 400)
     _save_and_publish(cfg)
     return jsonify({"status": "ok"})
 
@@ -358,13 +389,142 @@ def api_s3_object():
 
 def _save_and_publish(cfg: SignConfig) -> None:
     """Save config to SQLite, snapshot S3, publish to Adafruit IO."""
+    cfg_dict = cfg.to_dict()
     sqlite.put_config(cfg)
     try:
-        s3.save_config_snapshot(cfg.to_dict())
+        s3.save_config_snapshot(cfg_dict)
     except Exception as e:
         logger.warning("Config S3 snapshot failed: %s", e)
-    assert _mqtt_client is not None
-    _mqtt_client.publish_envelope(MessageEnvelope("config", cfg.to_dict()))
+    logger.info(
+        "[flask] _save_and_publish: publishing config envelope "
+        "rotation=%s text=(speed=%d, color=#%06x) pacing=(fade=%s, hold=%s)",
+        [(e["name"], e["enabled"]) for e in cfg_dict["effect_settings"]["effects"]],
+        cfg_dict["text_settings"]["speed"],
+        cfg_dict["text_settings"]["color"],
+        cfg_dict["effect_settings"]["fade_seconds"],
+        cfg_dict["effect_settings"]["hold_seconds"],
+    )
+    _mqtt_client_publish_config(cfg_dict)
+
+
+# Canonical set of effect class names the device knows about. Mirrors
+# `lib_shared.models._DEFAULT_EFFECTS_LIST_FULL` (the device-side
+# `_EFFECT_CLASSES` map in heart-matrix-controller/main.py is keyed on the
+# same names). Used by `_build_sign_config_from_request` to reject
+# incoming entries whose name isn't in this set.
+_KNOWN_EFFECT_NAMES = frozenset(
+    [
+        "Hyperspace",
+        "VideoDisplay",
+        "PngDisplay",
+        "Honeycomb",
+        "Flame",
+        "Fireworks",
+        "NightSky",
+    ]
+)
+
+
+def _build_sign_config_from_request(data: dict) -> tuple:
+    """Validate an incoming config payload and build a SignConfig from it.
+
+    Runs the migration registry at the top so v1 inputs are normalized to
+    v2 before validation. Validates the new fields (effects entries,
+    behavior fields, recent_count, text fields) and returns per-field error
+    messages.
+
+    Args:
+        data: dict — the parsed JSON request body.
+
+    Returns:
+        A `(SignConfig | None, Response | None)` tuple. On success, the
+        first element is the constructed SignConfig and the second is None.
+        On failure, the first element is None and the second is a Flask
+        JSON response with HTTP 400 and `{"error": "<message>"}`.
+    """
+    if not isinstance(data, dict):
+        return None, (jsonify({"error": "expected JSON object"}), 400)
+
+    # Normalize to current version before validation so v1 payloads are
+    # accepted through the same code path as v2.
+    data = migrate(data, current_version=SignConfig.CURRENT_VERSION)
+
+    # Validate effect_settings.
+    es = data.get("effect_settings")
+    if es is not None:
+        if not isinstance(es, dict):
+            return None, (jsonify({"error": "effect_settings must be an object"}), 400)
+        effects_list = es.get("effects")
+        if not isinstance(effects_list, list):
+            return None, (jsonify({"error": "effect_settings.effects must be a list"}), 400)
+        for idx, entry in enumerate(effects_list):
+            if not isinstance(entry, dict):
+                return None, (
+                    jsonify({"error": f"effect_settings.effects[{idx}]: must be an object"}),
+                    400,
+                )
+            name = entry.get("name")
+            enabled = entry.get("enabled")
+            if not isinstance(name, str):
+                return None, (
+                    jsonify({"error": (f"effect_settings.effects[{idx}]: missing or invalid 'name'")}),
+                    400,
+                )
+            if not isinstance(enabled, bool):
+                return None, (
+                    jsonify({"error": (f"effect_settings.effects[{idx}]: missing or invalid 'enabled'")}),
+                    400,
+                )
+            if name not in _KNOWN_EFFECT_NAMES:
+                return None, (
+                    jsonify({"error": f"effect_settings.effects: unknown effect '{name}'"}),
+                    400,
+                )
+        for field in ("fade_seconds", "hold_seconds", "intro_seconds", "idle_seconds"):
+            v = es.get(field)
+            if v is not None and (not isinstance(v, (int, float)) or v < 0):
+                return None, (
+                    jsonify({"error": (f"effect_settings.{field}: must be a non-negative number")}),
+                    400,
+                )
+        rc = es.get("recent_count")
+        if rc is not None:
+            if isinstance(rc, bool) or not isinstance(rc, int) or rc < 1:
+                return None, (
+                    jsonify({"error": ("effect_settings.recent_count: must be a positive integer")}),
+                    400,
+                )
+
+    # Validate text_settings.
+    ts = data.get("text_settings")
+    if ts is not None:
+        if not isinstance(ts, dict):
+            return None, (jsonify({"error": "text_settings must be an object"}), 400)
+        speed = ts.get("speed")
+        if speed is not None:
+            if isinstance(speed, bool) or not isinstance(speed, int) or not (1 <= speed <= 5):
+                return None, (
+                    jsonify({"error": "text_settings.speed: must be an integer in 1..5"}),
+                    400,
+                )
+        color = ts.get("color")
+        if color is not None:
+            if isinstance(color, bool) or not isinstance(color, int) or not (0 <= color <= 0xFFFFFF):
+                return None, (
+                    jsonify({"error": ("text_settings.color: must be an integer in 0..0xFFFFFF")}),
+                    400,
+                )
+        te = ts.get("text_effect")
+        if te is not None and te not in ("scroll",):
+            return None, (
+                jsonify({"error": (f"text_settings.text_effect: must be one of ('scroll',), got {te!r}")}),
+                400,
+            )
+
+    # All checks passed; construct the SignConfig (from_dict runs migrate()
+    # again as defense-in-depth, which is a no-op for an already-migrated dict).
+    cfg = SignConfig.from_dict(data)
+    return cfg, None
 
 
 def _suppress_message(msg_id: str) -> bool:
@@ -486,15 +646,58 @@ def settings():
             except ZoneInfoNotFoundError:
                 pass  # ignore invalid timezone, keep current value
 
-        cfg.rendering.mode = request.form.get("rendering_mode", cfg.rendering.mode)
-        try:
-            cfg.rendering.speed = float(request.form.get("rendering_speed", cfg.rendering.speed))
-        except ValueError:
-            pass
-        try:
-            cfg.rendering.color = int(request.form.get("rendering_color", str(cfg.rendering.color)), 0)
-        except ValueError:
-            pass
+        # Text settings: speed (1..5), color, text effect.
+        ts_form = cfg.text_settings
+        speed_raw = request.form.get("text_settings_speed")
+        if speed_raw is not None and speed_raw != "":
+            try:
+                speed_val = int(speed_raw)
+                if 1 <= speed_val <= 5:
+                    ts_form.speed = speed_val
+            except ValueError:
+                pass
+        color = request.form.get("text_settings_color")
+        if color is not None and color != "":
+            try:
+                ts_form.color = int(color, 16) & 0xFFFFFF
+            except ValueError:
+                pass
+        te = request.form.get("text_settings_text_effect")
+        if te:
+            ts_form.text_effect = te
+        cfg.text_settings = ts_form
+
+        # Effect settings: pacing (fade/hold/intro/idle seconds), recent_count,
+        # and the rotation list (handled by the multi-effect form below).
+        es_form = cfg.effect_settings
+        for field in ("fade_seconds", "hold_seconds", "intro_seconds", "idle_seconds"):
+            raw = request.form.get(f"effect_settings_{field}")
+            if raw is not None and raw != "":
+                try:
+                    setattr(es_form, field, float(raw))
+                except ValueError:
+                    pass
+        rc_raw = request.form.get("effect_settings_recent_count")
+        if rc_raw is not None and rc_raw != "":
+            try:
+                es_form.recent_count = int(rc_raw)
+            except ValueError:
+                pass
+
+        # Effect rotation list: the form posts the canonical order with each
+        # entry's `enabled` checkbox value (or absence). Rebuild the list
+        # preserving only known names.
+        enabled_map = {}
+        for name in request.form.getlist("effect_name"):
+            enabled_map[name] = True
+        # Any canonical name absent from the form list is treated as disabled
+        # (its checkbox wasn't ticked). We rebuild the list in the canonical
+        # order from the current model defaults so ordering is preserved.
+        new_effects = []
+        for entry in _DEFAULT_EFFECTS_LIST_FULL:
+            new_effects.append({"name": entry["name"], "enabled": entry["name"] in enabled_map})
+        es_form.effects = new_effects
+        cfg.effect_settings = es_form
 
         names = request.form.getlist("sender_name")
         phones = request.form.getlist("sender_phone")
@@ -513,6 +716,7 @@ def settings():
         "settings.html",
         cfg=cfg,
         sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
+        speed_labels=ScrollerBase.SPEED_LABELS,
     )
 
 

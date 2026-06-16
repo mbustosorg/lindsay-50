@@ -80,12 +80,16 @@ if [ ! -d "$MAIN_REPO" ]; then
 fi
 
 log=()
+no_source_count=0
+total=0
 for proj in heart-message-manager heart-matrix-controller; do
+    total=$((total + 1))
     src="$MAIN_REPO/$proj/settings.toml"
     dst="$WORKTREE_ROOT/$proj/settings.toml"
 
     if [ ! -f "$src" ]; then
         log+=("ℹ️  $proj: no settings.toml in $MAIN_REPO — skipped")
+        no_source_count=$((no_source_count + 1))
         continue
     fi
 
@@ -114,6 +118,17 @@ for proj in heart-message-manager heart-matrix-controller; do
     fi
 done
 
+# Fail loudly when every component was skipped because the source is
+# missing — that almost always means MAIN_REPO lost its settings.toml
+# (or this worktree is pointing at the wrong main checkout). A silent
+# skip in this case masks real setup failures. The hook (with set -e)
+# will not touch .git_wt_initialized, so the next operator can run
+# this script directly once the source is restored.
+all_no_source=0
+if [ "$no_source_count" -gt 0 ] && [ "$no_source_count" -eq "$total" ]; then
+    all_no_source=1
+fi
+
 printf '%s\n' "${log[@]}"
 
 # --check is for inspection, not for the log of-record. Skip the
@@ -124,4 +139,9 @@ if [ "$CHECK" -ne 1 ]; then
         echo "=== sync_settings.sh at $(date -u +'%Y-%m-%dT%H:%M:%SZ') ==="
         printf '%s\n' "${log[@]}"
     } > "$WORKTREE_ROOT/.settings_copy.log"
+fi
+
+if [ "$all_no_source" -eq 1 ]; then
+    echo "❌ no settings.toml found in $MAIN_REPO for any component — exiting non-zero" >&2
+    exit 1
 fi

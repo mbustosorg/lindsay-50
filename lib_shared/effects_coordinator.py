@@ -17,8 +17,12 @@ coordinator — `tick()` ends with one line: `self.display.render(...)`.
 
 The Pi hands the coordinator a `recent_provider` callable (e.g. one that
 queries the `MessageManager` for the last few bodies). The browser doesn't
-have that — it relies on an internal `deque` populated by `request_message`.
+have that — it relies on an internal `deque` populated by `set_text`.
 The class supports both via the optional `recent_provider` argument.
+
+Pacing + recent_count come from an `EffectsSettings` block (the v2 config
+shape), passed as `settings` (an `EffectsSettings` instance or `None` for
+the historic per-kwarg defaults).
 """
 
 import logging
@@ -26,7 +30,87 @@ import random
 import time
 from collections import deque
 
+from lib_shared.models import EffectsSettings
+
 log = logging.getLogger("heart")
+
+
+def build_effects(
+    effect_settings: EffectsSettings,
+    effect_class_factory=None,
+    *,
+    display=None,
+) -> list:
+    """Build the effects rotation from a v2 `EffectsSettings` block.
+
+    Iterates `effect_settings.effects` in declared order. For each
+    enabled entry, calls `effect_class_factory(name)` to resolve the
+    Effect class, then instantiates it with `display` (every Effect
+    constructor takes the display as its first positional arg).
+    Disabled entries are skipped. Names the factory doesn't
+    recognize are skipped silently (already logged inside the
+    factory).
+
+    If the resulting rotation is empty (every entry disabled or every
+    name unknown), falls back to the first canonical effect from the
+    declared rotation order so the sign never goes dark. The fallback
+    is deterministic — same config always picks the same fallback —
+    so the sign's idle behavior is predictable across reloads. If
+    even the fallback is unresolvable (every canonical name is
+    unknown to the factory), the rotation stays empty; callers that
+    need a non-empty list at any cost should provide their own
+    effects.
+
+    Args:
+        effect_settings: The v2 `EffectsSettings` block from `SignConfig`,
+            or None (returns [] — there's no settings to derive a
+            fallback from).
+        effect_class_factory: Callable `name -> type | None`. Defaults
+            to `lib_shared.effects_factory.make_effect_class`. Tests
+            can pass a stub that returns simple effect classes.
+        display: The display object handed to each Effect's constructor.
+            Required when `effect_settings` is not None — every Effect
+            subclass needs a display.
+
+    Returns:
+        A list of instantiated Effect objects in the order
+        declared in `effect_settings.effects`. Enabled effects
+        only. Empty when `effect_settings is None` or when the
+        fallback is also unresolvable.
+    """
+    if effect_settings is None:
+        return []
+    if effect_class_factory is None:
+        from lib_shared.effects_factory import make_effect_class
+
+        effect_class_factory = make_effect_class
+    if display is None:
+        raise ValueError("build_effects requires `display` to instantiate effects")
+    out = []
+    for entry in effect_settings.effects:
+        if not entry.get("enabled"):
+            continue
+        cls = effect_class_factory(entry.get("name", ""))
+        if cls is None:
+            continue
+        out.append(cls(display))
+    if not out:
+        # Fallback: the first canonical effect (the head of the
+        # declared rotation order). Resolved through the same
+        # factory so an unknown canonical name is caught and
+        # skipped — the rotation stays empty in that case (better
+        # dark panel than a crash). Deterministic: same config
+        # always picks the same fallback, so the sign's idle
+        # behavior is predictable across reloads.
+        for entry in effect_settings.effects:
+            cls = effect_class_factory(entry.get("name", ""))
+            if cls is not None:
+                log.warning(
+                    "build_effects: rotation empty after filter, " "falling back to first canonical effect %r",
+                    entry.get("name"),
+                )
+                return [cls(display)]
+    return out
 
 
 class EffectsCoordinator:
@@ -35,7 +119,7 @@ class EffectsCoordinator:
     Used directly by both the Pi entrypoint and the browser preview; no
     subclass. The Pi passes a `recent_provider` callable that reads from
     its message store; the browser omits it and the coordinator uses its
-    own internal deque of bodies handed in via `request_message`.
+    own internal deque of bodies handed in via `set_text`.
 
     Args:
         display: a `DisplayBase` subclass (`MatrixDisplay` on the Pi,
@@ -47,12 +131,20 @@ class EffectsCoordinator:
         recent_provider: optional callable returning recent message entries
             (each with a `.message.body` attribute) for the idle random
             pick. If `None`, the coordinator uses its internal `_recent`
-            deque populated by `request_message`.
-        fade_seconds: seconds for one full fade.
-        hold_seconds: seconds to keep a message fully visible.
-        intro_seconds: seconds to show the boot-splash heart.
-        idle_seconds: seconds of idleness before a random message plays.
-        recent_count: size of the internal recent-messages deque.
+            deque populated by `set_text`.
+        settings: optional `EffectsSettings` instance supplying
+            `fade_seconds`, `hold_seconds`, `intro_seconds`,
+            `idle_seconds`, and `recent_count`. When omitted, defaults
+            are used.
+        fade_seconds: seconds for one full fade (used when `settings` is None).
+        hold_seconds: seconds to keep a message fully visible (used when
+            `settings` is None).
+        intro_seconds: seconds to show the boot-splash heart (used when
+            `settings` is None).
+        idle_seconds: seconds of idleness before a random message plays
+            (used when `settings` is None).
+        recent_count: size of the internal recent-messages deque (used when
+            `settings` is None).
         fade_step: throttle (seconds) between palette writes during a fade.
         gamma: gamma exponent applied to the linear fade progress.
     """
@@ -64,24 +156,32 @@ class EffectsCoordinator:
         effects,
         heart,
         recent_provider=None,
-        fade_seconds=2.0,
-        hold_seconds=15.0,
-        intro_seconds=5.0,
-        idle_seconds=300.0,
-        recent_count=5,
-        fade_step=0.04,
-        gamma=2.2,
+        settings: EffectsSettings | None = None,
+        fade_seconds: float = 2.0,
+        hold_seconds: float = 15.0,
+        intro_seconds: float = 5.0,
+        idle_seconds: float = 300.0,
+        recent_count: int = 5,
+        fade_step: float = 0.04,
+        gamma: float = 2.2,
     ):
         self.display = display
         self.scroller = scroller
         self.effects = effects
         self.heart = heart
         self.recent_provider = recent_provider
-        self.fade_seconds = fade_seconds
-        self.hold_seconds = hold_seconds
-        self.intro_seconds = intro_seconds
-        self.idle_seconds = idle_seconds
-        self.recent_count = recent_count
+        if settings is not None:
+            self.fade_seconds = settings.fade_seconds
+            self.hold_seconds = settings.hold_seconds
+            self.intro_seconds = settings.intro_seconds
+            self.idle_seconds = settings.idle_seconds
+            self.recent_count = settings.recent_count
+        else:
+            self.fade_seconds = fade_seconds
+            self.hold_seconds = hold_seconds
+            self.intro_seconds = intro_seconds
+            self.idle_seconds = idle_seconds
+            self.recent_count = recent_count
         # Throttles palette writes during a fade. Without this, a fast main loop
         # rewrites the palette far faster than the panel refreshes, wasting work.
         self.fade_step = fade_step
@@ -99,7 +199,7 @@ class EffectsCoordinator:
         self.last_shown_text = None
         # Browser-side recent-message buffer. The Pi uses `recent_provider`
         # instead, so this deque is never consulted when a provider is set.
-        self._recent = deque(maxlen=recent_count)
+        self._recent: deque = deque(maxlen=self.recent_count)
 
     def start(self, startup_text):
         """Begin the boot splash, queuing the seeded message to show after it."""
@@ -112,7 +212,7 @@ class EffectsCoordinator:
         self.mode = "intro"
         self.phase_start = time.monotonic()
 
-    def request_message(self, text):
+    def set_text(self, text):
         """Queue a freshly-arrived message; shown at the next stable point.
 
         Empty / None bodies are ignored. When no `recent_provider` is set
@@ -126,6 +226,37 @@ class EffectsCoordinator:
         if self.recent_provider is None:
             if not self._recent or self._recent[-1] != text:
                 self._recent.append(text)
+
+    # Backwards-compat alias for the pre-v2 entrypoint. New code calls
+    # `set_text`; existing tests still call `request_message`.
+    def request_message(self, text):
+        """Deprecated alias for `set_text`; kept so old call sites compile."""
+        self.set_text(text)
+
+    def apply_settings(self, effect_settings: EffectsSettings) -> None:
+        """Live-update pacing + recent_count from a v2 `EffectsSettings`.
+
+        Called when a config envelope arrives over MQTT/WS; mutates
+        the coordinator's pacing attributes in place. Does NOT touch
+        the effects rotation — that's a separate `build_effects` call
+        that the caller (Pi main.py / preview_main.py) is expected to
+        make, then assign to `coordinator.effects`.
+        """
+        if effect_settings is None:
+            return
+        self.fade_seconds = effect_settings.fade_seconds
+        self.hold_seconds = effect_settings.hold_seconds
+        self.intro_seconds = effect_settings.intro_seconds
+        self.idle_seconds = effect_settings.idle_seconds
+        self.recent_count = effect_settings.recent_count
+        # Resize the in-memory recent deque. Existing entries are kept
+        # up to the new maxlen; older ones are dropped automatically.
+        # Always rebuild — the deque is small (max ~dozens of bodies)
+        # and the test suite expects `coord._recent.maxlen` to track
+        # `recent_count` even when a `recent_provider` is configured
+        # (the deque is unused in that case but must stay consistent).
+        existing = list(self._recent)
+        self._recent = deque(existing, maxlen=self.recent_count)
 
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""

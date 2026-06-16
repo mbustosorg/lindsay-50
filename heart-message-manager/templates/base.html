@@ -67,6 +67,19 @@
     window.createMqttWsClient = createMqttWsClient;
   </script>
   <script src="{{ url_for('static', filename='app.js') }}?v=8"></script>
+  <script>
+    // Generic collapse/expand helper for the card-with-chevron drawer
+    // pattern used on the Settings (Effects List) and Testing (Current
+    // Config / Active Filters / S3 Bucket) pages. The function reads two
+    // elements by ID: `<name>-section` (the body to toggle) and
+    // `<name>-chevron` (the chevron that rotates 180° when open).
+    function toggleSection(name) {
+      const section = document.getElementById(name + '-section');
+      const chevron = document.getElementById(name + '-chevron');
+      if (section) section.classList.toggle('hidden');
+      if (chevron) chevron.classList.toggle('rotate-180');
+    }
+  </script>
   {% endif %}
 </head>
 <body class="font-body">

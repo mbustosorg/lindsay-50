@@ -129,14 +129,7 @@ def get_config() -> SignConfig:
 
 
 def put_config(cfg: SignConfig) -> None:
-    """Save the config JSON to SQLite under the 'current' key.
-
-    tz_offset_mins is recomputed from the current timezone so it is always
-    up to date when serialized.
-    """
-    from server_time import tz_offset_mins
-
-    cfg.tz_offset_mins = tz_offset_mins(cfg.timezone)
+    """Save the config JSON to SQLite under the 'current' key."""
     conn = sqlite3.connect(_db_path())
     conn.execute(
         "INSERT OR REPLACE INTO config (key, value) VALUES ('current', ?)",

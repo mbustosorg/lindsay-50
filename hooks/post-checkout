@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Git passes these three arguments automatically
 PREV_HEAD=$1
@@ -57,12 +58,22 @@ fi
 # repo). The actual copy logic lives in scripts/sync_settings.sh so it
 # can also be run directly to refresh a clobbered settings.toml. The
 # app handles creating secret_key and db.sqlite on first startup.
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+#
+# Resolve symlinks so the script path is correct whether the hook was
+# invoked via .git/hooks/post-checkout (-> hooks/post-checkout) or
+# directly from hooks/post-checkout. Without this, dirname "$0" lands
+# on .git/hooks and the relative path resolves to .git/scripts/...,
+# which doesn't exist — and the "skipped" branch below fires silently.
+HOOK_PATH="$0"
+if [ -L "$HOOK_PATH" ]; then
+    HOOK_PATH="$(readlink "$HOOK_PATH")"
+fi
+SCRIPT_DIR="$(cd "$(dirname "$HOOK_PATH")" && pwd)"
 SYNC_SCRIPT="$SCRIPT_DIR/../scripts/sync_settings.sh"
 if [ -f "$SYNC_SCRIPT" ]; then
     bash "$SYNC_SCRIPT"
 else
-    echo "⚠️  $SYNC_SCRIPT not found — settings.toml not copied"
+    echo "⚠️  $SYNC_SCRIPT not found — settings.toml not copied" >&2
 fi
 
 # ---------------------------------------------------------------------------

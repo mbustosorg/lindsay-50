@@ -174,36 +174,38 @@
     return suppressing;
   }
 
-  function _formatDisplayTime(receivedAt, tzOffsetMins) {
+  function _formatDisplayTime(receivedAt, timezone) {
     if (!receivedAt) return "";
-    // receivedAt is ISO 8601 UTC ("2026-05-22T14:30:00Z"). Apply the
-    // sign's signed UTC offset (in minutes) without depending on the
-    // browser's local timezone.
-    const iso = receivedAt.replace(/Z$/, "");
-    const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})/.exec(iso);
-    if (!m) return receivedAt;
-    const utcEpoch = Date.UTC(
-      parseInt(m[1], 10),
-      parseInt(m[2], 10) - 1,
-      parseInt(m[3], 10),
-      parseInt(m[4], 10),
-      parseInt(m[5], 10),
-      parseInt(m[6], 10)
-    );
-    const localEpoch = utcEpoch + (tzOffsetMins || 0) * 60 * 1000;
-    const d = new Date(localEpoch);
-    const monthAbbr = [
-      "Jan", "Feb", "Mar", "Apr", "May", "Jun",
-      "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
-    ][d.getUTCMonth()];
-    const day = d.getUTCDate();
-    let hour = d.getUTCHours();
-    const minute = d.getUTCMinutes();
-    const ampm = hour >= 12 ? "PM" : "AM";
-    hour = hour % 12;
-    if (hour === 0) hour = 12;
-    const mm = minute < 10 ? "0" + minute : "" + minute;
-    return monthAbbr + " " + day + " " + hour + ":" + mm + " " + ampm;
+    // receivedAt is ISO 8601 UTC ("2026-05-22T14:30:00Z"). Format it in the
+    // sign's configured IANA timezone (DST-aware) using Intl.DateTimeFormat.
+    // Falls back to the browser's local timezone on unknown names so a bad
+    // config value never throws.
+    const tz = timezone || "US/Pacific";
+    const d = new Date(receivedAt);
+    if (isNaN(d.getTime())) return receivedAt;
+    let formatted;
+    try {
+      formatted = new Intl.DateTimeFormat("en-US", {
+        timeZone: tz,
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+        timeZoneName: "short",
+      }).format(d);
+    } catch (e) {
+      formatted = new Intl.DateTimeFormat("en-US", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        hour12: true,
+      }).format(d);
+    }
+    return formatted;
   }
 
   // Enrich a flat message dict with `source`, `suppressed`, `rules`,
@@ -223,7 +225,7 @@
       sender_name: sendersByPhone[msg.sender] || "",
       display_time: _formatDisplayTime(
         msg.received_at,
-        (config && config.tz_offset_mins) || 0
+        (config && config.timezone) || "US/Pacific"
       ),
     });
   }
@@ -242,6 +244,10 @@
   }
 
   function dispatchToCallbacks(msg) {
+    console.log(
+      "[app] dispatchToCallbacks: callbacks=" + onMessageCallbacks.length +
+      " msg=" + (msg && Object.keys(msg).slice(0, 5).join(","))
+    );
     for (const cb of onMessageCallbacks) {
       try {
         cb(msg);
@@ -460,7 +466,10 @@
       return;
     }
     if (!envelope || typeof envelope !== "object") return;
-
+    console.log(
+      "[app] onMqttEnvelope: type=" + envelope.type +
+      " payloadKeys=" + (envelope.payload && Object.keys(envelope.payload).join(","))
+    );
     // Mirror to the in-memory MessageManager (if /preview registered one).
     if (messageManager && typeof messageManager.dispatch === "function") {
       try {

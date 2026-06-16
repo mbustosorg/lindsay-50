@@ -1,7 +1,9 @@
 """Shared pytest fixtures for heart-message-manager tests."""
 
 import importlib
+import importlib.util
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -9,12 +11,38 @@ import pytest
 # Ensure project root is on the path so lib_shared is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# Expose the hyphenated heart-message-manager/ directory under the
+# package name `heart_message_manager` so tests can do
+# `from heart_message_manager.preview_scroller import PreviewScroller`.
+# Python refuses to import a hyphenated directory as a package
+# (PEP 328 / Python's identifier rules), so we synthesize a package
+# whose __path__ points at the real directory. preview_scroller and
+# preview_display are pure-CPython; preview_main is PyScript-only
+# (top-level `await`) and is left for the test that exercises it
+# (preview_wiring_test imports it lazily and skips on host CPython).
+_HEART_MM_DIR = Path(__file__).parent.parent / "heart-message-manager"
+if "heart_message_manager" not in sys.modules:
+    _pkg = types.ModuleType("heart_message_manager")
+    _pkg.__path__ = [str(_HEART_MM_DIR)]
+    sys.modules["heart_message_manager"] = _pkg
+    for _mod_name in ("preview_scroller", "preview_display"):
+        _path = _HEART_MM_DIR / f"{_mod_name}.py"
+        if not _path.exists():
+            continue
+        _spec = importlib.util.spec_from_file_location(f"heart_message_manager.{_mod_name}", str(_path))
+        if _spec is None or _spec.loader is None:
+            continue
+        _mod = importlib.util.module_from_spec(_spec)
+        sys.modules[f"heart_message_manager.{_mod_name}"] = _mod
+        _spec.loader.exec_module(_mod)
+
 from lib_shared.models import (
+    EffectsSettings,
     FilterRule,
     Message,
-    RenderingSettings,
     SignConfig,
     SignSettings,
+    TextSettings,
 )
 
 
@@ -82,10 +110,11 @@ def sample_messages():
 @pytest.fixture
 def default_config():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )
 
@@ -93,10 +122,11 @@ def default_config():
 @pytest.fixture
 def config_with_keyword_filter():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[FilterRule(type="keyword", pattern="badword", action="suppress")],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )
 
@@ -104,10 +134,11 @@ def config_with_keyword_filter():
 @pytest.fixture
 def config_with_sender_filter():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[FilterRule(type="sender", pattern="+15550001111", action="suppress")],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )
 
@@ -115,10 +146,11 @@ def config_with_sender_filter():
 @pytest.fixture
 def config_with_regex_filter():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[FilterRule(type="regex", pattern=r"^\s*$", action="suppress")],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )
 
@@ -126,9 +158,10 @@ def config_with_regex_filter():
 @pytest.fixture
 def config_with_message_filter():
     return SignConfig(
-        version=1,
+        version=2,
         filters=[FilterRule(type="message", pattern="msg-002", action="suppress")],
         senders={},
-        rendering=RenderingSettings(),
+        effect_settings=EffectsSettings(),
+        text_settings=TextSettings(),
         sign=SignSettings(),
     )

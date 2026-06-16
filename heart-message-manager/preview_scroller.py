@@ -24,19 +24,26 @@ class PreviewScroller(ScrollerBase):
     """ScrollerBase subclass backed by Pillow. Used in the browser preview.
 
     The TTF font is loaded from PREVIEW_FONT_PATH (env) or
-    `preview_font_path` constructor kwarg; if neither is set, falls back to
+    `font_path` constructor kwarg; if neither is set, falls back to
     Pillow's bundled default font, which is always available.
     """
 
     def __init__(
         self,
         display,
-        color=0xFF6400,
-        frame_delay=0.04,
-        offset_seconds=1.0,
-        font_path=None,
+        *,
+        speed: int = ScrollerBase.DEFAULT_SPEED,
+        color: int = 0xFF6400,
+        font_path: str | None = None,
+        frame_delay: float | None = None,
+        offset_seconds: float | None = None,
     ):
-        super().__init__(frame_delay=frame_delay, offset_seconds=offset_seconds, color=color)
+        super().__init__(
+            speed=speed,
+            color=color,
+            frame_delay=frame_delay,
+            offset_seconds=offset_seconds,
+        )
         self.display = display
 
         path = font_path or os.environ.get("PREVIEW_FONT_PATH")
