@@ -41,7 +41,7 @@ import to read `APP_CONFIG`.
 
 from pyodide_js import loadPackage  # type: ignore[reportGeneralTypeIssues]  # noqa: F401  (top-level await: PyScript 2024.9.x runs via `eval_code_async`)
 
-await loadPackage(["micropip"])  # type: ignore[reportGeneralTypeIssues]  # top-level await — see note above
+await loadPackage(["micropip", "tzdata"])  # type: ignore[reportGeneralTypeIssues]  # top-level await — see note above
 
 import sys
 
@@ -153,17 +153,28 @@ def _on_message_js(msg) -> None:
 
 
 async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
-    """JS-callable: return enriched message entries (newest first)."""
-    print(f"[app_main] _get_messages_js called: limit={limit} suppress={suppress}", flush=True)
+    """JS-callable: return enriched message entries (newest first).
+
+    Mirrors the old `messageBufferStore.hydrate()` contract so
+    `testing.html` (and the future `preview.js` hydration path)
+    can read from the in-memory ring buffer. Returns a list of
+    flat dicts — the JS side does its own enrichment (or the
+    same fields the Python `FilteredMessages._enrich_messages`
+    computes; the two are intended to agree).
+    """
     if _message_manager is None:
-        print("[app_main] _get_messages_js: _message_manager is None", flush=True)
         return to_js([])
     try:
-        buf_len = len(_message_manager._messages._msgs)
         entries = _message_manager.get_messages(limit=limit, suppress=suppress)
-        print(f"[app_main] _get_messages_js: buffer={buf_len} returned={len(entries)}", flush=True)
         out = []
-        for entry in entries:
+        for i, entry in enumerate(entries):
+            if i < 2:
+                print(
+                    f"[DEBUG] entry[{i}] type={type(entry).__name__} "
+                    f"hasattr_message={hasattr(entry, 'message')} "
+                    f"entry.message type={type(getattr(entry, 'message', None)).__name__}",
+                    flush=True,
+                )
             d = entry.message.to_dict()
             d["source"] = entry.source
             d["suppressed"] = bool(entry.suppressed)
@@ -179,19 +190,10 @@ async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
 
 async def _get_config_js() -> object:
     """JS-callable: return the current SignConfig as a plain dict."""
-    print(f"[app_main] _get_config_js called", flush=True)
     if _message_manager is None:
-        print("[app_main] _get_config_js: _message_manager is None", flush=True)
         return to_js({})
     try:
         cfg = _message_manager.get_config()
-        is_default = isinstance(cfg, SignConfig) and not cfg.filters and not cfg.senders
-        print(
-            f"[app_main] _get_config_js: cfg={type(cfg).__name__} is_default={is_default} "
-            f"filters={len(cfg.filters) if isinstance(cfg, SignConfig) else '?'} "
-            f"senders={len(cfg.senders) if isinstance(cfg, SignConfig) else '?'}",
-            flush=True,
-        )
         return to_js(cfg.to_dict() if isinstance(cfg, SignConfig) else dict(cfg))
     except Exception as e:
         print(f"[app_main] _get_config_js failed: {e!r}")
@@ -199,17 +201,21 @@ async def _get_config_js() -> object:
 
 
 async def _seed() -> None:
-    """Seed the in-browser MessageManager from the Flask REST API."""
-    print(f"[app_main] _seed() entered; _message_manager={_message_manager!r}", flush=True)
+    """Seed the in-browser MessageManager from the Flask REST API.
+
+    Called once per page load by `static/app.js`'s `init()` (the
+    "auth-aware" trigger — `app.js` only loads when
+    `current_user.is_authenticated` is true, so the seed runs on
+    every login and every full-page-reload). The MessageManager
+    swallows per-endpoint failures internally, so a partial seed
+    is non-fatal.
+    """
     if _message_manager is None:
-        print("[app_main] _seed() bailing: _message_manager is None", flush=True)
         return
     try:
         await _message_manager.seed()
-        buf_len = len(_message_manager._messages._msgs)
-        print(f"[app_main] _seed() DONE; buffer len={buf_len}", flush=True)
     except Exception as e:
-        print(f"[app_main] _seed() raised: {e!r}", flush=True)
+        print(f"[app_main] seed failed: {e!r}")
 
 
 # ---------------------------------------------------------------------------
@@ -217,9 +223,6 @@ async def _seed() -> None:
 # ---------------------------------------------------------------------------
 
 _cfg = _app_config()
-print(f"[DEBUG app_main.py] _app_config() returned keys={list(_cfg.keys())}")
-print(f"[DEBUG app_main.py] _cfg['mqttWsUrl'] = {_cfg.get('mqttWsUrl')!r}")
-print(f"[DEBUG app_main.py] _cfg['mqttTopic'] = {_cfg.get('mqttTopic')!r}")
 
 _message_manager = MessageManager(
     messages_api_url=str(_cfg.get("messagesApiUrl") or ""),
@@ -233,7 +236,6 @@ _coordinator = EffectsCoordinator()
 
 _mqtt_ws_client = None
 _mqtt_ws_url = str(_cfg.get("mqttWsUrl") or "")
-print(f"[DEBUG app_main.py] _mqtt_ws_url (str-converted) = {_mqtt_ws_url!r}")
 if _mqtt_ws_url:
     _client_opts = {
         "url": _mqtt_ws_url,
@@ -255,10 +257,6 @@ if _mqtt_ws_url:
     # `dict_converter=js.Object.fromEntries` produces a plain
     # JS object whose properties the destructuring can read.
     _client_opts_js = to_js(_client_opts, dict_converter=js.Object.fromEntries)
-    print(
-        f"[DEBUG app_main.py] createMqttWsClient opts keys={list(_client_opts.keys())}, "
-        f"url={_client_opts['url']!r}, topic={_client_opts['topic']!r}"
-    )
     _mqtt_ws_client = createMqttWsClient(_client_opts_js)
     # Start the WS connection; the shim handles reconnect / pause /
     # status internally. Any envelope that lands calls
