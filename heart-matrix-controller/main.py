@@ -56,86 +56,48 @@ _boot_settings = EffectsSettings()
 effects = build_effects(_boot_settings, display=display)
 
 coordinator = EffectsCoordinator(
-    display,
-    scroller,
-    effects,
+    message_manager=None,  # patched below once `manager` exists
+    display=display,
+    scroller=scroller,
+    effects=effects,
     heart=heartbeat,
     settings=_boot_settings,
 )
 
 
 def _on_change():
-    """No-op: the rAF loop reads the buffer on every tick and the
-    message-selection algorithm decides when to display what.
+    """Apply the manager's current SignConfig to the coordinator + scroller.
 
-    The previous `on_message` callback short-circuited that by
-    calling `coordinator.set_text(msg.body)` directly, which
-    overrode the algorithm. With the universal `on_change`,
-    a new message just means the next tick will see the new
-    state — exactly what we want.
+    Wired as the MessageManager's universal `on_change` callback. Fires
+    for every `_emit_change()` (new message, config update, etc.). The
+    manager does not hold a reference to the coordinator — this
+    closure captures it and calls `apply_settings(...)` on the
+    coordinator with the manager's current effect_settings and
+    text_settings. `apply_settings` is idempotent and hash-guarded, so
+    message-only emits do not trigger a rotation rebuild.
     """
+    coordinator.apply_settings(manager.config.effect_settings, manager.config.text_settings)
 
 
-_message_mgr = MessageManager(
+manager = MessageManager(
     messages_api_url=cfg.MESSAGES_API_URL,
     config_api_url=cfg.CONFIG_API_URL,
     api_key=cfg.API_SECRET_KEY,
     on_change=_on_change,
 )
+# Now that the manager exists, give the coordinator its required reference.
+coordinator.message_manager = manager
 
+asyncio.run(manager.seed())
 
-def _on_config_update(cfg_dict):
-    """Apply a freshly-received config dict to the coordinator + scroller."""
-    from lib_shared.models import SignConfig
-
-    new_cfg = SignConfig.from_dict(cfg_dict or {})
-    new_effects = build_effects(new_cfg.effect_settings, display=display)
-    coordinator.effects = new_effects
-    coordinator.idx = -1  # next fade picks the head of the new list
-    # Re-bind pacing + recent_count in place.
-    coordinator.apply_settings(new_cfg.effect_settings)
-    # Apply text settings to the scroller.
-    ts = new_cfg.text_settings
-    scroller.set_color(ts.color)
-    scroller.set_speed(ts.speed)
-    log.info(
-        "Applied config update: %d effects, text_color=#%06x, speed=%d",
-        len(new_effects),
-        ts.color,
-        ts.speed,
-    )
-
-
-# Wrap MessageManager's dispatch so a config envelope also triggers
-# `_on_config_update`. We keep the original `dispatch` for messages.
-_orig_dispatch = _message_mgr.dispatch
-
-
-def _dispatch_with_config(raw: str) -> None:
-    import json as _json
-
-    try:
-        envelope = _json.loads(raw)
-    except Exception:
-        return _orig_dispatch(raw)
-    if envelope.get("type") == "config":
-        _on_config_update(envelope.get("payload") or {})
-    _orig_dispatch(raw)
-
-
-_message_mgr.dispatch = _dispatch_with_config
-
-asyncio.run(_message_mgr.seed())
-
-# Kick off the boot splash, queuing the most recent seeded message to play once
-# the heart fades out.
-_recent = _message_mgr.get_messages(limit=1)
-_startup_text = _recent[0].message.body if _recent else None
-coordinator.start(_startup_text)
+# Kick off the boot splash. The coordinator's first pull (every 250 ms)
+# produces the most recent message in the manager's buffer; no
+# separate "show this body after the heart" hook is needed.
+coordinator.start()
 
 # Platform MQTT client (paho on every platform)
 _mqtt_client = PahoMqttClient(
-    dispatch_callback=_message_mgr.dispatch,
+    dispatch_callback=manager.dispatch,
     host=cfg.MQTT_HOST,
     port=cfg.MQTT_PORT,
     username=cfg.MQTT_USERNAME,

@@ -149,7 +149,12 @@ class InMemoryMessages(FilteredMessages):
         if message.id in self._seen_ids:
             return
         self._seen_ids.add(message.id)
-        self._msgs.append(MessageView(message, source=source))
+        view = MessageView(message, source=source)
+        # Pre-compute derived fields on the event (write-time), not on read.
+        # Reads (`get_messages`) are now a thin pass — they do not run the
+        # filter regex or the timezone formatter again.
+        self._enrich_messages([view])
+        self._msgs.append(view)
 
     def add_many(self, messages, source="rest"):
         """Add multiple messages in insertion order. Skips duplicates."""
@@ -161,15 +166,30 @@ class InMemoryMessages(FilteredMessages):
         self._msgs.clear()
         self._seen_ids.clear()
 
+    def re_enrich_all(self) -> None:
+        """Re-run enrichment against the current config for every entry in the buffer.
+
+        Called by `MessageManager._handle_config()` after a config change so
+        filter rules or timezone updates reclassify all buffered messages.
+        O(buffer × filters), but runs only on config-envelope events.
+        """
+        self._enrich_messages(list(self._msgs))
+
     def get_messages(self, limit=100, suppress=True):
         """Return the most recent N messages, newest first (sorted by received_at desc).
+
+        Thin read: returns the already-enriched `MessageView` instances from
+        the ring buffer, sorted, and optionally filtered by the precomputed
+        `suppressed` flag. Does NOT call `_apply_filter`, `_matches`, or
+        `_format_display_time` — enrichment happens on the event that
+        mutates the inputs (a new message arriving or a config change), not
+        on every read.
 
         Args:
             limit: Maximum number of messages to return (default 100).
             suppress: If True (default), exclude suppressed messages from the result.
         """
         entries = list(self._msgs)
-        self._enrich_messages(entries)
         if suppress:
             entries = [e for e in entries if not e.suppressed]
         return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[:limit]

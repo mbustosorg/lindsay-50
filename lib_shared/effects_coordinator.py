@@ -23,12 +23,18 @@ scroller + effects are constructed. `tick()` is a no-op when the
 coordinator has no render layer (the app is alive on every admin page
 but the canvas only exists on /preview).
 
+The coordinator is the consumer; `MessageManager` is the source of truth.
+`message_manager` is a required constructor argument. `tick()` throttles a
+~4 Hz pull from `manager.messages.get_messages(...)` and the cached pull
+result becomes the next text shown by the fade state machine.
+
 Pacing comes from an `EffectsSettings` block (the v2 config shape),
 passed as `settings` (an `EffectsSettings` instance or `None` for
 the historic per-kwarg defaults).
 """
 
 import logging
+import random
 import time
 
 from lib_shared.models import EffectsSettings
@@ -125,7 +131,17 @@ class EffectsCoordinator:
     is unbound so an admin page that loaded the app-scoped
     coordinator can run a no-rAF idle without crashing.
 
+    The coordinator is the consumer; `MessageManager` is the source
+    of truth. `message_manager` is a required keyword argument —
+    there is no fallback to a None manager. The constructor raises
+    `TypeError` if a caller omits it. `tick()` calls
+    `get_display_message()` throttled to ~4 Hz; the cached result
+    becomes the next text shown by the fade state machine.
+
     Args:
+        message_manager: required `MessageManager` instance. The
+            coordinator reads messages and config from it. Construct
+            one before constructing the coordinator and pass it in.
         settings: optional `EffectsSettings` instance supplying
             `fade_seconds`, `hold_seconds`, `intro_seconds`,
             `idle_seconds`, and `recent_count`. When omitted, defaults
@@ -146,8 +162,14 @@ class EffectsCoordinator:
         gamma: gamma exponent applied to the linear fade progress.
     """
 
+    # Throttle the coordinator's pull from MessageManager.messages. 4 Hz is
+    # 4x faster than any human perceives text change and far below the 30+
+    # FPS cost we are avoiding.
+    _PULL_INTERVAL = 0.25
+
     def __init__(
         self,
+        message_manager,
         display=None,
         scroller=None,
         effects=None,
@@ -161,6 +183,8 @@ class EffectsCoordinator:
         fade_step: float = 0.04,
         gamma: float = 2.2,
     ):
+        # Required — no default. Raises TypeError if a caller omits it.
+        self.message_manager = message_manager
         self.display = display
         self.scroller = scroller
         self.effects = list(effects) if effects is not None else []
@@ -189,9 +213,20 @@ class EffectsCoordinator:
         self.fade_start = 0.0
         self.last_step = 0.0
         self.phase_start = 0.0  # start of intro / hold / background
-        self.pending_text = None  # next message body to show (None = nothing)
         self.showing_text = False
         self.last_shown_text = None
+        # Pull-throttle state. `_last_message_pull` is the monotonic time of
+        # the last pull from the manager; `_last_display_message` is the
+        # cached body that non-pull ticks consume.
+        self._last_message_pull: float = 0.0
+        self._last_display_message: str | None = None
+        self._last_shown_message_id: str | None = None
+        # Hashes that guard the heavier config-application work
+        # (effects rebuild, scroller text settings mutation) in
+        # `apply_settings`. `None` means "never applied" so the first
+        # apply always runs the heavier work.
+        self._last_effects_hash: str | None = None
+        self._last_text_settings_hash: str | None = None
 
     def is_bound(self) -> bool:
         """True when the coordinator has a render layer (display + scroller + effects + heart).
@@ -234,49 +269,105 @@ class EffectsCoordinator:
                 self.heart.set_brightness(1.0)
             self.phase_start = time.monotonic()
 
-    def start(self, startup_text):
-        """Begin the boot splash, queuing the seeded message to show after it.
+    def start(self) -> None:
+        """Begin the boot splash.
 
         No-op when the coordinator is unbound — the app-scoped
         coordinator on non-preview admin pages is constructed
         without a render layer; `start()` is only meaningful on
-        the preview's per-page shim.
+        the preview's per-page shim. The first message after the
+        heart fades out comes from the manager's buffer via
+        `get_display_message()`, which the throttled tick pulls
+        from — there is no separate "show this body after the
+        heart" hook (the push path is gone).
         """
         if not self.is_bound():
             return
         assert self.heart is not None
-        if startup_text:
-            self.pending_text = startup_text
         self.current = self.heart
         self.heart.set_brightness(1.0)
         self.mode = "intro"
         self.phase_start = time.monotonic()
 
-    def set_text(self, text):
-        """Queue a freshly-arrived message; shown at the next stable point.
+    def get_display_message(self) -> str | None:
+        """Pick the body to display next, from the manager's buffered messages.
 
-        Empty / None bodies are ignored.
+        Algorithm:
+          1. Read `self.recent_count` most-recent non-suppressed messages.
+          2. If the list is empty, return None.
+          3. If the head entry's id differs from `self._last_shown_message_id`,
+             return its body and update `_last_shown_message_id` (fresh-message
+             priority).
+          4. Otherwise pick uniformly at random from the list and return that
+             entry's body, updating `_last_shown_message_id` to the picked id.
+
+        Returns:
+            The body string to show next, or None when the buffer is empty.
         """
-        if not text:
-            return
-        self.pending_text = text
+        entries = self.message_manager.messages.get_messages(
+            limit=self.recent_count, suppress=True
+        )
+        if not entries:
+            return None
+        head = entries[0]
+        if head.message.id != self._last_shown_message_id:
+            self._last_shown_message_id = head.message.id
+            return head.message.body
+        picked = random.choice(entries)
+        self._last_shown_message_id = picked.message.id
+        return picked.message.body
 
-    def apply_settings(self, effect_settings: EffectsSettings) -> None:
-        """Live-update pacing from a v2 `EffectsSettings`.
+    def apply_settings(
+        self,
+        effect_settings: EffectsSettings,
+        text_settings=None,
+    ) -> None:
+        """Live-update pacing + effects rotation + scroller text settings.
 
-        Called when a config envelope arrives over MQTT/WS; mutates
-        the coordinator's pacing attributes in place. Does NOT touch
-        the effects rotation — that's a separate `build_effects` call
-        that the caller (Pi main.py / preview_main.py) is expected to
-        make, then assign to `coordinator.effects`.
+        Called by `MessageManager`'s `on_change` callback (the single
+        Python-side fan-out point). Idempotent on message-only emits:
+        pacing writes always run (cheap), but the effects rebuild
+        and scroller text-settings mutation are guarded by a hash of
+        the relevant fields, so they only run on actual config
+        changes.
+
+        Args:
+            effect_settings: v2 effects block (pacing + rotation).
+            text_settings: v2 text block (color, speed). Optional
+                for callers that only have effects; when omitted,
+                the scroller text settings are not touched.
         """
-        if effect_settings is None:
-            return
-        self.fade_seconds = effect_settings.fade_seconds
-        self.hold_seconds = effect_settings.hold_seconds
-        self.intro_seconds = effect_settings.intro_seconds
-        self.idle_seconds = effect_settings.idle_seconds
-        self.recent_count = effect_settings.recent_count
+        if effect_settings is not None:
+            self.fade_seconds = effect_settings.fade_seconds
+            self.hold_seconds = effect_settings.hold_seconds
+            self.intro_seconds = effect_settings.intro_seconds
+            self.idle_seconds = effect_settings.idle_seconds
+            self.recent_count = effect_settings.recent_count
+
+            # Effects rebuild is guarded by a hash of the declared rotation.
+            effects_hash = self._hash_effects(effect_settings.effects)
+            if effects_hash != self._last_effects_hash:
+                new_effects = build_effects(effect_settings, display=self.display)
+                self.effects = new_effects
+                self.idx = -1  # next fade picks the head of the new list
+                self._last_effects_hash = effects_hash
+
+        if text_settings is not None and self.scroller is not None:
+            text_hash = self._hash_text_settings(text_settings)
+            if text_hash != self._last_text_settings_hash:
+                self.scroller.set_color(text_settings.color)
+                self.scroller.set_speed(text_settings.speed)
+                self._last_text_settings_hash = text_hash
+
+    @staticmethod
+    def _hash_effects(effects) -> str:
+        """Stable hash of an effects rotation list (name + enabled per entry)."""
+        return repr([(e.get("name"), e.get("enabled")) for e in (effects or [])])
+
+    @staticmethod
+    def _hash_text_settings(text_settings) -> str:
+        """Stable hash of the text-settings fields the scroller consumes."""
+        return f"({text_settings.color!r},{text_settings.speed!r})"
 
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""
@@ -323,6 +414,10 @@ class EffectsCoordinator:
         current effect's `tick()` advances, the scroller
         scrolls, and `display.render(...)` composites the
         frame.
+
+        Pulls the next display message from the manager on a
+        ~4 Hz throttle (`_PULL_INTERVAL`). Non-pull ticks consume
+        the cached result from the previous pull.
         """
         if not self.is_bound():
             return
@@ -338,19 +433,24 @@ class EffectsCoordinator:
         now = time.monotonic()
         mode = self.mode
 
+        # Throttled pull: only fetch a fresh body every _PULL_INTERVAL.
+        # The cached value drives the state-machine transitions.
+        if now - self._last_message_pull >= self._PULL_INTERVAL:
+            self._last_display_message = self.get_display_message()
+            self._last_message_pull = now
+        text = self._last_display_message
+
         if mode == "intro":
             if now - self.phase_start >= self.intro_seconds:
                 self._begin_out(now)
 
         elif mode == "out":
             # Cross-fade the current effect + any text to black, then swap in
-            # the next effect and (if queued) the next message.
+            # the next effect and (if there's text) the next message.
             if self._step_fade(now, fading_out=True):
                 self.idx = (self.idx + 1) % len(effects)
                 self.current = effects[self.idx]
                 self.current.set_brightness(0.0)
-                text = self.pending_text
-                self.pending_text = None
                 if text:
                     scroller.set_text(text, display.width)
                     scroller.set_brightness(0.0)
@@ -372,7 +472,13 @@ class EffectsCoordinator:
                 self.mode = "hold" if self.showing_text else "background"
 
         elif mode == "hold":
-            if self.pending_text is not None:
+            # A fresh message (one whose id differs from the last we showed)
+            # interrupts the hold. We compare against `_last_shown_message_id`,
+            # which `get_display_message` updates on every pick. Use the
+            # pulled `text` to detect "a new pick since we last consumed one"
+            # by checking that the pull produced a different body than we
+            # already have on screen.
+            if text and text != self.last_shown_text:
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= self.hold_seconds:
                 self.mode = "text_out"
@@ -389,7 +495,8 @@ class EffectsCoordinator:
                 self.mode = "background"
 
         elif mode == "background":
-            if self.pending_text is not None:
+            # A new pull (different body than we last showed) kicks a fade.
+            if text and text != self.last_shown_text:
                 self._begin_out(now)  # show the queued message
 
         current = self.current

@@ -196,11 +196,25 @@ def test_build_effects_requires_display():
 
 
 def _build_coord(**kwargs):
+    from types import SimpleNamespace
+
+    from lib_shared.models import TextSettings
+
     display = _StubDisplay()
     scroller = _StubScroller()
     fx = _make_effect("A")()
     heart = _make_effect("Heart")()
+    # Minimal MessageManager stub — coordinator never calls into it for these
+    # apply_settings tests.
+    mgr = SimpleNamespace(
+        messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+        config=SimpleNamespace(
+            effect_settings=kwargs.pop("effect_settings", None),
+            text_settings=TextSettings(),
+        ),
+    )
     return EffectsCoordinator(
+        message_manager=mgr,
         display=display,
         scroller=scroller,
         effects=[fx],
@@ -234,13 +248,21 @@ def test_apply_settings_none_is_noop():
 
 
 def test_apply_settings_does_not_touch_effects_rotation():
-    """apply_settings is pacing-only — the effects list is left alone.
-    The caller rebuilds the rotation via build_effects + .effects = ...,
-    which is the documented pattern."""
+    """apply_settings is pacing-only when the rotation hash matches.
+
+    When the rotation hasn't changed, `apply_settings` skips the rebuild —
+    the rotation stays as it was. (Previously the test asserted that
+    apply_settings never touched the rotation; with the new hash-guarded
+    rebuild, an unchanged rotation is still untouched.)
+    """
     coord = _build_coord()
-    fx_a = coord.effects[0]
-    coord.apply_settings(EffectsSettings())
-    assert coord.effects[0] is fx_a
+    # Use a registered effect name so build_effects can resolve it.
+    settings = EffectsSettings(effects=[{"name": "Fireworks", "enabled": True}])
+    coord.apply_settings(settings)
+    fx_after_first = coord.effects[0]
+    # Second call with the same rotation: hash matches, no rebuild.
+    coord.apply_settings(settings)
+    assert coord.effects[0] is fx_after_first
 
 
 # --- PreviewScroller: kwargs + live updates ---------------------------------

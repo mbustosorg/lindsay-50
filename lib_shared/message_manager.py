@@ -372,8 +372,16 @@ class MessageManager:
         self._emit_change()
 
     def _handle_config(self, payload: dict) -> None:
-        """Apply a SignConfig dict to the in-memory config and emit change."""
+        """Apply a SignConfig dict to the in-memory config and re-enrich buffered messages.
+
+        Filter rules and timezone changes can reclassify previously-stored
+        entries (e.g. a message that wasn't suppressed before now matches a
+        new rule). Re-enrich on the event that changes the inputs so the
+        next `get_messages()` read returns up-to-date values without paying
+        the filter / formatter cost on the read path.
+        """
         self._config.update_from_dict(payload)
+        self._messages.re_enrich_all()
         logger.info("MessageManager applied config update")
         self._emit_change()
 

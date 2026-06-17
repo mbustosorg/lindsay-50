@@ -96,8 +96,19 @@ def test_subclass_render_called_once_per_tick():
     effect = _StubEffect()
     scroller = _StubScroller()
     heart = _StubEffect()
+    from types import SimpleNamespace
+
+    from lib_shared.models import EffectsSettings, TextSettings
+
+    mgr = SimpleNamespace(
+        messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+        config=SimpleNamespace(
+            effect_settings=EffectsSettings(), text_settings=TextSettings()
+        ),
+    )
 
     coord = EffectsCoordinator(
+        message_manager=mgr,
         display=display,
         scroller=scroller,
         effects=[effect],
@@ -105,7 +116,7 @@ def test_subclass_render_called_once_per_tick():
         intro_seconds=0,
         fade_seconds=0.01,
     )
-    coord.start(None)
+    coord.start()
     coord.tick()
     # First tick: intro → out, current is still heart (idx hasn't advanced yet)
     assert len(display.render_calls) == 1
