@@ -200,14 +200,26 @@ async def _get_config_js() -> object:
 
 
 async def _seed() -> None:
-    """Seed the in-browser MessageManager from the Flask REST API.
+    """Network seed from the Flask REST API.
 
-    Called once per page load by `static/app.js`'s `init()` (the
-    "auth-aware" trigger — `app.js` only loads when
-    `current_user.is_authenticated` is true, so the seed runs on
-    every login and every full-page-reload). The MessageManager
-    swallows per-endpoint failures internally, so a partial seed
-    is non-fatal.
+    Two callers:
+    - `static/app.js init()` — on a first page load this
+      tab (no sessionStorage cache). The seed populates the
+      in-memory MessageManager, clears the (empty) cache,
+      and writes a fresh cache via the trailing
+      `_emit_change()`. After this, the WS connection keeps
+      the cache current; subsequent navigations within the
+      tab take the cache path (see `app.js init()`).
+    - The Testing page's Refresh button — the user
+      explicitly asked for a fresh network pull. Wipes the
+      in-memory buffer + the sessionStorage cache (via
+      `seed()`'s built-in clears) and re-fetches. The
+      trailing `_emit_change` writes the new cache, so the
+      next page navigation reflects the freshly-seeded data,
+      not the pre-Refresh state.
+
+    The MessageManager swallows per-endpoint failures
+    internally, so a partial seed is non-fatal.
     """
     if _message_manager is None:
         return
@@ -215,6 +227,30 @@ async def _seed() -> None:
         await _message_manager.seed()
     except Exception as e:
         print(f"[app_main] seed failed: {e!r}")
+
+
+async def _hydrate_from_cache() -> bool:
+    """Populate the in-browser MessageManager from sessionStorage.
+
+    Bound to `window._hydrate_from_cache`. Called by
+    `static/app.js`'s `init()` on every page load BEFORE the
+    network seed. Returns True on a successful hit (the
+    page renders the cached state on the first frame, no
+    network call). Returns False on miss / corruption /
+    version mismatch / sign mismatch — the caller should
+    fall back to `window._seed()` in that case.
+
+    Browser-only no-op (returns False) — the Pi has no
+    sessionStorage. The MessageManager itself gates on
+    `is_browser=True`.
+    """
+    if _message_manager is None:
+        return False
+    try:
+        return await _message_manager.hydrate_from_cache()
+    except Exception as e:
+        print(f"[app_main] hydrate_from_cache failed: {e!r}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -273,6 +309,7 @@ js.window._coordinator = _coordinator
 if _mqtt_ws_client is not None:
     js.window._mqtt_ws_client = _mqtt_ws_client
 js.window._seed = create_proxy(_seed)
+js.window._hydrate_from_cache = create_proxy(_hydrate_from_cache)
 # JS-side read APIs — preserve the `window.App.getMessages` /
 # `getConfig` surface so `testing.html` (and any future per-page
 # hydration path in `preview.js`) can read from the in-memory ring

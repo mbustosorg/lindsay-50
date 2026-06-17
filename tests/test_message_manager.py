@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 # the class from that live module — robust against sibling tests'
 # autouse fixtures that wipe and re-import the `lib_shared.*` tree.
 import lib_shared.message_manager  # noqa: E402
-from lib_shared.models import FilterRule, SignConfig  # noqa: E402
+from lib_shared.models import FilterRule, SignConfig, SignSettings  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).parent.parent
 MM_PATH = PROJECT_ROOT / "lib_shared" / "message_manager.py"
@@ -788,6 +788,500 @@ class TestOnChange:
 # ---------------------------------------------------------------------------
 # Ring buffer eviction at 101 entries
 # ---------------------------------------------------------------------------
+
+
+class TestSessionCache:
+    """sessionStorage cache (browser-only).
+
+    The browser's sessionStorage persists the in-memory
+    state across full-page navigations within a tab so
+    /testing and /preview can re-render from cache instead
+    of waiting for a network re-seed on every nav. The
+    Pi doesn't have sessionStorage; all cache methods are
+    no-ops on the server path.
+    """
+
+    @staticmethod
+    def _make_session_storage_shim():
+        """Return a (storage_dict, shim_callable) pair.
+
+        storage_dict is a plain Python dict. The shim mimics
+        `js.sessionStorage` with `getItem`/`setItem`/`removeItem`
+        that read/write that dict, plus a `key` for iteration
+        (used by the login-page wipe logic, not by
+        MessageManager itself).
+        """
+        store: dict = {}
+
+        def getItem(k):
+            return store.get(k)
+
+        def setItem(k, v):
+            store[k] = v
+
+        def removeItem(k):
+            store.pop(k, None)
+
+        def key(i):
+            return list(store.keys())[i] if 0 <= i < len(store) else None
+
+        shim = MagicMock()
+        shim.getItem = getItem
+        shim.setItem = setItem
+        shim.removeItem = removeItem
+        shim.key = key
+        shim._store = store
+        shim.length = lambda: len(store)
+        return store, shim
+
+    @staticmethod
+    def _make_json_shim():
+        """Return a shim that mimics `js.JSON` (stringify + parse)."""
+        shim = MagicMock()
+        shim.stringify = json.dumps
+        shim.parse = json.loads
+        return shim
+
+    def test_hydrate_from_cache_empty_returns_false(self, messages_api_url, config_api_url, api_key):
+        """No cache entry → returns False; on_change not fired."""
+        cb = MagicMock()
+        _, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+                on_change=cb,
+            )
+            hit = asyncio.run(mgr.hydrate_from_cache())
+            assert hit is False
+            cb.assert_not_called()
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_hydrate_from_cache_invalidates_on_version_mismatch(self, messages_api_url, config_api_url, api_key):
+        """Cache with wrong `v` → returns False; on_change not fired."""
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        # Pre-populate with a v=0 entry
+        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(
+            {
+                "v": 0,
+                "sign_name": "Lindsay's Heart",
+                "messages": [],
+                "config": {},
+            }
+        )
+        cb = MagicMock()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+                on_change=cb,
+            )
+            hit = asyncio.run(mgr.hydrate_from_cache())
+            assert hit is False
+            cb.assert_not_called()
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_hydrate_from_cache_invalidates_on_sign_mismatch(self, messages_api_url, config_api_url, api_key):
+        """Cache for a different sign → returns False; on_change not fired."""
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(
+            {
+                "v": 1,
+                "sign_name": "Different Sign",
+                "messages": [],
+                "config": {},
+            }
+        )
+        cb = MagicMock()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+                on_change=cb,
+            )
+            hit = asyncio.run(mgr.hydrate_from_cache())
+            assert hit is False
+            cb.assert_not_called()
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_hydrate_from_cache_invalidates_on_corrupt_json(self, messages_api_url, config_api_url, api_key):
+        """Invalid JSON in cache → returns False; no exception propagates."""
+        _, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        # json_shim.parse is json.loads; force it to raise for our marker
+        json_shim.parse = MagicMock(side_effect=ValueError("bad json"))
+        cb = MagicMock()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+                on_change=cb,
+            )
+            hit = asyncio.run(mgr.hydrate_from_cache())
+            assert hit is False
+            cb.assert_not_called()
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_hydrate_from_cache_populates_messages_and_config(
+        self, messages_api_url, config_api_url, api_key, seed_messages, seed_config
+    ):
+        """Round-trip: write cache, fresh manager, hydrate → messages + config match."""
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        # First manager: populate, write cache
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr1 = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+            for item in seed_messages:
+                mgr1._handle_message(item)
+            mgr1._handle_config(seed_config)
+            mgr1._write_cache()
+            # The cache key includes the sign name, which changes
+            # during the test (default → "Test Sign"), so the store
+            # ends up with two entries: one keyed by the default and
+            # one by "Test Sign". The latest write is the one we
+            # want to assert against — pick the entry whose key
+            # matches the current cache key.
+            key = mgr1._cache_key()
+            assert key in store, f"expected {key!r} in store, found: {list(store.keys())}"
+            written = store[key]
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+        # Confirm shape
+        payload = json.loads(written)
+        assert payload["v"] == 1
+        assert payload["sign_name"] == seed_config["sign"]["name"]
+        assert len(payload["messages"]) == 2
+        assert payload["config"]["sign"]["name"] == "Test Sign"
+        # Second manager: hydrate from the same store. The
+        # sign_name check requires mgr2's sign.name to match
+        # the cache entry's sign_name, so seed it with the
+        # same name. In production, the sign name comes from
+        # the cached config — the gate is there so a tab for
+        # sign A can never hydrate from a tab for sign B.
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr2 = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+            mgr2._config.sign = SignSettings(name=seed_config["sign"]["name"])
+            hit = asyncio.run(mgr2.hydrate_from_cache())
+            assert hit is True
+            msgs = mgr2.get_messages(limit=10, suppress=False)
+            assert len(msgs) == 2
+            assert {m.message.id for m in msgs} == {"m1", "m2"}
+            assert mgr2.config.sign.name == "Test Sign"
+            assert mgr2.config.timezone == "US/Pacific"
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_hydrate_from_cache_fires_on_change(self, messages_api_url, config_api_url, api_key):
+        """Cache hit fires on_change exactly once."""
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(
+            {
+                "v": 1,
+                "sign_name": "Lindsay's Heart",
+                "messages": [
+                    {
+                        "id": "m1",
+                        "sender": "+15551111111",
+                        "body": "cached",
+                        "received_at": "2026-06-01T10:00:00Z",
+                    }
+                ],
+                "config": {
+                    "filters": [],
+                    "senders": [],
+                    "effect_settings": {
+                        "effects": [{"name": "Hyperspace", "enabled": True}],
+                        "fade_seconds": 2.0,
+                        "hold_seconds": 15.0,
+                        "intro_seconds": 5.0,
+                        "idle_seconds": 300.0,
+                        "recent_count": 5,
+                    },
+                    "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
+                    "sign": {"name": "Lindsay's Heart"},
+                    "timezone": "US/Pacific",
+                    "version": 2,
+                },
+            }
+        )
+        cb = MagicMock()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+                on_change=cb,
+            )
+            hit = asyncio.run(mgr.hydrate_from_cache())
+            assert hit is True
+            cb.assert_called_once_with()
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_handle_message_writes_cache(self, messages_api_url, config_api_url, api_key):
+        """_handle_message on a browser mgr writes the cache via _emit_change."""
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+            mgr._handle_message(
+                {
+                    "id": "m1",
+                    "sender": "+15551234567",
+                    "body": "hi",
+                    "received_at": "2026-06-01T12:00:00Z",
+                }
+            )
+            assert len(store) == 1
+            payload = json.loads(list(store.values())[0])
+            assert any(m["id"] == "m1" for m in payload["messages"])
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_handle_config_writes_cache(self, messages_api_url, config_api_url, api_key):
+        """_handle_config on a browser mgr writes the cache via _emit_change."""
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+            mgr._handle_config(
+                {
+                    "filters": [],
+                    "senders": [],
+                    "effect_settings": {
+                        "effects": [{"name": "Hyperspace", "enabled": True}],
+                        "fade_seconds": 2.0,
+                        "hold_seconds": 15.0,
+                        "intro_seconds": 5.0,
+                        "idle_seconds": 300.0,
+                        "recent_count": 5,
+                    },
+                    "text_settings": {
+                        "speed": 3,
+                        "color": 16711680,
+                        "text_effect": "scroll",
+                    },
+                    "sign": {"name": "Lindsay's Heart"},
+                    "timezone": "US/Pacific",
+                    "version": 2,
+                }
+            )
+            assert len(store) == 1
+            payload = json.loads(list(store.values())[0])
+            assert payload["config"]["timezone"] == "US/Pacific"
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_seed_writes_cache(self, messages_api_url, config_api_url, api_key, seed_messages, seed_config):
+        """seed() writes the cache on completion via the trailing _emit_change."""
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+
+            async def mock_fetch(url):
+                return seed_messages if url == messages_api_url else seed_config
+
+            mgr._fetch = mock_fetch  # type: ignore[assignment]
+            asyncio.run(mgr.seed())
+            assert len(store) == 1
+            payload = json.loads(list(store.values())[0])
+            assert len(payload["messages"]) == 2
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_cache_write_is_noop_on_server_path(self, messages_api_url, config_api_url, api_key):
+        """Pi mgr (is_browser=False) does not touch sessionStorage."""
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=False,
+            )
+            mgr._handle_message(
+                {
+                    "id": "m1",
+                    "sender": "+15551234567",
+                    "body": "hi",
+                    "received_at": "2026-06-01T12:00:00Z",
+                }
+            )
+            # Server path never touches sessionStorage
+            assert len(store) == 0
+            assert mgr._cache_key() == ""
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_cache_write_exception_is_swallowed(self, messages_api_url, config_api_url, api_key):
+        """sessionStorage raising doesn't break the buffer write."""
+        ss_shim = MagicMock()
+        ss_shim.setItem.side_effect = RuntimeError("quota exceeded")
+        json_shim = self._make_json_shim()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+            # Should not raise
+            mgr._handle_message(
+                {
+                    "id": "m1",
+                    "sender": "+15551234567",
+                    "body": "hi",
+                    "received_at": "2026-06-01T12:00:00Z",
+                }
+            )
+            # Buffer mutation succeeded despite the cache failure
+            msgs = mgr.get_messages(limit=10, suppress=False)
+            assert len(msgs) == 1
+            assert msgs[0].message.id == "m1"
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+
+    def test_seed_clears_cache_before_fetch(
+        self, messages_api_url, config_api_url, api_key, seed_messages, seed_config
+    ):
+        """seed() wipes the cache before fetching and rewrites it after."""
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        # Pre-populate the cache with an entry that would otherwise
+        # hydrate. The seed must wipe it before the fetch.
+        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(
+            {
+                "v": 1,
+                "sign_name": "Lindsay's Heart",
+                "messages": [
+                    {
+                        "id": "stale",
+                        "sender": "+15550000000",
+                        "body": "should be wiped",
+                        "received_at": "2026-06-01T09:00:00Z",
+                    }
+                ],
+                "config": {"sign": {"name": "Lindsay's Heart"}, "version": 2},
+            }
+        )
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+
+            async def mock_fetch(url):
+                # The cache should be empty at this point — the seed
+                # cleared it before calling _fetch.
+                assert len(store) == 0, f"cache not cleared before fetch: {list(store.keys())}"
+                return seed_messages if url == messages_api_url else seed_config
+
+            mgr._fetch = mock_fetch  # type: ignore[assignment]
+            asyncio.run(mgr.seed())
+            # After seed, the cache is rewritten with the fetched data
+            assert len(store) == 1
+            payload = json.loads(list(store.values())[0])
+            assert all(m["id"] != "stale" for m in payload["messages"])
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
 
 
 class TestRingBufferEviction:

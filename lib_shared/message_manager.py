@@ -39,6 +39,8 @@ _js_fetch = None
 _js_object_from_entries = None
 _to_js = None
 _requests = None
+_js_session_storage = None
+_js_json = None
 
 
 def _ensure_js_object_from_entries():
@@ -72,6 +74,37 @@ def _ensure_to_js():
     if _to_js is None:
         from pyodide.ffi import to_js as _to_js  # type: ignore[import-not-found]
     return _to_js
+
+
+def _ensure_js_session_storage():
+    """Lazily import `js.sessionStorage` — only available in a browser runtime.
+
+    Used to persist the post-seed state across full-page
+    navigations within a session so the testing/preview pages
+    re-render from cache instead of waiting for a network
+    re-seed on every nav. Module-level (lazy-resolved) so
+    tests can patch it with a `MagicMock` shim.
+    """
+    global _js_session_storage
+    if _js_session_storage is None:
+        from js import sessionStorage as _js_session_storage  # type: ignore[import-not-found]
+    return _js_session_storage
+
+
+def _ensure_js_json():
+    """Lazily import `js.JSON` — only available in a browser runtime.
+
+    The browser's `JSON.stringify` / `JSON.parse` round-trips
+    any JS-encodable value (including `Date`s and `undefined`),
+    which is safer than `json.dumps` for a `SignConfig` that
+    might have a model-incompatible nested shape after a
+    future schema change. Same lazy-import + module-level
+    pattern as `_ensure_js_session_storage` for testability.
+    """
+    global _js_json
+    if _js_json is None:
+        from js import JSON as _js_json  # type: ignore[import-not-found]
+    return _js_json
 
 
 class MessageManager:
@@ -120,19 +153,144 @@ class MessageManager:
         self._is_browser = is_browser
 
     def _emit_change(self) -> None:
-        """Fire the `on_change` callback if registered.
+        """Fire the `on_change` callback if registered, then persist to sessionStorage.
 
-        Exceptions are swallowed — a faulty listener must never break
-        the buffer write. The callback is parameterless; listeners
-        re-read state via `get_messages` / `get_config` if they need
-        to know what changed.
+        Exceptions from the callback are swallowed — a faulty
+        listener must never break the buffer write. The cache
+        write runs AFTER the callback so a listener that
+        throws can't suppress persistence. The cache write
+        itself is also exception-swallowed (private mode,
+        quota exceeded) for the same reason.
+
+        The cache is browser-only; on the Pi this is a no-op.
+        The WS keeps the cache live across full-page
+        navigations within a session.
         """
-        if self._on_change is None:
+        if self._on_change is not None:
+            try:
+                self._on_change()
+            except Exception as e:
+                logger.warning("MessageManager on_change callback raised: %s", e)
+        if self._is_browser:
+            self._write_cache()
+
+    # --- sessionStorage cache (browser-only) ---
+
+    _CACHE_VERSION = 1
+    _CACHE_KEY_PREFIX = "lindsay50:seed:v1:"
+
+    def _cache_key(self) -> str:
+        """Return the per-sign sessionStorage key for the seed cache.
+
+        The sign_name is taken from the in-memory config so a
+        tab for sign A can never hydrate from a tab for sign
+        B's cache. The `v1` prefix lets us invalidate the
+        cache when the on-disk format changes.
+        """
+        if not self._is_browser:
+            return ""
+        sign_name = "unknown"
+        try:
+            sign = getattr(self._config, "sign", None)
+            if sign is not None:
+                sign_name = getattr(sign, "name", None) or "unknown"
+        except Exception:
+            pass
+        return f"{self._CACHE_KEY_PREFIX}{sign_name}"
+
+    def _write_cache(self) -> None:
+        """Persist current state to sessionStorage. Browser-only. Swallows errors."""
+        key = self._cache_key()
+        if not key:
             return
         try:
-            self._on_change()
+            payload = {
+                "v": self._CACHE_VERSION,
+                "sign_name": self._config.sign.name if self._config.sign else "unknown",
+                "messages": [m.to_dict() for m in self._messages._msgs],
+                "config": self._config.to_dict(),
+            }
+            ss = _ensure_js_session_storage()
+            j = _ensure_js_json()
+            ss.setItem(key, j.stringify(payload))
         except Exception as e:
-            logger.warning("MessageManager on_change callback raised: %s", e)
+            logger.warning("MessageManager cache write failed: %s", e)
+
+    def _clear_cache(self) -> None:
+        """Remove the sessionStorage cache entry. Browser-only. Swallows errors."""
+        key = self._cache_key()
+        if not key:
+            return
+        try:
+            ss = _ensure_js_session_storage()
+            ss.removeItem(key)
+        except Exception as e:
+            logger.warning("MessageManager cache clear failed: %s", e)
+
+    async def hydrate_from_cache(self) -> bool:
+        """Populate state from sessionStorage if a valid entry exists.
+
+        Returns True on a successful hit (and fires `on_change`
+        once so per-page listeners re-render with the cached
+        state). Returns False on miss / version mismatch /
+        sign mismatch / corruption — those are all "treat as
+        no cache" cases and do NOT fire `on_change`.
+
+        Browser-only. The Pi returns False immediately.
+        """
+        if not self._is_browser:
+            return False
+        key = self._cache_key()
+        if not key:
+            return False
+        try:
+            ss = _ensure_js_session_storage()
+            j = _ensure_js_json()
+            raw = ss.getItem(key)
+        except Exception as e:
+            logger.warning("MessageManager cache read failed: %s", e)
+            return False
+        if not raw:
+            return False
+        try:
+            payload = j.parse(raw)
+            # Pyodide JsProxy → Python dict
+            if hasattr(payload, "to_py"):
+                payload = payload.to_py()
+        except Exception as e:
+            logger.warning("MessageManager cache parse failed: %s", e)
+            return False
+        if not isinstance(payload, dict):
+            return False
+        if payload.get("v") != self._CACHE_VERSION:
+            return False
+        expected_sign = self._config.sign.name if self._config.sign else "unknown"
+        if payload.get("sign_name") != expected_sign:
+            return False
+        msgs_raw = payload.get("messages") or []
+        cfg_raw = payload.get("config")
+        if not isinstance(msgs_raw, list) or not isinstance(cfg_raw, dict):
+            return False
+        try:
+            self._messages.clear()
+            msgs = [
+                Message(
+                    id=item.get("id", ""),
+                    sender=item.get("sender", ""),
+                    body=item.get("body", ""),
+                    received_at=item.get("received_at", ""),
+                )
+                for item in msgs_raw
+                if isinstance(item, dict)
+            ]
+            if msgs:
+                self._messages.add_many(msgs, source="rest")
+            self._config.update_from_dict(cfg_raw)
+        except Exception as e:
+            logger.warning("MessageManager cache hydrate failed: %s", e)
+            return False
+        self._emit_change()
+        return True
 
     @property
     def config(self) -> SignConfig:
@@ -253,11 +411,21 @@ class MessageManager:
     async def seed(self) -> None:
         """Back-populate config and messages from the Flask REST API.
 
-        Uses the internal `_fetch` helper for both endpoints, so the same
-        X-API-Key auth path runs in both the device and the browser.
-        Emits `on_change` once at the end so listeners see the post-seed
-        state in a single event (not one per endpoint).
+        Semantically "refresh from the network, ignoring any
+        prior state": the in-memory buffer is cleared and (on
+        the browser) the sessionStorage cache is cleared
+        before the fetch starts. The trailing `_emit_change()`
+        writes the new cache as a side effect, so callers
+        don't need to do anything else.
+
+        Uses the internal `_fetch` helper for both endpoints,
+        so the same X-API-Key auth path runs in both the
+        device and the browser. Emits `on_change` once at the
+        end so listeners see the post-seed state in a single
+        event (not one per endpoint).
         """
+        if self._is_browser:
+            self._clear_cache()
         if self._messages_api_url:
             try:
                 data = await self._fetch(self._messages_api_url)

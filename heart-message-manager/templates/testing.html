@@ -267,17 +267,28 @@ async function renderConfig() {
 }
 
 async function refreshFeed() {
-  // The WS-driven path: kick off a wipe + re-seed (which fetches the
-  // REST API and repopulates IndexedDB), then re-render from the buffer.
-  if (APP.wipeAndReseed) {
+  // Force a fresh network pull. The PyScript-side `seed()`
+  // wipes the in-memory buffer and the sessionStorage cache
+  // before fetching, then writes a fresh cache via the
+  // trailing `_emit_change()`. The `on_change` event fires
+  // when the seed resolves, so our registered `reRender`
+  // will paint the fresh data automatically — but we call
+  // `reRender()` explicitly here too so the operator sees
+  // the refresh resolve the moment the network round trip
+  // returns, not on the next event loop tick.
+  if (typeof window._seed === "function") {
     try {
-      await APP.wipeAndReseed();
+      await window._seed();
     } catch (e) {
-      console.warn("wipeAndReseed failed:", e);
+      console.warn("_seed failed:", e);
     }
   }
-  await renderMessages();
-  await renderConfig();
+  if (typeof reRender === "function") {
+    reRender();
+  } else {
+    await renderMessages();
+    await renderConfig();
+  }
 }
 
 // Disable the "Send Webhook" button until the WS reaches `connected`.

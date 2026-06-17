@@ -2,18 +2,22 @@
 //
 // Loaded from `templates/base.html` (gated by `@login_required`).
 // Reads `window.APP_CONFIG` (inlined server-side from `settings.toml`)
-// and seeds the in-browser state:
+// and primes the in-browser state:
 //
-//   - On page load, if the PyScript-side `window._message_manager` is
-//     installed (the PyScript runtime is loaded), call
-//     `await window._seed()` — that fetches the message ring buffer
-//     and the SignConfig from the Flask REST API and writes them
-//     into the in-memory MessageManager. The seed runs once per
-//     page load; SPA navigations within the page load don't re-fire
-//     DOMContentLoaded, so the in-memory state stays current for
-//     the lifetime of the page. The trigger is "auth-aware" because
-//     `app.js` only loads when `current_user.is_authenticated` is
-//     true — every login and every full-page-reload fires it.
+//   - On every page load, try to hydrate the in-memory
+//     MessageManager from `sessionStorage` via
+//     `window._hydrate_from_cache()`. If that returns true, the
+//     page renders the cached state on the first frame and no
+//     network call happens. The WS connection (started by
+//     `app_main.py` and fed by `MessageManager.dispatch`) keeps
+//     the cache current from there.
+//
+//   - On a cache miss (first page load this tab, after logout,
+//     or after a `seed()` Refresh that wiped the cache), call
+//     `window._seed()`. That fetches `/api/messages` and
+//     `/api/config` from Flask, populates the in-memory
+//     MessageManager, and writes a fresh cache via the
+//     MessageManager's universal `on_change` event.
 //
 //   - `window.App.registerOnChange(cb)` lets per-page scripts
 //     (e.g. /preview, /testing) subscribe to the universal
@@ -22,8 +26,9 @@
 //     MessageManager (`app_main.py` wires MqttWsClient →
 //     MessageManager.dispatch → on_change → window.App._dispatchChange).
 //     One event covers all mutations: WS message envelope, WS
-//     config envelope, seed completion. The page re-renders
-//     whatever on its DOM could be affected by any state change.
+//     config envelope, seed completion, cache hydrate. The
+//     page re-renders whatever on its DOM could be affected
+//     by any state change.
 //
 //   - `window.App.getMessages(limit, suppress)` and
 //     `window.App.getConfig()` are read APIs that delegate to
@@ -102,31 +107,74 @@
     }
   }
 
+  async function waitForPyDone(timeoutMs) {
+    // PyScript 2024.9.x fires `py:done` on each <py-script>
+    // element after its main module finishes evaluating —
+    // i.e. after all top-level statements in `app_main.py`
+    // have run and the proxies (window._seed,
+    // window._hydrate_from_cache, etc.) are installed.
+    // Polling for a function on `window` works in the warm
+    // case, but on a cold load `app.js` runs well before
+    // `app_main.py` finishes evaluating (PyScript is still
+    // in the "Loading micropip, packaging, tzdata" phase).
+    // A 5s polling window wasn't long enough on cold loads
+    // — `app.js` would give up, log "neither ... appeared",
+    // and the page would silently render with no buffer
+    // state. `py:done` is the canonical signal that the
+    // main module is ready.
+    if (typeof timeoutMs !== "number") timeoutMs = 30000;
+    return new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        document.removeEventListener("py:done", finish);
+        resolve();
+      };
+      document.addEventListener("py:done", finish, { once: true });
+      setTimeout(finish, timeoutMs);
+    });
+  }
+
   async function init() {
-    // Single seed trigger — runs once per page load (gated by
-    // `@login_required` on every admin route, so this only runs
-    // for authenticated users). Covers login (which always
-    // redirects to a fresh page) and full-page-reload (Pi-reboot
-    // analog). The PyScript side does the actual seeding; PyScript
-    // 2024.9.x loads asynchronously and may not have installed
-    // `window._seed` by the time `DOMContentLoaded` fires, so we
-    // poll for it (cap ~5s) before falling back. The 5s window
-    // covers PyScript's normal bootstrap on a cold load (micropip
-    // + numpy + Pillow + the in-browser render path) — the
-    // change event fires when the seed resolves, so per-page
-    // `reRender` listeners will paint the actual messages.
-    const seedDeadline = Date.now() + 5000;
-    while (typeof window._seed !== "function" && Date.now() < seedDeadline) {
-      await new Promise((r) => setTimeout(r, 50));
+    // Two-step boot. PyScript loads asynchronously, so we
+    // wait for `py:done` (the canonical "main module
+    // finished evaluating" signal) before reading any
+    // proxies off `window`. Without this, on a cold load
+    // `app.js` races PyScript's bootstrap and gives up
+    // before the proxies are installed. The 30s cap is
+    // generous — a normal cold load is a few seconds — but
+    // bounds a hung PyScript so the page doesn't sit
+    // forever on an empty testing/preview table.
+    //
+    // 1. Try the sessionStorage cache. If the previous page
+    //    load (within this tab) wrote a cache, this populates
+    //    the in-memory MessageManager and fires `on_change`,
+    //    so per-page `reRender` listeners paint the cached
+    //    state on the first frame. No network call.
+    // 2. On a cache miss (first page load this tab, after a
+    //    Logout/login cycle that cleared the cache, or after
+    //    a Testing-page Refresh that wiped it), call
+    //    `window._seed()` to do the network backfill. That
+    //    populates the buffer, fires `on_change` at the end
+    //    (which writes the new cache), done.
+    await waitForPyDone(30000);
+    let hydrated = false;
+    if (typeof window._hydrate_from_cache === "function") {
+      try {
+        hydrated = await window._hydrate_from_cache();
+      } catch (e) {
+        console.warn("hydrate_from_cache failed:", e);
+      }
     }
-    if (typeof window._seed === "function") {
+    if (!hydrated && typeof window._seed === "function") {
       try {
         await window._seed();
       } catch (e) {
         console.warn("seed failed:", e);
       }
-    } else {
-      console.warn("window._seed never appeared; skipping in-browser seed");
+    } else if (!hydrated) {
+      console.warn("neither _hydrate_from_cache nor _seed ever appeared; skipping in-browser bootstrap");
     }
   }
 

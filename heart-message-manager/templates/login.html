@@ -34,6 +34,25 @@
     }
     h1, h2, h3, h4, h5, h6 { font-family: 'Fredoka', sans-serif; }
   </style>
+  <script>
+    // Defense-in-depth: the login page is unauthenticated by
+    // definition, so any cached state from a previous
+    // authenticated user in this tab is stale. The Logout
+    // link in base.html clears it on click, but a clean
+    // Logout isn't guaranteed (browser crash, interrupted
+    // navigation, etc.). Wipe it here too, before the form
+    // submits, so the next login starts with a clean slate
+    // and the in-browser MessageManager will do a fresh
+    // network backfill on the post-login page load.
+    (function () {
+      try {
+        for (var i = sessionStorage.length - 1; i >= 0; i--) {
+          var k = sessionStorage.key(i);
+          if (k && k.indexOf("lindsay50:") === 0) sessionStorage.removeItem(k);
+        }
+      } catch (e) { /* private mode — best effort */ }
+    })();
+  </script>
 </head>
 <body class="font-body">
 <div class="min-h-screen flex items-center justify-center">
