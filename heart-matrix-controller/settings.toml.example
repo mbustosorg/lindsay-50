@@ -5,12 +5,17 @@
 # MQTT_HOST Default: io.adafruit.com (Adafruit IO cloud with TLS on port 8883).
 #   Local dev with Mosquitto: localhost, port 1883 (no TLS).
 # MQTT_USERNAME = your AIO username, MQTT_PASSWORD = your AIO key.
-# MQTT_TOPIC is the feed name (the device extracts the feed from "user/feeds/feed" if you give it the full path).
+# MQTT_TOPIC is the full wire-format topic — paho subscribes verbatim, with
+# no broker-specific translation. For Adafruit IO, that means
+# "{username}/feeds/{feedname}" (e.g. "mbustosorg/feeds/lindsay50"). For
+# local Mosquitto, any topic works (e.g. "lindsay50" or "test/configs").
+# This value must match the Flask server's MQTT_TOPIC so the Pi and the
+# server subscribe to the same feed.
 MQTT_HOST = "io.adafruit.com"
 MQTT_PORT = 1883
 MQTT_USERNAME = "YOUR_AIO_USERNAME"
 MQTT_PASSWORD = "YOUR_AIO_KEY"
-MQTT_TOPIC = "YOUR_AIO_FEED_NAME"
+MQTT_TOPIC = "YOUR_AIO_USERNAME/feeds/YOUR_AIO_FEED_NAME"
 
 # Flask server REST API URLs for seeding config and messages on boot.
 # The ESP32 boots without persistent storage, so it seeds from the Flask server.

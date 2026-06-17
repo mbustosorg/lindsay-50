@@ -1,4 +1,5 @@
 #!/bin/bash
+set -euo pipefail
 
 # Git passes these three arguments automatically
 PREV_HEAD=$1
@@ -53,25 +54,27 @@ if [ -f ".venv/bin/activate" ]; then
     fi
 fi
 
-# Copy settings.toml files from the main worktree (gitignored, so not in repo)
-# The app handles creating secret_key and db.sqlite on first startup
-# Derive main repo: .git file contains "gitdir: /path/to/.git/worktrees/<name>"
-# We need to extract the repo root from this path
-if [ -f ".git" ]; then
-    GITDIR=$(cat ".git" | sed 's/gitdir: //')
-    # Strip /worktrees/<name> to get repo root
-    MAIN_REPO=$(echo "$GITDIR" | sed 's|/.git/worktrees/.*||')
-else
-    MAIN_REPO=$(pwd)
+# Copy settings.toml files from the main worktree (gitignored, so not in
+# repo). The actual copy logic lives in scripts/sync_settings.sh so it
+# can also be run directly to refresh a clobbered settings.toml. The
+# app handles creating secret_key and db.sqlite on first startup.
+#
+# Resolve symlinks so the script path is correct whether the hook was
+# invoked via .git/hooks/post-checkout (-> hooks/post-checkout) or
+# directly from hooks/post-checkout. Without this, dirname "$0" lands
+# on .git/hooks and the relative path resolves to .git/scripts/...,
+# which doesn't exist — and the "skipped" branch below fires silently.
+HOOK_PATH="$0"
+if [ -L "$HOOK_PATH" ]; then
+    HOOK_PATH="$(readlink "$HOOK_PATH")"
 fi
-
-for proj in heart-message-manager heart-matrix-controller; do
-    if [ ! -f "$proj/settings.toml" ] && [ -f "$MAIN_REPO/$proj/settings.toml" ]; then
-        cp "$MAIN_REPO/$proj/settings.toml" "$proj/settings.toml"
-        echo "✅ Copied $proj/settings.toml from main worktree"
-        echo "   ⚠️  Review credentials before running the server!"
-    fi
-done
+SCRIPT_DIR="$(cd "$(dirname "$HOOK_PATH")" && pwd)"
+SYNC_SCRIPT="$SCRIPT_DIR/../scripts/sync_settings.sh"
+if [ -f "$SYNC_SCRIPT" ]; then
+    bash "$SYNC_SCRIPT"
+else
+    echo "⚠️  $SYNC_SCRIPT not found — settings.toml not copied" >&2
+fi
 
 # ---------------------------------------------------------------------------
 # Mark this worktree as initialized — guard for future checkouts

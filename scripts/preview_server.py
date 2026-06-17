@@ -80,11 +80,10 @@ log_setup_mod.configure_logging = MagicMock()
 # helper references it.
 mm_mod = make_mock("lib_shared.message_manager")
 mm_mod.MessageManager = MagicMock()
-mqtt_factory_mod = make_mock("lib_shared.mqtt_factory")
-mqtt_factory_mod.make_mqtt_client = MagicMock()
+paho_mod = make_mock("lib_shared.paho_mqtt_client")
+paho_mod.PahoMqttClient = MagicMock()
 
 # heart-message-manager submodules
-_make_mock("adafruit_mqtt_client")
 paho_mod = types.ModuleType("paho_mqtt_client")
 paho_mod.PahoMqttClient = MagicMock()
 sys.modules["paho_mqtt_client"] = paho_mod

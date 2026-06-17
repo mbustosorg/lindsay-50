@@ -5,44 +5,38 @@ Classes:
     InMemoryMessages: Ring-buffer implementation with O(1) deduplication.
 """
 
-import calendar
 import re
-import time
 from collections import deque
+from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from lib_shared.models import MessageView
 
 
-def _format_display_time(received_at: str, tz_offset_mins: int) -> str:
+def _format_display_time(received_at: str, timezone: str) -> str:
     """Format a UTC ISO timestamp for display in the sign's configured timezone.
 
-    Uses only ``time`` and ``calendar`` — no ``zoneinfo`` or ``datetime``.
-
-    ``time.gmtime(local_epoch)`` is used instead of ``time.localtime()`` to avoid
-    the system timezone polluting the result.  We treat the UTC epoch as UTC and
-    only apply the configured sign offset.
+    The offset is computed at read-time via ``zoneinfo.ZoneInfo`` from the
+    IANA ``timezone`` string on the config (DST-aware). On an unknown /
+    invalid timezone the function falls back to ``US/Pacific`` so a bad
+    config value never raises.
 
     Args:
-        received_at:    UTC ISO 8601 timestamp, e.g. ``"2026-05-22T14:30:00Z"``.
-        tz_offset_mins: Signed UTC offset in minutes for the sign's timezone,
-                        e.g. ``-240`` for EDT, ``-420`` for PDT.
+        received_at: UTC ISO 8601 timestamp, e.g. ``"2026-05-22T14:30:00Z"``.
+        timezone:    IANA timezone name, e.g. ``"America/Los_Angeles"``.
 
     Returns:
-        Formatted string, e.g. ``"May 22 10:30 AM"``.
+        Formatted string, e.g. ``"2026-05-22 10:30 AM"``, or the original
+        string on parse failure.
     """
     try:
-        time_tuple = time.strptime(received_at, "%Y-%m-%dT%H:%M:%SZ")
-    except Exception:
-        return received_at
+        tz = ZoneInfo(timezone)
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = ZoneInfo("US/Pacific")
     try:
-        utc_epoch = calendar.timegm(time_tuple)
-    except Exception:
-        return received_at
-    local_epoch = utc_epoch + tz_offset_mins * 60
-    try:
-        # time.gmtime always interprets as UTC, so we get the correct UTC
-        # components of the local time without the system TZ interfering.
-        return time.strftime("%b %d %I:%M %p", time.gmtime(local_epoch))
+        utc_dt = datetime.fromisoformat(received_at.replace("Z", "+00:00"))
+        local_dt = utc_dt.astimezone(tz)
+        return local_dt.strftime("%Y-%m-%d %I:%M %p %Z").lower()
     except Exception:
         return received_at
 
@@ -102,13 +96,13 @@ class FilteredMessages:
 
         Called by get_messages() before returning. Override to customize.
         """
-        tz_offset = self._config.tz_offset_mins
+        timezone = self._config.timezone
         for entry in entries:
             suppressing = self._apply_filter(entry.message, self._config.filters)
             entry.suppressed = bool(suppressing)
             entry.rules = [r.to_dict() for r in suppressing]
             entry.sender_name = self._config.senders.get(entry.message.sender)
-            entry.display_time = _format_display_time(entry.message.received_at, tz_offset)
+            entry.display_time = _format_display_time(entry.message.received_at, timezone)
 
     def add(self, message, source="rest"):
         """Add a single message to the store."""

@@ -20,11 +20,65 @@ log = logging.getLogger("heart")
 
 class ScrollerBase:
     """Scroller time/pixel logic shared by MatrixScroller (rgbmatrix) and
-    PreviewScroller (Pillow). Subclasses implement font loading and drawing."""
+    PreviewScroller (Pillow). Subclasses implement font loading and drawing.
 
-    def __init__(self, frame_delay=0.04, offset_seconds=1.0, color=0xFF0000):
-        self.frame_delay = frame_delay
-        self.offset_seconds = offset_seconds
+    The user-facing `speed` kwarg (1..5) is the canonical input; the
+    underlying `frame_delay` / `offset_seconds` are derived from
+    `SPEED_TABLE` inside the constructor. Callers that already have raw
+    pacing numbers (tests, the no-config boot path) can pass
+    `frame_delay=` / `offset_seconds=` directly as a back-compat escape
+    hatch; that path skips the speed translation.
+    """
+
+    # Speed 1..5 → (frame_delay, offset_seconds). Index 0 = speed 1.
+    # frame_delay shrinks as speed grows; offset_seconds shrinks mildly
+    # so the two-line offset feels tight at high speed.
+    SPEED_TABLE: tuple[tuple[float, float], ...] = (
+        (0.080, 1.5),  # 1 — Low
+        (0.060, 1.2),  # 2
+        (0.040, 1.0),  # 3 — Medium  (default)
+        (0.030, 0.8),  # 4
+        (0.020, 0.5),  # 5 — High
+    )
+    SPEED_LABELS: tuple[str, ...] = (
+        "1-Low",
+        "2",
+        "3-Medium",
+        "4",
+        "5-High",
+    )
+    DEFAULT_SPEED = 3
+
+    @classmethod
+    def resolve_pacing(cls, speed: int) -> tuple[float, float]:
+        """Translate a 1..5 speed knob to (frame_delay, offset_seconds).
+
+        Raises ValueError on out-of-range, non-int, or bool input (bool is
+        an int subclass in Python and must be rejected explicitly).
+        """
+        if isinstance(speed, bool) or not isinstance(speed, int) or not 1 <= speed <= 5:
+            raise ValueError(f"speed must be an integer in 1..5, got {speed!r}")
+        return cls.SPEED_TABLE[speed - 1]
+
+    def __init__(
+        self,
+        *,
+        speed: int = DEFAULT_SPEED,
+        color: int = 0xFF0000,
+        frame_delay: float | None = None,
+        offset_seconds: float | None = None,
+    ):
+        # Caller passed raw pacing directly (tests, no-config boot). Use
+        # those numbers and ignore the speed value.
+        if frame_delay is not None and offset_seconds is not None:
+            self.frame_delay = frame_delay
+            self.offset_seconds = offset_seconds
+        else:
+            # Translate speed → pacing. Validate even if only one of the
+            # raw kwargs was passed.
+            fd, off = self.resolve_pacing(speed)
+            self.frame_delay = fd if frame_delay is None else frame_delay
+            self.offset_seconds = off if offset_seconds is None else offset_seconds
         self.text = ""
         self.text_width = 0
         self.start_time = 0.0
@@ -41,6 +95,17 @@ class ScrollerBase:
 
     def set_brightness(self, b):
         self._brightness = b
+
+    def set_color(self, color: int) -> None:
+        """Live-update the text color (used by config-envelope handlers)."""
+        self._color = color
+
+    def set_speed(self, speed: int) -> None:
+        """Live-update the pacing (frame_delay + offset_seconds) from a
+        1..5 speed knob. Validates the same way the constructor does."""
+        fd, off = self.resolve_pacing(speed)
+        self.frame_delay = fd
+        self.offset_seconds = off
 
     def color_tuple(self):
         c, b = self._color, self._brightness

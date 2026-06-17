@@ -38,6 +38,10 @@
           Send Webhook
         </button>
       </form>
+      <div id="inject-pub-topic-row" class="hidden mt-3 flex items-center gap-2 text-xs text-slate-500">
+        <span class="font-semibold">Publishes to:</span>
+        <code id="inject-pub-topic" class="font-mono bg-slate-100 px-2 py-0.5 rounded text-slate-700 break-all"></code>
+      </div>
       <div id="inject-result" class="mt-4 text-sm text-slate-500"></div>
     </div>
   </div>
@@ -158,13 +162,6 @@
 <script>
 let s3Loaded = false;
 
-function toggleSection(name) {
-  const section = document.getElementById(name + '-section');
-  const chevron = document.getElementById(name + '-chevron');
-  section.classList.toggle('hidden');
-  chevron.classList.toggle('rotate-180');
-}
-
 function escapeHtml(s) {
   const d = document.createElement('div');
   d.textContent = s;
@@ -270,17 +267,28 @@ async function renderConfig() {
 }
 
 async function refreshFeed() {
-  // The WS-driven path: kick off a wipe + re-seed (which fetches the
-  // REST API and repopulates IndexedDB), then re-render from the buffer.
-  if (APP.wipeAndReseed) {
+  // Force a fresh network pull. The PyScript-side `seed()`
+  // wipes the in-memory buffer and the sessionStorage cache
+  // before fetching, then writes a fresh cache via the
+  // trailing `_emit_change()`. The `on_change` event fires
+  // when the seed resolves, so our registered `reRender`
+  // will paint the fresh data automatically — but we call
+  // `reRender()` explicitly here too so the operator sees
+  // the refresh resolve the moment the network round trip
+  // returns, not on the next event loop tick.
+  if (typeof window._seed === "function") {
     try {
-      await APP.wipeAndReseed();
+      await window._seed();
     } catch (e) {
-      console.warn("wipeAndReseed failed:", e);
+      console.warn("_seed failed:", e);
     }
   }
-  await renderMessages();
-  await renderConfig();
+  if (typeof reRender === "function") {
+    reRender();
+  } else {
+    await renderMessages();
+    await renderConfig();
+  }
 }
 
 // Disable the "Send Webhook" button until the WS reaches `connected`.
@@ -456,28 +464,32 @@ document.getElementById('inject-form').addEventListener('submit', async function
   }
 });
 
-// Init: subscribe to the shared in-browser MessageManager, then render.
+// Page-global re-render. Any state change in the in-browser
+// MessageManager (WS message envelope, WS config envelope, seed
+// completion, manual refresh) fires App.dispatchChange, which
+// calls this. We re-read everything from the source of truth and
+// re-paint the DOM. Per-component re-renders are not needed —
+// the dominant case is "re-render everything," and any one
+// component can be re-rendered directly (e.g. the "Hide
+// suppressed" checkbox calls `renderMessages()` itself, a
+// local UI event that doesn't go through the buffer).
+async function reRender() {
+  await renderMessages();
+  await renderConfig();
+}
+
+// Init: register the page-global reRender, then paint.
 function testingInit() {
   // The base template's app.js may not be ready yet on this script run
   // (it's loaded after the inline APP_CONFIG <script> but before this
-  // block). Defer to a microtask so window.App is in place.
+  // block). Poll for `registerOnChange` (50ms × 50 = 2.5s budget) so
+  // the initial paint doesn't race PyScript's app-scoped install.
   const tryStart = function () {
-    if (typeof APP.registerOnMessageCallback !== 'function') {
+    if (typeof APP.registerOnChange !== 'function') {
       return false;
     }
-    APP.registerOnMessageCallback(function (msg) {
-      // The in-browser MessageManager keeps a single source of truth
-      // for the ring buffer; the WS envelopes from the broker call
-      // mgr.dispatch, which appends to the ring and invokes us.
-      // Config envelopes carry a config-shaped payload; re-render the
-      // config panel as well.
-      renderMessages();
-      if (msg && msg.filters && msg.senders !== undefined) {
-        renderConfig();
-      }
-    });
-    renderMessages();
-    renderConfig();
+    APP.registerOnChange(reRender);
+    reRender();
     watchMqttStatus();
     return true;
   };
@@ -490,6 +502,20 @@ function testingInit() {
     poll();
   }
 }
+
+// Surface the MQTT topic that the "Send Webhook" button will publish to.
+// Read straight from window.APP_CONFIG.mqttTopic (inlined in base.html);
+// never expanded, never transformed — what Flask publishes to is what we
+// show, so the operator can verify the wiring at a glance.
+(function () {
+  const cfg = window.APP_CONFIG || {};
+  const row = document.getElementById("inject-pub-topic-row");
+  const code = document.getElementById("inject-pub-topic");
+  if (row && code && typeof cfg.mqttTopic === "string" && cfg.mqttTopic) {
+    code.textContent = cfg.mqttTopic;
+    row.classList.remove("hidden");
+  }
+})();
 
 testingInit();
 </script>

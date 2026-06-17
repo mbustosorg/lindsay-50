@@ -36,7 +36,6 @@
   const FRAME_MS = 1000 / 30;     // 30 FPS cap
 
   // Module-scope state.
-  let lastShownBody = null;
   let lastTick = 0;
   let imgData = null;             // reused ImageData for the rAF blit
   let imgDataNeedsWipe = true;
@@ -165,63 +164,58 @@
   }
 
   // ------------------------------------------------------------------
-  // Per-page callback: drives coordinator.request_message from the
-  // shared in-browser MessageManager's on_message signal.
+  // Per-page re-render. The MessageManager emits a universal
+  // `on_change` event for every mutation. On every change we
+  // re-read the latest message and the current SignConfig and
+  // push them into the PyScript coordinator:
+  //
+  //   - `request_message(body)` queues the latest message for
+  //     the rAF loop to display. The coordinator's `set_text`
+  //     is idempotent (overwrites `pending_text`); calling with
+  //     the same body repeatedly is a no-op.
+  //   - `apply_config(cfg)` rebuilds the effects rotation and
+  //     rebinds the scroller. Each call replaces the rotation
+  //     in place and rebinds, so calling with the same config
+  //     is cheap (no DOM churn).
+  //
+  // The point: "something changed" → re-push the current state
+  // to the coordinator. We don't need to know what changed —
+  // both sinks are idempotent.
   // ------------------------------------------------------------------
+
+  async function reRender() {
+    if (!window.App) return;
+    try {
+      const cfg = await window.App.getConfig();
+      if (cfg && typeof window.apply_config === "function") {
+        window.apply_config(cfg);
+      }
+    } catch (e) {
+      console.warn("reRender apply_config failed:", e);
+    }
+    try {
+      const msgs = await window.App.getMessages(1, true);
+      const body = msgs && msgs[0] && msgs[0].body;
+      if (body && typeof window.request_message === "function") {
+        window.request_message(body);
+      }
+    } catch (e) {
+      console.warn("reRender request_message failed:", e);
+    }
+  }
 
   function registerPreviewCallback() {
     if (callbackRegistered) return;
     callbackRegistered = true;
-    // The base template's app.js exposes `window.App.registerOnMessageCallback`.
-    // It wires the in-browser MessageManager's on_message signal to a
-    // user-supplied function. The body of the Message is forwarded to
-    // the PyScript coordinator.
-    if (window.App && typeof window.App.registerOnMessageCallback === "function") {
-      window.App.registerOnMessageCallback((msg) => {
-        const body = msg && msg.body;
-        if (body === undefined || body === null || body === "") return;
-        if (body === lastShownBody) return;     // dedup
-        lastShownBody = body;
-        try {
-          if (typeof window.request_message === "function") {
-            window.request_message(body);
-          }
-        } catch (e) {
-          console.error("request_message error:", e);
-        }
-      });
+    if (window.App && typeof window.App.registerOnChange === "function") {
+      window.App.registerOnChange(reRender);
     } else {
-      // Fallback: app.js hasn't loaded yet (shouldn't happen in v2
-      // because base.html loads it before this script). Log and
-      // continue — the preview's render loop will still tick.
-      console.warn("window.App not available; preview won't receive MQTT envelopes");
+      console.warn("window.App.registerOnChange not available; preview won't react to state changes");
     }
-    // Seed the preview with the most recent message from the in-browser
-    // ring buffer. Without this, the preview shows "Idle" until a fresh
-    // MQTT envelope arrives — on a page reload, the buffer is still
-    // populated (it was just wiped + re-seeded from /api/messages), so
-    // the latest body should be kicked onto the coordinator. Skipped
-    // if the buffer is empty (no messages yet) or if a live envelope
-    // arrived before the seed completed (lastShownBody will be set and
-    // dedup will skip the redundant call).
-    seedPreviewFromBuffer();
-  }
-
-  async function seedPreviewFromBuffer() {
-    if (!window.App || typeof window.App.getMessages !== "function") return;
-    try {
-      const msgs = await window.App.getMessages(1, true);
-      if (!msgs || msgs.length === 0) return;
-      const body = msgs[0].body;
-      if (body === undefined || body === null || body === "") return;
-      if (body === lastShownBody) return;       // dedup vs. the live callback
-      lastShownBody = body;
-      if (typeof window.request_message === "function") {
-        window.request_message(body);
-      }
-    } catch (e) {
-      console.warn("seedPreviewFromBuffer failed:", e);
-    }
+    // Kick off a re-render now so the preview shows the most
+    // recent seeded message + current config before the seed
+    // completion fires the first `on_change`.
+    reRender();
   }
 
   // ------------------------------------------------------------------

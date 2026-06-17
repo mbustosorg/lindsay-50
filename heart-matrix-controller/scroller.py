@@ -8,6 +8,13 @@ font is a BDF loaded from FONT_PATH (copy one from the rpi-rgb-led-matrix
 The time/pixel math (text width, x positions, frame pacing) lives in
 `lib_shared.scroller_base.ScrollerBase`. This module is the `rgbmatrix`-specific
 subclass — it loads a BDF font and calls `graphics.DrawText` to blit glyphs.
+
+v2 config: the user-facing knobs on `TextSettings` are `color`, `speed`, and
+`text_effect`. Callers destructure `TextSettings` and pass `color=` / `speed=`
+to the scroller. The device's main loop applies live updates via
+`scroller.set_color()` and `scroller.set_speed()`. The legacy `frame_delay=`
+/ `offset_seconds=` kwargs remain as a back-compat escape hatch for tests
+and the no-config boot path.
 """
 
 from __future__ import annotations
@@ -25,12 +32,19 @@ class MatrixScroller(ScrollerBase):
     def __init__(
         self,
         display,
-        color=0xFF6400,
-        frame_delay=0.04,
-        offset_seconds=1.0,
-        font_path=None,
+        *,
+        speed: int = ScrollerBase.DEFAULT_SPEED,
+        color: int = 0xFF6400,
+        font_path: str | None = None,
+        frame_delay: float | None = None,
+        offset_seconds: float | None = None,
     ):
-        super().__init__(frame_delay=frame_delay, offset_seconds=offset_seconds, color=color)
+        super().__init__(
+            speed=speed,
+            color=color,
+            frame_delay=frame_delay,
+            offset_seconds=offset_seconds,
+        )
         self.display = display
 
         cfg = get_config()

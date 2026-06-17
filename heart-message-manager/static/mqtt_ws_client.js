@@ -172,6 +172,11 @@ export function createMqttWsClient({
   onEnvelope,
   onStatus,
 }) {
+  console.log(
+    "[DEBUG mqtt_ws_client.js] createMqttWsClient called with url=" + JSON.stringify(url) +
+    " topic=" + JSON.stringify(topic) +
+    " (typeof url=" + typeof url + ", typeof topic=" + typeof(topic) + ")"
+  );
   const threshold = longDisconnectMs || 300000; // 5 minutes default
   let ws = null;
   let pingInterval = null;
@@ -202,6 +207,8 @@ export function createMqttWsClient({
   }
 
   function emitEnvelope(rawString) {
+    const preview = rawString.length > 200 ? rawString.slice(0, 200) + "..." : rawString;
+    console.log("[mqtt-ws] emitEnvelope: " + preview);
     if (typeof onEnvelope === "function") {
       try {
         onEnvelope(rawString);
@@ -374,6 +381,9 @@ export function createMqttWsClient({
     clearPauseTimer();
     let socket;
     try {
+      console.log(
+        "[DEBUG mqtt_ws_client.js] new WebSocket about to open with url=" + JSON.stringify(url)
+      );
       socket = new WebSocket(url, ["mqtt"]);
     } catch (e) {
       emitStatus("error", { error: String(e) });
@@ -423,6 +433,7 @@ export function createMqttWsClient({
       emitStatus("connected", detail);
     };
     socket.onmessage = (event) => {
+      console.log("[mqtt-ws] socket.onmessage fired, data type=" + (event.data && event.data.constructor && event.data.constructor.name));
       let data;
       if (event.data instanceof ArrayBuffer) {
         data = new Uint8Array(event.data);

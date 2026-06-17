@@ -41,20 +41,21 @@ AWS_S3_BUCKET = "YOUR_S3_BUCKET_NAME"
 # Adafruit IO — for MQTT publishing (both REST and MQTT use the same credentials)
 # -----------------------------------------------------------------------------
 
-# MQTT client: "adafruit" (Adafruit IO MQTT with TLS) or "paho" (raw paho-mqtt, for local dev).
-# Flask and subscriber use the same client.
-MQTT_CLIENT = "adafruit"
-
 # Adafruit IO over MQTT.
 # MQTT_HOST Default: io.adafruit.com (Adafruit IO cloud with TLS on port 8883).
 #   Local dev with Mosquitto: localhost, port 1883 (no TLS).
 # MQTT_USERNAME = your AIO username, MQTT_PASSWORD = your AIO key.
-# MQTT_TOPIC is the feed name (the device extracts the feed from "user/feeds/feed" if you give it the full path).
+# MQTT_TOPIC is the full wire-format topic — paho subscribes verbatim, with
+# no broker-specific translation. For Adafruit IO, that means
+# "{username}/feeds/{feedname}" (e.g. "mbustosorg/feeds/lindsay50"). For
+# local Mosquitto, any topic works (e.g. "lindsay50" or "test/configs").
+# The Flask publisher, the Pi subscriber, and the browser SUBSCRIBE all
+# use this single value.
 MQTT_HOST = "io.adafruit.com"
 MQTT_PORT = 8883
 MQTT_USERNAME = "YOUR_AIO_USERNAME"
 MQTT_PASSWORD = "YOUR_AIO_KEY"
-MQTT_TOPIC = "YOUR_AIO_FEED_NAME"
+MQTT_TOPIC = "YOUR_AIO_USERNAME/feeds/YOUR_AIO_FEED_NAME"
 
 # REST API URLs for seeding (Flask seeds from itself via localhost).
 # On Heroku, override these via config vars with the actual public URL
@@ -89,13 +90,19 @@ ADMIN_SESSION_TIMEOUT_MINS = 60
 # `window.APP_CONFIG` and the MqttWsClient opens a WS connection from
 # every admin page.
 [mqtt_ws]
-# Browser-side MQTT-over-WS URL.
-#   Adafruit IO: "wss://io.adafruit.com/mqtt" (TLS, default).
-#   Local Paho:  "ws://<host>:9001/mqtt" (plain WS, see note below).
-# NOTE: a local Mosquitto broker must be started with `--ws-port 9001`
+# Full browser-side MQTT-over-WS URL. If set, this wins outright.
+# Leave unset to derive from `MQTT_HOST` + `MQTT_WS_PORT` below.
+# MQTT_WS_URL = "ws://localhost:9001/mqtt"
+
+# Port for the browser-side MQTT-over-WS connection. Default is 9001
+# (the protocol default for Mosquitto) for loopback hosts and 443 for
+# remote brokers. The `scripts/start-app.sh` Docker flow maps host
+# 9002 → container 9001 to avoid MinIO's console on host 9001; set
+# `MQTT_WS_PORT = "9002"` if you use that flow.
+# NOTE: a native Mosquitto broker must be started with `--ws-port 9001`
 # to expose the MQTT-over-WS transport. Example:
 #   mosquitto -p 1883 --ws-port 9001
-MQTT_WS_URL = "wss://io.adafruit.com/mqtt"
+# MQTT_WS_PORT = "9001"
 
 # How long a disconnect (in ms) is allowed to elapse before the status
 # block transitions to "Paused" and a wipe + re-seed runs on reconnect.
