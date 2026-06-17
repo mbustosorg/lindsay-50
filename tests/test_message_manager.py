@@ -842,6 +842,27 @@ class TestSessionCache:
         shim.parse = json.loads
         return shim
 
+    @staticmethod
+    def _make_to_js_shim():
+        """Identity shim for `pyodide.ffi.to_js`.
+
+        The real `to_js` converts Python dicts to JsProxies that
+        `JSON.stringify` can walk. Under the test shim the payload
+        is already a plain Python dict, so an identity conversion
+        is faithful: the stringifier still walks it correctly and
+        the bytes-on-the-wire match a real Pyodide round-trip.
+        """
+        return lambda obj, dict_converter=None: obj
+
+    @staticmethod
+    def _make_from_entries_shim():
+        """Identity shim for `js.Object.fromEntries`.
+
+        Same rationale as `_make_to_js_shim`: the Python dict is
+        already structured correctly, so we just hand it back.
+        """
+        return lambda entries: dict(entries) if hasattr(entries, "__iter__") else entries
+
     def test_hydrate_from_cache_empty_returns_false(self, messages_api_url, config_api_url, api_key):
         """No cache entry → returns False; on_change not fired."""
         cb = MagicMock()
@@ -850,6 +871,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -864,6 +887,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_hydrate_from_cache_invalidates_on_version_mismatch(self, messages_api_url, config_api_url, api_key):
         """Cache with wrong `v` → returns False; on_change not fired."""
@@ -882,6 +907,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -896,6 +923,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_hydrate_from_cache_invalidates_on_sign_mismatch(self, messages_api_url, config_api_url, api_key):
         """Cache for a different sign → returns False; on_change not fired."""
@@ -913,6 +942,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -927,6 +958,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_hydrate_from_cache_invalidates_on_corrupt_json(self, messages_api_url, config_api_url, api_key):
         """Invalid JSON in cache → returns False; no exception propagates."""
@@ -938,6 +971,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -952,6 +987,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_hydrate_from_cache_populates_messages_and_config(
         self, messages_api_url, config_api_url, api_key, seed_messages, seed_config
@@ -963,6 +1000,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr1 = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -986,6 +1025,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
         # Confirm shape
         payload = json.loads(written)
         assert payload["v"] == 1
@@ -1001,6 +1042,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr2 = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -1019,6 +1062,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_hydrate_from_cache_fires_on_change(self, messages_api_url, config_api_url, api_key):
         """Cache hit fires on_change exactly once."""
@@ -1034,6 +1079,7 @@ class TestSessionCache:
                         "sender": "+15551111111",
                         "body": "cached",
                         "received_at": "2026-06-01T10:00:00Z",
+                        "source": "rest",
                     }
                 ],
                 "config": {
@@ -1058,6 +1104,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -1072,6 +1120,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_handle_message_writes_cache(self, messages_api_url, config_api_url, api_key):
         """_handle_message on a browser mgr writes the cache via _emit_change."""
@@ -1080,6 +1130,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -1101,6 +1153,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_handle_config_writes_cache(self, messages_api_url, config_api_url, api_key):
         """_handle_config on a browser mgr writes the cache via _emit_change."""
@@ -1109,6 +1163,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -1144,6 +1200,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_seed_writes_cache(self, messages_api_url, config_api_url, api_key, seed_messages, seed_config):
         """seed() writes the cache on completion via the trailing _emit_change."""
@@ -1152,6 +1210,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -1171,6 +1231,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_cache_write_is_noop_on_server_path(self, messages_api_url, config_api_url, api_key):
         """Pi mgr (is_browser=False) does not touch sessionStorage."""
@@ -1179,6 +1241,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -1200,6 +1264,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_cache_write_exception_is_swallowed(self, messages_api_url, config_api_url, api_key):
         """sessionStorage raising doesn't break the buffer write."""
@@ -1209,6 +1275,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -1232,6 +1300,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
     def test_seed_clears_cache_before_fetch(
         self, messages_api_url, config_api_url, api_key, seed_messages, seed_config
@@ -1251,6 +1321,7 @@ class TestSessionCache:
                         "sender": "+15550000000",
                         "body": "should be wiped",
                         "received_at": "2026-06-01T09:00:00Z",
+                        "source": "rest",
                     }
                 ],
                 "config": {"sign": {"name": "Lindsay's Heart"}, "version": 2},
@@ -1259,6 +1330,8 @@ class TestSessionCache:
         mm = _mm()
         mm._js_session_storage = ss_shim
         mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
         try:
             mgr = mm.MessageManager(
                 messages_api_url=messages_api_url,
@@ -1282,6 +1355,8 @@ class TestSessionCache:
         finally:
             mm._js_session_storage = None
             mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
 
 
 class TestRingBufferEviction:

@@ -231,16 +231,6 @@ class MessageManager:
             payload_js = to_js(payload, dict_converter=_ensure_js_object_from_entries())
             serialized = j.stringify(payload_js)
             ss.setItem(key, serialized)
-            # diagnostic: confirm the round-trip in the browser
-            try:
-                print(
-                    f"[MessageManager] _write_cache key={key!r} "
-                    f"serialized_type={type(serialized).__name__} "
-                    f"serialized_len={len(serialized) if isinstance(serialized, str) else 'n/a'} "
-                    f"preview={str(serialized)[:200]!r}"
-                )
-            except Exception:
-                pass
         except Exception as e:
             logger.warning("MessageManager cache write failed: %s", e)
 
@@ -261,10 +251,19 @@ class MessageManager:
         Returns True on a successful hit (and fires `on_change`
         once so per-page listeners re-render with the cached
         state). Returns False on miss / version mismatch /
-        sign mismatch / corruption — those are all "treat as
-        no cache" cases and do NOT fire `on_change`.
+        sign mismatch / corruption / any per-message missing
+        field — those are all "treat as no cache" cases and
+        do NOT fire `on_change`. The caller falls back to a
+        network seed on False.
 
         Browser-only. The Pi returns False immediately.
+
+        The per-message `source` field is required — it's
+        how /testing distinguishes live WS envelopes from
+        the initial REST backfill, and silently defaulting
+        to "rest" made every hydrated message look like a
+        backfill. A missing field on any item rejects the
+        whole cache so the page re-seeds cleanly.
         """
         if not self._is_browser:
             return False
@@ -278,16 +277,6 @@ class MessageManager:
         except Exception as e:
             logger.warning("MessageManager cache read failed: %s", e)
             return False
-        # diagnostic: show what sessionStorage actually held for this key
-        try:
-            print(
-                f"[MessageManager] hydrate_from_cache key={key!r} "
-                f"raw type={type(raw).__name__} "
-                f"raw_is_truthy={bool(raw)} "
-                f"raw_preview={(str(raw) if raw is not None else '')[:200]!r}"
-            )
-        except Exception:
-            pass
         if not raw:
             return False
         try:
@@ -297,55 +286,40 @@ class MessageManager:
                 payload = payload.to_py()
         except Exception as e:
             logger.warning("MessageManager cache parse failed: %s", e)
-            try:
-                print(f"[MessageManager] hydrate_from_cache PARSE FAIL: {e!r} raw={raw[:200]!r}")
-            except Exception:
-                pass
             return False
-        try:
-            print(
-                f"[MessageManager] hydrate_from_cache parsed type={type(payload).__name__} "
-                f"keys={list(payload.keys()) if isinstance(payload, dict) else 'n/a'}"
-            )
-        except Exception:
-            pass
         if not isinstance(payload, dict):
             return False
         if payload.get("v") != self._CACHE_VERSION:
-            try:
-                print(f"[MessageManager] hydrate_from_cache VERSION MISMATCH: got {payload.get('v')!r} want {self._CACHE_VERSION}")
-            except Exception:
-                pass
             return False
         expected_sign = self._config.sign.name if self._config.sign else "unknown"
         if payload.get("sign_name") != expected_sign:
-            try:
-                print(f"[MessageManager] hydrate_from_cache SIGN MISMATCH: got {payload.get('sign_name')!r} want {expected_sign!r}")
-            except Exception:
-                pass
             return False
         msgs_raw = payload.get("messages") or []
         cfg_raw = payload.get("config")
         if not isinstance(msgs_raw, list) or not isinstance(cfg_raw, dict):
-            try:
-                print(f"[MessageManager] hydrate_from_cache SHAPE BAD: msgs={type(msgs_raw).__name__} cfg={type(cfg_raw).__name__}")
-            except Exception:
-                pass
             return False
         try:
             self._messages.clear()
-            msgs = [
-                Message(
-                    id=item.get("id", ""),
-                    sender=item.get("sender", ""),
-                    body=item.get("body", ""),
-                    received_at=item.get("received_at", ""),
+            # Per-message hydrate. Each item must carry a
+            # source — anything missing falls through to the
+            # re-seed path below. `add_many` is single-source
+            # for a batch, so we use `add` to preserve the
+            # mix of rest + mqtt messages a live cache holds.
+            for item in msgs_raw:
+                if not isinstance(item, dict):
+                    return False
+                src = item.get("source")
+                if src not in ("rest", "mqtt"):
+                    return False
+                self._messages.add(
+                    Message(
+                        id=item.get("id", ""),
+                        sender=item.get("sender", ""),
+                        body=item.get("body", ""),
+                        received_at=item.get("received_at", ""),
+                    ),
+                    source=src,
                 )
-                for item in msgs_raw
-                if isinstance(item, dict)
-            ]
-            if msgs:
-                self._messages.add_many(msgs, source="rest")
             self._config.update_from_dict(cfg_raw)
         except Exception as e:
             logger.warning("MessageManager cache hydrate failed: %s", e)

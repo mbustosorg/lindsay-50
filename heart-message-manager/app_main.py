@@ -225,10 +225,6 @@ async def _seed() -> None:
         return
     try:
         await _message_manager.seed()
-        try:
-            print(f"[app_main] seed completed (cache_key={_message_manager._cache_key()!r})")
-        except Exception:
-            pass
     except Exception as e:
         print(f"[app_main] seed failed: {e!r}")
 
@@ -241,8 +237,10 @@ async def _hydrate_from_cache() -> bool:
     network seed. Returns True on a successful hit (the
     page renders the cached state on the first frame, no
     network call). Returns False on miss / corruption /
-    version mismatch / sign mismatch — the caller should
-    fall back to `window._seed()` in that case.
+    version mismatch / sign mismatch / missing per-message
+    field — the caller falls back to `window._seed()` in
+    all those cases so any cache problem triggers a fresh
+    network pull.
 
     Browser-only no-op (returns False) — the Pi has no
     sessionStorage. The MessageManager itself gates on
@@ -251,12 +249,7 @@ async def _hydrate_from_cache() -> bool:
     if _message_manager is None:
         return False
     try:
-        result = await _message_manager.hydrate_from_cache()
-        try:
-            print(f"[app_main] hydrate_from_cache -> {result} (key={_message_manager._cache_key()!r})")
-        except Exception:
-            pass
-        return result
+        return await _message_manager.hydrate_from_cache()
     except Exception as e:
         print(f"[app_main] hydrate_from_cache failed: {e!r}")
         return False
