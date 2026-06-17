@@ -210,9 +210,26 @@ class MessageManager:
                 "messages": [m.to_dict() for m in self._messages._msgs],
                 "config": self._config.to_dict(),
             }
+            # `payload` is a Python dict with nested dicts (the
+            # `config` value comes from `SignConfig.to_dict()`,
+            # which returns a dict-of-dicts of effects / text
+            # settings). Passing it directly to `JSON.stringify`
+            # lets Pyodide auto-convert to a JsProxy, but
+            # `JSON.stringify(JsProxy)` on a *Python* dict with
+            # nested *Python* dicts silently emits just `"{}"` —
+            # the inner proxies can't be walked by the JS
+            # stringifier, so all nested keys are dropped. The
+            # live symptom was sessionStorage holding `"{}"`
+            # instead of the actual cache (preview='{}' from
+            # `_write_cache`, then `hydrate_from_cache` parses
+            # to an empty dict and rejects on version mismatch).
+            # Convert with `to_js` first so the nested objects
+            # become real JS objects the stringifier can walk.
+            to_js = _ensure_to_js()
             ss = _ensure_js_session_storage()
             j = _ensure_js_json()
-            serialized = j.stringify(payload)
+            payload_js = to_js(payload, dict_converter=_ensure_js_object_from_entries())
+            serialized = j.stringify(payload_js)
             ss.setItem(key, serialized)
             # diagnostic: confirm the round-trip in the browser
             try:
