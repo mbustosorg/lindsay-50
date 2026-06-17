@@ -94,7 +94,10 @@ class FilteredMessages:
     def _enrich_messages(self, entries):
         """Enrich each MessageView entry with suppressed, rules, sender_name, and display_time.
 
-        Called by get_messages() before returning. Override to customize.
+        Called by `MessageManager._handle_message` (single-entry) and
+        `_handle_config` (whole-list re-enrich) at event time. Reads
+        (`get_messages`) do not call this — the derived fields are already
+        populated on the buffered views. Override to customize.
         """
         timezone = self._config.timezone
         for entry in entries:
@@ -145,16 +148,21 @@ class InMemoryMessages(FilteredMessages):
         self._seen_ids = set()
 
     def add(self, message, source="rest"):
-        """Add a single message. Skips silently if id already seen (O(1) check)."""
+        """Add a single message. Skips silently if id already seen (O(1) check).
+
+        Returns the appended `MessageView`, or `None` if the message was
+        a duplicate. Enrichment of the returned view is the caller's
+        responsibility — see `MessageManager._handle_message`
+        (single-entry) and `_handle_config` (whole-list re-enrich).
+        Keeping enrichment out of `add()` avoids a second pass during
+        batch hydrates like `add_many` / cache seed.
+        """
         if message.id in self._seen_ids:
-            return
+            return None
         self._seen_ids.add(message.id)
         view = MessageView(message, source=source)
-        # Pre-compute derived fields on the event (write-time), not on read.
-        # Reads (`get_messages`) are now a thin pass — they do not run the
-        # filter regex or the timezone formatter again.
-        self._enrich_messages([view])
         self._msgs.append(view)
+        return view
 
     def add_many(self, messages, source="rest"):
         """Add multiple messages in insertion order. Skips duplicates."""
@@ -165,15 +173,6 @@ class InMemoryMessages(FilteredMessages):
         """Clear all messages and the seen-id set."""
         self._msgs.clear()
         self._seen_ids.clear()
-
-    def re_enrich_all(self) -> None:
-        """Re-run enrichment against the current config for every entry in the buffer.
-
-        Called by `MessageManager._handle_config()` after a config change so
-        filter rules or timezone updates reclassify all buffered messages.
-        O(buffer × filters), but runs only on config-envelope events.
-        """
-        self._enrich_messages(list(self._msgs))
 
     def get_messages(self, limit=100, suppress=True):
         """Return the most recent N messages, newest first (sorted by received_at desc).

@@ -321,6 +321,10 @@ class MessageManager:
                     source=src,
                 )
             self._config.update_from_dict(cfg_raw)
+            # Hydrate enriches the whole buffer in one pass — the
+            # hydrate is rare and a per-message enrich would be O(n²)
+            # for no benefit.
+            self._messages._enrich_messages(list(self._messages._msgs))
         except Exception as e:
             logger.warning("MessageManager cache hydrate failed: %s", e)
             return False
@@ -351,14 +355,13 @@ class MessageManager:
             logger.warning("Unknown envelope type: %r", envelope.type)
 
     def _handle_message(self, payload: dict) -> None:
-        """Convert payload dict to Message, store it, and emit change.
+        """Convert payload dict to Message, store it, enrich it, and emit change.
 
         The buffer's `add` does its own duplicate-suppression
-        (silently drops re-deliveries). Whether a message is
-        filtered (suppressed) is computed at READ time, not write
-        time, so the change event fires for every new message —
-        listeners that care about suppression re-read with
-        `get_messages(limit, suppress=True)`.
+        (silently drops re-deliveries; returns `None` on dup).
+        Enrichment of the new view runs here at event time so the
+        next read sees up-to-date derived fields without paying the
+        filter / formatter cost on the read path.
         """
         msg = Message(
             id=payload.get("id", ""),
@@ -367,7 +370,9 @@ class MessageManager:
             received_at=payload.get("received_at", ""),
         )
 
-        self._messages.add(msg, source="mqtt")
+        view = self._messages.add(msg, source="mqtt")
+        if view is not None:
+            self._messages._enrich_messages([view])
         logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
         self._emit_change()
 
@@ -381,7 +386,7 @@ class MessageManager:
         the filter / formatter cost on the read path.
         """
         self._config.update_from_dict(payload)
-        self._messages.re_enrich_all()
+        self._messages._enrich_messages(list(self._messages._msgs))
         logger.info("MessageManager applied config update")
         self._emit_change()
 
@@ -499,6 +504,11 @@ class MessageManager:
             except Exception as e:
                 logger.warning("MessageManager config seed failed: %s", e)
 
+        # Seed populates messages first, then config — enrich once at
+        # the end so the derived fields reflect the final config. The
+        # buffer is empty if both fetches failed, so this is a cheap
+        # no-op in that case.
+        self._messages._enrich_messages(list(self._messages._msgs))
         self._emit_change()
 
     def get_messages(self, limit: int = 100, suppress: bool = True):

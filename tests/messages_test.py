@@ -99,6 +99,9 @@ def test_in_memory_messages_enriches_display_time():
         received_at="2026-05-22T14:30:00Z",
     )
     store.add(msg)
+    # In production the manager drives enrichment at event time; in
+    # this direct test we call it ourselves to populate display_time.
+    store._enrich_messages(list(store._msgs))
     out = store.get_messages(limit=1)
     assert len(out) == 1
     # 14:30 UTC → 10:30 EDT
@@ -152,6 +155,8 @@ def test_in_memory_messages_filters_applied():
     store = InMemoryMessages(cfg, maxlen=10)
     store.add(Message(id="ok", sender="+1", body="good message", received_at="2026-01-01T00:00:00Z"))
     store.add(Message(id="bad", sender="+1", body="this is bad news", received_at="2026-01-02T00:00:00Z"))
+    # Enrich at event time (the manager does this in production).
+    store._enrich_messages(list(store._msgs))
     out = store.get_messages(limit=10, suppress=True)
     assert len(out) == 1
     assert out[0].message.id == "ok"
