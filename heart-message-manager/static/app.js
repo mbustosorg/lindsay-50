@@ -107,45 +107,40 @@
     }
   }
 
-  async function waitForPyDone(timeoutMs) {
-    // PyScript 2024.9.x fires `py:done` on each <py-script>
-    // element after its main module finishes evaluating —
-    // i.e. after all top-level statements in `app_main.py`
-    // have run and the proxies (window._seed,
-    // window._hydrate_from_cache, etc.) are installed.
-    // Polling for a function on `window` works in the warm
-    // case, but on a cold load `app.js` runs well before
-    // `app_main.py` finishes evaluating (PyScript is still
-    // in the "Loading micropip, packaging, tzdata" phase).
-    // A 5s polling window wasn't long enough on cold loads
-    // — `app.js` would give up, log "neither ... appeared",
-    // and the page would silently render with no buffer
-    // state. `py:done` is the canonical signal that the
-    // main module is ready.
-    if (typeof timeoutMs !== "number") timeoutMs = 30000;
-    return new Promise((resolve) => {
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        document.removeEventListener("py:done", finish);
-        resolve();
-      };
-      document.addEventListener("py:done", finish, { once: true });
-      setTimeout(finish, timeoutMs);
-    });
+  async function waitForAppMain(timeoutMs) {
+    // Poll for the in-browser MessageManager proxies. PyScript
+    // 2024.9.1 dispatches `py:done` after `<py-script>`'s main
+    // module finishes evaluating, but the event-timing is
+    // fragile in this version — on a cold load (micropip +
+    // tzdata + numpy + Pillow + a top-level `await`), `app.js`
+    // was running and giving up well before the proxies were
+    // installed, and the `py:done` listener wasn't catching
+    // them reliably. Polling the function off `window` is
+    // boring and robust: as soon as `app_main.py` finishes
+    // line `js.window._hydrate_from_cache = create_proxy(...)`,
+    // this resolves. 60s cap bounds a hung PyScript so the
+    // page doesn't sit forever on an empty testing table.
+    if (typeof timeoutMs !== "number") timeoutMs = 60000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (
+        typeof window._hydrate_from_cache === "function" &&
+        typeof window._seed === "function"
+      ) {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
   }
 
   async function init() {
     // Two-step boot. PyScript loads asynchronously, so we
-    // wait for `py:done` (the canonical "main module
-    // finished evaluating" signal) before reading any
-    // proxies off `window`. Without this, on a cold load
-    // `app.js` races PyScript's bootstrap and gives up
-    // before the proxies are installed. The 30s cap is
-    // generous — a normal cold load is a few seconds — but
-    // bounds a hung PyScript so the page doesn't sit
-    // forever on an empty testing/preview table.
+    // wait for the in-browser MessageManager proxies
+    // (`window._seed`, `window._hydrate_from_cache`) to be
+    // installed before doing anything. The polling caps at
+    // 60s — a normal cold load is a few seconds — but bounds
+    // a hung PyScript so the page doesn't sit forever on
+    // an empty testing/preview table.
     //
     // 1. Try the sessionStorage cache. If the previous page
     //    load (within this tab) wrote a cache, this populates
@@ -158,23 +153,26 @@
     //    `window._seed()` to do the network backfill. That
     //    populates the buffer, fires `on_change` at the end
     //    (which writes the new cache), done.
-    await waitForPyDone(30000);
-    let hydrated = false;
-    if (typeof window._hydrate_from_cache === "function") {
-      try {
-        hydrated = await window._hydrate_from_cache();
-      } catch (e) {
-        console.warn("hydrate_from_cache failed:", e);
-      }
+    await waitForAppMain(60000);
+    if (
+      typeof window._hydrate_from_cache !== "function" &&
+      typeof window._seed !== "function"
+    ) {
+      console.warn("neither _hydrate_from_cache nor _seed ever appeared after 60s; skipping in-browser bootstrap");
+      return;
     }
-    if (!hydrated && typeof window._seed === "function") {
+    let hydrated = false;
+    try {
+      hydrated = await window._hydrate_from_cache();
+    } catch (e) {
+      console.warn("hydrate_from_cache failed:", e);
+    }
+    if (!hydrated) {
       try {
         await window._seed();
       } catch (e) {
         console.warn("seed failed:", e);
       }
-    } else if (!hydrated) {
-      console.warn("neither _hydrate_from_cache nor _seed ever appeared; skipping in-browser bootstrap");
     }
   }
 

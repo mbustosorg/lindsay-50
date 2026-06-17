@@ -66,7 +66,7 @@
     import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=10";
     window.createMqttWsClient = createMqttWsClient;
   </script>
-  <script src="{{ url_for('static', filename='app.js') }}?v=14"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=15"></script>
   <script>
     // PyScript 2024.9.x fires `py:error` on each <py-script>
     // element when its main module raises during evaluation
@@ -116,7 +116,7 @@
   <link rel="stylesheet" href="https://pyscript.net/releases/2024.9.1/core.css">
   <script type="module" src="https://pyscript.net/releases/2024.9.1/core.js"></script>
   <py-config src="{{ url_for('static', filename='preview/py-config.toml') }}?v=11"></py-config>
-  <py-script src="{{ url_for('static', filename='preview/heart-message-manager/app_main.py') }}?v=19"></py-script>
+  <py-script src="{{ url_for('static', filename='preview/heart-message-manager/app_main.py') }}?v=20"></py-script>
   {% endif %}
 </head>
 <body class="font-body">
