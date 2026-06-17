@@ -102,9 +102,7 @@ def test_subclass_render_called_once_per_tick():
 
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
-        config=SimpleNamespace(
-            effect_settings=EffectsSettings(), text_settings=TextSettings()
-        ),
+        config=SimpleNamespace(effect_settings=EffectsSettings(), text_settings=TextSettings()),
     )
 
     coord = EffectsCoordinator(

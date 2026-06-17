@@ -151,10 +151,7 @@ def test_get_display_message_returns_none_on_empty_buffer():
 def test_get_display_message_respects_recent_count():
     """recent_count caps the buffer slice used for sampling."""
     # 10 entries; recent_count=3 reads only the 3 newest.
-    msgs = [
-        _make_view(f"id{i:02d}", f"body-{i:02d}", f"2026-01-{10 + i:02d}T00:00:00Z")
-        for i in range(10)
-    ]
+    msgs = [_make_view(f"id{i:02d}", f"body-{i:02d}", f"2026-01-{10 + i:02d}T00:00:00Z") for i in range(10)]
     mgr = _StubMessageManager(messages=msgs)
     coord, _ = _build(message_manager=mgr, recent_count=3)
 
@@ -174,10 +171,7 @@ def test_get_display_message_respects_recent_count():
 
 def test_recent_count_2_reads_only_top_2():
     """recent_count=2 reads exactly 2 entries."""
-    msgs = [
-        _make_view(f"id{i:02d}", f"body-{i:02d}", f"2026-01-{10 + i:02d}T00:00:00Z")
-        for i in range(10)
-    ]
+    msgs = [_make_view(f"id{i:02d}", f"body-{i:02d}", f"2026-01-{10 + i:02d}T00:00:00Z") for i in range(10)]
     mgr = _StubMessageManager(messages=msgs)
     coord, _ = _build(message_manager=mgr, recent_count=2)
 

@@ -243,9 +243,7 @@ def test_idx_advances_on_fade_out_complete():
         suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1])
-    coord, display, scroller, fx_a, fx_b, heart = _build(
-        intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr
-    )
+    coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr)
     coord.start()
     _drive(clock, coord, 0.3)  # intro → out → in → hold (m1 shown)
     assert coord.idx == 0
@@ -281,9 +279,7 @@ def test_pending_text_consumed_on_out_to_in():
         suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1])
-    coord, display, scroller, fx_a, fx_b, heart = _build(
-        intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr
-    )
+    coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr)
     coord.start()
     _drive(clock, coord, 0.05)  # intro → out
     clock.advance(0.3)  # advance past PULL_INTERVAL so the next tick pulls

@@ -246,6 +246,8 @@ class EffectsCoordinator:
         scroller,
         effects,
         heart=None,
+        effect_settings: EffectsSettings | None = None,
+        text_settings=None,
     ) -> None:
         """Attach (or swap) the render layer.
 
@@ -253,6 +255,19 @@ class EffectsCoordinator:
         `heart` defaults to the head of the new effects list when
         not supplied (preview uses the first effect as the
         boot-splash; the Pi passes an explicit Heartbeat instance).
+
+        The app-scoped coordinator is constructed unbound (no
+        render layer) by `app_main.py`; the manager's `on_change`
+        callback fires `apply_settings` on it before the preview
+        has had a chance to `bind`. `apply_settings` is therefore
+        defensive about a missing `display` — pacing fields are
+        still written (cheap, harmless pre-bind) but the
+        effects rebuild and the scroller mutation are skipped.
+        To avoid a stale pre-bind rotation hanging around after
+        the preview finally binds, the caller can pass the
+        current `effect_settings` and `text_settings` here; we
+        forward them through `apply_settings` to refresh the
+        render layer with the manager's current config.
 
         Safe to call mid-life: the next `tick()` uses the new
         layer. The Pi's `main.py` calls it once at startup; the
@@ -268,6 +283,8 @@ class EffectsCoordinator:
             if self.heart is not None:
                 self.heart.set_brightness(1.0)
             self.phase_start = time.monotonic()
+        if effect_settings is not None:
+            self.apply_settings(effect_settings, text_settings)
 
     def start(self) -> None:
         """Begin the boot splash.
@@ -304,9 +321,7 @@ class EffectsCoordinator:
         Returns:
             The body string to show next, or None when the buffer is empty.
         """
-        entries = self.message_manager.messages.get_messages(
-            limit=self.recent_count, suppress=True
-        )
+        entries = self.message_manager.messages.get_messages(limit=self.recent_count, suppress=True)
         if not entries:
             return None
         head = entries[0]
@@ -345,8 +360,16 @@ class EffectsCoordinator:
             self.recent_count = effect_settings.recent_count
 
             # Effects rebuild is guarded by a hash of the declared rotation.
+            # When the coordinator is unbound (`self.display is None`) we
+            # still write the pacing fields above but defer the rebuild —
+            # `build_effects` requires a `display` to instantiate effects
+            # and the app-scoped coordinator's `on_change` callback fires
+            # `apply_settings` before `bind()` has a chance to run on the
+            # preview page. The hashes are NOT updated in the unbound
+            # case, so the first `apply_settings` after `bind()` re-runs
+            # the heavier work with the now-present display.
             effects_hash = self._hash_effects(effect_settings.effects)
-            if effects_hash != self._last_effects_hash:
+            if effects_hash != self._last_effects_hash and self.display is not None:
                 new_effects = build_effects(effect_settings, display=self.display)
                 self.effects = new_effects
                 self.idx = -1  # next fade picks the head of the new list

@@ -106,9 +106,7 @@ def test_handle_message_skips_enrich_on_duplicate():
     mgr._handle_message(payload)
     # Second call with the same id: add() returns None, manager
     # skips the enrich call. Buffer is unchanged.
-    with patch.object(
-        mgr.messages, "_enrich_messages", wraps=mgr.messages._enrich_messages
-    ) as enrich_spy:
+    with patch.object(mgr.messages, "_enrich_messages", wraps=mgr.messages._enrich_messages) as enrich_spy:
         mgr._handle_message(payload)
     enrich_spy.assert_not_called()
     assert len(mgr.messages._msgs) == 1
@@ -189,10 +187,18 @@ def test_handle_config_enriches_whole_buffer_on_call():
                 "received_at": f"2026-01-0{i + 1}T00:00:00Z",
             }
         )
-    with patch.object(
-        mgr.messages, "_enrich_messages", wraps=mgr.messages._enrich_messages
-    ) as enrich_spy:
-        mgr._handle_config({"filters": [], "senders": [], "effect_settings": {"effects": []}, "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"}, "sign": {"name": "x"}, "timezone": "US/Pacific", "version": 2})
+    with patch.object(mgr.messages, "_enrich_messages", wraps=mgr.messages._enrich_messages) as enrich_spy:
+        mgr._handle_config(
+            {
+                "filters": [],
+                "senders": [],
+                "effect_settings": {"effects": []},
+                "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
+                "sign": {"name": "x"},
+                "timezone": "US/Pacific",
+                "version": 2,
+            }
+        )
     # Exactly one call, with the full buffer as the argument.
     assert enrich_spy.call_count == 1
     args, _ = enrich_spy.call_args
@@ -215,16 +221,20 @@ def test_get_messages_does_not_invoke_filter_logic():
     store.add(Message(id="b", sender="+1", body="bad news", received_at="2026-01-02T00:00:00Z"))
     store._enrich_messages(list(store._msgs))
 
-    with patch.object(store, "_apply_filter", wraps=store._apply_filter) as apply_spy, \
-         patch.object(store, "_matches", wraps=store._matches) as matches_spy:
+    with (
+        patch.object(store, "_apply_filter", wraps=store._apply_filter) as apply_spy,
+        patch.object(store, "_matches", wraps=store._matches) as matches_spy,
+    ):
         out = store.get_messages(limit=10, suppress=True)
     assert len(out) == 1
     assert out[0].message.id == "a"
     apply_spy.assert_not_called()
     matches_spy.assert_not_called()
 
-    with patch.object(store, "_apply_filter", wraps=store._apply_filter) as apply_spy, \
-         patch.object(store, "_matches", wraps=store._matches) as matches_spy:
+    with (
+        patch.object(store, "_apply_filter", wraps=store._apply_filter) as apply_spy,
+        patch.object(store, "_matches", wraps=store._matches) as matches_spy,
+    ):
         out_all = store.get_messages(limit=10, suppress=False)
     assert len(out_all) == 2
     apply_spy.assert_not_called()
@@ -243,9 +253,7 @@ def test_get_messages_does_not_invoke_format_display_time():
     store.add(Message(id="a", sender="+1", body="hello", received_at="2026-01-01T00:00:00Z"))
     store._enrich_messages(list(store._msgs))
 
-    with patch.object(
-        messages_mod, "_format_display_time", wraps=messages_mod._format_display_time
-    ) as fmt_spy:
+    with patch.object(messages_mod, "_format_display_time", wraps=messages_mod._format_display_time) as fmt_spy:
         out = store.get_messages(limit=10, suppress=True)
     assert len(out) == 1
     # display_time was populated on the add+enrich, so it is present

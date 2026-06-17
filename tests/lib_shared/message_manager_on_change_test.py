@@ -30,7 +30,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from lib_shared.message_manager import MessageManager
 from lib_shared.models import SignConfig
 
-
 # --- helpers -----------------------------------------------------------------
 
 
@@ -104,26 +103,16 @@ def test_app_main_on_change_applies_config_and_fans_out_to_js():
     both branches of the on_change body are present. This is a
     static check.
     """
-    p = (
-        Path(__file__).parent.parent.parent
-        / "heart-message-manager"
-        / "app_main.py"
-    )
+    p = Path(__file__).parent.parent.parent / "heart-message-manager" / "app_main.py"
     src = p.read_text(encoding="utf-8")
     assert "def _on_change_js" in src, "app_main.py must define _on_change_js"
     # Find the closure body — between `def _on_change_js():` (or with
     # the `-> None` annotation) and the next `def `.
-    m = re.search(
-        r"def _on_change_js\([^)]*\)[^:]*:\s*\n(.*?)(?=\ndef |\Z)", src, re.DOTALL
-    )
+    m = re.search(r"def _on_change_js\([^)]*\)[^:]*:\s*\n(.*?)(?=\ndef |\Z)", src, re.DOTALL)
     assert m is not None, "could not extract _on_change_js body"
     body = m.group(1)
-    assert "_coordinator.apply_settings" in body, (
-        "browser _on_change_js must call _coordinator.apply_settings"
-    )
-    assert "app._dispatchChange" in body, (
-        "browser _on_change_js must call app._dispatchChange to fan out to JS"
-    )
+    assert "_coordinator.apply_settings" in body, "browser _on_change_js must call _coordinator.apply_settings"
+    assert "app._dispatchChange" in body, "browser _on_change_js must call app._dispatchChange to fan out to JS"
 
 
 def test_create_proxy_is_invoked_with_on_change_js():
@@ -161,9 +150,7 @@ def test_message_manager_rejects_coordinator_kwarg():
     coord = EffectsCoordinator(
         message_manager=SimpleNamespace(
             messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
-            config=SimpleNamespace(
-                effect_settings=EffectsSettings(), text_settings=TextSettings()
-            ),
+            config=SimpleNamespace(effect_settings=EffectsSettings(), text_settings=TextSettings()),
         ),
     )
     with pytest.raises(TypeError, match="coordinator"):

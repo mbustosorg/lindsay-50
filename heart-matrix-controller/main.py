@@ -106,11 +106,13 @@ coordinator = EffectsCoordinator(
 # separate "show this body after the heart" hook is needed.
 coordinator.start()
 
+
 # SIGTERM (systemd stop / `kill`) doesn't raise an exception by default, so the
 # `finally` below would never run. Turn it into SystemExit so cleanup happens on
 # every stop path; SIGINT (Ctrl-C) already raises KeyboardInterrupt.
 def _on_sigterm(signum, frame):
     raise SystemExit(0)
+
 
 signal.signal(signal.SIGTERM, _on_sigterm)
 

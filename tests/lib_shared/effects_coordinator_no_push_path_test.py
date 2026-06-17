@@ -32,7 +32,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from lib_shared.effects_coordinator import EffectsCoordinator
 from lib_shared.models import EffectsSettings, TextSettings
 
-
 # --- shared stubs ------------------------------------------------------------
 
 
@@ -105,9 +104,7 @@ class _StubMessageManager:
         from types import SimpleNamespace
 
         self.messages = SimpleNamespace(get_messages=lambda limit=100, suppress=True: [])
-        self.config = SimpleNamespace(
-            effect_settings=EffectsSettings(), text_settings=TextSettings()
-        )
+        self.config = SimpleNamespace(effect_settings=EffectsSettings(), text_settings=TextSettings())
 
 
 def _build():
@@ -173,13 +170,13 @@ def test_preview_main_drops_request_message_and_apply_config():
     p = Path(__file__).parent.parent.parent / "heart-message-manager" / "preview_main.py"
     src = p.read_text(encoding="utf-8")
     # No top-level def of `def request_message(`
-    assert not re.search(r"^def\s+request_message\s*\(", src, re.MULTILINE), (
-        "preview_main.py must not define `request_message`"
-    )
+    assert not re.search(
+        r"^def\s+request_message\s*\(", src, re.MULTILINE
+    ), "preview_main.py must not define `request_message`"
     # No top-level def of `def apply_config(`
-    assert not re.search(r"^def\s+apply_config\s*\(", src, re.MULTILINE), (
-        "preview_main.py must not define `apply_config`"
-    )
+    assert not re.search(
+        r"^def\s+apply_config\s*\(", src, re.MULTILINE
+    ), "preview_main.py must not define `apply_config`"
     # The bootstrap / install-js surface must NOT install them on window.
     # (The new `_install_js_api` only assigns `tick`, `get_frame_rgba`,
     # `get_current_text`, `get_current_effect_name`.)
@@ -190,12 +187,10 @@ def test_preview_main_drops_request_message_and_apply_config():
     )
     assert install_block is not None, "could not locate _install_js_api() block"
     install_body = install_block.group(0)
-    assert "js.window.request_message" not in install_body, (
-        "_install_js_api() must not assign request_message to window"
-    )
-    assert "js.window.apply_config" not in install_body, (
-        "_install_js_api() must not assign apply_config to window"
-    )
+    assert (
+        "js.window.request_message" not in install_body
+    ), "_install_js_api() must not assign request_message to window"
+    assert "js.window.apply_config" not in install_body, "_install_js_api() must not assign apply_config to window"
 
 
 # --- Scenario 5: preview.js drops reRender / registerOnChange / etc. ---------
@@ -211,13 +206,7 @@ def test_preview_js_drops_reRender_and_registerOnChange():
     the new contract (so readers know what was removed) — we strip
     comments first before checking.
     """
-    p = (
-        Path(__file__).parent.parent.parent
-        / "heart-message-manager"
-        / "static"
-        / "preview"
-        / "preview.js"
-    )
+    p = Path(__file__).parent.parent.parent / "heart-message-manager" / "static" / "preview" / "preview.js"
     src = p.read_text(encoding="utf-8")
     # Strip line comments and block comments so the names appear ONLY
     # in explanatory prose, not as code.
@@ -225,20 +214,12 @@ def test_preview_js_drops_reRender_and_registerOnChange():
     no_line = re.sub(r"//[^\n]*", "", no_block)
     # No function definition of `reRender` (e.g. `function reRender(`
     # or `async function reRender(`).
-    assert not re.search(
-        r"(?:async\s+)?function\s+reRender\s*\(", no_line
-    ), "preview.js must not define reRender"
+    assert not re.search(r"(?:async\s+)?function\s+reRender\s*\(", no_line), "preview.js must not define reRender"
     # No call to registerOnChange.
-    assert "registerOnChange" not in no_line, (
-        "preview.js must not call window.App.registerOnChange"
-    )
+    assert "registerOnChange" not in no_line, "preview.js must not call window.App.registerOnChange"
     # No call to request_message or apply_config.
-    assert "request_message" not in no_line, (
-        "preview.js must not call window.request_message"
-    )
-    assert "apply_config" not in no_line, (
-        "preview.js must not call window.apply_config"
-    )
+    assert "request_message" not in no_line, "preview.js must not call window.request_message"
+    assert "apply_config" not in no_line, "preview.js must not call window.apply_config"
 
 
 # --- Scenario 4.6: heart-matrix-controller/main.py cleans up dispatch wrapping
@@ -255,15 +236,15 @@ def test_pi_main_cleans_up_dispatch_wrapping():
     """
     p = Path(__file__).parent.parent.parent / "heart-matrix-controller" / "main.py"
     src = p.read_text(encoding="utf-8")
-    assert not re.search(r"^def\s+_on_config_update\s*\(", src, re.MULTILINE), (
-        "heart-matrix-controller/main.py must not define _on_config_update"
-    )
-    assert not re.search(r"^def\s+_dispatch_with_config\s*\(", src, re.MULTILINE), (
-        "heart-matrix-controller/main.py must not define _dispatch_with_config"
-    )
-    assert "_message_mgr.dispatch = _dispatch_with_config" not in src, (
-        "heart-matrix-controller/main.py must not patch _message_mgr.dispatch"
-    )
-    assert "coordinator.start(_startup_text)" not in src, (
-        "heart-matrix-controller/main.py must not call coordinator.start(_startup_text)"
-    )
+    assert not re.search(
+        r"^def\s+_on_config_update\s*\(", src, re.MULTILINE
+    ), "heart-matrix-controller/main.py must not define _on_config_update"
+    assert not re.search(
+        r"^def\s+_dispatch_with_config\s*\(", src, re.MULTILINE
+    ), "heart-matrix-controller/main.py must not define _dispatch_with_config"
+    assert (
+        "_message_mgr.dispatch = _dispatch_with_config" not in src
+    ), "heart-matrix-controller/main.py must not patch _message_mgr.dispatch"
+    assert (
+        "coordinator.start(_startup_text)" not in src
+    ), "heart-matrix-controller/main.py must not call coordinator.start(_startup_text)"

@@ -33,7 +33,6 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from lib_shared.effects_coordinator import EffectsCoordinator
 from lib_shared.models import EffectsSettings, TextSettings
 
-
 # --- shared stubs ------------------------------------------------------------
 
 
@@ -306,6 +305,101 @@ def test_apply_settings_is_idempotent_on_message_only_emit():
     assert scroller.set_speed_calls == scroller_speed_calls_before
 
 
+# --- Scenario 4b: apply_settings is defensive when the coordinator is unbound -----
+
+
+def test_apply_settings_unbound_does_not_crash():
+    """The app-scoped coordinator is constructed in `app_main.py`
+    WITHOUT a render layer; the manager's `on_change` callback
+    fires `apply_settings` before the preview has had a chance to
+    `bind`. `apply_settings` must not crash with the
+    `ValueError('build_effects requires `display` to instantiate
+    effects')` the previous behavior raised — the pacing fields
+    are still written (cheap, harmless pre-bind) but the effects
+    rebuild and the scroller mutation are skipped.
+
+    The hash state must also stay untouched in the unbound case,
+    so the first apply after `bind()` re-runs the heavier work
+    with the now-present display.
+    """
+    mgr = SimpleNamespace(
+        config=SimpleNamespace(
+            effect_settings=EffectsSettings(
+                effects=[{"name": "Fireworks", "enabled": True}],
+            ),
+            text_settings=TextSettings(),
+        )
+    )
+    coord = EffectsCoordinator(
+        message_manager=mgr,
+        display=None,  # unbound — mimics the app-scoped coordinator at PyScript load time
+        scroller=None,
+        effects=[],
+        heart=None,
+    )
+    assert not coord.is_bound()
+
+    # Pre-apply the first config so pacing has the seeded values.
+    seed_settings = EffectsSettings(
+        effects=[{"name": "Fireworks", "enabled": True}],
+        fade_seconds=1.5,
+    )
+    coord.apply_settings(seed_settings)
+    # Pacing was written.
+    assert coord.fade_seconds == 1.5
+    # No crash, no rotation list mutation (display is None).
+    assert coord.effects == []
+    # The hash was NOT updated, so a later apply (after bind) re-runs.
+    assert coord._last_effects_hash is None
+
+
+def test_bind_refreshes_state_from_passed_config():
+    """When `bind()` is called with the manager's current config, the
+    rotation + scroller get the seeded values — not the boot-time
+    defaults the preview constructed with. This is the path the
+    browser preview's `preview_main.py` uses to close the
+    app-scoped-coordinator race."""
+    scroller = _StubScroller()
+    mgr = SimpleNamespace(
+        config=SimpleNamespace(
+            effect_settings=EffectsSettings(
+                effects=[
+                    {"name": "Fireworks", "enabled": True},
+                    {"name": "Flame", "enabled": True},
+                ],
+                fade_seconds=1.5,
+            ),
+            text_settings=TextSettings(color=0x00FF00, speed=4),
+        )
+    )
+    coord = EffectsCoordinator(
+        message_manager=mgr,
+        display=None,  # unbound at first — same as app_main.py
+        scroller=None,
+        effects=[],
+        heart=None,
+    )
+    # Simulate the manager's on_change firing pre-bind.
+    coord.apply_settings(mgr.config.effect_settings, mgr.config.text_settings)
+    assert coord.effects == []  # defer until bind
+    assert not coord.is_bound()
+
+    # Preview bootstrap now binds the page-local render layer.
+    coord.bind(
+        display=_StubDisplay(),
+        scroller=scroller,
+        effects=[],
+        heart=_make_effect("Heart")(),
+        effect_settings=mgr.config.effect_settings,
+        text_settings=mgr.config.text_settings,
+    )
+    # After bind + refresh, the rotation is populated and the
+    # scroller was driven with the manager's text settings.
+    assert len(coord.effects) == 2
+    assert scroller.set_color_calls == [0x00FF00]
+    assert scroller.set_speed_calls == [4]
+
+
 # --- Scenario 5: on_change closure in main.py / preview_main.py ---------------
 
 
@@ -316,13 +410,13 @@ def test_pi_main_uses_on_change_closure_with_apply_settings():
     p = Path(__file__).parent.parent.parent / "heart-matrix-controller" / "main.py"
     src = p.read_text(encoding="utf-8")
     # The closure must be passed as `on_change=_on_change` to MessageManager.
-    assert re.search(r"on_change\s*=\s*_on_change", src), (
-        "heart-matrix-controller/main.py must wire MessageManager(on_change=_on_change)"
-    )
+    assert re.search(
+        r"on_change\s*=\s*_on_change", src
+    ), "heart-matrix-controller/main.py must wire MessageManager(on_change=_on_change)"
     # The closure body must call apply_settings with the two manager.config fields.
-    assert "coordinator.apply_settings(manager.config.effect_settings, manager.config.text_settings)" in src, (
-        "Pi _on_change must call coordinator.apply_settings(manager.config.effect_settings, manager.config.text_settings)"
-    )
+    assert (
+        "coordinator.apply_settings(manager.config.effect_settings, manager.config.text_settings)" in src
+    ), "Pi _on_change must call coordinator.apply_settings(manager.config.effect_settings, manager.config.text_settings)"
 
 
 def test_app_main_uses_on_change_closure_with_apply_settings():
@@ -338,19 +432,19 @@ def test_app_main_uses_on_change_closure_with_apply_settings():
     src = p.read_text(encoding="utf-8")
     # The manager's on_change callback must call apply_settings with
     # the two manager.config fields.
-    assert "_coordinator.apply_settings(" in src, (
-        "app_main.py must call _coordinator.apply_settings(...) in the on_change path"
-    )
-    assert "_message_manager.config.effect_settings" in src, (
-        "app_main.py on_change must pass _message_manager.config.effect_settings"
-    )
-    assert "_message_manager.config.text_settings" in src, (
-        "app_main.py on_change must pass _message_manager.config.text_settings"
-    )
+    assert (
+        "_coordinator.apply_settings(" in src
+    ), "app_main.py must call _coordinator.apply_settings(...) in the on_change path"
+    assert (
+        "_message_manager.config.effect_settings" in src
+    ), "app_main.py on_change must pass _message_manager.config.effect_settings"
+    assert (
+        "_message_manager.config.text_settings" in src
+    ), "app_main.py on_change must pass _message_manager.config.text_settings"
     # The coordinator must be constructed with the app-scoped manager.
-    assert "EffectsCoordinator(message_manager=_message_manager)" in src, (
-        "app_main.py must construct the app-scoped coordinator with message_manager=_message_manager"
-    )
+    assert (
+        "EffectsCoordinator(message_manager=_message_manager)" in src
+    ), "app_main.py must construct the app-scoped coordinator with message_manager=_message_manager"
 
 
 def test_preview_main_does_not_construct_per_page_manager():
@@ -360,14 +454,10 @@ def test_preview_main_does_not_construct_per_page_manager():
     p = Path(__file__).parent.parent.parent / "heart-message-manager" / "preview_main.py"
     src = p.read_text(encoding="utf-8")
     # preview_main.py must not import MessageManager.
-    assert "from lib_shared.message_manager import" not in src, (
-        "preview_main.py must not import MessageManager (the app-scoped one is the source of truth)"
-    )
+    assert (
+        "from lib_shared.message_manager import" not in src
+    ), "preview_main.py must not import MessageManager (the app-scoped one is the source of truth)"
     # preview_main.py must not call the MessageManager constructor.
-    assert "MessageManager(" not in src, (
-        "preview_main.py must not construct a per-page MessageManager"
-    )
+    assert "MessageManager(" not in src, "preview_main.py must not construct a per-page MessageManager"
     # preview_main.py must not reassign window._message_manager.
-    assert "js.window._message_manager" not in src, (
-        "preview_main.py must not reassign js.window._message_manager"
-    )
+    assert "js.window._message_manager" not in src, "preview_main.py must not reassign js.window._message_manager"

@@ -195,13 +195,21 @@ async def _bootstrap() -> None:
     # MessageManager in `app_main.py` (constructor arg), and that
     # manager's `on_change` callback calls `apply_settings(...)`
     # on the coordinator. The preview's only job is to attach
-    # the page-local render layer.
+    # the page-local render layer. We pass the manager's current
+    # config into `bind()` so the first `apply_settings` after
+    # the bind (which `bind` triggers itself) refreshes the
+    # rotation + scroller with the seeded values — `apply_settings`
+    # is defensive about the unbound state, so the manager's
+    # earlier on_change fires (during the seed, before this
+    # point) did NOT touch the rotation (no display existed).
     coord = _coordinator()
     coord.bind(
         display=_display,
         scroller=_scroller,
         effects=_effects,
         heart=_heart,
+        effect_settings=coord.message_manager.config.effect_settings,
+        text_settings=coord.message_manager.config.text_settings,
     )
     _coord_ref["coord"] = coord
 
