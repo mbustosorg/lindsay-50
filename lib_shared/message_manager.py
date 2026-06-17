@@ -212,7 +212,18 @@ class MessageManager:
             }
             ss = _ensure_js_session_storage()
             j = _ensure_js_json()
-            ss.setItem(key, j.stringify(payload))
+            serialized = j.stringify(payload)
+            ss.setItem(key, serialized)
+            # diagnostic: confirm the round-trip in the browser
+            try:
+                print(
+                    f"[MessageManager] _write_cache key={key!r} "
+                    f"serialized_type={type(serialized).__name__} "
+                    f"serialized_len={len(serialized) if isinstance(serialized, str) else 'n/a'} "
+                    f"preview={str(serialized)[:200]!r}"
+                )
+            except Exception:
+                pass
         except Exception as e:
             logger.warning("MessageManager cache write failed: %s", e)
 
@@ -250,6 +261,16 @@ class MessageManager:
         except Exception as e:
             logger.warning("MessageManager cache read failed: %s", e)
             return False
+        # diagnostic: show what sessionStorage actually held for this key
+        try:
+            print(
+                f"[MessageManager] hydrate_from_cache key={key!r} "
+                f"raw type={type(raw).__name__} "
+                f"raw_is_truthy={bool(raw)} "
+                f"raw_preview={(str(raw) if raw is not None else '')[:200]!r}"
+            )
+        except Exception:
+            pass
         if not raw:
             return False
         try:
@@ -259,17 +280,40 @@ class MessageManager:
                 payload = payload.to_py()
         except Exception as e:
             logger.warning("MessageManager cache parse failed: %s", e)
+            try:
+                print(f"[MessageManager] hydrate_from_cache PARSE FAIL: {e!r} raw={raw[:200]!r}")
+            except Exception:
+                pass
             return False
+        try:
+            print(
+                f"[MessageManager] hydrate_from_cache parsed type={type(payload).__name__} "
+                f"keys={list(payload.keys()) if isinstance(payload, dict) else 'n/a'}"
+            )
+        except Exception:
+            pass
         if not isinstance(payload, dict):
             return False
         if payload.get("v") != self._CACHE_VERSION:
+            try:
+                print(f"[MessageManager] hydrate_from_cache VERSION MISMATCH: got {payload.get('v')!r} want {self._CACHE_VERSION}")
+            except Exception:
+                pass
             return False
         expected_sign = self._config.sign.name if self._config.sign else "unknown"
         if payload.get("sign_name") != expected_sign:
+            try:
+                print(f"[MessageManager] hydrate_from_cache SIGN MISMATCH: got {payload.get('sign_name')!r} want {expected_sign!r}")
+            except Exception:
+                pass
             return False
         msgs_raw = payload.get("messages") or []
         cfg_raw = payload.get("config")
         if not isinstance(msgs_raw, list) or not isinstance(cfg_raw, dict):
+            try:
+                print(f"[MessageManager] hydrate_from_cache SHAPE BAD: msgs={type(msgs_raw).__name__} cfg={type(cfg_raw).__name__}")
+            except Exception:
+                pass
             return False
         try:
             self._messages.clear()
