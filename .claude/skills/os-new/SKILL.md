@@ -30,7 +30,7 @@ Create a new GitHub issue for an OpenSpec change.
    With JSON body:
    ```json
    {
-     "title": "[spec] <user-title>",
+     "title": "<user-title>",
      "body": "",
      "labels": ["spec-driven"]
    }

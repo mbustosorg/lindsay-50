@@ -133,6 +133,31 @@
     }
   }
 
+  function clearMessageCache() {
+    // Wipe the in-browser MessageManager's sessionStorage cache.
+    // Called from base.html's logout link and from login.html on
+    // page load (defense-in-depth — a prior user's cache in this
+    // tab must never hydrate the next session). Centralized here
+    // so the "what counts as our cache" rule (any key with the
+    // `lindsay50:` prefix) lives in one place. Best-effort:
+    // sessionStorage can throw in private mode or quota-exceeded
+    // states, in which case the next page load's hydrate is
+    // already a no-op anyway.
+    let wiped = 0;
+    try {
+      for (let i = sessionStorage.length - 1; i >= 0; i--) {
+        const k = sessionStorage.key(i);
+        if (k && k.indexOf("lindsay50:") === 0) {
+          sessionStorage.removeItem(k);
+          wiped += 1;
+        }
+      }
+      console.info("[app] cleared message cache (keys wiped:", wiped, ")");
+    } catch (e) {
+      console.warn("[app] clearMessageCache failed:", e);
+    }
+  }
+
   async function init() {
     // Two-step boot. PyScript loads asynchronously, so we
     // wait for the in-browser MessageManager proxies
@@ -165,13 +190,17 @@
     try {
       hydrated = await window._hydrate_from_cache();
     } catch (e) {
-      console.warn("hydrate_from_cache failed:", e);
+      console.warn("[app] hydrate_from_cache failed:", e);
     }
-    if (!hydrated) {
+    if (hydrated) {
+      console.info("[app] hydrated message manager from sessionStorage cache");
+    } else {
+      console.info("[app] no cache hit — re-seeding message manager from network");
       try {
         await window._seed();
+        console.info("[app] re-seed complete");
       } catch (e) {
-        console.warn("seed failed:", e);
+        console.warn("[app] seed failed:", e);
       }
     }
   }
@@ -185,6 +214,7 @@
     registerOnChange,
     getMessages,
     getConfig: getConfigNow,
+    clearMessageCache,
     // PyScript-side fan-out entry point. The MessageManager's
     // on_change callback calls this; per-page listeners
     // (e.g. testing.html's `reRender`) are reached via
