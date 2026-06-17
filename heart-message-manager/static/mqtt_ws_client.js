@@ -172,6 +172,11 @@ export function createMqttWsClient({
   onEnvelope,
   onStatus,
 }) {
+  console.log(
+    "[DEBUG mqtt_ws_client.js] createMqttWsClient called with url=" + JSON.stringify(url) +
+    " topic=" + JSON.stringify(topic) +
+    " (typeof url=" + typeof url + ", typeof topic=" + typeof(topic) + ")"
+  );
   const threshold = longDisconnectMs || 300000; // 5 minutes default
   let ws = null;
   let pingInterval = null;
@@ -376,6 +381,9 @@ export function createMqttWsClient({
     clearPauseTimer();
     let socket;
     try {
+      console.log(
+        "[DEBUG mqtt_ws_client.js] new WebSocket about to open with url=" + JSON.stringify(url)
+      );
       socket = new WebSocket(url, ["mqtt"]);
     } catch (e) {
       emitStatus("error", { error: String(e) });

@@ -54,19 +54,31 @@
       apiKey:           {{ auth.API_SECRET_KEY | tojson }},
       mqttLongDisconnectMs: {{ mqtt_ws.MQTT_LONG_DISCONNECT_MS | tojson }}
     };
+    console.log("[DEBUG base.html] APP_CONFIG =", JSON.stringify(window.APP_CONFIG, null, 2));
   </script>
-  <!-- Native JS shims for IndexedDB persistence + MQTT-over-WebSocket.
-       The `?v=8` query string is a cache-buster — bump it whenever the
-       shim changes so browsers don't pin to a stale copy (the WS
-       packet-encode/decode changes in particular are easy to miss
-       when the page is "Live" with a broken client). -->
+  <!-- Native JS shim for MQTT-over-WebSocket. The `?v=9` query string
+       is a cache-buster — bump it whenever the shim changes so
+       browsers don't pin to a stale copy (the WS packet-encode/decode
+       changes in particular are easy to miss when the page is "Live"
+       with a broken client). The IndexedDB shim was dropped in
+       #39 — persistence is server-side (S3 + SQLite). -->
   <script type="module">
-    import { createMessageBufferStore } from "{{ url_for('static', filename='message_buffer_store.js') }}?v=8";
-    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=8";
-    window.createMessageBufferStore = createMessageBufferStore;
+    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=10";
     window.createMqttWsClient = createMqttWsClient;
   </script>
-  <script src="{{ url_for('static', filename='app.js') }}?v=8"></script>
+  <script src="{{ url_for('static', filename='app.js') }}?v=16"></script>
+  <script>
+    // PyScript 2024.9.x fires `py:error` on each <py-script>
+    // element when its main module raises during evaluation
+    // (uncaught top-level exception, import failure, syntax
+    // error in the .py file, etc.). The event is otherwise
+    // easy to miss — log it loudly so a broken app_main.py
+    // doesn't show up as a silent "nothing happens on
+    // page load" symptom in the console.
+    document.addEventListener("py:error", function (e) {
+      console.error("[py:error]", e.detail && e.detail.error || e);
+    });
+  </script>
   <script>
     // Generic collapse/expand helper for the card-with-chevron drawer
     // pattern used on the Settings (Effects List) and Testing (Current
@@ -80,6 +92,31 @@
       if (chevron) chevron.classList.toggle('rotate-180');
     }
   </script>
+
+  <!--
+    PyScript runtime + app-scoped entry point. Loaded on every
+    authenticated page so `window._message_manager` /
+    `window._coordinator` / `window._mqtt_ws_client` are available
+    page-wide. The `app_main.py` script is purely app-scoped — it
+    builds the singletons and starts the WS connection; per-page
+    work (canvas, rAF loop) lives in `preview_main.py` which is
+    only loaded on /preview.
+
+    Pin to the 2024.9.x release line (same as preview.html). The
+    2024.10.x and 2024.9.1+ releases have an `o.slice is not a
+    function` regression that crashes the runtime before
+    `py:done` fires — see preview.html for the full note.
+
+    The py-config is declared here (not in preview.html) so it's
+    loaded once per page; the [files] list declares everything
+    that any py-script element on the page might need. The
+    [files] only fetches them — actual Python import only
+    happens when a py-script element referencing the file runs.
+  -->
+  <link rel="stylesheet" href="https://pyscript.net/releases/2024.9.1/core.css">
+  <script type="module" src="https://pyscript.net/releases/2024.9.1/core.js"></script>
+  <py-config src="{{ url_for('static', filename='preview/py-config.toml') }}?v=11"></py-config>
+  <py-script src="{{ url_for('static', filename='preview/heart-message-manager/app_main.py') }}?v=22"></py-script>
   {% endif %}
 </head>
 <body class="font-body">
@@ -114,7 +151,7 @@
         Preview
       </a>
       {% if current_user.is_authenticated %}
-      <a href="{{ url_for('auth.logout') }}" class="flex items-center gap-3 px-4 py-3 rounded-xl font-semibold transition-all cursor-pointer text-slate-600 hover:bg-red-50 hover:text-red-500">
+      <a href="{{ url_for('auth.logout') }}" onclick="App.clearMessageCache()" class="flex items-center gap-3 px-4 py-3 rounded-xl font-semibold transition-all cursor-pointer text-slate-600 hover:bg-red-50 hover:text-red-500">
         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"/></svg>
         Logout
       </a>
@@ -127,7 +164,6 @@
     <div class="flex items-center gap-3 mb-4 flex-wrap">
       <span class="text-xs text-slate-500 font-medium">MQTT:</span>
       <span id="mqtt-status" class="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">Connecting…</span>
-      <span id="persistence-status" class="hidden px-3 py-1 rounded-full bg-rose-100 text-rose-700 text-xs font-semibold">Persistence unavailable</span>
       <span id="mqtt-ws-target" class="text-xs text-slate-400 font-mono"></span>
       <span id="mqtt-sub-topic" class="hidden text-xs text-slate-400 font-mono"></span>
     </div>

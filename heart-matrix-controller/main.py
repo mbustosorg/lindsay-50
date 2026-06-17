@@ -60,24 +60,27 @@ coordinator = EffectsCoordinator(
     scroller,
     effects,
     heart=heartbeat,
-    recent_provider=lambda: _message_mgr.get_messages(limit=5),
     settings=_boot_settings,
 )
 
 
-def _on_message(msg):
-    """Forward a freshly-received SMS to the coordinator.
+def _on_change():
+    """No-op: the rAF loop reads the buffer on every tick and the
+    message-selection algorithm decides when to display what.
 
-    Wired up below once `_message_mgr` exists.
+    The previous `on_message` callback short-circuited that by
+    calling `coordinator.set_text(msg.body)` directly, which
+    overrode the algorithm. With the universal `on_change`,
+    a new message just means the next tick will see the new
+    state — exactly what we want.
     """
-    coordinator.set_text(msg.body)
 
 
 _message_mgr = MessageManager(
     messages_api_url=cfg.MESSAGES_API_URL,
     config_api_url=cfg.CONFIG_API_URL,
     api_key=cfg.API_SECRET_KEY,
-    on_message=_on_message,
+    on_change=_on_change,
 )
 
 
