@@ -48,23 +48,6 @@ scroller = MatrixScroller(
 heartbeat = Heartbeat(display)
 
 
-# Boot with the default effect settings (the v2 config arrives over MQTT
-# shortly after and refreshes the rotation + scroller + pacing). The
-# shared `build_effects` falls back to the first canonical effect if
-# the rotation ends up empty, so the sign never goes dark.
-_boot_settings = EffectsSettings()
-effects = build_effects(_boot_settings, display=display)
-
-coordinator = EffectsCoordinator(
-    message_manager=None,  # patched below once `manager` exists
-    display=display,
-    scroller=scroller,
-    effects=effects,
-    heart=heartbeat,
-    settings=_boot_settings,
-)
-
-
 def _on_change():
     """Apply the manager's current SignConfig to the coordinator + scroller.
 
@@ -85,15 +68,9 @@ manager = MessageManager(
     api_key=cfg.API_SECRET_KEY,
     on_change=_on_change,
 )
-# Now that the manager exists, give the coordinator its required reference.
-coordinator.message_manager = manager
 
 asyncio.run(manager.seed())
 
-# Kick off the boot splash. The coordinator's first pull (every 250 ms)
-# produces the most recent message in the manager's buffer; no
-# separate "show this body after the heart" hook is needed.
-coordinator.start()
 
 # Platform MQTT client (paho on every platform)
 _mqtt_client = PahoMqttClient(
@@ -108,14 +85,35 @@ logging.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 
 
+# Boot with the default effect settings (the v2 config arrives over MQTT
+# shortly after and refreshes the rotation + scroller + pacing). The
+# shared `build_effects` falls back to the first canonical effect if
+# the rotation ends up empty, so the sign never goes dark.
+_boot_settings = EffectsSettings()
+effects = build_effects(_boot_settings, display=display)
+
+coordinator = EffectsCoordinator(
+    message_manager=None,  # patched below once `manager` exists
+    display=display,
+    scroller=scroller,
+    effects=effects,
+    heart=heartbeat,
+    settings=_boot_settings,
+)
+
+# Kick off the boot splash. The coordinator's first pull (every 250 ms)
+# produces the most recent message in the manager's buffer; no
+# separate "show this body after the heart" hook is needed.
+coordinator.start()
+
 # SIGTERM (systemd stop / `kill`) doesn't raise an exception by default, so the
 # `finally` below would never run. Turn it into SystemExit so cleanup happens on
 # every stop path; SIGINT (Ctrl-C) already raises KeyboardInterrupt.
 def _on_sigterm(signum, frame):
     raise SystemExit(0)
 
-
 signal.signal(signal.SIGTERM, _on_sigterm)
+
 
 try:
     while True:

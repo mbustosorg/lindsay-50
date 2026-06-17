@@ -325,20 +325,49 @@ def test_pi_main_uses_on_change_closure_with_apply_settings():
     )
 
 
-def test_preview_main_uses_on_change_closure_with_apply_settings():
-    """The browser's per-page MessageManager closure also calls
-    `coord.apply_settings(manager.config.effect_settings,
-    manager.config.text_settings)`, then fans the change out to JS
-    subscribers via `create_proxy(_on_change_js)()`."""
+def test_app_main_uses_on_change_closure_with_apply_settings():
+    """The browser's app-scoped `MessageManager.on_change` callback
+    calls `coord.apply_settings(_message_manager.config.effect_settings,
+    _message_manager.config.text_settings)` so the preview's pacing,
+    rotation, and scroller color/speed reflect the change.
+
+    The preview page does NOT construct a per-page MessageManager —
+    the app-scoped one in `app_main.py` is the single source of truth.
+    """
+    p = Path(__file__).parent.parent.parent / "heart-message-manager" / "app_main.py"
+    src = p.read_text(encoding="utf-8")
+    # The manager's on_change callback must call apply_settings with
+    # the two manager.config fields.
+    assert "_coordinator.apply_settings(" in src, (
+        "app_main.py must call _coordinator.apply_settings(...) in the on_change path"
+    )
+    assert "_message_manager.config.effect_settings" in src, (
+        "app_main.py on_change must pass _message_manager.config.effect_settings"
+    )
+    assert "_message_manager.config.text_settings" in src, (
+        "app_main.py on_change must pass _message_manager.config.text_settings"
+    )
+    # The coordinator must be constructed with the app-scoped manager.
+    assert "EffectsCoordinator(message_manager=_message_manager)" in src, (
+        "app_main.py must construct the app-scoped coordinator with message_manager=_message_manager"
+    )
+
+
+def test_preview_main_does_not_construct_per_page_manager():
+    """The preview page is a thin render-layer shim — it must NOT
+    create its own MessageManager (the app-scoped one in app_main.py
+    is the single source of truth)."""
     p = Path(__file__).parent.parent.parent / "heart-message-manager" / "preview_main.py"
     src = p.read_text(encoding="utf-8")
-    assert re.search(r"on_change\s*=\s*_on_change", src), (
-        "preview_main.py must wire MessageManager(on_change=_on_change)"
+    # preview_main.py must not import MessageManager.
+    assert "from lib_shared.message_manager import" not in src, (
+        "preview_main.py must not import MessageManager (the app-scoped one is the source of truth)"
     )
-    assert "coord.apply_settings(manager.config.effect_settings, manager.config.text_settings)" in src, (
-        "preview _on_change must call coord.apply_settings(manager.config.effect_settings, manager.config.text_settings)"
+    # preview_main.py must not call the MessageManager constructor.
+    assert "MessageManager(" not in src, (
+        "preview_main.py must not construct a per-page MessageManager"
     )
-    # Browser fan-out: must call create_proxy to keep the JS callback alive.
-    assert "create_proxy(_on_change_js)()" in src, (
-        "preview _on_change must call create_proxy(_on_change_js)() to fan out to JS"
+    # preview_main.py must not reassign window._message_manager.
+    assert "js.window._message_manager" not in src, (
+        "preview_main.py must not reassign js.window._message_manager"
     )

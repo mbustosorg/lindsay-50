@@ -4,7 +4,12 @@ The app-scoped `EffectsCoordinator` is created at PyScript load
 time by `app_main.py` and exposed on `window._coordinator`. This
 file runs after `app_main.py` and binds the coordinator to the
 page-local render layer that the canvas needs to exist before
-any frame can composite.
+any frame can composite. The `MessageManager` is also app-scoped
+(also constructed in `app_main.py`); the preview never creates
+its own — the manager is the single source of truth for both
+messages and config, and the coordinator's `on_change` callback
+(registered in `app_main.py`) keeps the preview's pacing,
+rotation, and scroller in sync.
 
 PyScript 2024.9.x evaluates each `<py-script>` element as its
 own async task — there is no guarantee they run in document
@@ -31,19 +36,14 @@ The actual main loop lives in `static/preview/preview.js`, which
 drives `tick()` via requestAnimationFrame (capped at 30 FPS). The
 shared `MqttWsClient` (started by `app_main.py`) feeds
 `window._message_manager.dispatch(raw)` on each inbound envelope;
-the MessageManager's universal `on_change` fan-out fires
-`window.App._dispatchChange`. The per-page `MessageManager`
-constructed here has its own `on_change` closure that calls
-`coord.apply_settings(manager.config.effect_settings,
-manager.config.text_settings)` and then fans the change out to
-JS subscribers via `create_proxy(_on_change_js)()`. The
-coordinator itself pulls the next display message from the
-manager on a 250 ms throttle (see
-`EffectsCoordinator.get_display_message`); no JS-driven push of
-"next message body" or "apply config" is needed.
+the app-scoped MessageManager's universal `on_change` callback
+calls `_coordinator.apply_settings(...)` and fans the change out
+to JS subscribers via `App._dispatchChange`. The coordinator
+itself pulls the next display message from the manager on a
+250 ms throttle (see `EffectsCoordinator.get_display_message`).
 
 The effect list, scroller color, and scroller speed all come
-from the v2 `SignConfig` exposed by `window._message_manager`.
+from the v2 `SignConfig` held by the app-scoped manager.
 `build_effects` (in `lib_shared.effects_coordinator`) is the
 single source of truth that translates an `EffectsSettings`
 block into a list of instantiated Effect objects; both the
@@ -85,12 +85,10 @@ for path in (
 
 # Standard imports from the browser-side render path.
 import js
-from pyodide.ffi import create_proxy  # type: ignore[reportGeneralTypeIssues]
 
 from preview_display import WebCanvas, WebDisplay  # noqa: E402
 from preview_scroller import PreviewScroller  # noqa: E402
 from lib_shared.effects_coordinator import build_effects  # noqa: E402
-from lib_shared.message_manager import MessageManager  # noqa: E402
 from lib_shared.models import EffectsSettings, TextSettings  # noqa: E402
 
 # Standard bitmap patterns the browser preview can run (no filesystem
@@ -130,13 +128,13 @@ def _coordinator():
 _web_canvas = WebCanvas(PANEL_WIDTH, PANEL_HEIGHT)
 _display = WebDisplay(_web_canvas)
 
-# Boot-time defaults. The MessageManager is the source of truth
-# for the SignConfig; once the seed completes (called by app.js on
-# page load), the manager's universal `on_change` closure fires
-# `coord.apply_settings(...)` and rebinds the rotation + scroller
-# + pacing in place. Until that happens the canonical defaults
-# (the same `EffectsSettings()` / `TextSettings()` the device
-# boots with) are the visible state.
+# Boot-time defaults. The app-scoped MessageManager is the source of
+# truth for the SignConfig; once the seed completes (called by app.js
+# on page load), the manager's universal `on_change` callback fires
+# `_coordinator.apply_settings(...)` and rebinds the rotation +
+# scroller + pacing in place. Until that happens the canonical
+# defaults (the same `EffectsSettings()` / `TextSettings()` the
+# device boots with) are the visible state.
 _settings = EffectsSettings()
 _text_settings = TextSettings()
 _effects = build_effects(_settings, display=_display)
@@ -183,49 +181,22 @@ async def _wait_for_coordinator(timeout_s: float = 5.0, poll_ms: int = 20) -> No
 async def _bootstrap() -> None:
     """Wait for `app_main.py`, then bind + start the preview.
 
-    Everything that depends on the app-scoped coordinator /
-    message manager lives inside this coroutine. The wait
-    resolves the document-order race; the bind mirrors the
-    device's startup sequence; the start kicks the boot splash.
-    The coordinator's first pull (every 250 ms) produces the
-    most recent message in the manager's buffer.
+    Everything that depends on the app-scoped coordinator lives
+    inside this coroutine. The wait resolves the document-order
+    race; the bind mirrors the device's startup sequence; the
+    start kicks the boot splash. The coordinator's first pull
+    (every 250 ms) produces the most recent message in the
+    app-scoped manager's buffer.
     """
     await _wait_for_coordinator()
 
-    # --- Construct the per-page MessageManager with on_change closure ---
-    # The closure applies the current config to the coordinator and fans
-    # the change out to any JS subscribers registered via
-    # `window.App.registerOnChange(...)`. The manager does NOT hold a
-    # reference to the coordinator — the closure captures it.
+    # --- Bind the render layer to the app-scoped coordinator ---
+    # The coordinator is already wired to the app-scoped
+    # MessageManager in `app_main.py` (constructor arg), and that
+    # manager's `on_change` callback calls `apply_settings(...)`
+    # on the coordinator. The preview's only job is to attach
+    # the page-local render layer.
     coord = _coordinator()
-
-    def _on_change_js():
-        """JS-side fan-out: tell every registered onChange listener
-        that the manager's state mutated. Backed by `App._dispatchChange`
-        in app.js, which iterates `App._onChangeListeners` and calls
-        each callback with no args."""
-        if hasattr(js.window, "App") and hasattr(js.window.App, "_dispatchChange"):
-            js.window.App._dispatchChange()
-
-    def _on_change():
-        coord.apply_settings(manager.config.effect_settings, manager.config.text_settings)
-        # Pyodide's `create_proxy` keeps a JS callback alive across
-        # calls — a bare `_on_change_js` reference would be released
-        # after this function returns and the JS dispatch would no-op.
-        create_proxy(_on_change_js)()
-
-    manager = MessageManager(
-        on_change=_on_change,
-        messages_api_url="",  # seeded by the app-scoped manager; not used here
-        config_api_url="",
-        api_key="",
-    )
-    # Replace the app-scoped reference so subsequent reads (status
-    # block, etc.) reach this per-page manager that drives the
-    # coordinator's on_change.
-    js.window._message_manager = manager
-
-    # --- Bind the render layer to the coordinator ---
     coord.bind(
         display=_display,
         scroller=_scroller,
@@ -235,9 +206,9 @@ async def _bootstrap() -> None:
     _coord_ref["coord"] = coord
 
     # Begin the boot splash. The first pulled message (from the
-    # manager's buffer, which is seeded by the app-scoped WS
-    # client) plays once the heart fades out — mirroring the
-    # device's "show the last seeded message at startup" behavior.
+    # app-scoped manager's buffer) plays once the heart fades out
+    # — mirroring the device's "show the last seeded message at
+    # startup" behavior.
     coord.start()
 
     # Install the JS surface last, once the coordinator is bound

@@ -4,18 +4,21 @@ The admin app loads on every authenticated page. The script owns three
 app-scoped singletons that any page can reach through the `window`:
 
   - `window._message_manager` — `MessageManager(is_browser=True)` with an
-    `on_change` callback that fans out to the JS-side `_dispatchChange`
-    (preserves the `window.App.registerOnChange` API for /preview and
-    /testing). Holds the in-browser copy of the SignConfig and the
-    message ring buffer.
+    `on_change` callback that (1) applies the new config to the
+    app-scoped coordinator (`_coordinator.apply_settings(...)`) and
+    (2) fans out to the JS-side `_dispatchChange` (preserves the
+    `window.App.registerOnChange` API for /preview and /testing).
+    Holds the in-browser copy of the SignConfig and the message
+    ring buffer — the single source of truth for both.
 
-  - `window._coordinator` — `EffectsCoordinator` constructed WITHOUT a
-    render layer. The /preview page (`preview_main.py`) creates its
-    page-local canvas + scroller + effects and calls
-    `window._coordinator.bind(...)` once they're in scope. The
-    coordinator is app-scoped (it survives across SPA navigations
-    within the page load) but the render layer is page-scoped
-    (the canvas only exists on /preview).
+  - `window._coordinator` — `EffectsCoordinator(message_manager=...)`
+    constructed WITHOUT a render layer. The /preview page
+    (`preview_main.py`) creates its page-local canvas + scroller +
+    effects and calls `window._coordinator.bind(...)` once they're
+    in scope. The coordinator is app-scoped (it survives across
+    SPA navigations within the page load) but the render layer is
+    page-scoped (the canvas only exists on /preview). The manager
+    reference is set at construction time, not by `bind(...)`.
 
   - `window._mqtt_ws_client` — Python wrapper around the native JS
     MQTT-over-WebSocket shim. Starts the WS connection and forwards
@@ -138,6 +141,18 @@ def _on_change_js() -> None:
     re-renders whatever on its page could be affected by a
     state change (the page's `reRender` aggregator, typically).
     """
+    try:
+        # Apply the new config to the coordinator so the preview's
+        # pacing, effects rotation, and scroller color/speed reflect
+        # the change. The manager itself is the single source of
+        # truth; this closure captures the app-scoped coordinator.
+        if _coordinator is not None:
+            _coordinator.apply_settings(
+                _message_manager.config.effect_settings,
+                _message_manager.config.text_settings,
+            )
+    except Exception as e:
+        print(f"[app_main] _on_change apply_settings failed: {e!r}")
     try:
         app = getattr(js.window, "App", None)
         if app is not None and hasattr(app, "_dispatchChange"):
@@ -269,7 +284,7 @@ _message_manager = MessageManager(
     on_change=create_proxy(_on_change_js),
 )
 
-_coordinator = EffectsCoordinator()
+_coordinator = EffectsCoordinator(message_manager=_message_manager)
 
 _mqtt_ws_client = None
 _mqtt_ws_url = str(_cfg.get("mqttWsUrl") or "")
