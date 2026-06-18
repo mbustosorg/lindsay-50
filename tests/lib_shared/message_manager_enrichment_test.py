@@ -24,7 +24,7 @@ from lib_shared.models import EffectsSettings, FilterRule, Message, SignConfig, 
 
 def _make_config(timezone="America/Los_Angeles", filters=None, senders=None):
     return SignConfig(
-        effect_settings=EffectsSettings(),
+        effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
         timezone=timezone,
         filters=list(filters or []),
@@ -152,7 +152,7 @@ def test_handle_config_re_enriches_all_entries():
         {
             "filters": [{"type": "keyword", "pattern": "bad", "action": "suppress"}],
             "senders": [],
-            "effect_settings": {"effects": [{"name": "Hyperspace", "enabled": True}]},
+            "effects_settings": {"effects": [{"name": "Hyperspace", "enabled": True}]},
             "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
             "sign": {"name": "Lindsay's Heart"},
             "timezone": "US/Pacific",
@@ -192,7 +192,7 @@ def test_handle_config_enriches_whole_buffer_on_call():
             {
                 "filters": [],
                 "senders": [],
-                "effect_settings": {"effects": []},
+                "effects_settings": {"effects": []},
                 "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
                 "sign": {"name": "x"},
                 "timezone": "US/Pacific",

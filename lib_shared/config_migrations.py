@@ -21,7 +21,7 @@ log = logging.getLogger("heart")
 
 
 def _v1_to_v2(d: dict) -> dict:
-    """v1 → v2: drop tz_offset_mins + rendering, add effect_settings + text_settings, bump version.
+    """v1 → v2: drop tz_offset_mins + rendering, add effects_settings + text_settings, bump version.
 
     Preserves filters, senders, sign, timezone. The on-disk message list
     (messages.json in S3) is not part of the config and is not touched.
@@ -32,8 +32,8 @@ def _v1_to_v2(d: dict) -> dict:
     # block replaces it. There is no v1 → v2 mapping for individual rendering
     # fields — the new block starts from defaults.
     out.pop("rendering", None)
-    if "effect_settings" not in out:
-        out["effect_settings"] = EffectsSettings().to_dict()
+    if "effects_settings" not in out:
+        out["effects_settings"] = EffectsSettings().to_dict()
     if "text_settings" not in out:
         out["text_settings"] = TextSettings().to_dict()
     out["version"] = 2

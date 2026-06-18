@@ -13,6 +13,7 @@ boot for a few seconds, then fades into the first background effect.
 import math
 import time
 
+from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Bitmap, Palette, Effect, arrayblit
 
 _PALETTE_SIZE = 16
@@ -69,7 +70,7 @@ def _heart_inside(x, y):
 
 
 class Heartbeat(Effect):
-    def __init__(self, display, frame_delay=0.03):
+    def __init__(self, display: DisplayBase, frame_delay: float = 0.03) -> None:
         self.display = display
         self.frame_delay = frame_delay
         self.last_frame = 0.0

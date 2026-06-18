@@ -50,11 +50,21 @@ def test_subclass_render_called_once_per_tick():
 
     mod = _load_display_base()
 
+    class _StubCanvas:
+        width = 8
+        height = 8
+
+        def SetPixel(self, x, y, r, g, b):
+            pass
+
+        def SetImage(self, image, offset_x=0, offset_y=0):
+            pass
+
     class _StubDisplay(mod.DisplayBase):
         def __init__(self):
             self.width = 8
             self.height = 8
-            self.canvas = object()
+            self.canvas = _StubCanvas()
             self.render_calls = []
 
         def clear(self):
@@ -86,6 +96,12 @@ def test_subclass_render_called_once_per_tick():
         def set_brightness(self, b):
             pass
 
+        def set_color(self, color):
+            pass
+
+        def set_speed(self, speed):
+            pass
+
         def tick(self, w):
             pass
 
@@ -105,11 +121,17 @@ def test_subclass_render_called_once_per_tick():
         # Pacing values are read live from the manager — set
         # intro_seconds=0 and fade_seconds=0.01 on the manager's
         # EffectSettings so the test's tick timing is honored.
+        # The coordinator reads rotation + text settings via the
+        # `effects_settings` / `text_settings` properties, which
+        # delegate to these getters.
         config=SimpleNamespace(
-            effect_settings=EffectsSettings(intro_seconds=0, fade_seconds=0.01),
+            effects_settings=EffectsSettings(intro_seconds=0, fade_seconds=0.01),
             text_settings=TextSettings(),
         ),
     )
+    mgr.get_messages = lambda limit=100, suppress=True: []
+    mgr.get_effects_settings = lambda: mgr.config.effects_settings
+    mgr.get_text_settings = lambda: mgr.config.text_settings
 
     coord = EffectsCoordinator(
         message_manager=mgr,

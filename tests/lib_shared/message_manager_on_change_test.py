@@ -162,12 +162,13 @@ def test_message_manager_rejects_coordinator_kwarg():
     from lib_shared.effects_coordinator import EffectsCoordinator
     from lib_shared.models import EffectsSettings, TextSettings
 
-    coord = EffectsCoordinator(
-        message_manager=SimpleNamespace(
-            messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
-            config=SimpleNamespace(effect_settings=EffectsSettings(), text_settings=TextSettings()),
-        ),
+    mgr = SimpleNamespace(
+        messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+        config=SimpleNamespace(effects_settings=EffectsSettings(), text_settings=TextSettings()),
     )
+    mgr.get_effects_settings = lambda: mgr.config.effects_settings
+    mgr.get_text_settings = lambda: mgr.config.text_settings
+    coord = EffectsCoordinator(message_manager=mgr)
     with pytest.raises(TypeError, match="coordinator"):
         MessageManager(
             messages_api_url="",

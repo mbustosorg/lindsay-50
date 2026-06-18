@@ -104,7 +104,7 @@ class _StubMessageManager:
         from types import SimpleNamespace
 
         self.messages = SimpleNamespace(get_messages=lambda limit=100, suppress=True: [])
-        self.config = SimpleNamespace(effect_settings=EffectsSettings(), text_settings=TextSettings())
+        self.config = SimpleNamespace(effects_settings=EffectsSettings(), text_settings=TextSettings())
 
 
 def _build():

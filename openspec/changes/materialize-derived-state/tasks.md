@@ -24,9 +24,9 @@
   - Initialize `self._last_shown_message_id = None` in `__init__`.
 - [x] 2.3 Add a `_PULL_INTERVAL = 0.25` class-level constant and a `_last_message_pull: float = 0.0` instance attribute. In `tick()`, when `now - self._last_message_pull >= self._PULL_INTERVAL`, call `self.get_display_message()` and store the result on `self._last_display_message`; otherwise consume the cached value. Update `self._last_message_pull = now` after each pull.
 - [x] 2.4 Wire the pull result into the existing fade-out / swap / fade-in state machine in `tick()`. The result replaces the source of the "next text" — wherever the existing code reads `self.pending_text` and queues it for the scroller, read `self._last_display_message` instead. The state machine itself does not change shape; only the input source.
-- [x] 2.5 Extend `apply_settings(self, effect_settings, text_settings=None)` on `EffectsCoordinator` to handle the full config-application work that `main.py::_on_config_update` does today:
+- [x] 2.5 Extend `apply_settings(self, effects_settings, text_settings=None)` on `EffectsCoordinator` to handle the full config-application work that `main.py::_on_config_update` does today:
   - Pacing fields (already in scope): `fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, `recent_count` — write them every call (idempotent).
-  - Effects rebuild: compute a hash of the declared rotation (`effect_settings.effects`); if it differs from `self._last_effects_hash`, call `build_effects(effect_settings, display=self.display)`, assign to `self.effects`, reset `self.idx = -1`, and update `self._last_effects_hash`.
+  - Effects rebuild: compute a hash of the declared rotation (`effects_settings.effects`); if it differs from `self._last_effects_hash`, call `build_effects(effects_settings, display=self.display)`, assign to `self.effects`, reset `self.idx = -1`, and update `self._last_effects_hash`.
   - Scroller text settings: if `text_settings is not None`, compute a hash of `(text_settings.color, text_settings.speed)`; if it differs from `self._last_text_settings_hash`, call `self.scroller.set_color(text_settings.color)` and `self.scroller.set_speed(text_settings.speed)`, and update `self._last_text_settings_hash`.
   - Initialize `self._last_effects_hash` and `self._last_text_settings_hash` to `None` in `__init__`.
   - `apply_settings` is called from the `MessageManager`'s `on_change` callback (see 4.1) — it is no longer called by JS.
@@ -57,7 +57,7 @@
 - [x] 4.1 In `heart-matrix-controller/main.py`, replace the existing `_on_change()` no-op with a closure over the coordinator:
   ```python
   def _on_change():
-      coord.apply_settings(manager.config.effect_settings, manager.config.text_settings)
+      coord.apply_settings(manager.config.effects_settings, manager.config.text_settings)
   manager = MessageManager(on_change=_on_change, ...)
   ```
   Then pass `message_manager=manager` to the `EffectsCoordinator` constructor. The manager does NOT need a `coordinator=` reference; the closure captures it.
@@ -65,17 +65,17 @@
 - [x] 4.3 In `heart-message-manager/preview_main.py`, construct the per-page `MessageManager` (or reuse the app-scoped one) with the same closure pattern. The browser callback additionally calls `create_proxy(_on_change_js)()` to fan out to JS subscribers:
   ```python
   def _on_change():
-      coord.apply_settings(manager.config.effect_settings, manager.config.text_settings)
+      coord.apply_settings(manager.config.effects_settings, manager.config.text_settings)
       create_proxy(_on_change_js)()
   manager = MessageManager(on_change=_on_change, ...)
   ```
   Then pass `message_manager=manager` to the per-page `EffectsCoordinator`.
 - [x] 4.4 Add `tests/lib_shared/effects_coordinator_apply_settings_test.py` with the 5 scenarios from the spec:
-  - `apply_settings(effect_settings, text_settings)` writes the pacing fields (`fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, `recent_count`).
-  - `apply_settings` rebuilds `coordinator.effects` and resets `coordinator.idx` when the declared rotation changes (compare `effect_settings.effects` before and after; assert new `coordinator.effects` list).
+  - `apply_settings(effects_settings, text_settings)` writes the pacing fields (`fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, `recent_count`).
+  - `apply_settings` rebuilds `coordinator.effects` and resets `coordinator.idx` when the declared rotation changes (compare `effects_settings.effects` before and after; assert new `coordinator.effects` list).
   - `apply_settings` calls `coordinator.scroller.set_color(...)` and `coordinator.scroller.set_speed(...)` when `text_settings.color` or `text_settings.speed` changes (spy on the scroller).
   - `apply_settings` is idempotent on message-only emits: no effects rebuild, no scroller mutation (spy on `build_effects` and `scroller.set_color`/`set_speed`, assert they are NOT called when the relevant fields match the prior state).
-  - The on_change closure in `heart-matrix-controller/main.py` and `heart-message-manager/preview_main.py` is a single function that calls `coord.apply_settings(manager.config.effect_settings, manager.config.text_settings)` (static check of the source files).
+  - The on_change closure in `heart-matrix-controller/main.py` and `heart-message-manager/preview_main.py` is a single function that calls `coord.apply_settings(manager.config.effects_settings, manager.config.text_settings)` (static check of the source files).
 - [x] 4.5 Add `tests/lib_shared/message_manager_on_change_test.py` with the 3 scenarios from the spec:
   - `on_change` callback is invoked exactly once per `MessageManager._emit_change()` call from either `_handle_message()` or `_handle_config()`.
   - In the browser runtime, `on_change` additionally calls `create_proxy(_on_change_js)()` to fan out to JS subscribers (spy on the proxy).

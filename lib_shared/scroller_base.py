@@ -65,7 +65,7 @@ class ScrollerBase:
         *,
         speed: int = DEFAULT_SPEED,
         color: int = 0xFF0000,
-    ):
+    ) -> None:
         # Translate speed → pacing
         self.frame_delay, self.offset_seconds = self.resolve_pacing(speed)
         self.text = ""

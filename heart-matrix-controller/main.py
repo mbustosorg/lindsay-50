@@ -58,21 +58,6 @@ manager = MessageManager(
     on_change=_on_change,
 )
 
-display = MatrixDisplay()
-# The scroller takes its text settings from the v2 config. The boot-time
-# defaults are the same TextSettings().to_dict() values the admin UI
-# would write; the v2 envelope that arrives over MQTT shortly after
-# re-binds color and speed via the coordinator's tick-time
-# `_sync_render_layer()`.
-text_settings = TextSettings()
-scroller = MatrixScroller(
-    display,
-    color=text_settings.color,
-    speed=text_settings.speed,
-)
-heartbeat = Heartbeat(display)
-
-
 asyncio.run(manager.seed())
 
 
@@ -87,6 +72,21 @@ _mqtt_client = PahoMqttClient(
 )
 logging.info("Starting MQTT client at boot...")
 _mqtt_client.start()
+
+
+display = MatrixDisplay()
+# The scroller takes its text settings from the v2 config. The boot-time
+# defaults are the same TextSettings().to_dict() values the admin UI
+# would write; the v2 envelope that arrives over MQTT shortly after
+# re-binds color and speed via the coordinator's tick-time
+# `_sync_render_layer()`.
+text_settings = TextSettings()
+scroller = MatrixScroller(
+    display,
+    color=text_settings.color,
+    speed=text_settings.speed,
+)
+heartbeat = Heartbeat(display)
 
 
 # Boot with the default effect settings (the v2 config arrives over MQTT

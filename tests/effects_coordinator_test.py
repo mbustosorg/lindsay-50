@@ -113,16 +113,22 @@ class _StubMessageManager:
       `messages.get_messages(limit, suppress=True)` — returns a list of
         MessageView-shaped objects with `.message.id`, `.message.body`,
         and `.suppressed`.
-      `config.effect_settings`, `config.text_settings` — used by apply_settings.
+      `get_messages(limit, suppress=True)` — the top-level alias used by
+        `EffectsCoordinator.current_messages`.
+      `get_effects_settings()`, `get_text_settings()` — live config
+        getters the coordinator reads each tick via the
+        `effects_settings` / `text_settings` properties.
+      `config.effects_settings`, `config.text_settings` — kept for
+        callers that still reach into the legacy surface.
     """
 
-    def __init__(self, messages=None, effect_settings=None, text_settings=None):
+    def __init__(self, messages=None, effects_settings=None, text_settings=None):
         from lib_shared.models import EffectsSettings, TextSettings
 
         self.messages = SimpleNamespace(get_messages=self._get_messages)
         self._entries = list(messages or [])
         self.config = SimpleNamespace(
-            effect_settings=effect_settings or EffectsSettings(),
+            effects_settings=effects_settings or EffectsSettings(),
             text_settings=text_settings or TextSettings(),
         )
 
@@ -131,6 +137,15 @@ class _StubMessageManager:
         if suppress:
             entries = [e for e in entries if not getattr(e, "suppressed", False)]
         return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[:limit]
+
+    def get_messages(self, limit=100, suppress=True):
+        return self._get_messages(limit, suppress)
+
+    def get_effects_settings(self):
+        return self.config.effects_settings
+
+    def get_text_settings(self):
+        return self.config.text_settings
 
     def add_message(self, view):
         self._entries.append(view)
@@ -178,11 +193,11 @@ def _build(
 
     if message_manager is None:
         message_manager = _StubMessageManager()
-    # Always override the manager's effect_settings with the
+    # Always override the manager's effects_settings with the
     # pacing values from this helper — the coordinator reads
     # pacing live from the manager, and a passing test needs
     # those values to land in the manager's EffectSettings.
-    message_manager.config.effect_settings = EffectsSettings(
+    message_manager.config.effects_settings = EffectsSettings(
         fade_seconds=fade_seconds,
         intro_seconds=intro_seconds,
         hold_seconds=hold_seconds,
@@ -216,7 +231,7 @@ def _build_unbound(
         from lib_shared.models import EffectsSettings
 
         message_manager = _StubMessageManager(
-            effect_settings=EffectsSettings(
+            effects_settings=EffectsSettings(
                 fade_seconds=fade_seconds,
                 intro_seconds=intro_seconds,
                 hold_seconds=hold_seconds,

@@ -45,9 +45,9 @@ class _StubMessageManager:
         self._entries = list(messages or [])
         self._recent_count = recent_count
         # The coordinator reads `recent_count` (and the rest of
-        # the pacing) live from `message_manager.config.effect_settings`.
+        # the pacing) live from `message_manager.config.effects_settings`.
         self.config = SimpleNamespace(
-            effect_settings=EffectsSettings(recent_count=recent_count),
+            effects_settings=EffectsSettings(recent_count=recent_count),
             text_settings=TextSettings(),
         )
 
@@ -62,6 +62,15 @@ class _StubMessageManager:
             entries = [e for e in entries if not getattr(e, "suppressed", False)]
         return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[:limit]
 
+    def get_messages(self, limit=100, suppress=True):
+        return self._get_messages(limit, suppress)
+
+    def get_effects_settings(self):
+        return self.config.effects_settings
+
+    def get_text_settings(self):
+        return self.config.text_settings
+
     def add(self, view):
         self._entries.append(view)
 
@@ -75,7 +84,7 @@ def _build(message_manager=None, recent_count=5):
         # `recent_count` it holds so the test's expected value
         # takes effect (the coordinator reads it live from the
         # manager).
-        message_manager.config.effect_settings.recent_count = recent_count
+        message_manager.config.effects_settings.recent_count = recent_count
     coord = EffectsCoordinator(
         message_manager=message_manager,
     )

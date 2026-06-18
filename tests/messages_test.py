@@ -82,7 +82,7 @@ def test_format_display_time_empty_string():
 
 def _make_config(timezone="America/Los_Angeles"):
     return SignConfig(
-        effect_settings=EffectsSettings(),
+        effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
         timezone=timezone,
     )

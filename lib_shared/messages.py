@@ -10,7 +10,7 @@ from collections import deque
 from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from lib_shared.models import MessageView
+from lib_shared.models import MessageView, SignConfig
 
 
 def _format_display_time(received_at: str, timezone: str) -> str:
@@ -54,7 +54,7 @@ class FilteredMessages:
     for use by subclasses. Thread-safety is the caller's responsibility.
     """
 
-    def __init__(self, config):
+    def __init__(self, config: SignConfig) -> None:
         """Initialize with a SignConfig (provides .filters and .senders)."""
         self._config = config
 
@@ -136,7 +136,7 @@ class InMemoryMessages(FilteredMessages):
     Duplicates are dropped silently on add().
     """
 
-    def __init__(self, config, maxlen=100):
+    def __init__(self, config: SignConfig, maxlen: int = 100) -> None:
         """Initialize with a config and optional ring-buffer max length.
 
         Args:
@@ -144,10 +144,10 @@ class InMemoryMessages(FilteredMessages):
             maxlen: Maximum number of messages to retain (default 100).
         """
         super().__init__(config)
-        self._msgs = deque(maxlen=maxlen)
-        self._seen_ids = set()
+        self._msgs: deque = deque(maxlen=maxlen)
+        self._seen_ids: set = set()
 
-    def add(self, message, source="rest"):
+    def add(self, message, source="rest") -> MessageView | None:
         """Add a single message. Skips silently if id already seen (O(1) check).
 
         Returns the appended `MessageView`, or `None` if the message was
@@ -164,17 +164,17 @@ class InMemoryMessages(FilteredMessages):
         self._msgs.append(view)
         return view
 
-    def add_many(self, messages, source="rest"):
+    def add_many(self, messages, source="rest") -> None:
         """Add multiple messages in insertion order. Skips duplicates."""
         for msg in messages:
             self.add(msg, source)
 
-    def clear(self):
+    def clear(self) -> None:
         """Clear all messages and the seen-id set."""
         self._msgs.clear()
         self._seen_ids.clear()
 
-    def get_messages(self, limit=100, suppress=True):
+    def get_messages(self, limit=100, suppress=True) -> list[MessageView]:
         """Return the most recent N messages, newest first (sorted by received_at desc).
 
         Thin read: returns the already-enriched `MessageView` instances from

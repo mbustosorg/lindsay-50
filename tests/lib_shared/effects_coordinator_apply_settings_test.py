@@ -4,9 +4,13 @@ The coordinator holds no copy of the config — pacing fields
 (`fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`,
 `recent_count`), the rotation, and the scroller text settings
 (`color`, `speed`) all live on the manager. The coordinator reads
-them at tick time (pacing/rotation through `effect_settings` /
-`text_settings`, the render layer through the per-tick
-`_sync_render_layer` which is hash-guarded and idempotent).
+them at tick time via the `effects_settings` / `text_settings`
+properties (which delegate to the manager's `get_effects_settings` /
+`get_text_settings`). The render layer (rotation + scroller color
+/ speed) is refreshed from the manager's config every tick, gated
+by small structural diffs (`_last_rotation`, `_last_text_color`,
+`_last_text_speed`) so an unchanged config is a small tuple
+comparison.
 
 These tests pin down that contract:
 
@@ -14,11 +18,14 @@ These tests pin down that contract:
    no `fade_seconds` / `hold_seconds` / `intro_seconds` /
    `idle_seconds` / `recent_count` fields. The coordinator
    delegates to the manager.
-2. `_sync_render_layer` (called from `tick()`) refreshes the
-   rotation + scroller text settings from the manager's current
-   config, hash-guarded so an unchanged config is a no-op.
-3. `bind()` resets the hash cache so the first tick after a
-   fresh `bind()` re-runs the heavier work — the app-scoped
+2. `tick()` refreshes the rotation + scroller text settings
+   from the manager's current config; the rotation is rebuilt
+   only when the rotation signature changes, and the scroller
+   setters fire only when color / speed change.
+3. `bind()` resets the diff sentinels (`_last_rotation`,
+   `_last_text_color`, `_last_text_speed`) to None so the first
+   tick after a fresh `bind()` re-applies the manager's
+   config to the now-attached render layer — the app-scoped
    coordinator's pre-bind ticks (during the seed) never had a
    render layer to refresh, so the bind is the first chance to
    populate the rotation + scroller from the seeded config.
@@ -119,14 +126,18 @@ def _make_effect(name):
     return _Fx
 
 
-def _make_manager(effect_settings=None, text_settings=None):
-    return SimpleNamespace(
+def _make_manager(effects_settings=None, text_settings=None):
+    mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
         config=SimpleNamespace(
-            effect_settings=effect_settings or EffectsSettings(),
+            effects_settings=effects_settings or EffectsSettings(),
             text_settings=text_settings or TextSettings(),
         ),
     )
+    mgr.get_messages = lambda limit=100, suppress=True: []
+    mgr.get_effects_settings = lambda: mgr.config.effects_settings
+    mgr.get_text_settings = lambda: mgr.config.text_settings
+    return mgr
 
 
 def _build_bound(message_manager=None):
@@ -173,7 +184,7 @@ def test_coordinator_has_no_cached_pacing_fields():
         "recent_count",
     ):
         assert not hasattr(coord, field), (
-            f"EffectsCoordinator should not cache {field!r} — " f"it lives on message_manager.config.effect_settings"
+            f"EffectsCoordinator should not cache {field!r} — " f"it lives on message_manager.config.effects_settings"
         )
 
 
@@ -216,7 +227,7 @@ def test_tick_reads_intro_seconds_from_manager():
     assertion is that the manager's value drives the
     transition."""
     mgr = _make_manager(
-        effect_settings=EffectsSettings(intro_seconds=0.0),
+        effects_settings=EffectsSettings(intro_seconds=0.0),
     )
     coord, _, _, _ = _build_bound(message_manager=mgr)
     coord.start()
@@ -225,7 +236,7 @@ def test_tick_reads_intro_seconds_from_manager():
     # first tick should have moved past it.
     assert coord.mode != "intro"
     # The source of truth is the manager.
-    assert mgr.config.effect_settings.intro_seconds == 0.0
+    assert mgr.config.effects_settings.intro_seconds == 0.0
 
 
 def test_get_display_message_reads_recent_count_from_manager():
@@ -233,7 +244,7 @@ def test_get_display_message_reads_recent_count_from_manager():
     # Empty buffer with a low recent_count: still returns None
     # (nothing to display).
     mgr = _make_manager(
-        effect_settings=EffectsSettings(recent_count=3),
+        effects_settings=EffectsSettings(recent_count=3),
     )
     coord, _, _, _ = _build_bound(message_manager=mgr)
     assert coord.get_display_message() is None
@@ -244,10 +255,10 @@ def test_get_display_message_reads_recent_count_from_manager():
 
 def test_tick_refreshes_rotation_when_manager_rotation_changes():
     """The first tick builds the rotation from the manager's
-    current `effect_settings.effects` list. Changing the
+    current `effects_settings.effects` list. Changing the
     manager's config and ticking again rebuilds the rotation."""
     mgr = _make_manager(
-        effect_settings=EffectsSettings(
+        effects_settings=EffectsSettings(
             effects=[{"name": "Fireworks", "enabled": True}],
         ),
     )
@@ -257,7 +268,7 @@ def test_tick_refreshes_rotation_when_manager_rotation_changes():
     assert type(coord.effects[0]).__name__ == "Fireworks"
 
     # Update the manager's rotation to a different effect.
-    mgr.config.effect_settings = EffectsSettings(
+    mgr.config.effects_settings = EffectsSettings(
         effects=[{"name": "Flame", "enabled": True}],
     )
     coord.tick()
@@ -271,7 +282,7 @@ def test_tick_keeps_effects_when_rotation_unchanged():
     """When the manager's rotation is unchanged, the tick is a
     no-op for the rotation list (hash-guarded)."""
     mgr = _make_manager(
-        effect_settings=EffectsSettings(
+        effects_settings=EffectsSettings(
             effects=[{"name": "Fireworks", "enabled": True}],
         ),
     )
@@ -329,17 +340,18 @@ def test_tick_skips_scroller_when_text_settings_unchanged():
 # --- Scenario 4: bind() resets the hash cache -------------------------------
 
 
-def test_bind_resets_hash_cache():
+def test_bind_resets_render_diff_sentinels():
     """After `bind()`, the first tick refreshes the render layer
     with the manager's current config — even if the previous
     pre-bind tick had already run a sync (it didn't, but the
-    hash cache is reset to be safe across mid-life binds)."""
+    diff sentinels are reset to None to be safe across mid-life
+    binds)."""
     scroller = _StubScroller()
     display = _StubDisplay()
     fx = _make_effect("Fireworks")(display=display)
     heart = _make_effect("Heart")(display=display)
     mgr = _make_manager(
-        effect_settings=EffectsSettings(
+        effects_settings=EffectsSettings(
             effects=[{"name": "Fireworks", "enabled": True}],
         ),
         text_settings=TextSettings(color=0x00FF00, speed=5),
@@ -352,29 +364,26 @@ def test_bind_resets_hash_cache():
         heart=None,
     )
     # Pre-bind tick: no display/scroller, so the per-tick
-    # `_sync_render_layer` early-returns. The hash cache stays
-    # at its initial value (the default-rotation hash).
+    # render-diff block is a no-op. The diff sentinels stay at
+    # their initial values (the default-rotation signature).
     coord.tick()
     assert coord.effects == []
     assert scroller.set_color_calls == []
-    pre_bind_effects_hash = coord._last_effects_hash
-    pre_bind_text_hash = coord._last_text_settings_hash
 
-    # Now bind the render layer. `bind()` resets both hashes
-    # to None so the first post-bind tick refreshes the
-    # rotation + scroller with the manager's non-default config.
+    # Now bind the render layer. `bind()` resets the diff
+    # sentinels to None so the first post-bind tick rebuilds
+    # the rotation + scroller with the manager's non-default
+    # config (the rotation differs from the default).
     coord.bind(display=display, scroller=scroller, effects=[fx], heart=heart)
-    assert coord._last_effects_hash is None
-    assert coord._last_text_settings_hash is None
+    assert coord._last_rotation is None
+    assert coord._last_text_color is None
+    assert coord._last_text_speed is None
     coord.tick()
     # The rotation was rebuilt (Fireworks is in the list).
     assert any(type(f).__name__ == "Fireworks" for f in coord.effects)
     # The scroller received the non-default text settings.
     assert scroller.set_color_calls == [0x00FF00]
     assert scroller.set_speed_calls == [5]
-    # Hashes have moved on from their pre-bind values.
-    assert coord._last_effects_hash != pre_bind_effects_hash
-    assert coord._last_text_settings_hash != pre_bind_text_hash
 
 
 # --- Scenario 5: on_change closures do NOT call apply_settings ----------------
@@ -434,18 +443,18 @@ def test_app_main_on_change_does_not_call_apply_settings():
 
 def test_preview_main_does_not_pass_settings_to_bind():
     """The preview's `coord.bind(...)` call must not pass
-    `effect_settings` / `text_settings` — the coordinator reads
+    `effects_settings` / `text_settings` — the coordinator reads
     those from the manager at tick time, and `bind()` does not
     take config args anymore."""
     p = Path(__file__).parent.parent.parent / "heart-message-manager" / "preview_main.py"
     src = p.read_text(encoding="utf-8")
     assert "coord.bind(" in src, "preview_main.py must call coord.bind(...)"
     # `bind()` is the no-config-args flavor: display=, scroller=,
-    # effects=, heart=. No `effect_settings` or `text_settings` kwargs.
+    # effects=, heart=. No `effects_settings` or `text_settings` kwargs.
     m = re.search(r"coord\.bind\(([^)]+)\)", src, re.DOTALL)
     assert m is not None, "could not extract coord.bind(...) args"
     bind_args = m.group(1)
-    assert "effect_settings" not in bind_args, "preview_main.py coord.bind(...) must not pass effect_settings"
+    assert "effects_settings" not in bind_args, "preview_main.py coord.bind(...) must not pass effects_settings"
     assert "text_settings" not in bind_args, "preview_main.py coord.bind(...) must not pass text_settings"
 
 

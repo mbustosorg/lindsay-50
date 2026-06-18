@@ -1,7 +1,7 @@
 """Tests for the browser preview's live wiring of all SignConfig settings.
 
 Covers:
-- `build_effects(effect_settings, effect_classes)` — shared builder
+- `build_effects(effects_settings, effect_classes)` — shared builder
 - `EffectsCoordinator.apply_settings(...)` — live pacing + recent_count
 - `ScrollerBase.set_color(...)` / `set_speed(...)` — live text updates
 - `PreviewScroller` accepts the same kwargs as `ScrollerBase`
@@ -229,10 +229,13 @@ def _build_coord(message_manager=None, **kwargs):
         message_manager = SimpleNamespace(
             messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
             config=SimpleNamespace(
-                effect_settings=EffectsSettings(),
+                effects_settings=EffectsSettings(),
                 text_settings=TextSettings(),
             ),
         )
+        message_manager.get_effects_settings = lambda: message_manager.config.effects_settings
+        message_manager.get_text_settings = lambda: message_manager.config.text_settings
+        message_manager.get_messages = lambda limit=100, suppress=True: []
     return EffectsCoordinator(
         message_manager=message_manager,
         display=display,
@@ -244,7 +247,7 @@ def _build_coord(message_manager=None, **kwargs):
 
 def test_coordinator_reads_pacing_from_message_manager():
     """The coordinator holds no per-instance pacing — it reads
-    `message_manager.config.effect_settings.fade_seconds` /
+    `message_manager.config.effects_settings.fade_seconds` /
     `.hold_seconds` / `.intro_seconds` / `.idle_seconds` at tick time.
     Updating the manager's config is observed by the coordinator on
     the next tick (no explicit `apply_settings` call needed).
@@ -254,7 +257,7 @@ def test_coordinator_reads_pacing_from_message_manager():
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
         config=SimpleNamespace(
-            effect_settings=EffectsSettings(
+            effects_settings=EffectsSettings(
                 fade_seconds=2.0,
                 hold_seconds=15.0,
                 intro_seconds=5.0,
@@ -263,18 +266,21 @@ def test_coordinator_reads_pacing_from_message_manager():
             text_settings=TextSettings(),
         ),
     )
-    coord = _build_coord(message_manager=mgr, effect_settings=mgr.config.effect_settings)
+    mgr.get_effects_settings = lambda: mgr.config.effects_settings
+    mgr.get_text_settings = lambda: mgr.config.text_settings
+    mgr.get_messages = lambda limit=100, suppress=True: []
+    coord = _build_coord(message_manager=mgr, effects_settings=mgr.config.effects_settings)
     # Pacing is read off the manager — no need to call apply_settings.
-    assert mgr.config.effect_settings.fade_seconds == 2.0
-    assert mgr.config.effect_settings.hold_seconds == 15.0
+    assert mgr.config.effects_settings.fade_seconds == 2.0
+    assert mgr.config.effects_settings.hold_seconds == 15.0
     # Mutating the manager's config is the new way to change pacing.
-    mgr.config.effect_settings = EffectsSettings(
+    mgr.config.effects_settings = EffectsSettings(
         fade_seconds=0.5, hold_seconds=7.0, intro_seconds=2.0, idle_seconds=120.0
     )
-    assert mgr.config.effect_settings.fade_seconds == 0.5
-    assert mgr.config.effect_settings.hold_seconds == 7.0
-    assert mgr.config.effect_settings.intro_seconds == 2.0
-    assert mgr.config.effect_settings.idle_seconds == 120.0
+    assert mgr.config.effects_settings.fade_seconds == 0.5
+    assert mgr.config.effects_settings.hold_seconds == 7.0
+    assert mgr.config.effects_settings.intro_seconds == 2.0
+    assert mgr.config.effects_settings.idle_seconds == 120.0
     # The coordinator has no cached copy (no `coord.fade_seconds`).
     assert not hasattr(coord, "fade_seconds")
     assert not hasattr(coord, "hold_seconds")
@@ -396,10 +402,13 @@ def test_config_update_live_applies_to_render_layer():
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
         config=SimpleNamespace(
-            effect_settings=EffectsSettings(),
+            effects_settings=EffectsSettings(),
             text_settings=TextSettings(),
         ),
     )
+    mgr.get_effects_settings = lambda: mgr.config.effects_settings
+    mgr.get_text_settings = lambda: mgr.config.text_settings
+    mgr.get_messages = lambda limit=100, suppress=True: []
     coord = EffectsCoordinator(
         message_manager=mgr,
         display=_StubDisplay(),
@@ -416,13 +425,13 @@ def test_config_update_live_applies_to_render_layer():
     # Now update the manager's config to a non-default SignConfig.
     cfg = SignConfig(
         text_settings=TextSettings(speed=5, color=0x00FF00),
-        effect_settings=EffectsSettings(
+        effects_settings=EffectsSettings(
             effects=[{"name": "Fireworks", "enabled": True}],
             fade_seconds=0.5,
             hold_seconds=10.0,
         ),
     )
-    mgr.config.effect_settings = cfg.effect_settings
+    mgr.config.effects_settings = cfg.effects_settings
     mgr.config.text_settings = cfg.text_settings
 
     # Next tick: rotation hash differs, scroller color/speed differ.
@@ -431,7 +440,7 @@ def test_config_update_live_applies_to_render_layer():
     assert scroller.frame_delay == 0.020
     assert scroller.offset_seconds == 0.5
     # Pacing lives on the manager; the coordinator has no copy.
-    assert mgr.config.effect_settings.fade_seconds == 0.5
-    assert mgr.config.effect_settings.hold_seconds == 10.0
+    assert mgr.config.effects_settings.fade_seconds == 0.5
+    assert mgr.config.effects_settings.hold_seconds == 10.0
     # The Fireworks effect was built and added to the rotation.
     assert any(type(fx).__name__ == "Fireworks" for fx in coord.effects)

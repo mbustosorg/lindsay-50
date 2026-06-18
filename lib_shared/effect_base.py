@@ -15,7 +15,7 @@ class Bitmap:
     Stores one palette index per pixel in a flat bytearray (row-major).
     """
 
-    def __init__(self, width, height):
+    def __init__(self, width: int, height: int) -> None:
         self.width = width
         self.height = height
         self._buf = bytearray(width * height)
@@ -38,7 +38,7 @@ class Bitmap:
 class Palette:
     """Fixed-size list of 0xRRGGBB colors, indexed like displayio.Palette."""
 
-    def __init__(self, size):
+    def __init__(self, size: int) -> None:
         self._colors = [0] * size
 
     def __setitem__(self, i, color):
@@ -66,7 +66,10 @@ class Effect:
     """Base for background effects: palette-based brightness fade + canvas blit.
 
     Subclasses set `self.bitmap`, `self.palette`, and (optionally) `self.scale`,
-    then call `self._init_render()` once the palette is populated.
+    then call `self._init_render()` once the palette is populated. Subclasses
+    must implement `tick()` to advance one frame; the default `render()`
+    handles the indexed Bitmap → canvas blit but full-color effects (video,
+    PNG) override it.
     """
 
     bitmap: Bitmap  # subclasses must set
@@ -77,14 +80,18 @@ class Effect:
         # Captured for palette-based brightness fading (see set_brightness).
         self._original_palette = [self.palette[i] for i in range(len(self.palette))]
 
-    def set_brightness(self, b):
+    def tick(self) -> None:
+        """Advance one frame. Subclasses must override."""
+        raise NotImplementedError
+
+    def set_brightness(self, b: float) -> None:
         for i, c in enumerate(self._original_palette):
             r = int(((c >> 16) & 0xFF) * b)
             g = int(((c >> 8) & 0xFF) * b)
             bl = int((c & 0xFF) * b)
             self.palette[i] = (r << 16) | (g << 8) | bl
 
-    def render(self, canvas):
+    def render(self, canvas) -> None:
         """Blit nonzero pixels onto the canvas, honoring self.scale.
 
         Index 0 is the (black) background and is skipped — the canvas is cleared

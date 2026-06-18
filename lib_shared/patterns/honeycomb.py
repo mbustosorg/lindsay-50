@@ -18,6 +18,7 @@ import time
 
 import numpy as np
 
+from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Effect
 
 logger = logging.getLogger("heart")

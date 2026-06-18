@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Callable, Optional
 
-from lib_shared.models import MessageEnvelope, Message, SignConfig
+from lib_shared.models import EffectsSettings, MessageEnvelope, Message, SignConfig, TextSettings
 from lib_shared.messages import InMemoryMessages
 
 logger = logging.getLogger(__name__)
@@ -522,3 +522,23 @@ class MessageManager:
 
     def get_config(self) -> SignConfig:
         return self._config
+
+    def get_effects_settings(self) -> EffectsSettings:
+        """Live reference to the v2 effects-settings block (rotation + pacing).
+
+        Returns the live `EffectsSettings` instance held by the manager's
+        `SignConfig` — NOT a copy. Consumers (e.g. `EffectsCoordinator`)
+        read this on every tick to observe rotation and pacing updates
+        without the manager broadcasting an `apply_settings` callback.
+        """
+        return self._config.effects_settings
+
+    def get_text_settings(self) -> TextSettings:
+        """Live reference to the v2 text-settings block (color, speed).
+
+        Returns the live `TextSettings` instance held by the manager's
+        `SignConfig` — NOT a copy. Consumers read this on every tick
+        to observe text-color / speed updates without an
+        `apply_settings` callback.
+        """
+        return self._config.text_settings

@@ -398,11 +398,11 @@ def _save_and_publish(cfg: SignConfig) -> None:
     logger.info(
         "[flask] _save_and_publish: publishing config envelope "
         "rotation=%s text=(speed=%d, color=#%06x) pacing=(fade=%s, hold=%s)",
-        [(e["name"], e["enabled"]) for e in cfg_dict["effect_settings"]["effects"]],
+        [(e["name"], e["enabled"]) for e in cfg_dict["effects_settings"]["effects"]],
         cfg_dict["text_settings"]["speed"],
         cfg_dict["text_settings"]["color"],
-        cfg_dict["effect_settings"]["fade_seconds"],
-        cfg_dict["effect_settings"]["hold_seconds"],
+        cfg_dict["effects_settings"]["fade_seconds"],
+        cfg_dict["effects_settings"]["hold_seconds"],
     )
     _mqtt_client_publish_config(cfg_dict)
 
@@ -449,49 +449,49 @@ def _build_sign_config_from_request(data: dict) -> tuple:
     # accepted through the same code path as v2.
     data = migrate(data, current_version=SignConfig.CURRENT_VERSION)
 
-    # Validate effect_settings.
-    es = data.get("effect_settings")
+    # Validate effects_settings.
+    es = data.get("effects_settings")
     if es is not None:
         if not isinstance(es, dict):
-            return None, (jsonify({"error": "effect_settings must be an object"}), 400)
+            return None, (jsonify({"error": "effects_settings must be an object"}), 400)
         effects_list = es.get("effects")
         if not isinstance(effects_list, list):
-            return None, (jsonify({"error": "effect_settings.effects must be a list"}), 400)
+            return None, (jsonify({"error": "effects_settings.effects must be a list"}), 400)
         for idx, entry in enumerate(effects_list):
             if not isinstance(entry, dict):
                 return None, (
-                    jsonify({"error": f"effect_settings.effects[{idx}]: must be an object"}),
+                    jsonify({"error": f"effects_settings.effects[{idx}]: must be an object"}),
                     400,
                 )
             name = entry.get("name")
             enabled = entry.get("enabled")
             if not isinstance(name, str):
                 return None, (
-                    jsonify({"error": (f"effect_settings.effects[{idx}]: missing or invalid 'name'")}),
+                    jsonify({"error": (f"effects_settings.effects[{idx}]: missing or invalid 'name'")}),
                     400,
                 )
             if not isinstance(enabled, bool):
                 return None, (
-                    jsonify({"error": (f"effect_settings.effects[{idx}]: missing or invalid 'enabled'")}),
+                    jsonify({"error": (f"effects_settings.effects[{idx}]: missing or invalid 'enabled'")}),
                     400,
                 )
             if name not in _KNOWN_EFFECT_NAMES:
                 return None, (
-                    jsonify({"error": f"effect_settings.effects: unknown effect '{name}'"}),
+                    jsonify({"error": f"effects_settings.effects: unknown effect '{name}'"}),
                     400,
                 )
         for field in ("fade_seconds", "hold_seconds", "intro_seconds", "idle_seconds"):
             v = es.get(field)
             if v is not None and (not isinstance(v, (int, float)) or v < 0):
                 return None, (
-                    jsonify({"error": (f"effect_settings.{field}: must be a non-negative number")}),
+                    jsonify({"error": (f"effects_settings.{field}: must be a non-negative number")}),
                     400,
                 )
         rc = es.get("recent_count")
         if rc is not None:
             if isinstance(rc, bool) or not isinstance(rc, int) or rc < 1:
                 return None, (
-                    jsonify({"error": ("effect_settings.recent_count: must be a positive integer")}),
+                    jsonify({"error": ("effects_settings.recent_count: must be a positive integer")}),
                     400,
                 )
 
@@ -669,15 +669,15 @@ def settings():
 
         # Effect settings: pacing (fade/hold/intro/idle seconds), recent_count,
         # and the rotation list (handled by the multi-effect form below).
-        es_form = cfg.effect_settings
+        es_form = cfg.effects_settings
         for field in ("fade_seconds", "hold_seconds", "intro_seconds", "idle_seconds"):
-            raw = request.form.get(f"effect_settings_{field}")
+            raw = request.form.get(f"effects_settings{field}")
             if raw is not None and raw != "":
                 try:
                     setattr(es_form, field, float(raw))
                 except ValueError:
                     pass
-        rc_raw = request.form.get("effect_settings_recent_count")
+        rc_raw = request.form.get("effects_settings")
         if rc_raw is not None and rc_raw != "":
             try:
                 es_form.recent_count = int(rc_raw)
@@ -697,7 +697,7 @@ def settings():
         for entry in _DEFAULT_EFFECTS_LIST_FULL:
             new_effects.append({"name": entry["name"], "enabled": entry["name"] in enabled_map})
         es_form.effects = new_effects
-        cfg.effect_settings = es_form
+        cfg.effects_settings = es_form
 
         names = request.form.getlist("sender_name")
         phones = request.form.getlist("sender_phone")

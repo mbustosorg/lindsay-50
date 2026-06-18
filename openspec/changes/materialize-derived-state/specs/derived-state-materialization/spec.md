@@ -89,29 +89,29 @@ The system SHALL NOT provide a `set_text(...)` method on `EffectsCoordinator`, S
 
 ### Requirement: The on_change callback applies config changes to the coordinator and fans out to JS in a single handler
 
-The system SHALL construct `MessageManager` with a single `on_change: Callable[[], None] | None` callback. The callback SHALL be the only Python-side fan-out point: it SHALL apply the new config to the coordinator by calling `coordinator.apply_settings(effect_settings, text_settings)` with the current values from the manager's config, and (in the browser) it SHALL additionally call `create_proxy(_on_change_js)()` to notify JS subscribers. The `MessageManager` itself SHALL NOT hold a reference to the coordinator; the callback is a closure constructed by the entrypoint (the Pi's `main.py` or the browser's `preview_main.py`) with the coordinator in scope. The `coordinator.apply_settings(effect_settings, text_settings)` method SHALL handle pacing-field updates, effects-rotation rebuild (when the effects list changes), and scroller text-settings updates (when color or speed change) — and SHALL be idempotent across message-only emits so the callback is cheap on every tick.
+The system SHALL construct `MessageManager` with a single `on_change: Callable[[], None] | None` callback. The callback SHALL be the only Python-side fan-out point: it SHALL apply the new config to the coordinator by calling `coordinator.apply_settings(effects_settings, text_settings)` with the current values from the manager's config, and (in the browser) it SHALL additionally call `create_proxy(_on_change_js)()` to notify JS subscribers. The `MessageManager` itself SHALL NOT hold a reference to the coordinator; the callback is a closure constructed by the entrypoint (the Pi's `main.py` or the browser's `preview_main.py`) with the coordinator in scope. The `coordinator.apply_settings(effects_settings, text_settings)` method SHALL handle pacing-field updates, effects-rotation rebuild (when the effects list changes), and scroller text-settings updates (when color or speed change) — and SHALL be idempotent across message-only emits so the callback is cheap on every tick.
 
 #### Scenario: on_change applies the new config to the coordinator on every emit
 - **WHEN** `MessageManager._emit_change()` is invoked from either `_handle_message()` or `_handle_config()`
 - **THEN** the `on_change` callback is called exactly once
-- **AND** the callback calls `coordinator.apply_settings(manager.config.effect_settings, manager.config.text_settings)` to apply the current config to the coordinator
+- **AND** the callback calls `coordinator.apply_settings(manager.config.effects_settings, manager.config.text_settings)` to apply the current config to the coordinator
 
 #### Scenario: apply_settings updates pacing fields
-- **WHEN** `coordinator.apply_settings(effect_settings, text_settings)` is called
-- **THEN** `coordinator.fade_seconds`, `coordinator.hold_seconds`, `coordinator.intro_seconds`, `coordinator.idle_seconds`, and `coordinator.recent_count` reflect the values from `effect_settings`
+- **WHEN** `coordinator.apply_settings(effects_settings, text_settings)` is called
+- **THEN** `coordinator.fade_seconds`, `coordinator.hold_seconds`, `coordinator.intro_seconds`, `coordinator.idle_seconds`, and `coordinator.recent_count` reflect the values from `effects_settings`
 
 #### Scenario: apply_settings rebuilds effects when the rotation changes
-- **WHEN** `coordinator.apply_settings(effect_settings, text_settings)` is called and `effect_settings.effects` differs from the prior rotation
-- **THEN** `coordinator.effects` is reassigned to a fresh `build_effects(effect_settings, display=coordinator.display)` result
+- **WHEN** `coordinator.apply_settings(effects_settings, text_settings)` is called and `effects_settings.effects` differs from the prior rotation
+- **THEN** `coordinator.effects` is reassigned to a fresh `build_effects(effects_settings, display=coordinator.display)` result
 - **AND** `coordinator.idx` is reset to `-1`
 
 #### Scenario: apply_settings updates the scroller when text settings change
-- **WHEN** `coordinator.apply_settings(effect_settings, text_settings)` is called and `text_settings.color` or `text_settings.speed` differs from the prior values
+- **WHEN** `coordinator.apply_settings(effects_settings, text_settings)` is called and `text_settings.color` or `text_settings.speed` differs from the prior values
 - **THEN** `coordinator.scroller.set_color(text_settings.color)` is called
 - **AND** `coordinator.scroller.set_speed(text_settings.speed)` is called
 
 #### Scenario: apply_settings is idempotent on message-only emits
-- **WHEN** `coordinator.apply_settings(effect_settings, text_settings)` is called with values that match the prior state
+- **WHEN** `coordinator.apply_settings(effects_settings, text_settings)` is called with values that match the prior state
 - **THEN** the function returns without rebuilding the effects rotation (the effects hash matches)
 - **AND** the function returns without calling `scroller.set_color` or `scroller.set_speed` (the text-settings hash matches)
 - **AND** pacing-field writes still occur but write the same values that were already in effect
@@ -132,7 +132,7 @@ The system SHALL construct `MessageManager` with a single `on_change: Callable[[
 - **AND** the file does not define `_dispatch_with_config`
 - **AND** the file does not assign `_message_mgr.dispatch = _dispatch_with_config` (the manager's own `dispatch` is the unpatched method)
 - **AND** the file does not call `coordinator.start(_startup_text)` (the coordinator's first pull produces the most recent message in the manager's buffer)
-- **AND** the `_on_change` function defined in main.py is a closure over the coordinator that calls `coord.apply_settings(manager.config.effect_settings, manager.config.text_settings)`
+- **AND** the `_on_change` function defined in main.py is a closure over the coordinator that calls `coord.apply_settings(manager.config.effects_settings, manager.config.text_settings)`
 
 ### Requirement: pytest tests/ stays at 304 pass + 1 skip
 
