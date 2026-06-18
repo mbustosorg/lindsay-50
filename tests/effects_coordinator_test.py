@@ -48,6 +48,13 @@ class _StubScroller:
         self.tick_calls = []
         self.render_calls = []
         self._brightness = 1.0
+        # Scroller text-settings state — driven by the coordinator's
+        # per-tick `_sync_render_layer` on a text_settings change.
+        self._color = 0xFF0000
+        self.frame_delay = 0.040
+        self.offset_seconds = 1.0
+        self.set_color_calls = []
+        self.set_speed_calls = []
 
     def set_text(self, text, width):
         self.set_text_calls.append((text, width))
@@ -56,6 +63,19 @@ class _StubScroller:
     def set_brightness(self, b):
         self.set_brightness_calls.append(b)
         self._brightness = b
+
+    def set_color(self, c):
+        self.set_color_calls.append(c)
+        self._color = c
+
+    def set_speed(self, s):
+        self.set_speed_calls.append(s)
+        if s <= 1:
+            self.frame_delay, self.offset_seconds = 0.080, 1.5
+        elif s >= 5:
+            self.frame_delay, self.offset_seconds = 0.020, 0.5
+        else:
+            self.frame_delay, self.offset_seconds = 0.040, 1.0
 
     def tick(self, width):
         self.tick_calls.append(width)
@@ -144,24 +164,36 @@ def _build(
     The default shape every state-machine test uses. Tests that
     need the unbound form (the `bind()` tests + no-op-when-unbound
     tests) call `_build_unbound()` instead.
+
+    The pacing values are plumbed into the stub manager's
+    `EffectSettings` — the coordinator reads them live from the
+    manager (no per-coordinator copy).
     """
     display = _StubDisplay()
     scroller = _StubScroller()
     fx_a = _make_effect("A")()
     fx_b = _make_effect("B")()
     heart = _make_effect("Heart")()
+    from lib_shared.models import EffectsSettings
+
     if message_manager is None:
         message_manager = _StubMessageManager()
+    # Always override the manager's effect_settings with the
+    # pacing values from this helper — the coordinator reads
+    # pacing live from the manager, and a passing test needs
+    # those values to land in the manager's EffectSettings.
+    message_manager.config.effect_settings = EffectsSettings(
+        fade_seconds=fade_seconds,
+        intro_seconds=intro_seconds,
+        hold_seconds=hold_seconds,
+        idle_seconds=idle_seconds,
+    )
     coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(
         message_manager=message_manager,
         display=display,
         scroller=scroller,
         effects=[fx_a, fx_b],
         heart=heart,
-        fade_seconds=fade_seconds,
-        hold_seconds=hold_seconds,
-        intro_seconds=intro_seconds,
-        idle_seconds=idle_seconds,
     )
     return coord, display, scroller, fx_a, fx_b, heart
 
@@ -181,13 +213,18 @@ def _build_unbound(
     because the test only needs to assert state, not the layer.
     """
     if message_manager is None:
-        message_manager = _StubMessageManager()
+        from lib_shared.models import EffectsSettings
+
+        message_manager = _StubMessageManager(
+            effect_settings=EffectsSettings(
+                fade_seconds=fade_seconds,
+                intro_seconds=intro_seconds,
+                hold_seconds=hold_seconds,
+                idle_seconds=idle_seconds,
+            ),
+        )
     coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(
         message_manager=message_manager,
-        fade_seconds=fade_seconds,
-        hold_seconds=hold_seconds,
-        intro_seconds=intro_seconds,
-        idle_seconds=idle_seconds,
     )
     return coord
 

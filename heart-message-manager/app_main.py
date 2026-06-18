@@ -140,19 +140,10 @@ def _on_change_js() -> None:
     registered via `App.registerOnChange(cb)`. Each listener
     re-renders whatever on its page could be affected by a
     state change (the page's `reRender` aggregator, typically).
+
+    The coordinator reads the manager's config live on every
+    tick — no explicit `apply_settings` call is needed here.
     """
-    try:
-        # Apply the new config to the coordinator so the preview's
-        # pacing, effects rotation, and scroller color/speed reflect
-        # the change. The manager itself is the single source of
-        # truth; this closure captures the app-scoped coordinator.
-        if _coordinator is not None:
-            _coordinator.apply_settings(
-                _message_manager.config.effect_settings,
-                _message_manager.config.text_settings,
-            )
-    except Exception as e:
-        print(f"[app_main] _on_change apply_settings failed: {e!r}")
     try:
         app = getattr(js.window, "App", None)
         if app is not None and hasattr(app, "_dispatchChange"):

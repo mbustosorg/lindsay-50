@@ -1,24 +1,32 @@
-"""Tests for `EffectsCoordinator.apply_settings` (the on_change target).
+"""Tests for `EffectsCoordinator`'s live-read model of MessageManager config.
 
-The `on_change` callback on the MessageManager (constructed in
-`heart-matrix-controller/main.py` and `heart-message-manager/preview_main.py`)
-calls `coord.apply_settings(manager.config.effect_settings,
-manager.config.text_settings)`. These tests pin down that contract:
+The coordinator holds no copy of the config — pacing fields
+(`fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`,
+`recent_count`), the rotation, and the scroller text settings
+(`color`, `speed`) all live on the manager. The coordinator reads
+them at tick time (pacing/rotation through `effect_settings` /
+`text_settings`, the render layer through the per-tick
+`_sync_render_layer` which is hash-guarded and idempotent).
 
-1. `apply_settings(effect_settings, text_settings)` writes the pacing
-   fields (`fade_seconds`, `hold_seconds`, `intro_seconds`,
-   `idle_seconds`, `recent_count`).
-2. `apply_settings` rebuilds `coordinator.effects` and resets
-   `coordinator.idx` when the declared rotation changes.
-3. `apply_settings` calls `coordinator.scroller.set_color(...)` and
-   `coordinator.scroller.set_speed(...)` when `text_settings.color` or
-   `text_settings.speed` changes.
-4. `apply_settings` is idempotent on message-only emits: no effects
-   rebuild, no scroller mutation (rotation + scroller hashes match).
-5. The on_change closure in `heart-matrix-controller/main.py` and
-   `heart-message-manager/preview_main.py` is a single function that
-   calls `coord.apply_settings(manager.config.effect_settings,
-   manager.config.text_settings)` (static check of the source files).
+These tests pin down that contract:
+
+1. `EffectsCoordinator(...)` exposes no `apply_settings` method and
+   no `fade_seconds` / `hold_seconds` / `intro_seconds` /
+   `idle_seconds` / `recent_count` fields. The coordinator
+   delegates to the manager.
+2. `_sync_render_layer` (called from `tick()`) refreshes the
+   rotation + scroller text settings from the manager's current
+   config, hash-guarded so an unchanged config is a no-op.
+3. `bind()` resets the hash cache so the first tick after a
+   fresh `bind()` re-runs the heavier work — the app-scoped
+   coordinator's pre-bind ticks (during the seed) never had a
+   render layer to refresh, so the bind is the first chance to
+   populate the rotation + scroller from the seeded config.
+4. The `on_change` closure in `heart-matrix-controller/main.py`
+   and `heart-message-manager/app_main.py` does NOT call
+   `apply_settings` — the coordinator pulls config live on its
+   own ticks. The closures exist for symmetry (and for the JS
+   fan-out to `App._dispatchChange`).
 """
 
 import re
@@ -47,12 +55,13 @@ class _StubDisplay:
         self.height = 64
         self.canvas = _StubCanvas()
         self.clear_called = 0
+        self.render_calls = 0
 
     def clear(self):
         self.clear_called += 1
 
     def render(self, effect, scroller):
-        pass
+        self.render_calls += 1
 
 
 class _StubScroller:
@@ -73,8 +82,6 @@ class _StubScroller:
 
     def set_speed(self, s):
         self.set_speed_calls.append(s)
-        # Map speed (1..5) to (frame_delay, offset_seconds) like the
-        # real PreviewScroller does.
         if s <= 1:
             self.frame_delay, self.offset_seconds = 0.080, 1.5
         elif s >= 5:
@@ -95,8 +102,9 @@ class _StubScroller:
 def _make_effect(name):
 
     class _Fx:
-        def __init__(self):
+        def __init__(self, display=None):
             self.brightness = 1.0
+            self.display = display
 
         def tick(self):
             pass
@@ -111,118 +119,186 @@ def _make_effect(name):
     return _Fx
 
 
-def _build(effect_settings=None, text_settings=None):
-    mgr = SimpleNamespace(
+def _make_manager(effect_settings=None, text_settings=None):
+    return SimpleNamespace(
+        messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
         config=SimpleNamespace(
             effect_settings=effect_settings or EffectsSettings(),
             text_settings=text_settings or TextSettings(),
-        )
+        ),
     )
+
+
+def _build_bound(message_manager=None):
+    mgr = message_manager or _make_manager()
+    display = _StubDisplay()
+    scroller = _StubScroller()
+    fx = _make_effect("Fireworks")(display=display)
+    heart = _make_effect("Heart")(display=display)
     coord = EffectsCoordinator(
         message_manager=mgr,
-        display=_StubDisplay(),
-        scroller=_StubScroller(),
-        effects=[_make_effect("Fireworks")()],
-        heart=_make_effect("Heart")(),
+        display=display,
+        scroller=scroller,
+        effects=[fx],
+        heart=heart,
     )
-    return coord
+    return coord, mgr, display, scroller
 
 
-# --- Scenario 1: apply_settings writes pacing fields -------------------------
+# --- Scenario 1: the coordinator holds no config copy ------------------------
 
 
-def test_apply_settings_writes_pacing_fields():
-    """apply_settings writes fade_seconds, hold_seconds, intro_seconds,
-    idle_seconds, recent_count in place."""
-    coord = _build()
-    assert coord.fade_seconds == 2.0
-    assert coord.hold_seconds == 15.0
-    new = EffectsSettings(
-        fade_seconds=0.5,
-        hold_seconds=7.0,
-        intro_seconds=2.0,
-        idle_seconds=120.0,
-        recent_count=3,
+def test_coordinator_has_no_apply_settings_method():
+    """The EffectsCoordinator no longer exposes `apply_settings` —
+    config updates land via the manager, the coordinator reads
+    live at tick time."""
+    coord, _, _, _ = _build_bound()
+    assert not hasattr(coord, "apply_settings"), (
+        "EffectsCoordinator should not have apply_settings — "
+        "the coordinator reads config live from message_manager.config"
     )
-    coord.apply_settings(new)
-    assert coord.fade_seconds == 0.5
-    assert coord.hold_seconds == 7.0
-    assert coord.intro_seconds == 2.0
-    assert coord.idle_seconds == 120.0
-    assert coord.recent_count == 3
 
 
-# --- Scenario 2: apply_settings rebuilds effects when rotation changes -------
+def test_coordinator_has_no_cached_pacing_fields():
+    """The coordinator does not store `fade_seconds`,
+    `hold_seconds`, `intro_seconds`, `idle_seconds`, or
+    `recent_count` as instance attributes — those are read from
+    the manager on demand."""
+    coord, _, _, _ = _build_bound()
+    for field in (
+        "fade_seconds",
+        "hold_seconds",
+        "intro_seconds",
+        "idle_seconds",
+        "recent_count",
+    ):
+        assert not hasattr(coord, field), (
+            f"EffectsCoordinator should not cache {field!r} — " f"it lives on message_manager.config.effect_settings"
+        )
 
 
-def test_apply_settings_rebuilds_effects_on_rotation_change():
-    """When the declared rotation changes, apply_settings rebuilds
-    `coord.effects` and resets `coord.idx = -1`."""
-    coord = _build()
-    # First rotation: Fireworks only.
-    rot1 = EffectsSettings(effects=[{"name": "Fireworks", "enabled": True}])
-    coord.apply_settings(rot1)
-    assert len(coord.effects) == 1
-    assert type(coord.effects[0]).__name__ == "Fireworks"
+def test_coordinator_constructor_rejects_pacing_kwargs():
+    """The constructor dropped the per-pacing kwargs (the values
+    come from the manager)."""
+    with pytest.raises(TypeError, match="fade_seconds"):
+        EffectsCoordinator(
+            message_manager=_make_manager(),
+            display=_StubDisplay(),
+            scroller=_StubScroller(),
+            effects=[],
+            heart=None,
+            fade_seconds=1.0,
+        )
+
+
+def test_coordinator_constructor_rejects_settings_kwarg():
+    """The constructor dropped the `settings=` kwarg (the manager
+    is the source of truth)."""
+    with pytest.raises(TypeError, match="settings"):
+        EffectsCoordinator(
+            message_manager=_make_manager(),
+            display=_StubDisplay(),
+            scroller=_StubScroller(),
+            effects=[],
+            heart=None,
+            settings=EffectsSettings(),
+        )
+
+
+# --- Scenario 2: tick reads pacing live from the manager ----------------------
+
+
+def test_tick_reads_intro_seconds_from_manager():
+    """The first tick after `start()` with `intro_seconds=0.0`
+    leaves `intro` immediately (the manager's value). With
+    `intro_seconds=0.0`, the state machine never sits in
+    `intro`; with a larger value it does. The structural
+    assertion is that the manager's value drives the
+    transition."""
+    mgr = _make_manager(
+        effect_settings=EffectsSettings(intro_seconds=0.0),
+    )
+    coord, _, _, _ = _build_bound(message_manager=mgr)
+    coord.start()
+    coord.tick()
+    # `intro` is a transient mode when intro_seconds is 0.0; the
+    # first tick should have moved past it.
+    assert coord.mode != "intro"
+    # The source of truth is the manager.
+    assert mgr.config.effect_settings.intro_seconds == 0.0
+
+
+def test_get_display_message_reads_recent_count_from_manager():
+    """`get_display_message` reads `recent_count` from the manager."""
+    # Empty buffer with a low recent_count: still returns None
+    # (nothing to display).
+    mgr = _make_manager(
+        effect_settings=EffectsSettings(recent_count=3),
+    )
+    coord, _, _, _ = _build_bound(message_manager=mgr)
+    assert coord.get_display_message() is None
+
+
+# --- Scenario 3: _sync_render_layer refreshes rotation + scroller -----------
+
+
+def test_tick_refreshes_rotation_when_manager_rotation_changes():
+    """The first tick builds the rotation from the manager's
+    current `effect_settings.effects` list. Changing the
+    manager's config and ticking again rebuilds the rotation."""
+    mgr = _make_manager(
+        effect_settings=EffectsSettings(
+            effects=[{"name": "Fireworks", "enabled": True}],
+        ),
+    )
+    coord, _, _, _ = _build_bound(message_manager=mgr)
+    coord.tick()
     first_id = id(coord.effects[0])
+    assert type(coord.effects[0]).__name__ == "Fireworks"
 
-    # Second rotation: Fireworks + Flame (a new one). The hash differs,
-    # so the effects list is rebuilt.
-    rot2 = EffectsSettings(
-        effects=[
-            {"name": "Fireworks", "enabled": True},
-            {"name": "Flame", "enabled": True},
-        ]
+    # Update the manager's rotation to a different effect.
+    mgr.config.effect_settings = EffectsSettings(
+        effects=[{"name": "Flame", "enabled": True}],
     )
-    coord.apply_settings(rot2)
-    assert len(coord.effects) == 2
-    # The Fireworks instance is a fresh object (the rebuild constructs
-    # new Effect instances even if the name matches).
+    coord.tick()
+    assert type(coord.effects[0]).__name__ == "Flame"
     assert id(coord.effects[0]) != first_id
-    # idx is reset to -1 so the next fade picks the head.
+    # idx is reset to -1 so the next fade picks the head of the new list.
     assert coord.idx == -1
 
 
-def test_apply_settings_keeps_effects_when_rotation_unchanged():
-    """When the declared rotation is identical, apply_settings does
-    NOT rebuild the effects list (idempotent on message-only emits)."""
-    coord = _build()
-    rot = EffectsSettings(effects=[{"name": "Fireworks", "enabled": True}])
-    coord.apply_settings(rot)
-    first_id = id(coord.effects[0])
-    # Same rotation again.
-    coord.apply_settings(rot)
-    assert id(coord.effects[0]) == first_id
-
-
-# --- Scenario 3: apply_settings mutates scroller on text settings change -----
-
-
-def test_apply_settings_mutates_scroller_on_text_settings_change():
-    """When text_settings.color or .speed changes, apply_settings calls
-    set_color / set_speed on the scroller."""
-    scroller = _StubScroller()
-    coord = EffectsCoordinator(
-        message_manager=SimpleNamespace(
-            config=SimpleNamespace(
-                effect_settings=EffectsSettings(),
-                text_settings=TextSettings(),
-            )
+def test_tick_keeps_effects_when_rotation_unchanged():
+    """When the manager's rotation is unchanged, the tick is a
+    no-op for the rotation list (hash-guarded)."""
+    mgr = _make_manager(
+        effect_settings=EffectsSettings(
+            effects=[{"name": "Fireworks", "enabled": True}],
         ),
-        display=_StubDisplay(),
-        scroller=scroller,
-        effects=[_make_effect("Fireworks")()],
-        heart=_make_effect("Heart")(),
     )
-    # Seed the scroller's current state via the first call (default
-    # TextSettings). This establishes the baseline hash so the second
-    # call can detect a real change.
-    coord.apply_settings(EffectsSettings(), TextSettings())
-    scroller.set_color_calls.clear()
-    scroller.set_speed_calls.clear()
+    coord, _, _, _ = _build_bound(message_manager=mgr)
+    coord.tick()
+    fx_id = id(coord.effects[0])
+    coord.tick()
+    coord.tick()
+    assert id(coord.effects[0]) == fx_id
 
-    # New color and speed.
-    coord.apply_settings(EffectsSettings(), TextSettings(color=0x00FF00, speed=5))
+
+def test_tick_updates_scroller_color_and_speed_on_change():
+    """When the manager's `text_settings` changes, the next
+    tick calls `scroller.set_color(...)` and
+    `scroller.set_speed(...)`."""
+    mgr = _make_manager(text_settings=TextSettings())
+    coord, _, _, scroller = _build_bound(message_manager=mgr)
+    # First tick with the default text settings is a no-op (the
+    # coordinator's text-settings hash starts at the default,
+    # matching the manager's default).
+    coord.tick()
+    assert scroller.set_color_calls == []
+    assert scroller.set_speed_calls == []
+
+    # Update the manager's text settings.
+    mgr.config.text_settings = TextSettings(color=0x00FF00, speed=5)
+    coord.tick()
     assert scroller.set_color_calls == [0x00FF00]
     assert scroller.set_speed_calls == [5]
     assert scroller._color == 0x00FF00
@@ -230,221 +306,147 @@ def test_apply_settings_mutates_scroller_on_text_settings_change():
     assert scroller.offset_seconds == 0.5
 
 
-def test_apply_settings_skips_scroller_when_text_unchanged():
-    """When text_settings is unchanged, apply_settings does NOT call
-    set_color / set_speed (idempotent on message-only emits)."""
-    scroller = _StubScroller()
-    coord = EffectsCoordinator(
-        message_manager=SimpleNamespace(
-            config=SimpleNamespace(
-                effect_settings=EffectsSettings(),
-                text_settings=TextSettings(color=0x00FF00, speed=5),
-            )
-        ),
-        display=_StubDisplay(),
-        scroller=scroller,
-        effects=[_make_effect("Fireworks")()],
-        heart=_make_effect("Heart")(),
+def test_tick_skips_scroller_when_text_settings_unchanged():
+    """When the manager's text settings are unchanged, the tick
+    does NOT call `set_color` / `set_speed` (hash-guarded)."""
+    mgr = _make_manager(
+        text_settings=TextSettings(color=0x00FF00, speed=5),
     )
-    coord.apply_settings(EffectsSettings(), TextSettings(color=0x00FF00, speed=5))
+    coord, _, _, scroller = _build_bound(message_manager=mgr)
+    # First tick writes the manager's non-default text settings to
+    # the scroller (hash differs from the coordinator's initial
+    # default).
+    coord.tick()
     assert scroller.set_color_calls == [0x00FF00]
     assert scroller.set_speed_calls == [5]
-    # Second call with the same text settings: hashes match, no mutation.
-    coord.apply_settings(EffectsSettings(), TextSettings(color=0x00FF00, speed=5))
+    coord.tick()
+    coord.tick()
+    # No additional calls beyond the first.
     assert scroller.set_color_calls == [0x00FF00]
     assert scroller.set_speed_calls == [5]
 
 
-# --- Scenario 4: apply_settings is idempotent on message-only emits ----------
+# --- Scenario 4: bind() resets the hash cache -------------------------------
 
 
-def test_apply_settings_is_idempotent_on_message_only_emit():
-    """When only a new message arrives (no config change), apply_settings
-    must NOT rebuild the rotation or mutate the scroller — the relevant
-    fields are unchanged so the hashes match.
-
-    The MessageManager's `_emit_change` fires for both `_handle_message`
-    and `_handle_config`. A message-only emit should be a no-op for the
-    coordinator's apply_settings work, even though the manager's
-    internal state changed (the buffer grew).
-    """
+def test_bind_resets_hash_cache():
+    """After `bind()`, the first tick refreshes the render layer
+    with the manager's current config — even if the previous
+    pre-bind tick had already run a sync (it didn't, but the
+    hash cache is reset to be safe across mid-life binds)."""
     scroller = _StubScroller()
-    coord = EffectsCoordinator(
-        message_manager=SimpleNamespace(
-            config=SimpleNamespace(
-                effect_settings=EffectsSettings(
-                    effects=[{"name": "Fireworks", "enabled": True}],
-                    fade_seconds=1.0,
-                ),
-                text_settings=TextSettings(color=0xFF6400, speed=3),
-            )
+    display = _StubDisplay()
+    fx = _make_effect("Fireworks")(display=display)
+    heart = _make_effect("Heart")(display=display)
+    mgr = _make_manager(
+        effect_settings=EffectsSettings(
+            effects=[{"name": "Fireworks", "enabled": True}],
         ),
-        display=_StubDisplay(),
-        scroller=scroller,
-        effects=[_make_effect("Fireworks")()],
-        heart=_make_effect("Heart")(),
-    )
-    # First call: seed the hashes. Effects rebuild (was empty), scroller
-    # is updated (color/speed are the defaults, hashes match, so no
-    # scroller mutation is expected on the first call).
-    coord.apply_settings(
-        EffectsSettings(effects=[{"name": "Fireworks", "enabled": True}], fade_seconds=1.0),
-        TextSettings(color=0xFF6400, speed=3),
-    )
-    effects_id_before = id(coord.effects[0])
-    scroller_color_calls_before = list(scroller.set_color_calls)
-    scroller_speed_calls_before = list(scroller.set_speed_calls)
-
-    # Second call: same effect_settings, same text_settings. Idempotent.
-    coord.apply_settings(
-        EffectsSettings(effects=[{"name": "Fireworks", "enabled": True}], fade_seconds=1.0),
-        TextSettings(color=0xFF6400, speed=3),
-    )
-    assert id(coord.effects[0]) == effects_id_before
-    assert scroller.set_color_calls == scroller_color_calls_before
-    assert scroller.set_speed_calls == scroller_speed_calls_before
-
-
-# --- Scenario 4b: apply_settings is defensive when the coordinator is unbound -----
-
-
-def test_apply_settings_unbound_does_not_crash():
-    """The app-scoped coordinator is constructed in `app_main.py`
-    WITHOUT a render layer; the manager's `on_change` callback
-    fires `apply_settings` before the preview has had a chance to
-    `bind`. `apply_settings` must not crash with the
-    `ValueError('build_effects requires `display` to instantiate
-    effects')` the previous behavior raised — the pacing fields
-    are still written (cheap, harmless pre-bind) but the effects
-    rebuild and the scroller mutation are skipped.
-
-    The hash state must also stay untouched in the unbound case,
-    so the first apply after `bind()` re-runs the heavier work
-    with the now-present display.
-    """
-    mgr = SimpleNamespace(
-        config=SimpleNamespace(
-            effect_settings=EffectsSettings(
-                effects=[{"name": "Fireworks", "enabled": True}],
-            ),
-            text_settings=TextSettings(),
-        )
+        text_settings=TextSettings(color=0x00FF00, speed=5),
     )
     coord = EffectsCoordinator(
         message_manager=mgr,
-        display=None,  # unbound — mimics the app-scoped coordinator at PyScript load time
+        display=None,  # unbound
         scroller=None,
         effects=[],
         heart=None,
     )
-    assert not coord.is_bound()
-
-    # Pre-apply the first config so pacing has the seeded values.
-    seed_settings = EffectsSettings(
-        effects=[{"name": "Fireworks", "enabled": True}],
-        fade_seconds=1.5,
-    )
-    coord.apply_settings(seed_settings)
-    # Pacing was written.
-    assert coord.fade_seconds == 1.5
-    # No crash, no rotation list mutation (display is None).
+    # Pre-bind tick: no display/scroller, so the per-tick
+    # `_sync_render_layer` early-returns. The hash cache stays
+    # at its initial value (the default-rotation hash).
+    coord.tick()
     assert coord.effects == []
-    # The hash was NOT updated, so a later apply (after bind) re-runs.
+    assert scroller.set_color_calls == []
+    pre_bind_effects_hash = coord._last_effects_hash
+    pre_bind_text_hash = coord._last_text_settings_hash
+
+    # Now bind the render layer. `bind()` resets both hashes
+    # to None so the first post-bind tick refreshes the
+    # rotation + scroller with the manager's non-default config.
+    coord.bind(display=display, scroller=scroller, effects=[fx], heart=heart)
     assert coord._last_effects_hash is None
-
-
-def test_bind_refreshes_state_from_passed_config():
-    """When `bind()` is called with the manager's current config, the
-    rotation + scroller get the seeded values — not the boot-time
-    defaults the preview constructed with. This is the path the
-    browser preview's `preview_main.py` uses to close the
-    app-scoped-coordinator race."""
-    scroller = _StubScroller()
-    mgr = SimpleNamespace(
-        config=SimpleNamespace(
-            effect_settings=EffectsSettings(
-                effects=[
-                    {"name": "Fireworks", "enabled": True},
-                    {"name": "Flame", "enabled": True},
-                ],
-                fade_seconds=1.5,
-            ),
-            text_settings=TextSettings(color=0x00FF00, speed=4),
-        )
-    )
-    coord = EffectsCoordinator(
-        message_manager=mgr,
-        display=None,  # unbound at first — same as app_main.py
-        scroller=None,
-        effects=[],
-        heart=None,
-    )
-    # Simulate the manager's on_change firing pre-bind.
-    coord.apply_settings(mgr.config.effect_settings, mgr.config.text_settings)
-    assert coord.effects == []  # defer until bind
-    assert not coord.is_bound()
-
-    # Preview bootstrap now binds the page-local render layer.
-    coord.bind(
-        display=_StubDisplay(),
-        scroller=scroller,
-        effects=[],
-        heart=_make_effect("Heart")(),
-        effect_settings=mgr.config.effect_settings,
-        text_settings=mgr.config.text_settings,
-    )
-    # After bind + refresh, the rotation is populated and the
-    # scroller was driven with the manager's text settings.
-    assert len(coord.effects) == 2
+    assert coord._last_text_settings_hash is None
+    coord.tick()
+    # The rotation was rebuilt (Fireworks is in the list).
+    assert any(type(f).__name__ == "Fireworks" for f in coord.effects)
+    # The scroller received the non-default text settings.
     assert scroller.set_color_calls == [0x00FF00]
-    assert scroller.set_speed_calls == [4]
+    assert scroller.set_speed_calls == [5]
+    # Hashes have moved on from their pre-bind values.
+    assert coord._last_effects_hash != pre_bind_effects_hash
+    assert coord._last_text_settings_hash != pre_bind_text_hash
 
 
-# --- Scenario 5: on_change closure in main.py / preview_main.py ---------------
+# --- Scenario 5: on_change closures do NOT call apply_settings ----------------
 
 
-def test_pi_main_uses_on_change_closure_with_apply_settings():
-    """The Pi's `_on_change` closure calls
-    `coord.apply_settings(manager.config.effect_settings,
-    manager.config.text_settings)`."""
+def test_pi_on_change_does_not_call_apply_settings():
+    """The Pi's `_on_change` closure is a no-op — the coordinator
+    reads config live, no `apply_settings` call needed.
+
+    The closure must still be wired to the manager (so the wiring
+    contract is symmetric across the Pi and the browser) — it's
+    just that the body no longer applies config.
+    """
     p = Path(__file__).parent.parent.parent / "heart-matrix-controller" / "main.py"
     src = p.read_text(encoding="utf-8")
-    # The closure must be passed as `on_change=_on_change` to MessageManager.
     assert re.search(
         r"on_change\s*=\s*_on_change", src
     ), "heart-matrix-controller/main.py must wire MessageManager(on_change=_on_change)"
-    # The closure body must call apply_settings with the two manager.config fields.
-    assert (
-        "coordinator.apply_settings(manager.config.effect_settings, manager.config.text_settings)" in src
-    ), "Pi _on_change must call coordinator.apply_settings(manager.config.effect_settings, manager.config.text_settings)"
+    # Check the closure body, not the docstring.
+    m = re.search(r"def _on_change\([^)]*\)[^:]*:\s*\n(.*?)(?=\ndef |\Z)", src, re.DOTALL)
+    assert m is not None, "could not extract Pi _on_change body"
+    body = m.group(1)
+    body = re.sub(r'"""[\s\S]*?"""', "", body, count=1)
+    assert "apply_settings" not in body, (
+        "Pi _on_change must not call coordinator.apply_settings — "
+        "the coordinator reads config live from message_manager.config"
+    )
 
 
-def test_app_main_uses_on_change_closure_with_apply_settings():
-    """The browser's app-scoped `MessageManager.on_change` callback
-    calls `coord.apply_settings(_message_manager.config.effect_settings,
-    _message_manager.config.text_settings)` so the preview's pacing,
-    rotation, and scroller color/speed reflect the change.
+def test_app_main_on_change_does_not_call_apply_settings():
+    """The browser's app-scoped `_on_change_js` callback is a
+    fan-out to `App._dispatchChange` only — no `apply_settings`
+    call, since the coordinator reads config live.
 
-    The preview page does NOT construct a per-page MessageManager —
-    the app-scoped one in `app_main.py` is the single source of truth.
+    The check looks at the function body, not the docstring
+    (the docstring still references the old design as historical
+    context for readers).
     """
     p = Path(__file__).parent.parent.parent / "heart-message-manager" / "app_main.py"
     src = p.read_text(encoding="utf-8")
-    # The manager's on_change callback must call apply_settings with
-    # the two manager.config fields.
-    assert (
-        "_coordinator.apply_settings(" in src
-    ), "app_main.py must call _coordinator.apply_settings(...) in the on_change path"
-    assert (
-        "_message_manager.config.effect_settings" in src
-    ), "app_main.py on_change must pass _message_manager.config.effect_settings"
-    assert (
-        "_message_manager.config.text_settings" in src
-    ), "app_main.py on_change must pass _message_manager.config.text_settings"
-    # The coordinator must be constructed with the app-scoped manager.
-    assert (
-        "EffectsCoordinator(message_manager=_message_manager)" in src
-    ), "app_main.py must construct the app-scoped coordinator with message_manager=_message_manager"
+    # The function body — between `def _on_change_js(...):` and the
+    # next top-level `def `, skipping the docstring (the docstring
+    # still references the old design as historical context).
+    m = re.search(r"def _on_change_js\([^)]*\)[^:]*:\s*\n(.*?)(?=\ndef |\Z)", src, re.DOTALL)
+    assert m is not None, "could not extract _on_change_js body"
+    body = m.group(1)
+    # Drop the docstring portion (between the first `"""` and the
+    # next `"""`).
+    body = re.sub(r'"""[\s\S]*?"""', "", body, count=1)
+    assert "apply_settings" not in body, (
+        "browser _on_change_js must not call apply_settings — "
+        "the coordinator reads config live from message_manager.config"
+    )
+    # The fan-out to JS is preserved.
+    assert "app._dispatchChange" in body, "app_main.py _on_change_js must still fan out to App._dispatchChange"
+
+
+def test_preview_main_does_not_pass_settings_to_bind():
+    """The preview's `coord.bind(...)` call must not pass
+    `effect_settings` / `text_settings` — the coordinator reads
+    those from the manager at tick time, and `bind()` does not
+    take config args anymore."""
+    p = Path(__file__).parent.parent.parent / "heart-message-manager" / "preview_main.py"
+    src = p.read_text(encoding="utf-8")
+    assert "coord.bind(" in src, "preview_main.py must call coord.bind(...)"
+    # `bind()` is the no-config-args flavor: display=, scroller=,
+    # effects=, heart=. No `effect_settings` or `text_settings` kwargs.
+    m = re.search(r"coord\.bind\(([^)]+)\)", src, re.DOTALL)
+    assert m is not None, "could not extract coord.bind(...) args"
+    bind_args = m.group(1)
+    assert "effect_settings" not in bind_args, "preview_main.py coord.bind(...) must not pass effect_settings"
+    assert "text_settings" not in bind_args, "preview_main.py coord.bind(...) must not pass text_settings"
 
 
 def test_preview_main_does_not_construct_per_page_manager():
@@ -453,11 +455,8 @@ def test_preview_main_does_not_construct_per_page_manager():
     is the single source of truth)."""
     p = Path(__file__).parent.parent.parent / "heart-message-manager" / "preview_main.py"
     src = p.read_text(encoding="utf-8")
-    # preview_main.py must not import MessageManager.
     assert (
         "from lib_shared.message_manager import" not in src
     ), "preview_main.py must not import MessageManager (the app-scoped one is the source of truth)"
-    # preview_main.py must not call the MessageManager constructor.
     assert "MessageManager(" not in src, "preview_main.py must not construct a per-page MessageManager"
-    # preview_main.py must not reassign window._message_manager.
     assert "js.window._message_manager" not in src, "preview_main.py must not reassign js.window._message_manager"

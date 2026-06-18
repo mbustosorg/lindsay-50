@@ -40,8 +40,16 @@ class _StubMessageManager:
     """Minimal MessageManager stub exposing just the surface EffectsCoordinator reads."""
 
     def __init__(self, messages=None, recent_count=5):
+        from lib_shared.models import EffectsSettings, TextSettings
+
         self._entries = list(messages or [])
         self._recent_count = recent_count
+        # The coordinator reads `recent_count` (and the rest of
+        # the pacing) live from `message_manager.config.effect_settings`.
+        self.config = SimpleNamespace(
+            effect_settings=EffectsSettings(recent_count=recent_count),
+            text_settings=TextSettings(),
+        )
 
     @property
     def messages(self):
@@ -62,9 +70,14 @@ def _build(message_manager=None, recent_count=5):
     """Build a coordinator with the minimum layer needed to construct one."""
     if message_manager is None:
         message_manager = _StubMessageManager(recent_count=recent_count)
+    else:
+        # Caller supplied a pre-built manager — override the
+        # `recent_count` it holds so the test's expected value
+        # takes effect (the coordinator reads it live from the
+        # manager).
+        message_manager.config.effect_settings.recent_count = recent_count
     coord = EffectsCoordinator(
         message_manager=message_manager,
-        recent_count=recent_count,
     )
     return coord, message_manager
 

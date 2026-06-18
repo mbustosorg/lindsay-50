@@ -33,12 +33,37 @@ from lib_shared.paho_mqtt_client import PahoMqttClient
 from lib_shared.effects_coordinator import EffectsCoordinator, build_effects
 from lib_shared.models import EffectsSettings, TextSettings
 
+
+def _on_change():
+    """Re-render the message table when the buffer changes.
+
+    Wired as the MessageManager's universal `on_change` callback. Fires
+    for every `_emit_change()` (new message, config update, etc.).
+    The coordinator has no state of its own that needs an explicit
+    sync — it reads the manager's config and buffer at every `tick()`,
+    so message-only emits do not need any action here. The
+    coordinator's own `tick()` is the single point that applies
+    config changes (rotation rebuild + scroller color/speed,
+    hash-guarded so message-only ticks cost only a small repr).
+    """
+    return None
+
+
+# Build the manager first — the coordinator needs it as a constructor
+# arg, and the manager doesn't depend on the display.
+manager = MessageManager(
+    messages_api_url=cfg.MESSAGES_API_URL,
+    config_api_url=cfg.CONFIG_API_URL,
+    api_key=cfg.API_SECRET_KEY,
+    on_change=_on_change,
+)
+
 display = MatrixDisplay()
 # The scroller takes its text settings from the v2 config. The boot-time
 # defaults are the same TextSettings().to_dict() values the admin UI
 # would write; the v2 envelope that arrives over MQTT shortly after
-# re-binds color and speed via `scroller.set_color()` and
-# `scroller.set_speed()`.
+# re-binds color and speed via the coordinator's tick-time
+# `_sync_render_layer()`.
 text_settings = TextSettings()
 scroller = MatrixScroller(
     display,
@@ -47,27 +72,6 @@ scroller = MatrixScroller(
 )
 heartbeat = Heartbeat(display)
 
-
-def _on_change():
-    """Apply the manager's current SignConfig to the coordinator + scroller.
-
-    Wired as the MessageManager's universal `on_change` callback. Fires
-    for every `_emit_change()` (new message, config update, etc.). The
-    manager does not hold a reference to the coordinator — this
-    closure captures it and calls `apply_settings(...)` on the
-    coordinator with the manager's current effect_settings and
-    text_settings. `apply_settings` is idempotent and hash-guarded, so
-    message-only emits do not trigger a rotation rebuild.
-    """
-    coordinator.apply_settings(manager.config.effect_settings, manager.config.text_settings)
-
-
-manager = MessageManager(
-    messages_api_url=cfg.MESSAGES_API_URL,
-    config_api_url=cfg.CONFIG_API_URL,
-    api_key=cfg.API_SECRET_KEY,
-    on_change=_on_change,
-)
 
 asyncio.run(manager.seed())
 
@@ -93,12 +97,11 @@ _boot_settings = EffectsSettings()
 effects = build_effects(_boot_settings, display=display)
 
 coordinator = EffectsCoordinator(
-    message_manager=None,  # patched below once `manager` exists
+    message_manager=manager,
     display=display,
     scroller=scroller,
     effects=effects,
     heart=heartbeat,
-    settings=_boot_settings,
 )
 
 # Kick off the boot splash. The coordinator's first pull (every 250 ms)

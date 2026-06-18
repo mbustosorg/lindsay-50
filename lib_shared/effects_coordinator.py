@@ -37,7 +37,7 @@ import logging
 import random
 import time
 
-from lib_shared.models import EffectsSettings
+from lib_shared.models import EffectsSettings, TextSettings
 
 log = logging.getLogger("heart")
 
@@ -142,22 +142,10 @@ class EffectsCoordinator:
         message_manager: required `MessageManager` instance. The
             coordinator reads messages and config from it. Construct
             one before constructing the coordinator and pass it in.
-        settings: optional `EffectsSettings` instance supplying
-            `fade_seconds`, `hold_seconds`, `intro_seconds`,
-            `idle_seconds`, and `recent_count`. When omitted, defaults
-            are used.
-        fade_seconds: seconds for one full fade (used when `settings` is None).
-        hold_seconds: seconds to keep a message fully visible (used when
-            `settings` is None).
-        intro_seconds: seconds to show the boot-splash heart (used when
-            `settings` is None).
-        idle_seconds: seconds of idleness before... no longer used for
-            a random pick (the in-memory deque is gone) but kept on
-            the dataclass for compat with the historic per-kwarg
-            defaults.
-        recent_count: retained on the dataclass for compat with the
-            historic per-kwarg defaults; no longer used at runtime
-            (no in-memory recent deque, no `recent_provider`).
+            The coordinator holds no copy of the config; pacing and
+            rotation updates are observed live by reading
+            `message_manager.config.effect_settings` /
+            `.text_settings` at tick time.
         fade_step: throttle (seconds) between palette writes during a fade.
         gamma: gamma exponent applied to the linear fade progress.
     """
@@ -174,33 +162,19 @@ class EffectsCoordinator:
         scroller=None,
         effects=None,
         heart=None,
-        settings: EffectsSettings | None = None,
-        fade_seconds: float = 2.0,
-        hold_seconds: float = 15.0,
-        intro_seconds: float = 5.0,
-        idle_seconds: float = 300.0,
-        recent_count: int = 5,
         fade_step: float = 0.04,
         gamma: float = 2.2,
     ):
         # Required — no default. Raises TypeError if a caller omits it.
+        # All live config (pacing fields, rotation, text settings) is
+        # read from `message_manager.config` at tick time — the
+        # coordinator holds no copy, so config updates land
+        # automatically without an explicit `apply_settings` call.
         self.message_manager = message_manager
         self.display = display
         self.scroller = scroller
         self.effects = list(effects) if effects is not None else []
         self.heart = heart
-        if settings is not None:
-            self.fade_seconds = settings.fade_seconds
-            self.hold_seconds = settings.hold_seconds
-            self.intro_seconds = settings.intro_seconds
-            self.idle_seconds = settings.idle_seconds
-            self.recent_count = settings.recent_count
-        else:
-            self.fade_seconds = fade_seconds
-            self.hold_seconds = hold_seconds
-            self.intro_seconds = intro_seconds
-            self.idle_seconds = idle_seconds
-            self.recent_count = recent_count
         # Throttles palette writes during a fade. Without this, a fast main loop
         # rewrites the palette far faster than the panel refreshes, wasting work.
         self.fade_step = fade_step
@@ -223,10 +197,19 @@ class EffectsCoordinator:
         self._last_shown_message_id: str | None = None
         # Hashes that guard the heavier config-application work
         # (effects rebuild, scroller text settings mutation) in
-        # `apply_settings`. `None` means "never applied" so the first
-        # apply always runs the heavier work.
-        self._last_effects_hash: str | None = None
-        self._last_text_settings_hash: str | None = None
+        # `_sync_render_layer`. Initialized to the hash of the
+        # `EffectsSettings()` / `TextSettings()` defaults so the
+        # first tick's per-tick sync is a no-op when the manager's
+        # config is still at its default (which is the typical
+        # state at boot — the v2 config arrives over MQTT shortly
+        # after and the hash then differs, triggering the
+        # rebuild). The bootstrap `effects=` / scroller color /
+        # speed constructor args survive until that first real
+        # config update. `bind()` resets both to None so the
+        # first tick after a fresh bind re-runs the heavier work
+        # with the now-attached render layer.
+        self._last_effects_hash: str | None = self._hash_effects(EffectsSettings().effects)
+        self._last_text_settings_hash: str | None = self._hash_text_settings(TextSettings())
 
     def is_bound(self) -> bool:
         """True when the coordinator has a render layer (display + scroller + effects + heart).
@@ -246,8 +229,6 @@ class EffectsCoordinator:
         scroller,
         effects,
         heart=None,
-        effect_settings: EffectsSettings | None = None,
-        text_settings=None,
     ) -> None:
         """Attach (or swap) the render layer.
 
@@ -256,18 +237,13 @@ class EffectsCoordinator:
         not supplied (preview uses the first effect as the
         boot-splash; the Pi passes an explicit Heartbeat instance).
 
-        The app-scoped coordinator is constructed unbound (no
-        render layer) by `app_main.py`; the manager's `on_change`
-        callback fires `apply_settings` on it before the preview
-        has had a chance to `bind`. `apply_settings` is therefore
-        defensive about a missing `display` — pacing fields are
-        still written (cheap, harmless pre-bind) but the
-        effects rebuild and the scroller mutation are skipped.
-        To avoid a stale pre-bind rotation hanging around after
-        the preview finally binds, the caller can pass the
-        current `effect_settings` and `text_settings` here; we
-        forward them through `apply_settings` to refresh the
-        render layer with the manager's current config.
+        The rotation / scroller text-settings caches are reset on
+        bind, so the first `tick()` after bind refreshes the
+        render layer with the manager's current config (the
+        app-scoped coordinator's `on_change` callback fires
+        before the preview has had a chance to `bind`, so the
+        pre-bind ticks were no-ops that never touched the
+        render layer).
 
         Safe to call mid-life: the next `tick()` uses the new
         layer. The Pi's `main.py` calls it once at startup; the
@@ -283,8 +259,11 @@ class EffectsCoordinator:
             if self.heart is not None:
                 self.heart.set_brightness(1.0)
             self.phase_start = time.monotonic()
-        if effect_settings is not None:
-            self.apply_settings(effect_settings, text_settings)
+        # Force the rotation + scroller caches to refresh on the
+        # next tick — the manager's config is the single source of
+        # truth and we just attached a fresh render layer.
+        self._last_effects_hash = None
+        self._last_text_settings_hash = None
 
     def start(self) -> None:
         """Begin the boot splash.
@@ -310,7 +289,8 @@ class EffectsCoordinator:
         """Pick the body to display next, from the manager's buffered messages.
 
         Algorithm:
-          1. Read `self.recent_count` most-recent non-suppressed messages.
+          1. Read `message_manager.config.effect_settings.recent_count`
+             most-recent non-suppressed messages.
           2. If the list is empty, return None.
           3. If the head entry's id differs from `self._last_shown_message_id`,
              return its body and update `_last_shown_message_id` (fresh-message
@@ -321,7 +301,10 @@ class EffectsCoordinator:
         Returns:
             The body string to show next, or None when the buffer is empty.
         """
-        entries = self.message_manager.messages.get_messages(limit=self.recent_count, suppress=True)
+        entries = self.message_manager.messages.get_messages(
+            limit=self.message_manager.config.effect_settings.recent_count,
+            suppress=True,
+        )
         if not entries:
             return None
         head = entries[0]
@@ -332,55 +315,40 @@ class EffectsCoordinator:
         self._last_shown_message_id = picked.message.id
         return picked.message.body
 
-    def apply_settings(
-        self,
-        effect_settings: EffectsSettings,
-        text_settings=None,
-    ) -> None:
-        """Live-update pacing + effects rotation + scroller text settings.
+    def _sync_render_layer(self) -> None:
+        """Refresh the render layer from the manager's current config.
 
-        Called by `MessageManager`'s `on_change` callback (the single
-        Python-side fan-out point). Idempotent on message-only emits:
-        pacing writes always run (cheap), but the effects rebuild
-        and scroller text-settings mutation are guarded by a hash of
-        the relevant fields, so they only run on actual config
-        changes.
+        Reads `message_manager.config.effect_settings` and `.text_settings`
+        and applies the rotation + scroller text settings to the bound
+        render layer, hash-guarded so a no-op (same config) costs only a
+        small repr. Called from `tick()` so a config update lands at
+        most one frame later, without an explicit `apply_settings` call
+        — the coordinator holds no copy of the config, the manager is
+        the single source of truth.
 
-        Args:
-            effect_settings: v2 effects block (pacing + rotation).
-            text_settings: v2 text block (color, speed). Optional
-                for callers that only have effects; when omitted,
-                the scroller text settings are not touched.
+        The pacing fields (`fade_seconds`, `hold_seconds`,
+        `intro_seconds`, `idle_seconds`, `recent_count`) are read at
+        the call sites in `tick()` / `_step_fade` / `get_display_message`
+        directly from the manager — no per-coordinator copy, no sync
+        step needed.
         """
-        if effect_settings is not None:
-            self.fade_seconds = effect_settings.fade_seconds
-            self.hold_seconds = effect_settings.hold_seconds
-            self.intro_seconds = effect_settings.intro_seconds
-            self.idle_seconds = effect_settings.idle_seconds
-            self.recent_count = effect_settings.recent_count
+        if self.display is None or self.scroller is None:
+            return
+        effect_settings = self.message_manager.config.effect_settings
+        text_settings = self.message_manager.config.text_settings
 
-            # Effects rebuild is guarded by a hash of the declared rotation.
-            # When the coordinator is unbound (`self.display is None`) we
-            # still write the pacing fields above but defer the rebuild —
-            # `build_effects` requires a `display` to instantiate effects
-            # and the app-scoped coordinator's `on_change` callback fires
-            # `apply_settings` before `bind()` has a chance to run on the
-            # preview page. The hashes are NOT updated in the unbound
-            # case, so the first `apply_settings` after `bind()` re-runs
-            # the heavier work with the now-present display.
-            effects_hash = self._hash_effects(effect_settings.effects)
-            if effects_hash != self._last_effects_hash and self.display is not None:
-                new_effects = build_effects(effect_settings, display=self.display)
-                self.effects = new_effects
-                self.idx = -1  # next fade picks the head of the new list
-                self._last_effects_hash = effects_hash
+        effects_hash = self._hash_effects(effect_settings.effects)
+        if effects_hash != self._last_effects_hash:
+            new_effects = build_effects(effect_settings, display=self.display)
+            self.effects = new_effects
+            self.idx = -1  # next fade picks the head of the new list
+            self._last_effects_hash = effects_hash
 
-        if text_settings is not None and self.scroller is not None:
-            text_hash = self._hash_text_settings(text_settings)
-            if text_hash != self._last_text_settings_hash:
-                self.scroller.set_color(text_settings.color)
-                self.scroller.set_speed(text_settings.speed)
-                self._last_text_settings_hash = text_hash
+        text_hash = self._hash_text_settings(text_settings)
+        if text_hash != self._last_text_settings_hash:
+            self.scroller.set_color(text_settings.color)
+            self.scroller.set_speed(text_settings.speed)
+            self._last_text_settings_hash = text_hash
 
     @staticmethod
     def _hash_effects(effects) -> str:
@@ -394,7 +362,7 @@ class EffectsCoordinator:
 
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""
-        progress = (now - self.fade_start) / self.fade_seconds
+        progress = (now - self.fade_start) / self.message_manager.config.effect_settings.fade_seconds
         if progress > 1.0:
             progress = 1.0
         if now - self.last_step >= self.fade_step or progress >= 1.0:
@@ -441,9 +409,19 @@ class EffectsCoordinator:
         Pulls the next display message from the manager on a
         ~4 Hz throttle (`_PULL_INTERVAL`). Non-pull ticks consume
         the cached result from the previous pull.
+
+        Pacing fields (intro_seconds, hold_seconds, etc.) and the
+        rotation / scroller text settings are read live from
+        `message_manager.config`; no per-coordinator copy, no
+        explicit `apply_settings` call needed. Config updates land
+        at most one frame later.
         """
         if not self.is_bound():
             return
+        # Refresh the render layer from the manager's current config
+        # (rotation rebuild, scroller color/speed) — hash-guarded so
+        # the common case is a single repr.
+        self._sync_render_layer()
         # Local aliases for the bound layer — Pyright doesn't narrow
         # `self.display` etc. through `is_bound()`, but the guard above
         # makes these accesses safe.
@@ -455,6 +433,7 @@ class EffectsCoordinator:
         assert effects
         now = time.monotonic()
         mode = self.mode
+        effect_settings = self.message_manager.config.effect_settings
 
         # Throttled pull: only fetch a fresh body every _PULL_INTERVAL.
         # The cached value drives the state-machine transitions.
@@ -464,7 +443,7 @@ class EffectsCoordinator:
         text = self._last_display_message
 
         if mode == "intro":
-            if now - self.phase_start >= self.intro_seconds:
+            if now - self.phase_start >= effect_settings.intro_seconds:
                 self._begin_out(now)
 
         elif mode == "out":
@@ -503,7 +482,7 @@ class EffectsCoordinator:
             # already have on screen.
             if text and text != self.last_shown_text:
                 self._begin_out(now)  # new SMS interrupts the hold
-            elif now - self.phase_start >= self.hold_seconds:
+            elif now - self.phase_start >= effect_settings.hold_seconds:
                 self.mode = "text_out"
                 self.fade_start = now
                 self.last_step = 0.0

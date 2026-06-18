@@ -1,20 +1,25 @@
 """Tests for the MessageManager's universal `on_change` callback.
 
-The `on_change` callback is the single fan-out point the EffectsCoordinator
-and the browser JS subscribers listen on. The Pi's `main.py` and the
-browser's `app_main.py` both construct a `MessageManager` with an
-`on_change` closure that calls
-`coord.apply_settings(manager.config.effect_settings,
-manager.config.text_settings)`. These tests pin down that contract:
+The `on_change` callback is the single fan-out point the browser JS
+subscribers listen on. The Pi's `main.py` and the browser's
+`app_main.py` both construct a `MessageManager` with an `on_change`
+closure; the closure is a no-op for the Pi (the coordinator reads
+config live from the manager) and a fan-out to `App._dispatchChange`
+for the browser. The coordinator's config is read live at tick
+time — there is no `apply_settings` call from the on_change path.
+
+These tests pin down that contract:
 
 1. `on_change` is invoked exactly once per `MessageManager._emit_change()`
    call from either `_handle_message()` or `_handle_config()`.
 2. In the browser runtime, `on_change` (the app-scoped
-   `_on_change_js` in `app_main.py`) calls `_coordinator.apply_settings(...)`
-   and also fans the change out to JS subscribers via `App._dispatchChange()`.
+   `_on_change_js` in `app_main.py`) fans the change out to JS
+   subscribers via `App._dispatchChange()`. It does NOT call
+   `apply_settings` — the coordinator pulls config live.
 3. `MessageManager(coordinator=coord)` raises `TypeError: __init__()
    got an unexpected keyword argument 'coordinator'` (the manager does
-   not accept a coordinator reference — closures capture it instead).
+   not accept a coordinator reference — the coordinator is constructed
+   with `message_manager=...` instead).
 """
 
 import re
@@ -94,14 +99,18 @@ def test_on_change_does_not_fire_when_no_change():
 # --- Scenario 2: browser fan-out via create_proxy(_on_change_js) ------------
 
 
-def test_app_main_on_change_applies_config_and_fans_out_to_js():
+def test_app_main_on_change_fans_out_to_js():
     """In the browser, the app-scoped MessageManager's on_change callback
-    (1) applies the new config to the coordinator and (2) fans the
-    change out to JS subscribers via `App._dispatchChange()`.
+    fans the change out to JS subscribers via `App._dispatchChange()`.
+
+    The coordinator reads config live at tick time, so the on_change
+    callback does NOT call `apply_settings` — that work is pulled
+    on the coordinator's next `tick()`. The JS fan-out is the only
+    responsibility of the on_change path on the browser.
 
     We can't run PyScript in tests, so we read the source and assert
-    both branches of the on_change body are present. This is a
-    static check.
+    the fan-out is present and that `apply_settings` is NOT in the
+    on_change body.
     """
     p = Path(__file__).parent.parent.parent / "heart-message-manager" / "app_main.py"
     src = p.read_text(encoding="utf-8")
@@ -111,8 +120,14 @@ def test_app_main_on_change_applies_config_and_fans_out_to_js():
     m = re.search(r"def _on_change_js\([^)]*\)[^:]*:\s*\n(.*?)(?=\ndef |\Z)", src, re.DOTALL)
     assert m is not None, "could not extract _on_change_js body"
     body = m.group(1)
-    assert "_coordinator.apply_settings" in body, "browser _on_change_js must call _coordinator.apply_settings"
+    # Drop the docstring (it may reference the old design as
+    # historical context).
+    body = re.sub(r'"""[\s\S]*?"""', "", body, count=1)
     assert "app._dispatchChange" in body, "browser _on_change_js must call app._dispatchChange to fan out to JS"
+    assert "apply_settings" not in body, (
+        "browser _on_change_js must not call _coordinator.apply_settings — "
+        "the coordinator reads config live from message_manager.config"
+    )
 
 
 def test_create_proxy_is_invoked_with_on_change_js():
