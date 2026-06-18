@@ -28,7 +28,7 @@ def test_migrate_v2_input_is_noop():
         "version": 2,
         "filters": [],
         "senders": [],
-        "effect_settings": EffectsSettings().to_dict(),
+        "effects_settings": EffectsSettings().to_dict(),
         "text_settings": TextSettings().to_dict(),
     }
     out = migrate(v2, current_version=2)
@@ -59,11 +59,11 @@ def test_migrate_v1_drops_rendering():
     assert "rendering" not in out
 
 
-def test_migrate_v1_adds_effect_settings():
-    """v1 → v2 adds an effect_settings block with canonical defaults."""
+def test_migrate_v1_adds_effects_settings():
+    """v1 → v2 adds an effects_settings block with canonical defaults."""
     out = migrate({"version": 1, "filters": [], "senders": []}, current_version=2)
-    assert "effect_settings" in out
-    es = out["effect_settings"]
+    assert "effects_settings" in out
+    es = out["effects_settings"]
     assert "effects" in es
     assert es["fade_seconds"] == 2.0
     assert es["hold_seconds"] == 15.0
@@ -88,7 +88,7 @@ def test_migrate_treats_missing_version_as_v1():
     """A dict without a version key is treated as v1 and migrated to v2."""
     out = migrate({"filters": [], "senders": []}, current_version=2)
     assert out["version"] == 2
-    assert "effect_settings" in out
+    assert "effects_settings" in out
     assert "text_settings" in out
 
 
@@ -134,11 +134,11 @@ def test_migrate_does_not_overwrite_existing_v2_blocks():
         "version": 1,
         "filters": [],
         "senders": [],
-        "effect_settings": {"fade_seconds": 99.0},
+        "effects_settings": {"fade_seconds": 99.0},
         "text_settings": {"color": 0x0000FF},
     }
     out = migrate(v1_with_v2, current_version=2)
-    assert out["effect_settings"]["fade_seconds"] == 99.0
+    assert out["effects_settings"]["fade_seconds"] == 99.0
     assert out["text_settings"]["color"] == 0x0000FF
 
 
@@ -165,7 +165,7 @@ def test_migrate_handles_empty_dict():
     """migrate({}) is equivalent to migrate(v1 dict with no fields)."""
     out = migrate({}, current_version=2)
     assert out["version"] == 2
-    assert "effect_settings" in out
+    assert "effects_settings" in out
     assert "text_settings" in out
 
 
@@ -223,7 +223,7 @@ def test_migrate_on_startup_v2_input_is_noop():
             "version": 2,
             "filters": [],
             "senders": [],
-            "effect_settings": EffectsSettings().to_dict(),
+            "effects_settings": EffectsSettings().to_dict(),
             "text_settings": TextSettings().to_dict(),
         }
 

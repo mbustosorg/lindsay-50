@@ -123,11 +123,19 @@ def test_constructor_rejects_invalid_speed():
         _stub_scroller(speed=6)
 
 
-def test_constructor_back_compat_uses_raw_pacing():
-    """Passing frame_delay + offset_seconds skips speed translation."""
-    s = _stub_scroller(frame_delay=0.123, offset_seconds=2.5)
-    assert s.frame_delay == 0.123
-    assert s.offset_seconds == 2.5
+def test_constructor_rejects_legacy_pacing_kwargs():
+    """`frame_delay=` / `offset_seconds=` are no longer accepted.
+
+    Speed is the only pacing knob on the public constructor; raw
+    pacing numbers are no longer a supported back-compat path. The
+    attributes `frame_delay` / `offset_seconds` still exist (so
+    `set_speed()` can update them in place) but they're derived
+    from `speed` via `SPEED_TABLE`.
+    """
+    with pytest.raises(TypeError, match="frame_delay"):
+        _stub_scroller(frame_delay=0.123)
+    with pytest.raises(TypeError, match="offset_seconds"):
+        _stub_scroller(offset_seconds=2.5)
 
 
 def test_set_speed_updates_pacing():

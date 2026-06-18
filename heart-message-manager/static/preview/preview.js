@@ -4,21 +4,22 @@
 //   1. PyScript's bootstrap, which loads the runtime + preview_main.py
 //      and fires `py:ready` (BEFORE the main module runs) and `py:done`
 //      (AFTER the main module has finished evaluating) — that's when
-//      coordinator.request_message and tick become callable.
+//      coordinator.tick becomes callable.
 //   2. A requestAnimationFrame loop, capped at 30 FPS, that calls
 //      `coordinator.tick()` and blits the frame buffer to the canvas.
 //   3. (v2) The base template's `app.js` owns the MQTT-WS client and
 //      the in-browser MessageManager. The preview no longer polls
-//      /api/live-messages — it registers a callback on the shared
-//      MessageManager and drives `coordinator.request_message(body)`
-//      from the `on_message` signal.
+//      /api/live-messages, and it no longer pushes the next body or
+//      the current config to the coordinator — the per-page
+//      MessageManager constructed by `preview_main.py` wires the
+//      manager's universal `on_change` directly to
+//      `coord.apply_settings(...)`. The coordinator pulls the next
+//      display message from the manager on a 250 ms throttle (see
+//      `EffectsCoordinator.get_display_message`).
 //
 // We DO NOT open a WebSocket from preview.js. The base template's
 // app.js owns the WS connection. preview.js only:
 //   - Boots the rAF render loop after PyScript is ready.
-//   - Registers a per-page on_message callback that hands the new body
-//     to the coordinator (with a body-dedupe so we don't re-kick the
-//     fade on every tick when nothing has changed).
 
 (function () {
   "use strict";
@@ -42,7 +43,6 @@
   let srcCanvas = null;           // 64x64 offscreen holding the raw frame
   let srcCtx = null;
   let dotMask = null;             // precomputed grid of soft circles (alpha mask)
-  let callbackRegistered = false;
 
   // ------------------------------------------------------------------
   // Bootstrap
@@ -104,16 +104,16 @@
     // The correct post-execution event is `py:done` (CustomEvent, bubbles
     // on each `<py-script>` element) — fired after the main module has
     // finished evaluating, at which point the top-level functions
-    // exposed by preview_main.py (request_message, tick, get_frame_rgba)
-    // are callable. `py:all-done` is the equivalent plain Event fired
-    // once all py-script elements are done.
+    // exposed by preview_main.py (tick, get_frame_rgba,
+    // get_current_text, get_current_effect_name) are callable.
+    // `py:all-done` is the equivalent plain Event fired once all
+    // py-script elements are done.
     //
     // We listen for `py:done` (primary) and `py:ready` (fallback for
     // older runtimes that don't fire `py:done`).
     const onReady = () => {
       hideLoading();
       startRenderLoop(canvas);
-      registerPreviewCallback();
     };
     document.addEventListener("py:done", onReady);
     document.addEventListener("py:all-done", onReady);
@@ -164,59 +164,15 @@
   }
 
   // ------------------------------------------------------------------
-  // Per-page re-render. The MessageManager emits a universal
-  // `on_change` event for every mutation. On every change we
-  // re-read the latest message and the current SignConfig and
-  // push them into the PyScript coordinator:
-  //
-  //   - `request_message(body)` queues the latest message for
-  //     the rAF loop to display. The coordinator's `set_text`
-  //     is idempotent (overwrites `pending_text`); calling with
-  //     the same body repeatedly is a no-op.
-  //   - `apply_config(cfg)` rebuilds the effects rotation and
-  //     rebinds the scroller. Each call replaces the rotation
-  //     in place and rebinds, so calling with the same config
-  //     is cheap (no DOM churn).
-  //
-  // The point: "something changed" → re-push the current state
-  // to the coordinator. We don't need to know what changed —
-  // both sinks are idempotent.
+  // No per-page re-render shim. The per-page MessageManager
+  // constructed by `preview_main.py` wires its universal
+  // `on_change` directly to `coord.apply_settings(...)`, which
+  // is the single source of truth for "the manager's state just
+  // changed — re-apply the config and let the coordinator's
+  // throttled pull pick the next body". The JS side no longer
+  // pushes via `request_message` or `apply_config`; the preview
+  // no longer registers an `onChange` listener here.
   // ------------------------------------------------------------------
-
-  async function reRender() {
-    if (!window.App) return;
-    try {
-      const cfg = await window.App.getConfig();
-      if (cfg && typeof window.apply_config === "function") {
-        window.apply_config(cfg);
-      }
-    } catch (e) {
-      console.warn("reRender apply_config failed:", e);
-    }
-    try {
-      const msgs = await window.App.getMessages(1, true);
-      const body = msgs && msgs[0] && msgs[0].body;
-      if (body && typeof window.request_message === "function") {
-        window.request_message(body);
-      }
-    } catch (e) {
-      console.warn("reRender request_message failed:", e);
-    }
-  }
-
-  function registerPreviewCallback() {
-    if (callbackRegistered) return;
-    callbackRegistered = true;
-    if (window.App && typeof window.App.registerOnChange === "function") {
-      window.App.registerOnChange(reRender);
-    } else {
-      console.warn("window.App.registerOnChange not available; preview won't react to state changes");
-    }
-    // Kick off a re-render now so the preview shows the most
-    // recent seeded message + current config before the seed
-    // completion fires the first `on_change`.
-    reRender();
-  }
 
   // ------------------------------------------------------------------
   // Fuzzy-circle ("LED") rendering setup

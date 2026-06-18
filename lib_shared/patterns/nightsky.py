@@ -1,6 +1,8 @@
 import math
 import random
 import time
+
+from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Bitmap, Palette, Effect, arrayblit
 
 _PALETTE_SIZE = 32
@@ -9,15 +11,15 @@ _PALETTE_SIZE = 32
 class NightSky(Effect):
     def __init__(
         self,
-        display,
-        frame_delay=0.05,
-        num_stars=45,
-        shoot_min=5.0,
-        shoot_max=15.0,
-        sky_color=0x000000,
-        twinkle_period=3.0,
-        twinkle_fraction=0.20,
-    ):
+        display: DisplayBase,
+        frame_delay: float = 0.05,
+        num_stars: int = 45,
+        shoot_min: float = 5.0,
+        shoot_max: float = 15.0,
+        sky_color: int = 0x000000,
+        twinkle_period: float = 3.0,
+        twinkle_fraction: float = 0.20,
+    ) -> None:
         self.display = display
         self.frame_delay = frame_delay
         self.shoot_min = shoot_min

@@ -12,6 +12,29 @@ surface (clear, width, height, canvas) the effects and the coordinator rely
 on; subclasses implement `render(effect, scroller)` to do the work.
 """
 
+from typing import Protocol
+
+
+class Canvas(Protocol):
+    """Surface a `DisplayBase` exposes to effects for per-pixel drawing.
+
+    The Pi's `rgbmatrix.Canvas` (C extension) and the browser's Pillow
+    `Image` both satisfy this duck-typed contract — `width` / `height`
+    for sizing, and per-pixel blit methods (`SetPixel` / `SetImage` on
+    the matrix, `putpixel` on Pillow) used by the effects.
+
+    Declared as a Protocol so `display.canvas.width` / `.height` type-
+    check without coupling the effects module to either the rgbmatrix
+    or Pillow import.
+    """
+
+    width: int
+    height: int
+
+    def SetPixel(self, x: int, y: int, r: int, g: int, b: int) -> None: ...
+
+    def SetImage(self, image, offset_x: int = 0, offset_y: int = 0) -> None: ...
+
 
 class DisplayBase:
     """Abstract display that owns a frame canvas and composites one frame.
@@ -24,7 +47,7 @@ class DisplayBase:
 
     width: int
     height: int
-    canvas: object
+    canvas: Canvas
 
     def clear(self):
         """Blank the panel immediately so no frame stays lit after we exit."""

@@ -93,7 +93,7 @@ def seed_config():
     return {
         "filters": [],
         "senders": [],
-        "effect_settings": {
+        "effects_settings": {
             "effects": [{"name": "Hyperspace", "enabled": True}],
             "fade_seconds": 2.0,
             "hold_seconds": 15.0,
@@ -463,7 +463,7 @@ class TestDispatchMessage:
             {
                 "filters": [],
                 "senders": [],
-                "effect_settings": {
+                "effects_settings": {
                     "effects": [
                         {"name": "Hyperspace", "enabled": True},
                         {"name": "Fireworks", "enabled": True},
@@ -487,7 +487,7 @@ class TestDispatchMessage:
         mgr.dispatch(env)
         # Config updated
         assert mgr.config.sign.name == "Updated"
-        names = [e["name"] for e in mgr.config.effect_settings.effects]
+        names = [e["name"] for e in mgr.config.effects_settings.effects]
         assert "Fireworks" in names
         # on_change WAS called (the universal change event covers
         # both message arrivals and config updates)
@@ -655,7 +655,7 @@ class TestOnChange:
             {
                 "filters": [],
                 "senders": [],
-                "effect_settings": {
+                "effects_settings": {
                     "effects": [{"name": "Fireworks", "enabled": True}],
                     "fade_seconds": 2.0,
                     "hold_seconds": 15.0,
@@ -1085,7 +1085,7 @@ class TestSessionCache:
                 "config": {
                     "filters": [],
                     "senders": [],
-                    "effect_settings": {
+                    "effects_settings": {
                         "effects": [{"name": "Hyperspace", "enabled": True}],
                         "fade_seconds": 2.0,
                         "hold_seconds": 15.0,
@@ -1176,7 +1176,7 @@ class TestSessionCache:
                 {
                     "filters": [],
                     "senders": [],
-                    "effect_settings": {
+                    "effects_settings": {
                         "effects": [{"name": "Hyperspace", "enabled": True}],
                         "fade_seconds": 2.0,
                         "hold_seconds": 15.0,

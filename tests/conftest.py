@@ -113,7 +113,7 @@ def default_config():
         version=2,
         filters=[],
         senders={},
-        effect_settings=EffectsSettings(),
+        effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
         sign=SignSettings(),
     )
@@ -125,7 +125,7 @@ def config_with_keyword_filter():
         version=2,
         filters=[FilterRule(type="keyword", pattern="badword", action="suppress")],
         senders={},
-        effect_settings=EffectsSettings(),
+        effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
         sign=SignSettings(),
     )
@@ -137,7 +137,7 @@ def config_with_sender_filter():
         version=2,
         filters=[FilterRule(type="sender", pattern="+15550001111", action="suppress")],
         senders={},
-        effect_settings=EffectsSettings(),
+        effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
         sign=SignSettings(),
     )
@@ -149,7 +149,7 @@ def config_with_regex_filter():
         version=2,
         filters=[FilterRule(type="regex", pattern=r"^\s*$", action="suppress")],
         senders={},
-        effect_settings=EffectsSettings(),
+        effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
         sign=SignSettings(),
     )
@@ -161,7 +161,7 @@ def config_with_message_filter():
         version=2,
         filters=[FilterRule(type="message", pattern="msg-002", action="suppress")],
         senders={},
-        effect_settings=EffectsSettings(),
+        effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
         sign=SignSettings(),
     )

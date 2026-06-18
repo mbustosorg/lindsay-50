@@ -1,9 +1,9 @@
-"""Tests for the Flask PUT /api/config validation path (v2 effect_settings + text_settings).
+"""Tests for the Flask PUT /api/config validation path (v2 effects_settings + text_settings).
 
 Covers:
 - Valid v2 payloads are accepted (HTTP 200)
 - v1 payloads (with tz_offset_mins + rendering) are migrated and accepted
-- effect_settings validation: malformed entries, unknown names, out-of-range
+- effects_settings validation: malformed entries, unknown names, out-of-range
 - text_settings validation: out-of-range fields, unknown text_effect, bad color
 
 Uses the `app` + `client` + `esp32_headers` fixtures from test_auth.py
@@ -186,7 +186,7 @@ def test_valid_v2_payload_returns_200(client, esp32_headers):
         "senders": [],
         "sign": {"name": "OK"},
         "timezone": "America/Los_Angeles",
-        "effect_settings": {
+        "effects_settings": {
             "effects": [{"name": "Hyperspace", "enabled": True}],
             "fade_seconds": 2.0,
             "hold_seconds": 15.0,
@@ -220,65 +220,65 @@ def test_valid_v1_payload_is_migrated_then_accepted(client, esp32_headers):
     assert response.status_code == 200
 
 
-# --- effect_settings validation ---
+# --- effects_settings validation ---
 
 
-def test_effect_settings_must_be_object(client, esp32_headers):
+def test_effects_settings_must_be_object(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": "nope"},
+        json={"effects_settings": "nope"},
         headers=esp32_headers,
     )
     assert response.status_code == 400
     assert "error" in response.get_json()
 
 
-def test_effect_settings_effects_must_be_list(client, esp32_headers):
+def test_effects_settings_effects_must_be_list(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": {"effects": "not a list"}},
+        json={"effects_settings": {"effects": "not a list"}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
 
 
-def test_effect_settings_entry_must_be_dict(client, esp32_headers):
+def test_effects_settings_entry_must_be_dict(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": {"effects": [42]}},
+        json={"effects_settings": {"effects": [42]}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
 
 
-def test_effect_settings_entry_must_have_name_string(client, esp32_headers):
+def test_effects_settings_entry_must_have_name_string(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": {"effects": [{"enabled": True}]}},
+        json={"effects_settings": {"effects": [{"enabled": True}]}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
 
 
-def test_effect_settings_entry_must_have_enabled_bool(client, esp32_headers):
+def test_effects_settings_entry_must_have_enabled_bool(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": {"effects": [{"name": "Hyperspace", "enabled": "yes"}]}},
+        json={"effects_settings": {"effects": [{"name": "Hyperspace", "enabled": "yes"}]}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
 
 
-def test_effect_settings_unknown_effect_name_rejected(client, esp32_headers):
+def test_effects_settings_unknown_effect_name_rejected(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": {"effects": [{"name": "NotAnEffect", "enabled": True}]}},
+        json={"effects_settings": {"effects": [{"name": "NotAnEffect", "enabled": True}]}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
 
 
-def test_effect_settings_known_effect_names_accepted(client, esp32_headers):
+def test_effects_settings_known_effect_names_accepted(client, esp32_headers):
     for name in [
         "Hyperspace",
         "VideoDisplay",
@@ -290,26 +290,26 @@ def test_effect_settings_known_effect_names_accepted(client, esp32_headers):
     ]:
         response = client.put(
             "/api/config",
-            json={"effect_settings": {"effects": [{"name": name, "enabled": True}]}},
+            json={"effects_settings": {"effects": [{"name": name, "enabled": True}]}},
             headers=esp32_headers,
         )
         assert response.status_code == 200, f"{name} unexpectedly rejected"
 
 
-def test_effect_settings_negative_pacing_rejected(client, esp32_headers):
+def test_effects_settings_negative_pacing_rejected(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": {"fade_seconds": -1.0}},
+        json={"effects_settings": {"fade_seconds": -1.0}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
 
 
-def test_effect_settings_zero_pacing_accepted(client, esp32_headers):
+def test_effects_settings_zero_pacing_accepted(client, esp32_headers):
     response = client.put(
         "/api/config",
         json={
-            "effect_settings": {
+            "effects_settings": {
                 "effects": [{"name": "Hyperspace", "enabled": True}],
                 "fade_seconds": 0.0,
                 "hold_seconds": 0.0,
@@ -322,19 +322,19 @@ def test_effect_settings_zero_pacing_accepted(client, esp32_headers):
     assert response.status_code == 200
 
 
-def test_effect_settings_recent_count_zero_rejected(client, esp32_headers):
+def test_effects_settings_recent_count_zero_rejected(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": {"recent_count": 0}},
+        json={"effects_settings": {"recent_count": 0}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
 
 
-def test_effect_settings_recent_count_negative_rejected(client, esp32_headers):
+def test_effects_settings_recent_count_negative_rejected(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": {"recent_count": -1}},
+        json={"effects_settings": {"recent_count": -1}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
@@ -460,7 +460,7 @@ def test_text_settings_scroll_accepted(client, esp32_headers):
 def test_error_response_has_error_key(client, esp32_headers):
     response = client.put(
         "/api/config",
-        json={"effect_settings": "not an object"},
+        json={"effects_settings": "not an object"},
         headers=esp32_headers,
     )
     body = response.get_json()

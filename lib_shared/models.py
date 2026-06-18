@@ -13,7 +13,7 @@ class MessageEnvelope:
         payload: dict — Message.to_dict() or SignConfig.to_dict()
     """
 
-    def __init__(self, type: str, payload: dict):
+    def __init__(self, type: str, payload: dict) -> None:
         """Initialize a MessageEnvelope.
 
         Args:
@@ -38,7 +38,7 @@ class Message:
     Stored to S3 as JSON and published over MQTT as part of a MessageEnvelope.
     """
 
-    def __init__(self, id, sender, body, received_at):
+    def __init__(self, id: str, sender: str, body: str, received_at: str) -> None:
         """Initialize a Message.
 
         Args:
@@ -70,27 +70,27 @@ class MessageView:
 
     def __init__(
         self,
-        message,
-        source="rest",
-        suppressed=False,
-        rules=[],
-        sender_name="",
-        display_time=None,
-    ):
+        message: "Message",
+        source: str = "rest",
+        suppressed: bool = False,
+        rules: list["FilterRule"] | None = None,
+        sender_name: str = "",
+        display_time: str | None = None,
+    ) -> None:
         """Initialize a MessageView.
 
         Args:
             message: Message object this view wraps.
             source: "rest" when loaded from storage, "mqtt" when received live.
             suppressed: True if any filter rule matched this message.
-            rules: List of FilterRule dicts that suppressed the message.
+            rules: List of FilterRule objects that suppressed the message.
             sender_name: Display name for the sender (from the senders allowlist).
             display_time: Pre-formatted local time string, or None (set by _enrich_messages).
         """
         self.message = message
         self.source = source
         self.suppressed = suppressed
-        self.rules = rules
+        self.rules = list(rules) if rules is not None else []
         self.sender_name = sender_name
         self.display_time = display_time
 
@@ -117,7 +117,7 @@ class FilterRule:
         action: Always "suppress" in practice.
     """
 
-    def __init__(self, type, pattern, action="suppress"):
+    def __init__(self, type: str, pattern: str, action: str = "suppress") -> None:
         """Initialize a FilterRule.
 
         Args:
@@ -373,7 +373,7 @@ class SignConfig:
     senders: dict of phone -> name
     sign: SignSettings
     timezone: IANA timezone string
-    effect_settings: EffectsSettings
+    effects_settings: EffectsSettings
     text_settings: TextSettings
 
     Thread-safe: guards mutations with a reentrant lock.
@@ -385,15 +385,15 @@ class SignConfig:
 
     def __init__(
         self,
-        filters=None,
-        senders=None,
-        sign=None,
+        filters: list["FilterRule"] | None = None,
+        senders: dict[str, str] | None = None,
+        sign: "SignSettings | dict | None" = None,
         timezone: str = "US/Pacific",
         version: int = CURRENT_VERSION,
-        effect_settings=None,
-        text_settings=None,
-        allowed_senders=None,
-    ):
+        effects_settings: "EffectsSettings | dict | None" = None,
+        text_settings: "TextSettings | dict | None" = None,
+        allowed_senders: list[str] | None = None,
+    ) -> None:
         """Initialize a SignConfig.
 
         Args:
@@ -402,7 +402,7 @@ class SignConfig:
             sign: SignSettings instance or dict (default built from empty dict).
             timezone: IANA timezone string (default "US/Pacific").
             version: Config schema version (default CURRENT_VERSION = 2).
-            effect_settings: EffectsSettings instance or dict (default built from empty dict).
+            effects_settings: EffectsSettings instance or dict (default built from empty dict).
             text_settings: TextSettings instance or dict (default built from empty dict).
             allowed_senders: Deprecated, ignored (kept for backward compat with tests).
         """
@@ -411,10 +411,10 @@ class SignConfig:
         self.sign = sign if isinstance(sign, SignSettings) else SignSettings.from_dict(sign or {})
         self.timezone = timezone
         self.version = version
-        self.effect_settings = (
-            effect_settings
-            if isinstance(effect_settings, EffectsSettings)
-            else EffectsSettings.from_dict(effect_settings or {})
+        self.effects_settings = (
+            effects_settings
+            if isinstance(effects_settings, EffectsSettings)
+            else EffectsSettings.from_dict(effects_settings or {})
         )
         self.text_settings = (
             text_settings if isinstance(text_settings, TextSettings) else TextSettings.from_dict(text_settings or {})
@@ -449,7 +449,7 @@ class SignConfig:
 
         Args:
             data: dict with optional keys: filters, senders, sign, timezone,
-                version, effect_settings, text_settings.
+                version, effects_settings, text_settings.
 
         Returns:
             A new SignConfig instance.
@@ -467,7 +467,7 @@ class SignConfig:
             sign=(SignSettings.from_dict(data.get("sign")) if data.get("sign") else SignSettings()),
             timezone=data.get("timezone", "US/Pacific"),
             version=data.get("version", cls.CURRENT_VERSION),
-            effect_settings=data.get("effect_settings"),
+            effects_settings=data.get("effects_settings"),
             text_settings=data.get("text_settings"),
         )
 
@@ -475,7 +475,7 @@ class SignConfig:
         """Serialize the config to a dict suitable for JSON or S3 storage.
 
         Returns:
-            dict with keys: filters, senders, sign, timezone, effect_settings,
+            dict with keys: filters, senders, sign, timezone, effects_settings,
             text_settings, version.
         """
         return self._with_lock(
@@ -485,7 +485,7 @@ class SignConfig:
                 "sign": self.sign.to_dict(),
                 "timezone": self.timezone,
                 "version": self.version,
-                "effect_settings": self.effect_settings.to_dict(),
+                "effects_settings": self.effects_settings.to_dict(),
                 "text_settings": self.text_settings.to_dict(),
             }
         )
@@ -502,7 +502,7 @@ class SignConfig:
             self.sign = other.sign
             self.timezone = other.timezone
             self.version = other.version
-            self.effect_settings = other.effect_settings
+            self.effects_settings = other.effects_settings
             self.text_settings = other.text_settings
 
         self._with_lock(_do)
@@ -532,9 +532,9 @@ class SignConfig:
             # This keeps the existing in-memory values when a v1 partial update
             # arrives (the migration fills defaults, so the blocks are present
             # — but we still want the caller's intent to "leave it alone" honored).
-            if "effect_settings" in data:
-                es = data["effect_settings"]
-                self.effect_settings = es if isinstance(es, EffectsSettings) else EffectsSettings.from_dict(es or {})
+            if "effects_settings" in data:
+                es = data["effects_settings"]
+                self.effects_settings = es if isinstance(es, EffectsSettings) else EffectsSettings.from_dict(es or {})
             if "text_settings" in data:
                 ts = data["text_settings"]
                 self.text_settings = ts if isinstance(ts, TextSettings) else TextSettings.from_dict(ts or {})

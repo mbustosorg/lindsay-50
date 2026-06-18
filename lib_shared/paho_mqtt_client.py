@@ -14,6 +14,7 @@ automatically on port 8883 (e.g. io.adafruit.com).
 import logging
 import threading
 import time
+from typing import Callable
 
 import paho.mqtt.client as mqtt
 
@@ -26,7 +27,16 @@ class PahoMqttClient:
     Calls dispatch_callback(raw_payload) for each incoming message.
     """
 
-    def __init__(self, dispatch_callback, *, host, port, username, password, topic):
+    def __init__(
+        self,
+        dispatch_callback: Callable[[str], None],
+        *,
+        host: str,
+        port: int | str,
+        username: str,
+        password: str,
+        topic: str,
+    ) -> None:
         """Initialize the client.
 
         Args:
@@ -40,8 +50,8 @@ class PahoMqttClient:
                 IO this must be the full "{username}/feeds/{feedname}" path.
         """
         self._dispatch = dispatch_callback
-        self._thread = None
-        self._stop = None
+        self._thread: threading.Thread | None = None
+        self._stop: threading.Event | None = None
 
         self._host = host
         self._port = int(port)

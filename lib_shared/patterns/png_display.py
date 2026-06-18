@@ -14,6 +14,7 @@ import re
 import time
 from pathlib import Path
 
+from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Bitmap, Palette, Effect
 from lib_shared.config_reader import get_config
 
@@ -28,7 +29,14 @@ def _natural_key(path):
 class PngDisplay(Effect):
     """Slideshow of PNGs, rendered through the indexed Bitmap/Palette pipeline."""
 
-    def __init__(self, display, png_dir=None, interval=8.0, fade=0.6, gamma=2.2):
+    def __init__(
+        self,
+        display: DisplayBase,
+        png_dir: str | Path | None = None,
+        interval: float = 8.0,
+        fade: float = 0.6,
+        gamma: float = 2.2,
+    ) -> None:
         cfg = get_config()
         # Match the sibling effects: source geometry from the mapped canvas.
         self._w = display.canvas.width

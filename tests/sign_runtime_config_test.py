@@ -27,7 +27,7 @@ def test_current_version_is_2():
 def test_default_sign_config_has_v2_blocks():
     """A no-arg SignConfig carries EffectsSettings + TextSettings."""
     c = SignConfig()
-    assert isinstance(c.effect_settings, EffectsSettings)
+    assert isinstance(c.effects_settings, EffectsSettings)
     assert isinstance(c.text_settings, TextSettings)
     assert c.version == 2
 
@@ -50,7 +50,7 @@ def test_to_dict_omits_legacy_fields():
     d = c.to_dict()
     assert "tz_offset_mins" not in d
     assert "rendering" not in d
-    assert "effect_settings" in d
+    assert "effects_settings" in d
     assert "text_settings" in d
 
 
@@ -64,7 +64,7 @@ def test_from_dict_default():
     """from_dict({}) yields a default SignConfig."""
     c = SignConfig.from_dict({})
     assert c.version == 2
-    assert isinstance(c.effect_settings, EffectsSettings)
+    assert isinstance(c.effects_settings, EffectsSettings)
     assert isinstance(c.text_settings, TextSettings)
 
 
@@ -81,7 +81,7 @@ def test_from_dict_runs_migration():
     }
     c = SignConfig.from_dict(v1)
     assert c.version == 2
-    assert isinstance(c.effect_settings, EffectsSettings)
+    assert isinstance(c.effects_settings, EffectsSettings)
     assert isinstance(c.text_settings, TextSettings)
     # Filters + senders + sign + timezone are preserved.
     assert c.sign.name == "Old Sign"
@@ -112,15 +112,15 @@ def test_to_dict_from_dict_round_trip():
         senders={"+15550001111": "Alice"},
         sign=SignSettings(name="Round Trip"),
         timezone="America/Chicago",
-        effect_settings=EffectsSettings(fade_seconds=1.0, hold_seconds=10.0),
+        effects_settings=EffectsSettings(fade_seconds=1.0, hold_seconds=10.0),
         text_settings=TextSettings(color=0x00FF00),
     )
     d = c.to_dict()
     c2 = SignConfig.from_dict(d)
     assert c2.sign.name == "Round Trip"
     assert c2.timezone == "America/Chicago"
-    assert c2.effect_settings.fade_seconds == 1.0
-    assert c2.effect_settings.hold_seconds == 10.0
+    assert c2.effects_settings.fade_seconds == 1.0
+    assert c2.effects_settings.hold_seconds == 10.0
     assert c2.text_settings.color == 0x00FF00
     assert c2.senders["+15550001111"] == "Alice"
     assert len(c2.filters) == 1
@@ -137,13 +137,13 @@ def test_update_from_dict_replaces_fields():
             "sign": {"name": "New"},
             "timezone": "UTC",
             "version": 2,
-            "effect_settings": {"fade_seconds": 0.5, "hold_seconds": 5.0},
+            "effects_settings": {"fade_seconds": 0.5, "hold_seconds": 5.0},
             "text_settings": {"color": 0x0000FF},
         }
     )
     assert c.sign.name == "New"
     assert c.timezone == "UTC"
-    assert c.effect_settings.fade_seconds == 0.5
+    assert c.effects_settings.fade_seconds == 0.5
     assert c.text_settings.color == 0x0000FF
 
 
@@ -163,7 +163,7 @@ def test_update_from_dict_migrates_v1_input():
     )
     assert c.version == 2
     assert c.sign.name == "Migrated"
-    assert isinstance(c.effect_settings, EffectsSettings)
+    assert isinstance(c.effects_settings, EffectsSettings)
     assert isinstance(c.text_settings, TextSettings)
 
 
@@ -180,15 +180,15 @@ def test_sign_config_classmethod_default():
     """SignConfig.default() returns a fresh default."""
     c = SignConfig.default()
     assert c.version == 2
-    assert isinstance(c.effect_settings, EffectsSettings)
+    assert isinstance(c.effects_settings, EffectsSettings)
 
 
 def test_from_dict_with_constructors():
     """SignConfig(...) can take EffectsSettings/TextSettings instances directly."""
     es = EffectsSettings(fade_seconds=1.0)
     ts = TextSettings(color=0xABCDEF)
-    c = SignConfig(effect_settings=es, text_settings=ts)
-    assert c.effect_settings is es
+    c = SignConfig(effects_settings=es, text_settings=ts)
+    assert c.effects_settings is es
     assert c.text_settings is ts
 
 
@@ -205,7 +205,7 @@ def test_migrate_helper_brings_v1_to_v2():
     assert out["version"] == 2
     assert "tz_offset_mins" not in out
     assert "rendering" not in out
-    assert "effect_settings" in out
+    assert "effects_settings" in out
     assert "text_settings" in out
 
 
@@ -215,7 +215,7 @@ def test_migrate_helper_no_op_for_v2():
         "filters": [],
         "senders": [],
         "version": 2,
-        "effect_settings": EffectsSettings().to_dict(),
+        "effects_settings": EffectsSettings().to_dict(),
         "text_settings": TextSettings().to_dict(),
     }
     out = migrate(v2, current_version=SignConfig.CURRENT_VERSION)
@@ -223,9 +223,9 @@ def test_migrate_helper_no_op_for_v2():
 
 
 def test_update_from_dict_preserves_existing_blocks_when_absent():
-    """When a payload omits effect_settings, the in-memory block is preserved."""
+    """When a payload omits effects_settings, the in-memory block is preserved."""
     c = SignConfig(
-        effect_settings=EffectsSettings(fade_seconds=7.0),
+        effects_settings=EffectsSettings(fade_seconds=7.0),
         text_settings=TextSettings(color=0x123456),
     )
     c.update_from_dict(
@@ -238,6 +238,6 @@ def test_update_from_dict_preserves_existing_blocks_when_absent():
         }
     )
     # Pre-existing block values are kept (the v2-only update didn't touch them).
-    assert c.effect_settings.fade_seconds == 7.0
+    assert c.effects_settings.fade_seconds == 7.0
     assert c.text_settings.color == 0x123456
     assert c.sign.name == "Partial"

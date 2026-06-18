@@ -12,9 +12,7 @@ subclass — it loads a BDF font and calls `graphics.DrawText` to blit glyphs.
 v2 config: the user-facing knobs on `TextSettings` are `color`, `speed`, and
 `text_effect`. Callers destructure `TextSettings` and pass `color=` / `speed=`
 to the scroller. The device's main loop applies live updates via
-`scroller.set_color()` and `scroller.set_speed()`. The legacy `frame_delay=`
-/ `offset_seconds=` kwargs remain as a back-compat escape hatch for tests
-and the no-config boot path.
+`scroller.set_color()` and `scroller.set_speed()`.
 """
 
 from __future__ import annotations
@@ -36,14 +34,10 @@ class MatrixScroller(ScrollerBase):
         speed: int = ScrollerBase.DEFAULT_SPEED,
         color: int = 0xFF6400,
         font_path: str | None = None,
-        frame_delay: float | None = None,
-        offset_seconds: float | None = None,
     ):
         super().__init__(
             speed=speed,
             color=color,
-            frame_delay=frame_delay,
-            offset_seconds=offset_seconds,
         )
         self.display = display
 

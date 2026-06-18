@@ -99,19 +99,19 @@ The `on_change` callback shape on the Pi and in the browser:
 ```python
 # Pi (heart-matrix-controller/main.py)
 def _on_change():
-    coord.apply_settings(manager.config.effect_settings, manager.config.text_settings)
+    coord.apply_settings(manager.config.effects_settings, manager.config.text_settings)
 manager = MessageManager(on_change=_on_change, ...)
 _mqtt_client = PahoMqttClient(dispatch_callback=_message_mgr.dispatch, ...)
 
 # Browser (heart-message-manager/preview_main.py)
 def _on_change():
-    coord.apply_settings(manager.config.effect_settings, manager.config.text_settings)
+    coord.apply_settings(manager.config.effects_settings, manager.config.text_settings)
     create_proxy(_on_change_js)()  # fan out to JS subscribers
 manager = MessageManager(on_change=_on_change, ...)
 ```
 
 **`coordinator.apply_settings` becomes the single config-application method on the coordinator.** It currently updates only the pacing fields (`fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, `recent_count`). This change extends it to also handle the heavier work that `main.py::_on_config_update` does today:
-- **Effects rebuild** — when `effect_settings.effects` (the declared rotation) changes, call `build_effects(effect_settings, display=self.display)`, assign the result to `self.effects`, and reset `self.idx = -1` so the next fade picks the head of the new list. Guarded by a hash of the effects list so message-only emits don't rebuild on every tick.
+- **Effects rebuild** — when `effects_settings.effects` (the declared rotation) changes, call `build_effects(effects_settings, display=self.display)`, assign the result to `self.effects`, and reset `self.idx = -1` so the next fade picks the head of the new list. Guarded by a hash of the effects list so message-only emits don't rebuild on every tick.
 - **Scroller text settings** — when `text_settings.color` or `text_settings.speed` changes, call `self.scroller.set_color(...)` and `self.scroller.set_speed(...)`. Guarded by a hash of the relevant fields.
 
 The function is idempotent across message-only emits: same values are written, no observable change. The guards ensure the heavier work (effects rebuild, scroller mutation) only runs on actual config changes.
