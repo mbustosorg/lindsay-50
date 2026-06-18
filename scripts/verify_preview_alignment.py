@@ -35,7 +35,7 @@ sys.modules["rgbmatrix.graphics"] = _RG.graphics
 
 # Bootstrap config so the device's get_config() call in MatrixScroller
 # doesn't blow up (we never reach it, but ScrollerBase.__init__ reads
-# frame_delay directly).
+# `speed` and calls `resolve_pacing`).
 os.environ.update(
     {
         "MQTT_CLIENT": "paho",
@@ -103,7 +103,7 @@ class _StubDisplay:
 
 # Build MatrixScroller without invoking __init__'s font load.
 m = MatrixScroller.__new__(MatrixScroller)
-ScrollerBase.__init__(m, frame_delay=0.04, offset_seconds=1.0, color=0xFFFFFF)
+ScrollerBase.__init__(m, speed=3, color=0xFFFFFF)
 m.display = _StubDisplay()
 m.font = _StubFont()
 m.font_height = m.font.height
@@ -130,7 +130,7 @@ class _PreviewDisplay:
     height = 64
 
 
-p = PreviewScroller(display=_PreviewDisplay(), color=0xFFFFFF, frame_delay=0.04, offset_seconds=1.0)
+p = PreviewScroller(display=_PreviewDisplay(), color=0xFFFFFF, speed=3)
 p.last_tick = 1000.0
 
 # 1. Both subclasses use ScrollerBase.tick (no override) — the alignment

@@ -101,7 +101,8 @@ def test_preview_scroller_tick_advances_x_by_expected_pixels(monkeypatch):
     state = {"t": 1000.0}
     monkeypatch.setattr(time, "monotonic", lambda: state["t"])
 
-    s = mod.PreviewScroller(_StubDisplay(), frame_delay=0.05)
+    s = mod.PreviewScroller(_StubDisplay())
+    s.frame_delay = 0.05  # direct attr assignment; speed= kwarg is the public path
     s.set_text("hi", canvas_width=64)
     initial_top = s.top_x
 
