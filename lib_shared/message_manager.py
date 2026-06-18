@@ -210,6 +210,14 @@ class MessageManager:
                 "messages": [m.to_dict() for m in self._messages._msgs],
                 "config": self._config.to_dict(),
             }
+            logger.info(
+                "[debug-dispatch] CACHE_WRITE key=%s filter_count=%d filter_ids=%s suppressed_in_buffer=%d buffer_size=%d",
+                key,
+                len(payload["config"].get("filters", [])),
+                [f.get("pattern", "") for f in payload["config"].get("filters", []) if f.get("type") == "message"],
+                sum(1 for m in payload["messages"] if m.get("suppressed")),
+                len(payload["messages"]),
+            )
             # `payload` is a Python dict with nested dicts (the
             # `config` value comes from `SignConfig.to_dict()`,
             # which returns a dict-of-dicts of effects / text
@@ -348,9 +356,24 @@ class MessageManager:
             return
 
         if envelope.type == "message":
-            self._handle_message(envelope.payload)
+            payload = envelope.payload
+            if isinstance(payload, dict):
+                logger.info(
+                    "[debug-dispatch] ENVELOPE_RECEIVED type=message id=%s body=%r",
+                    payload.get("id", ""),
+                    (payload.get("body", "") or "")[:40],
+                )
+            self._handle_message(payload)
         elif envelope.type == "config":
-            self._handle_config(envelope.payload)
+            payload = envelope.payload
+            if isinstance(payload, dict):
+                filters = payload.get("filters") or []
+                logger.info(
+                    "[debug-dispatch] ENVELOPE_RECEIVED type=config filter_count=%d filter_ids=%s",
+                    len(filters),
+                    [f.get("pattern", "") for f in filters if isinstance(f, dict) and f.get("type") == "message"],
+                )
+            self._handle_config(payload)
         else:
             logger.warning("Unknown envelope type: %r", envelope.type)
 
@@ -387,7 +410,15 @@ class MessageManager:
         """
         self._config.update_from_dict(payload)
         self._messages._enrich_messages(list(self._messages._msgs))
-        logger.info("MessageManager applied config update")
+        post_filters = list(self._config.filters)
+        post_suppressed = sum(1 for m in self._messages._msgs if getattr(m, "suppressed", False))
+        logger.info(
+            "[debug-dispatch] HANDLE_CONFIG_DONE filter_count=%d filter_ids=%s suppressed_in_buffer=%d buffer_size=%d",
+            len(post_filters),
+            [f.pattern for f in post_filters if f.type == "message"],
+            post_suppressed,
+            len(self._messages._msgs),
+        )
         self._emit_change()
 
     async def _fetch(self, url: str) -> dict:
@@ -524,21 +555,9 @@ class MessageManager:
         return self._config
 
     def get_effects_settings(self) -> EffectsSettings:
-        """Live reference to the v2 effects-settings block (rotation + pacing).
-
-        Returns the live `EffectsSettings` instance held by the manager's
-        `SignConfig` — NOT a copy. Consumers (e.g. `EffectsCoordinator`)
-        read this on every tick to observe rotation and pacing updates
-        without the manager broadcasting an `apply_settings` callback.
-        """
+        """Live reference to the effects-settings block (rotation + pacing)."""
         return self._config.effects_settings
 
     def get_text_settings(self) -> TextSettings:
-        """Live reference to the v2 text-settings block (color, speed).
-
-        Returns the live `TextSettings` instance held by the manager's
-        `SignConfig` — NOT a copy. Consumers read this on every tick
-        to observe text-color / speed updates without an
-        `apply_settings` callback.
-        """
+        """Live reference to the text-settings block (color, speed)."""
         return self._config.text_settings

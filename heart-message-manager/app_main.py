@@ -68,7 +68,7 @@ from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]
 
 from lib_shared.message_manager import MessageManager
 from lib_shared.effects_coordinator import EffectsCoordinator
-from lib_shared.models import SignConfig
+from lib_shared.models import Message, SignConfig
 
 # The existing JS-side `mqtt_ws_client.js` shim is loaded by `base.html`
 # before this script runs. We import it via the `js` global and wrap it
@@ -171,10 +171,13 @@ async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
             # Defensive: an entry can be a MessageView (normal path)
             # or, in odd cases, a raw dict (e.g. a partial seed that
             # stored dicts instead of Message objects). Handle both.
-            if hasattr(entry, "message"):
-                d = entry.message.to_dict() if hasattr(entry.message, "to_dict") else dict(entry.message)
+            entry_msg = getattr(entry, "message", None)
+            if isinstance(entry_msg, Message):
+                d: dict = dict(entry_msg.to_dict())
+            elif isinstance(entry, dict):
+                d = dict(entry)
             else:
-                d = dict(entry) if isinstance(entry, dict) else {}
+                d = {}
             d["source"] = getattr(entry, "source", "rest")
             d["suppressed"] = bool(getattr(entry, "suppressed", False))
             rules = getattr(entry, "rules", None) or []
