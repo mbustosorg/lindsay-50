@@ -517,7 +517,7 @@ class MessageManager:
                             body=item.get("body", ""),
                             received_at=item.get("received_at", ""),
                         )
-                        for item in data[-100:]
+                        for item in data[:100]
                     ]
                     self._messages.add_many(msgs, source="rest")
                 logger.info(
