@@ -11,7 +11,7 @@ module is importable in either runtime without a top-level network dependency.
 import asyncio
 import json
 import logging
-from typing import Callable, Mapping, Optional
+from typing import Callable, Optional
 
 from lib_shared.models import EffectsSettings, MessageEnvelope, Message, SignConfig, TextSettings
 from lib_shared.messages import InMemoryMessages
@@ -124,7 +124,7 @@ class MessageManager:
         api_key: str,
         is_browser: bool = False,
         on_change: Optional[Callable[[], None]] = None,
-        command_handlers: Optional[Mapping[str, Callable[[dict], None]]] = None,
+        on_check_for_update: Optional[Callable[[], None]] = None,
     ) -> None:
         """Create MessageManager with explicit URLs and an `is_browser` flag.
 
@@ -144,33 +144,22 @@ class MessageManager:
                               per-page `reRender` both rely on this. Exceptions
                               from the callback are swallowed so a faulty
                               listener never breaks the buffer write.
-            command_handlers: Optional mapping of `action` → handler for
-                              `type=command` envelopes. Each handler is a
-                              callable accepting the command payload dict.
-                              Unknown actions are logged and dropped (a buggy
-                              publisher must never brick the device). The
-                              constructor copies the mapping so callers can
-                              mutate theirs without affecting the manager.
+            on_check_for_update: Optional callback invoked when a
+                              `type=command, action=check-for-update`
+                              envelope arrives. The Pi's controller wires
+                              this to its loader-entrypoint. The browser
+                              leaves it None. Exceptions are logged and
+                              swallowed so a faulty callback never
+                              interrupts the paho network thread.
         """
         self._config = SignConfig()
         self._messages = InMemoryMessages(self._config, maxlen=100)
         self._on_change = on_change
-        self._command_handlers: dict[str, Callable[[dict], None]] = dict(command_handlers) if command_handlers else {}
+        self._on_check_for_update = on_check_for_update
         self._messages_api_url = messages_api_url
         self._config_api_url = config_api_url
         self._api_key = api_key
         self._is_browser = is_browser
-
-    def register_command_handler(self, action: str, handler: Callable[[dict], None]) -> None:
-        """Register (or replace) a handler for a `type=command` action.
-
-        Called after construction for handlers that need the manager
-        instance (e.g. the matrix controller's `check_for_update`
-        handler). The handler is invoked synchronously on the paho
-        network thread — keep it short, non-blocking, and
-        exception-safe.
-        """
-        self._command_handlers[action] = handler
 
     def _emit_change(self) -> None:
         """Fire the `on_change` callback if registered, then persist to sessionStorage.
@@ -400,24 +389,24 @@ class MessageManager:
             logger.warning("Unknown envelope type: %r", envelope.type)
 
     def _handle_command(self, payload) -> None:
-        """Handle a type=command envelope by dispatching to a registered handler.
+        """Handle a type=command envelope by dispatching on the `action` field.
 
-        The `payload` is the command dict (e.g. {"action": "check-for-update"}).
-        The action string selects a handler from `command_handlers`; unknown
-        actions are logged and dropped. Malformed payloads (None, non-dict,
-        missing or non-string `action`) are also logged and dropped: a buggy
-        publisher must never brick the device's render loop.
+        v2 supports exactly one action: `check-for-update` (Flask publishes
+        a one-shot hint at startup; the running app compares its
+        `LINDSAY50_ACTIVE_SHA` env var to Flask's expected SHA and
+        `os.execvpe`s into the loader on mismatch). The handler is the
+        `on_check_for_update` callable wired at construction time — a
+        simple switch, not a registry, because we have one command.
+
+        Malformed payloads (None, non-dict, missing or non-string `action`)
+        are logged and dropped: a buggy publisher must never brick the
+        device's render loop. Unknown actions are also logged and dropped
+        — adding a new command is a one-line `elif` plus a constructor
+        kwarg, not a registry mutation.
 
         Handler exceptions are caught and logged — a faulty handler is a
         deployment bug, not a render-loop bug, and raising here would
-        interrupt the paho network thread (the only listener we have for
-        live message envelopes).
-
-        Built-in handlers are NOT hardcoded here. The matrix controller
-        registers its `check_for_update` handler after construction;
-        the browser registers nothing (it ignores commands). This keeps
-        MessageManager agnostic to which commands exist — it just
-        dispatches by action string.
+        interrupt the paho network thread.
         """
         if not isinstance(payload, dict):
             logger.warning("MessageManager dropped command: payload is not a dict: %r", payload)
@@ -426,22 +415,17 @@ class MessageManager:
         if not isinstance(action, str) or not action:
             logger.warning("MessageManager dropped command: missing or invalid 'action': %r", payload)
             return
-        handler = self._command_handlers.get(action)
-        if handler is None:
-            logger.warning(
-                "MessageManager dropped unknown command action: %r (registered: %s)",
-                action,
-                sorted(self._command_handlers),
-            )
+        if action == "check-for-update":
+            callback = self._on_check_for_update
+            if callback is None:
+                logger.warning("MessageManager dropped check-for-update: no handler registered")
+                return
+            try:
+                callback()
+            except Exception as exc:
+                logger.exception("MessageManager on_check_for_update raised: %s", exc)
             return
-        try:
-            handler(payload)
-        except Exception as exc:
-            logger.exception(
-                "MessageManager command handler for action=%r raised: %s",
-                action,
-                exc,
-            )
+        logger.warning("MessageManager dropped unknown command action: %r", action)
 
     def _handle_message(self, payload: dict) -> None:
         """Convert payload dict to Message, store it, enrich it, and emit change.

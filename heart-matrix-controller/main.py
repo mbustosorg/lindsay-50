@@ -76,27 +76,15 @@ def _on_change():
     return None
 
 
-# Build the manager first — the coordinator needs it as a constructor
-# arg, and the manager doesn't depend on the display.
-manager = MessageManager(
-    messages_api_url=cfg.MESSAGES_API_URL,
-    config_api_url=cfg.CONFIG_API_URL,
-    api_key=cfg.API_SECRET_KEY,
-    on_change=_on_change,
-)
+def _on_check_for_update() -> None:
+    """Handle a `command=check-for-update` envelope.
 
-asyncio.run(manager.seed())
-
-
-# Register the check-for-update command handler. The loader sets
-# LINDSAY50_ACTIVE_SHA via os.execvpe so we can compare Flask's
-# expected SHA to the version we're running. On mismatch, this
-# handler `os.execvpe`s into the loader — the loader then stages
-# the new SHA, probes via status.json, swaps, and execs us again
-# with a fresh env. Same env vars, new SHA. No MQTT logic needed
-# in the loader.
-def _handle_check_for_update(payload: dict) -> None:
-    _ = payload  # the action is implicit in the handler registration
+    Compares the SHA the loader started us with (LINDSAY50_ACTIVE_SHA)
+    to Flask's expected SHA. On mismatch, `os.execvpe`s into the loader
+    — the loader then stages the new SHA, probes via status.json,
+    swaps, and execs us again with a fresh env. Same env vars, new
+    SHA. No MQTT logic needed in the loader.
+    """
     from check_for_update import check_for_update as _cfu
 
     _cfu(
@@ -105,7 +93,17 @@ def _handle_check_for_update(payload: dict) -> None:
     )
 
 
-manager.register_command_handler("check-for-update", _handle_check_for_update)
+# Build the manager first — the coordinator needs it as a constructor
+# arg, and the manager doesn't depend on the display.
+manager = MessageManager(
+    messages_api_url=cfg.MESSAGES_API_URL,
+    config_api_url=cfg.CONFIG_API_URL,
+    api_key=cfg.API_SECRET_KEY,
+    on_change=_on_change,
+    on_check_for_update=_on_check_for_update,
+)
+
+asyncio.run(manager.seed())
 
 
 # Platform MQTT client (paho on every platform)
@@ -211,7 +209,7 @@ status_writer = StatusWriter(
 # SIGTERM (systemd stop / `kill`) doesn't raise an exception by default, so the
 # `finally` below would never run. Turn it into SystemExit so cleanup happens on
 # every stop path; SIGINT (Ctrl-C) already raises KeyboardInterrupt.
-def _on_sigterm(_signum, _frame):
+def _on_sigterm(_signum, _frame):  # noqa: ARG001 — signal handler signature
     raise SystemExit(0)
 
 
