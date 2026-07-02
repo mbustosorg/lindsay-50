@@ -19,7 +19,7 @@ The Raspberry Pi matrix controller is currently upgraded by hand (SSH, `git pull
 
 ### New Capabilities
 
-- `pi-upgrade-mechanism`: Loader process, blue/green layout (git worktrees + symlink swap), app-owned status.json probe for pre-swap validation, env-var contract (`LINDSAY50_ACTIVE_SHA` / `_REPO_DIR` / `_BOOT_ID`).
+- `pi-upgrade-mechanism`: Loader process, blue/green layout (git worktrees + symlink swap), app-owned status.json probe for pre-swap validation, env-var contract (`LINDSAY50_ACTIVE_SHA` / `_REPO_DIR`).
 - `version-coordination`: Flask exposes expected SHA via authenticated admin endpoint; Pi queries it on boot and on the one-shot MQTT hint; rollback is the same `heroku rollback v123` operator workflow.
 - `mqtt-command-envelope`: New `type=command` envelope routed by `MessageManager.dispatch` to a registered handler; initial handler is `check-for-update` (replaces the v1 `reboot` handler).
 

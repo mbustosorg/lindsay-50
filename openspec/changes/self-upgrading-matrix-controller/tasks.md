@@ -31,7 +31,7 @@
 ## 3. App-owned status.json (replaces v1 healthcheck.py + --healthcheck)
 
 - [x] 3.1 Create `heart-matrix-controller/status.py` with `StatusSnapshot` dataclass and `StatusWriter` (throttled, atomic, self-throttle default 3s)
-- [x] 3.2 `StatusSnapshot` fields: `schema_version=1`, `pid`, `active_sha`, `boot_id`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error: Optional[str]`
+- [x] 3.2 `StatusSnapshot` fields: `schema_version=1`, `pid`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error: Optional[str]`
 - [x] 3.3 Atomic write via `os.replace` over a `.tmp` sibling; `tick()` is called from the render loop and is a no-op until `tick_interval_s` has elapsed
 - [x] 3.4 `read_status(path, *, stale_after_s=10.0)` returns the dict on success; None on missing file / corrupt JSON / schema mismatch / missing keys / stale mtime
 - [x] 3.5 Render loop in `heart-matrix-controller/main.py` constructs a `StatusWriter` keyed on its render-loop `tick`; snapshot builder returns live values
@@ -44,13 +44,13 @@
 ## 4. Loader process (env-var driven, status.json probe — no subprocess watch)
 
 - [x] 4.1 Create `heart-matrix-controller/loader.py` skeleton: resolve `REPO_DIR`, read `settings.toml`, import `make_mqtt_client`, set up logging
-- [x] 4.2 Loader reads three optional env vars: `LINDSAY50_REPO_DIR` (override), `LINDSAY50_ACTIVE_SHA` (running version, set by `check_for_update.check_for_update`), `LINDSAY50_BOOT_ID` (instance identifier, falls back to a generated UUID)
+- [x] 4.2 Loader reads two optional env vars: `LINDSAY50_REPO_DIR` (override; default `/home/pi/projects/lindsay-50`) and `LINDSAY50_ACTIVE_SHA` (running version, set by `check_for_update.check_for_update`)
 - [x] 4.3 Implement `fetch_expected_sha(repo_dir)` using `lib_shared.boot_config.fetch_boot_config` (shared HTTP + auth code with Flask)
 - [x] 4.4 Implement `current_sha(repo_dir)` — `git -C $REPO_DIR rev-parse HEAD` resolved through the `current/` symlink
 - [x] 4.5 Implement `stage_version(repo_dir, expected_sha)` — `git worktree add $REPO_DIR/v-<sha> <sha>`; on dirty tree, `reset --hard` first; on network error, raises a typed exception the caller catches
 - [x] 4.6 Implement `_is_status_healthy(staged_path, timeout_s)` — spawns `v-<sha>/heart-matrix-controller/main.py` as a subprocess; reads `.status.json` once it reports `mqtt_connected=true` and no `last_error`; kills the subprocess; returns True/False
 - [x] 4.7 Implement `atomic_swap(repo_dir, expected_sha)` — `ln -sfn v-<expected_sha> current`; logs the swap
-- [x] 4.8 Implement `_build_exec_env(repo_dir, active_sha, boot_id)` — returns a dict inheriting `os.environ` and adding the three LINDSAY50_* vars so the next `main.py` instance knows its identity
+- [x] 4.8 Implement `_build_exec_env(repo_dir, active_sha)` — returns a dict inheriting `os.environ` and adding the two LINDSAY50_* vars so the next `main.py` instance knows its identity
 - [x] 4.9 Implement `exec_active(repo_dir, exec_fn=os.execvpe)` — `exec_fn(sys.executable, [...loader_dir.../main.py], env=...)`; tests inject a no-op `exec_fn`
 - [x] 4.10 Drop the v1 `run_health_check` (CLI subprocess `--healthcheck` flag) — the v2 flow uses `.status.json` instead
 - [x] 4.11 Drop the v1 `watch_subprocess(proc, repo_dir, previous_sha, grace_seconds=30)` — the `--healthcheck` + grace combination is replaced by the status.json probe, which is much faster and runs against the staged dir without `os.execvpe`
@@ -61,11 +61,11 @@
 - [x] 4.16 Test: Flask-unreachable path — loader logs error and execs existing `current/.../main.py` without staging
 - [x] 4.17 Test: status-probe unhealthy path — loader logs error and does NOT swap (leaves `current` pointing at the previous SHA)
 - [x] 4.18 Test: SHA-match path — loader skips staging entirely and execs `current/.../main.py`
-- [x] 4.19 Test: env vars passed to the spawned `main.py` carry `LINDSAY50_ACTIVE_SHA`, `LINDSAY50_REPO_DIR`, `LINDSAY50_BOOT_ID`; other vars are inherited
+- [x] 4.19 Test: env vars passed to the spawned `main.py` carry `LINDSAY50_ACTIVE_SHA` and `LINDSAY50_REPO_DIR`; other vars are inherited
 
 ## 5. App-side `check-for-update` handler
 
-- [x] 5.1 Create `heart-matrix-controller/check_for_update.py` — register `LINDSAY50_REPO_DIR`, `LINDSAY50_ACTIVE_SHA`, `LINDSAY50_BOOT_ID` constants; expose `check_for_update(api_url, api_key, repo_dir=None)`
+- [x] 5.1 Create `heart-matrix-controller/check_for_update.py` — register `LINDSAY50_REPO_DIR` and `LINDSAY50_ACTIVE_SHA` constants; expose `check_for_update(api_url, api_key, repo_dir=None)`
 - [x] 5.2 `_resolve_active_sha()` reads `LINDSAY50_ACTIVE_SHA` from env; returns None if unset/empty/whitespace-only
 - [x] 5.3 `_resolve_repo_dir(repo_dir)` returns the kwarg if set, else `LINDSAY50_REPO_DIR` env var, else `Path("/home/pi/projects/lindsay-50")` fallback
 - [x] 5.4 `check_for_update` flow: if active_sha missing → no-op; fetch expected_sha via `lib_shared.boot_config.fetch_boot_config`; if fetch fails → no-op; if expected == active → no-op; else call `_exec_into_loader`

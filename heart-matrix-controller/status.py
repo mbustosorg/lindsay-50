@@ -5,9 +5,10 @@ briefly, then reading `$REPO_DIR/.status.json`. If the staged
 version reports itself healthy (status.json fresh, mqtt connected,
 no last_error, recent render ticks), the swap goes through.
 
-This module is the writer side. It is called once per render-loop
-iteration; the `StatusWriter.tick()` method is self-throttling
-(default 3 seconds) so we don't burn SD-card writes at 60 Hz.
+This module owns the writer side and the snapshot schema. It is
+called once per render-loop iteration; the `StatusWriter.tick()`
+method is self-throttling (default 3 seconds) so we don't burn
+SD-card writes at 60 Hz.
 
 The file uses atomic rename (`os.replace` over a `.tmp` sibling)
 so a reader (the loader) never sees a half-written file. The
@@ -29,7 +30,7 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,6 @@ class StatusSnapshot:
     schema_version: int = SCHEMA_VERSION
     pid: int = 0
     active_sha: str = ""
-    boot_id: str = ""
     started_at: str = ""
     updated_at: str = ""
     uptime_seconds: float = 0.0
@@ -92,7 +92,7 @@ class StatusWriter:
     def __init__(
         self,
         path: Path,
-        snapshot_builder,
+        snapshot_builder: Callable[[], StatusSnapshot],
         *,
         tick_interval_s: float = DEFAULT_TICK_INTERVAL_S,
     ) -> None:
@@ -160,6 +160,26 @@ class StatusWriter:
                 pass
             return False
         return True
+
+
+def make_status_writer(
+    *,
+    repo_dir: Path,
+    snapshot_builder: Callable[[], StatusSnapshot],
+    relative_path: str = ".status.json",
+    tick_interval_s: float = DEFAULT_TICK_INTERVAL_S,
+) -> StatusWriter:
+    """Create a writer pointed at `<repo_dir>/<relative_path>`.
+
+    Convenience for the standard app case where the status file
+    lives at the repo root. Tests inject a tmp dir as `repo_dir`
+    rather than reaching in here.
+    """
+    return StatusWriter(
+        path=repo_dir / relative_path,
+        snapshot_builder=snapshot_builder,
+        tick_interval_s=tick_interval_s,
+    )
 
 
 def read_status(

@@ -27,10 +27,9 @@ Design notes:
     stays the same, signal handling is preserved.
   - Atomic swap uses `ln -sfn`, which on the same filesystem is
     atomic relative to any concurrent reader.
-  - Env vars (`LINDSAY50_ACTIVE_SHA`, `LINDSAY50_REPO_DIR`,
-    `LINDSAY50_BOOT_ID`) travel with the child via `os.execvpe`,
-    so the app never has to run `git rev-parse HEAD` on the hot
-    path.
+  - Env vars (`LINDSAY50_ACTIVE_SHA`, `LINDSAY50_REPO_DIR`) travel
+    with the child via `os.execvpe`, so the app never has to run
+    `git rev-parse HEAD` on the hot path.
 """
 
 from __future__ import annotations
@@ -56,7 +55,6 @@ logger = logging.getLogger("loader")
 # app. Centralized so tests and the app agree on the spelling.
 ENV_ACTIVE_SHA = "LINDSAY50_ACTIVE_SHA"
 ENV_REPO_DIR = "LINDSAY50_REPO_DIR"
-ENV_BOOT_ID = "LINDSAY50_BOOT_ID"
 
 # Pre-swap probe parameters. The probe spawns the staged main.py
 # and waits for its status.json to reflect a healthy render loop.
@@ -211,27 +209,22 @@ def _build_exec_env(
     active_sha: str,
     *,
     base_env: Optional[dict[str, str]] = None,
-    boot_id: str = "",
 ) -> dict[str, str]:
     """Build the env dict we pass to `os.execvpe`.
 
     Inherits the loader's own env (so PYTHONPATH, LOG_LEVEL, and
-    the user's PATH carry through), then sets/refreshes the three
+    the user's PATH carry through), then sets/refreshes the two
     `LINDSAY50_*` vars the app reads at module load.
     """
     env = dict(base_env if base_env is not None else os.environ)
     env[ENV_ACTIVE_SHA] = active_sha
     env[ENV_REPO_DIR] = str(repo_dir)
-    if boot_id:
-        env[ENV_BOOT_ID] = boot_id
     return env
 
 
 def exec_active(
     repo_dir: Path,
     active_sha: str,
-    *,
-    boot_id: str = "",
 ) -> None:
     """Replace the current process with `current/.../main.py`.
 
@@ -242,7 +235,7 @@ def exec_active(
     on the hot path.
     """
     main_py = main_py_for(repo_dir)
-    env = _build_exec_env(repo_dir, active_sha, boot_id=boot_id)
+    env = _build_exec_env(repo_dir, active_sha)
     logger.info("loader: execvpe python3 %s", main_py)
     os.execvpe(sys.executable, [sys.executable, main_py], env)
 
@@ -429,7 +422,6 @@ def run_upgrade_flow(
     *,
     api_url: str,
     api_key: str,
-    boot_id: str = "",
     fetch_fn: Callable[..., Optional[str]] = fetch_expected_sha,
     stage_fn: Callable[[Path, str], Path] = stage_version,
     probe_fn: Callable[..., bool] = probe,
@@ -451,13 +443,13 @@ def run_upgrade_flow(
     expected = fetch_fn(api_url=api_url, api_key=api_key)
     if expected is None:
         logger.warning("loader: could not fetch expected SHA; using existing current")
-        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        exec_fn(repo_dir, local or "")
         return
     logger.info("loader: expected SHA = %s", expected)
 
     if local == expected:
         logger.info("loader: local SHA matches expected; no upgrade needed")
-        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        exec_fn(repo_dir, local or "")
         return
 
     # Mismatch — stage the new version.
@@ -465,11 +457,11 @@ def run_upgrade_flow(
         stage_fn(repo_dir, expected)
     except StageError as e:
         logger.error("loader: staging %s failed: %s; using existing current", expected, e)
-        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        exec_fn(repo_dir, local or "")
         return
     except Exception as e:
         logger.error("loader: staging %s raised: %s; using existing current", expected, e)
-        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        exec_fn(repo_dir, local or "")
         return
 
     if not probe_fn(repo_dir, expected):
@@ -477,12 +469,12 @@ def run_upgrade_flow(
             "loader: probe for %s reported unhealthy; NOT swapping; using existing current",
             expected,
         )
-        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        exec_fn(repo_dir, local or "")
         return
 
     swap_fn(repo_dir, expected)
     logger.info("loader: swapped to %s; exec'ing", expected)
-    exec_fn(repo_dir, expected, boot_id=boot_id)
+    exec_fn(repo_dir, expected)
 
 
 # ---------------------------------------------------------------------------
@@ -502,15 +494,14 @@ def main() -> int:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     logger.info("loader: starting; repo_dir=%s", repo_dir)
 
-    # Pull API credentials and optional boot_id from settings.toml.
-    # The lib_shared.config_reader imports happen at function-scope
-    # so the loader can be imported in unit tests without a settings
-    # file present.
+    # Pull API credentials from settings.toml. The lib_shared.config_reader
+    # imports happen at function-scope so the loader can be imported in
+    # unit tests without a settings file present.
     try:
         from lib_shared.config_reader import get_config  # type: ignore[import-not-found]
     except ImportError:
         logger.warning("loader: cannot import config_reader; using existing current")
-        exec_active(repo_dir, current_sha(repo_dir) or "", boot_id=os.environ.get(ENV_BOOT_ID, ""))
+        exec_active(repo_dir, current_sha(repo_dir) or "")
         return 0
 
     required = {"CONFIG_API_URL", "API_SECRET_KEY"}
@@ -518,27 +509,25 @@ def main() -> int:
         cfg = get_config(required)
     except Exception as e:
         logger.warning("loader: config_reader failed: %s", e)
-        exec_active(repo_dir, current_sha(repo_dir) or "", boot_id=os.environ.get(ENV_BOOT_ID, ""))
+        exec_active(repo_dir, current_sha(repo_dir) or "")
         return 0
 
     api_url = cfg.if_exists("CONFIG_API_URL") or ""
     api_key = cfg.if_exists("API_SECRET_KEY") or ""
-    boot_id = os.environ.get(ENV_BOOT_ID, "")
 
     if not api_url or not api_key:
         logger.warning("loader: missing CONFIG_API_URL or API_SECRET_KEY; using existing current")
-        exec_active(repo_dir, current_sha(repo_dir) or "", boot_id=boot_id)
+        exec_active(repo_dir, current_sha(repo_dir) or "")
         return 0
 
     run_upgrade_flow(
         repo_dir,
         api_url=api_url,
         api_key=api_key,
-        boot_id=boot_id,
     )
     # run_upgrade_flow always exec's — reaching here means something
     # threw without being caught. Fall through to a safe default.
-    exec_active(repo_dir, current_sha(repo_dir) or "", boot_id=boot_id)
+    exec_active(repo_dir, current_sha(repo_dir) or "")
     return 0
 
 

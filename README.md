@@ -199,9 +199,9 @@ restarts with a new commit. The flow:
    running version.) On success the loader atomically swaps the
    `current` symlink, then `os.execvpe`s into the new
    `current/.../main.py`.
-5. The new `main.py` inherits `LINDSAY50_ACTIVE_SHA=<new_sha>`,
-   `LINDSAY50_REPO_DIR`, and `LINDSAY50_BOOT_ID` from the loader's
-   env dict — it always knows its own identity, even after a swap.
+5. The new `main.py` inherits `LINDSAY50_ACTIVE_SHA=<new_sha>` and
+   `LINDSAY50_REPO_DIR` from the loader's env dict — it always
+   knows its own identity, even after a swap.
 
 The previous draft had `command=reboot` + a 30-second post-swap grace
 period. The new design is quieter (no reboot on same-SHA deploys),
@@ -234,8 +234,6 @@ cat /home/pi/projects/lindsay-50/.status.json   # should report mqtt_connected=t
 
 `scripts/setup-pi.sh` writes `LINDSAY50_REPO_DIR=/home/pi/projects/lindsay-50`
 to `/etc/default/lindsay-50` (which systemd `EnvironmentFile=`s).
-`LINDSAY50_BOOT_ID` is minted at runtime by the loader (UUID4); the
-running app inherits it via `os.execvpe`.
 
 ### Operator rollback (after a bad deploy)
 

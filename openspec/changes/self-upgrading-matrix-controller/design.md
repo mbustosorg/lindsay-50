@@ -105,16 +105,14 @@ Systemd unit adds `StartLimitIntervalSec=120` + `StartLimitBurst=3`. After 3 ser
 - **Why:** Cheap defense-in-depth. If the loader itself has a bug that causes tight crash loops, systemd bounds the damage.
 - **Alternative considered:** Loader tracks its own restart count. Rejected — systemd already does this correctly.
 
-### D9. Env-var contract: `LINDSAY50_REPO_DIR` / `_ACTIVE_SHA` / `_BOOT_ID`
+### D9. Env-var contract: `LINDSAY50_REPO_DIR` / `_ACTIVE_SHA`
 
-Three env vars flow between loader and app via `os.execvpe`'s env dict:
+Two env vars flow between loader and app via `os.execvpe`'s env dict:
 
 - `LINDSAY50_REPO_DIR` — set once by `scripts/setup-pi.sh` (or systemd `Environment=`); both loader and `check_for_update` read it. Fallback default `/home/pi/projects/lindsay-50`.
 - `LINDSAY50_ACTIVE_SHA` — set by `check_for_update.check_for_update` BEFORE `os.execvpe`-ing into the loader, so the loader knows the SHA of the running app that called it. The loader sets it on the env passed to the next `main.py` invocation.
-- `LINDSAY50_BOOT_ID` — minted by the loader at startup (UUID4), inherited by `main.py`, written into `.status.json` so Flask can correlate "is this the same boot instance?"
 
 - **Why:** A single exec is cheaper than a fork/exec and survives across the loader/app boundary as a tuple of env vars. The alternative (reading from disk) is slower and requires a separate storage location.
-- **Alternative considered:** Persist the boot ID in `.status.json` and have the loader read it back on next boot. Rejected — boots are not necessarily idempotent (crash → restart may not want the same ID).
 
 ### D10. Shared `lib_shared/boot_config.py`
 
@@ -153,4 +151,3 @@ Three env vars flow between loader and app via `os.execvpe`'s env dict:
 ## Open Questions
 
 - **GC of old worktrees:** how many `v-<sha>/` directories to retain? Configurable constant in `loader.py`?
-- **`LINDSAY50_BOOT_ID` storage:** env var is lost across systemd restarts unless systemd sets it. Should `setup-pi.sh` write a fixed UUID to `/etc/lindsay-50/boot_id` and have systemd read it? Deferred — a runtime UUID is sufficient for status correlation in v2.

@@ -17,7 +17,6 @@ import pytest
 
 from check_for_update import (
     ENV_ACTIVE_SHA,
-    ENV_BOOT_ID,
     ENV_REPO_DIR,
     LOADER_PATH,
     _exec_into_loader,
@@ -31,7 +30,7 @@ from check_for_update import (
 def _clean_env(monkeypatch):  # noqa: D401 — fixture
     """Strip LINDSAY50_* vars so tests don't leak between cases."""
     _ = _clean_env  # silence Pyright "not accessed" on the fixture
-    for var in (ENV_ACTIVE_SHA, ENV_REPO_DIR, ENV_BOOT_ID):
+    for var in (ENV_ACTIVE_SHA, ENV_REPO_DIR):
         monkeypatch.delenv(var, raising=False)
 
 
@@ -156,14 +155,12 @@ class TestExecIntoLoader:
         assert env[ENV_ACTIVE_SHA] == "newsha"
 
     def test_exec_inherits_existing_env_vars(self, monkeypatch, tmp_path):
-        """_exec_into_loader's env dict inherits os.environ (so boot_id, etc. carry over)."""
-        _ = tmp_path  # silence Pyright "monkeypatch only" — keep signature stable
-        monkeypatch.setenv(ENV_BOOT_ID, "boot-123")
+        """_exec_into_loader's env dict inherits os.environ for vars it doesn't set."""
+        monkeypatch.setenv("UNRELATED_VAR", "hello")
         with patch("check_for_update.os.execvpe") as mock_exec:
             _exec_into_loader(tmp_path, "newsha")
         env: dict = mock_exec.call_args.args[2]
-        # boot_id was inherited from os.environ via the env= dict.
-        assert env.get(ENV_BOOT_ID) == "boot-123"
+        assert env.get("UNRELATED_VAR") == "hello"
 
     def test_exec_loader_path_resolves_through_repo(self, tmp_path):
         """_exec_into_loader builds the loader path as repo_dir/current/.../loader.py."""

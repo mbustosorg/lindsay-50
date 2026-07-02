@@ -28,7 +28,6 @@ class TestStatusSnapshot:
         assert snap.schema_version == SCHEMA_VERSION
         assert snap.pid == 0
         assert snap.active_sha == ""
-        assert snap.boot_id == ""
         assert snap.started_at == ""
         assert snap.updated_at == ""
         assert snap.uptime_seconds == 0.0
@@ -41,7 +40,6 @@ class TestStatusSnapshot:
         snap = StatusSnapshot(
             pid=1234,
             active_sha="abc",
-            boot_id="boot-1",
             started_at="2026-07-02T00:00:00+00:00",
             updated_at="2026-07-02T00:01:00+00:00",
             uptime_seconds=60.0,

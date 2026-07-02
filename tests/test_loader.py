@@ -4,8 +4,8 @@ v2 design:
   - status.json probe replaces `--healthcheck` subprocess probe
   - `run_upgrade_flow` returns None; loader execvpe's the active version
     (no Popen returned, no post-swap watchdog)
-  - Env vars (LINDSAY50_ACTIVE_SHA, LINDSAY50_REPO_DIR, LINDSAY50_BOOT_ID)
-    travel with the child via os.execvpe's env dict
+  - Env vars (LINDSAY50_ACTIVE_SHA, LINDSAY50_REPO_DIR) travel with the
+    child via os.execvpe's env dict
   - Failure cases (Flask unreachable, status.json probe fails, stage fails)
     all fall through to "exec the existing current/.../main.py"
 
@@ -102,8 +102,9 @@ class TestEnvVarConstants:
     def test_repo_dir_constant(self, loader):
         assert loader.ENV_REPO_DIR == "LINDSAY50_REPO_DIR"
 
-    def test_boot_id_constant(self, loader):
-        assert loader.ENV_BOOT_ID == "LINDSAY50_BOOT_ID"
+    def test_no_boot_id_constant(self, loader):
+        """The loader does not mint or carry an instance identifier anymore."""
+        assert not hasattr(loader, "ENV_BOOT_ID")
 
 
 # ---------------------------------------------------------------------------
@@ -194,15 +195,6 @@ class TestBuildExecEnv:
         env = loader._build_exec_env(Path("/repo"), "newsha")
         assert env[loader.ENV_REPO_DIR] == "/repo"
 
-    def test_sets_boot_id_when_provided(self, loader):
-        env = loader._build_exec_env(Path("/repo"), "newsha", boot_id="b123")
-        assert env[loader.ENV_BOOT_ID] == "b123"
-
-    def test_omits_boot_id_when_empty(self, loader):
-        # Empty boot_id is treated as "not set" — don't pollute env.
-        env = loader._build_exec_env(Path("/repo"), "newsha", boot_id="")
-        assert loader.ENV_BOOT_ID not in env
-
     def test_inherits_base_env(self, loader, monkeypatch):
         monkeypatch.setenv("LINDSAY50_REPO_DIR", "/whatever")
         env = loader._build_exec_env(Path("/r"), "newsha")
@@ -243,12 +235,11 @@ class TestExecActive:
         repo.mkdir()
         (repo / "current").symlink_to(tmp_path / "placeholder")
         with patch("loader.os.execvpe") as mock_exec:
-            loader.exec_active(repo, "newsha", boot_id="b-1")
+            loader.exec_active(repo, "newsha")
         # env is positional args[2] (os.execvpe(file, args, env)).
         env: dict = mock_exec.call_args.args[2]
         assert env[loader.ENV_ACTIVE_SHA] == "newsha"
         assert env[loader.ENV_REPO_DIR] == str(repo)
-        assert env[loader.ENV_BOOT_ID] == "b-1"
 
 
 # Use unittest.mock.patch for the execvpe spy — `patch` is shadowed in the
@@ -305,7 +296,6 @@ class TestProbe:
             "schema_version": 1,
             "pid": 1,
             "active_sha": "x",
-            "boot_id": "",
             "started_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:01Z",
             "uptime_seconds": 1.0,

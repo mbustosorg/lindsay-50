@@ -38,7 +38,6 @@ logger = logging.getLogger(__name__)
 # Env vars the loader sets via os.execvpe when handing off to us.
 ENV_ACTIVE_SHA = "LINDSAY50_ACTIVE_SHA"
 ENV_REPO_DIR = "LINDSAY50_REPO_DIR"
-ENV_BOOT_ID = "LINDSAY50_BOOT_ID"
 
 # Where the loader entrypoint lives, relative to the repo root.
 # Resolved through the `current/` symlink because the loader is the
@@ -76,9 +75,8 @@ def _exec_into_loader(repo_dir: Path, expected_sha: str) -> None:
 
     Uses `os.execvpe` so systemd sees `loader.py` as the direct
     child of our PID — preserving signal handling. The env dict
-    inherits our own (so LINDSAY50_* vars carry over), and we
-    freshen the active SHA to the expected one in case the loader
-    needs it for log output.
+    inherits our own (so the env the loader set on us carries over),
+    and we freshen the active SHA to the expected one.
     """
     loader_py = repo_dir / LOADER_PATH
     env = dict(os.environ)

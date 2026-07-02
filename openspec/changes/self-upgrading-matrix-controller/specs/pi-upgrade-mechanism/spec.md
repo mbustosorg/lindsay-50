@@ -66,11 +66,11 @@ The loader MUST swap the active version via `ln -sfn v-<expected_sha> current` a
 - **THEN** any subsequent `current/...` resolution resolves to the new version directory
 
 ### Requirement: Post-exec env vars carry deployment context
-After `os.execvpe` into the new `main.py`, the loader's env dict MUST include `LINDSAY50_ACTIVE_SHA=<new_sha>`, `LINDSAY50_REPO_DIR=<repo_dir>`, and `LINDSAY50_BOOT_ID=<boot_id>` (minted at loader startup if not already set in `os.environ`). All other variables in `os.environ` MUST be inherited unchanged.
+After `os.execvpe` into the new `main.py`, the loader's env dict MUST include `LINDSAY50_ACTIVE_SHA=<new_sha>` and `LINDSAY50_REPO_DIR=<repo_dir>`. All other variables in `os.environ` MUST be inherited unchanged.
 
 #### Scenario: New `main.py` inherits loader env
 - **WHEN** loader execs the new version's `main.py`
-- **THEN** the new process sees `LINDSAY50_ACTIVE_SHA`, `LINDSAY50_REPO_DIR`, `LINDSAY50_BOOT_ID` plus the loader's other env vars (PATH, LOG_LEVEL, etc.)
+- **THEN** the new process sees `LINDSAY50_ACTIVE_SHA`, `LINDSAY50_REPO_DIR` plus the loader's other env vars (PATH, LOG_LEVEL, etc.)
 
 ### Requirement: Repository layout uses bare repo + worktrees
 The Pi's working tree MUST be organized as a bare git repo (`.git/`) at the repo root, per-version worktrees (`v-<sha>/`) at the repo root, and a `current` symlink pointing at the active version. Shared resources (`settings.toml`, `fonts/`, `.venv/`) MUST live at the repo root, outside any per-version directory.

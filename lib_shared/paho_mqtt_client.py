@@ -48,12 +48,6 @@ class PahoMqttClient:
             topic: Wire-format topic to subscribe to and publish on. The
                 client does no broker-specific translation; for Adafruit
                 IO this must be the full "{username}/feeds/{feedname}" path.
-
-        Note: prior versions accepted an `on_connect_callback` so Flask
-        could publish a one-shot `command=reboot` envelope on every
-        successful (re)connect. That was removed: the v2 design publishes
-        exactly once at Flask startup, and reconnects publish nothing.
-        Network flakiness should not become a reboot hint.
         """
         self._dispatch = dispatch_callback
         self._thread: threading.Thread | None = None

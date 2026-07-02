@@ -3,14 +3,7 @@ import signal
 import logging
 import asyncio
 import time
-
-# The `--healthcheck` short-circuit that previously lived here is
-# GONE in v2. The loader validates a staged worktree by spawning
-# us briefly, then reading `$REPO_DIR/.status.json` — the app
-# reports its own health, the loader never spawns a separate
-# healthcheck process. That removes a whole class of "drifted
-# checks" bugs (the v1 healthcheck path was hermetic and never
-# caught bugs in the render loop).
+from pathlib import Path
 
 # Create the config singleton FIRST: modules imported below (rgb_matrix_display,
 # message_manager, and the MQTT client) call get_config() at import time, so it
@@ -41,24 +34,17 @@ from lib_shared.message_manager import MessageManager
 from lib_shared.paho_mqtt_client import PahoMqttClient
 from lib_shared.effects_coordinator import EffectsCoordinator, build_effects
 from lib_shared.models import EffectsSettings, TextSettings
-from status import StatusWriter, StatusSnapshot
+from status import StatusSnapshot, make_status_writer
 
-# LINDSAY50_BOOT_ID is set by Flask (passed through to the loader,
-# then to us via os.execvpe). It's purely diagnostic — Flask uses
-# it to correlate deploy → Pi upgrade in logs. We read it once at
-# module load and surface it in status.json for the loader's
-# later logs to match.
-_BOOT_ID = os.environ.get("LINDSAY50_BOOT_ID", "")
 # LINDSAY50_ACTIVE_SHA is the SHA the loader started us with.
 # `check_for_update` reads it; we also include it in status.json.
 _ACTIVE_SHA = os.environ.get("LINDSAY50_ACTIVE_SHA", "")
 # LINDSAY50_REPO_DIR lets us know where the repo lives. Default
 # to the conventional Pi path so a manual `python3 main.py` run
 # works for development.
-_REPO_DIR = os.environ.get("LINDSAY50_REPO_DIR", "/home/pi/projects/lindsay-50")
+_REPO_DIR = Path(os.environ.get("LINDSAY50_REPO_DIR", "/home/pi/projects/lindsay-50"))
 _STARTED_AT_MONOTONIC = time.monotonic()
 _STARTED_AT_ISO = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()) or ""
-_MESSAGES_RENDERED = 0
 
 
 def _on_change():
@@ -158,33 +144,9 @@ coordinator.start()
 # Status writer — the loader probes us by reading this file (see
 # loader.py: probe). One tick per render loop iteration; the writer
 # is self-throttled to DEFAULT_TICK_INTERVAL_S so SD-card write
-# amplification is bounded.
-def _build_status_snapshot() -> StatusSnapshot:
-    global _MESSAGES_RENDERED
-    now_monotonic = time.monotonic()
-    last_tick_ms = int((now_monotonic - _LAST_TICK_MONOTONIC) * 1000) if _LAST_TICK_MONOTONIC else 0
-    # `_msgs` is the deque used by `InMemoryMessages` for O(1)
-    # `len()` access. The class itself doesn't expose `__len__`,
-    # so we read the deque directly. This is a diagnostic field
-    # for status.json; the loader doesn't act on it.
-    msgs = getattr(manager, "_messages", None)
-    if msgs is not None and getattr(msgs, "_msgs", None) is not None:
-        _MESSAGES_RENDERED = len(msgs._msgs)
-    return StatusSnapshot(
-        schema_version=1,
-        pid=os.getpid(),
-        active_sha=_ACTIVE_SHA,
-        boot_id=_BOOT_ID,
-        started_at=_STARTED_AT_ISO,
-        updated_at=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()) or "",
-        uptime_seconds=now_monotonic - _STARTED_AT_MONOTONIC,
-        mqtt_connected=_is_mqtt_connected(),
-        last_tick_age_ms=last_tick_ms,
-        messages_rendered=_MESSAGES_RENDERED,
-        last_error=None,
-    )
-
-
+# amplification is bounded. StatusSnapshot (the dataclass) lives in
+# status.py alongside the writer; this closure sources the live
+# values from the manager + thread state at write time.
 def _is_mqtt_connected() -> bool:
     """Best-effort MQTT liveness check.
 
@@ -199,17 +161,44 @@ def _is_mqtt_connected() -> bool:
     return bool(thread is not None and thread.is_alive())
 
 
+def _build_status_snapshot(last_tick_monotonic: float) -> StatusSnapshot:
+    """Build a fresh snapshot of the app's runtime state."""
+    now_monotonic = time.monotonic()
+    last_tick_ms = int((now_monotonic - last_tick_monotonic) * 1000) if last_tick_monotonic else 0
+    # `_msgs` is the deque used by `InMemoryMessages` for O(1)
+    # `len()` access. The class itself doesn't expose `__len__`,
+    # so we read the deque directly. This is a diagnostic field
+    # for status.json; the loader doesn't act on it.
+    messages_rendered = 0
+    msgs = getattr(manager, "_messages", None)
+    deque = getattr(msgs, "_msgs", None)
+    if deque is not None:
+        messages_rendered = len(deque)
+    return StatusSnapshot(
+        schema_version=1,
+        pid=os.getpid(),
+        active_sha=_ACTIVE_SHA,
+        started_at=_STARTED_AT_ISO,
+        updated_at=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()) or "",
+        uptime_seconds=now_monotonic - _STARTED_AT_MONOTONIC,
+        mqtt_connected=_is_mqtt_connected(),
+        last_tick_age_ms=last_tick_ms,
+        messages_rendered=messages_rendered,
+        last_error=None,
+    )
+
+
 _LAST_TICK_MONOTONIC = 0.0
-status_writer = StatusWriter(
-    path=os.path.join(_REPO_DIR, ".status.json"),
-    snapshot_builder=_build_status_snapshot,
+status_writer = make_status_writer(
+    repo_dir=_REPO_DIR,
+    snapshot_builder=lambda: _build_status_snapshot(_LAST_TICK_MONOTONIC),
 )
 
 
 # SIGTERM (systemd stop / `kill`) doesn't raise an exception by default, so the
 # `finally` below would never run. Turn it into SystemExit so cleanup happens on
 # every stop path; SIGINT (Ctrl-C) already raises KeyboardInterrupt.
-def _on_sigterm(_signum, _frame):  # noqa: ARG001 — signal handler signature
+def _on_sigterm(_signum, _frame):  # type: ignore  # noqa: ARG001 — signal handler signature
     raise SystemExit(0)
 
 
