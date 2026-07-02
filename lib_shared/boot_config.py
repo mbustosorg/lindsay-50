@@ -1,0 +1,207 @@
+"""Boot config — what Flask tells the Pi to run.
+
+The Pi queries `/api/sign/boot-config` to learn the expected SHA
+(HEROKU_SLUG_COMMIT on Heroku, `git rev-parse HEAD` in local dev).
+The loader uses the same module to read the expected SHA before
+staging a new version; the app uses it to decide whether an
+incoming `check-for-update` MQTT command justifies an exec into
+the loader.
+
+All HTTP fetch + git rev-parse + endpoint path lives here so
+Flask, the loader, and the app-side check-for-update handler all
+agree on the wire shape. There is no other source of truth for
+the path or the payload.
+
+Failure policy: every error path returns None (or a BootConfig
+with `expected_sha=""`). Callers must treat None as "I couldn't
+reach the broker" and fall through to whatever the safe default
+is (loader: keep running on the existing current/, app: ignore
+the check-for-update).
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
+
+
+# Endpoint path — single source of truth for renaming. Both Flask
+# (the server) and the loader / app (the clients) import this
+# constant so a typo or rename is caught at import time.
+BOOT_CONFIG_PATH = "/api/sign/boot-config"
+
+# Conservative HTTP timeout. The broker is the same network as
+# MQTT; 5s is enough for a healthy connection and short enough
+# that a network blip doesn't stall the loader or the app.
+DEFAULT_TIMEOUT = 5.0
+
+
+@dataclass(frozen=True)
+class BootConfig:
+    """The version Flask expects the Pi to be running.
+
+    Only `expected_sha` carries business logic today. Future fields
+    (sign_name, feature_flags, etc.) can be added without changing
+    the wire shape — Flask returns the dataclass as JSON, callers
+    ignore unknown keys.
+    """
+
+    expected_sha: str
+
+
+def from_response(payload: Any) -> Optional[BootConfig]:
+    """Parse a Flask `/api/sign/boot-config` JSON payload.
+
+    Returns None on any malformed input (non-dict, missing key,
+    wrong type, empty string). Callers treat None as "couldn't
+    parse the response" — the same as a network failure.
+    """
+    if not isinstance(payload, dict):
+        logger.warning("boot_config: response is not a dict: %r", payload)
+        return None
+    sha = payload.get("expected_sha")
+    if not isinstance(sha, str) or not sha:
+        logger.warning("boot_config: expected_sha missing or empty: %r", payload)
+        return None
+    return BootConfig(expected_sha=sha)
+
+
+def fetch_boot_config(
+    *,
+    api_url: str,
+    api_key: str,
+    timeout: float = DEFAULT_TIMEOUT,
+    requests_module: Any = None,
+) -> Optional[BootConfig]:
+    """GET `/api/sign/boot-config` with the `X-API-Key` header.
+
+    Returns a `BootConfig` on success, None on any failure (network,
+    timeout, non-200, malformed JSON, missing key). Callers must
+    not raise on None — it's a soft failure that means "we don't
+    know what Flask wants; fall through to the safe default."
+
+    Args:
+        api_url: The full URL of the Flask messages endpoint
+            (e.g. `https://example.com/api/messages`). The boot-config
+            path is appended via `BOOT_CONFIG_PATH`; the host is
+            derived by stripping the path from this URL.
+        api_key: The `X-API-Key` header value (the same key the
+            device uses for /api/config and /api/messages).
+        timeout: HTTP timeout in seconds.
+        requests_module: Override for the `requests` module —
+            tests inject a mock. Defaults to `import requests`
+            at call time so the import error is lazy (the loader
+            doesn't pay the cost of an import it won't use).
+    """
+    if not api_url:
+        logger.warning("boot_config: api_url is empty; cannot fetch")
+        return None
+    if not api_key:
+        logger.warning("boot_config: api_key is empty; cannot fetch")
+        return None
+
+    if requests_module is None:
+        try:
+            import requests as requests_module  # type: ignore[import-untyped]
+        except ImportError:
+            logger.warning("boot_config: requests not available; cannot fetch")
+            return None
+
+    # Derive origin from the messages URL. Flask serves both
+    # endpoints on the same host; stripping the path keeps the
+    # loader agnostic to which API URL it was given.
+    from urllib.parse import urlparse
+
+    parsed = urlparse(api_url)
+    if not parsed.scheme or not parsed.netloc:
+        logger.warning("boot_config: could not derive origin from %r", api_url)
+        return None
+    url = f"{parsed.scheme}://{parsed.netloc}{BOOT_CONFIG_PATH}"
+
+    try:
+        response = requests_module.get(
+            url,
+            headers={"X-API-Key": api_key},
+            timeout=timeout,
+        )
+    except Exception as exc:
+        logger.warning("boot_config: fetch failed: %s", exc)
+        return None
+
+    if response.status_code != 200:
+        logger.warning("boot_config: HTTP %s from %s", response.status_code, url)
+        return None
+
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("boot_config: bad JSON from %s: %s", url, exc)
+        return None
+
+    return from_response(payload)
+
+
+def current_sha(repo_dir: Path) -> Optional[str]:
+    """Resolve the SHA the `current/` symlink points at.
+
+    Reads `git -C <current_worktree> rev-parse HEAD` so the value
+    reflects what's actually live (not what's in the bare repo's
+    detached HEAD). Returns None if the symlink is missing or the
+    git invocation fails — the caller treats both as "I don't
+    know what's running; fall through to the safe default."
+    """
+    current = repo_dir / "current"
+    if not current.exists():
+        logger.warning("boot_config: current symlink missing at %s", current)
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(current), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5.0,
+        )
+        sha = result.stdout.strip()
+        return sha or None
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        logger.warning("boot_config: git rev-parse failed: %s", exc)
+        return None
+
+
+def from_heroku_or_git(repo_dir: Path) -> BootConfig:
+    """Server-side: read HEROKU_SLUG_COMMIT or fall back to git rev-parse.
+
+    Used by Flask to compute the `expected_sha` for `/api/sign/boot-config`.
+    On Heroku, `HEROKU_SLUG_COMMIT` is set automatically on every
+    `git push heroku main`, including `heroku rollback v<N>` — that
+    is how operator-initiated rollback propagates to the Pi.
+
+    In local dev there is no Heroku env var, so we fall back to
+    the local HEAD. If git is missing (e.g. a slim Docker image
+    without git), we return an empty SHA — the endpoint will
+    still respond 200, but the Pi will treat it as "no upgrade".
+    """
+    slug = os.environ.get("HEROKU_SLUG_COMMIT", "").strip()
+    if slug:
+        return BootConfig(expected_sha=slug)
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5.0,
+        )
+        sha = result.stdout.strip()
+        return BootConfig(expected_sha=sha or "")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        logger.warning("boot_config: HEROKU_SLUG_COMMIT unset and git rev-parse failed: %s", exc)
+        return BootConfig(expected_sha="")

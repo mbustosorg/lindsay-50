@@ -48,6 +48,7 @@ _cfg = get_config(REQUIRED_KEYS)
 
 import sqlite, s3
 from server_time import format_from_iso, now_utc_iso
+from lib_shared.boot_config import BootConfig, from_heroku_or_git as _boot_config_from_heroku_or_git
 from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.models import MessageEnvelope
@@ -117,6 +118,42 @@ _mqtt_client = PahoMqttClient(
 )
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
+
+
+# One-shot check-for-update hint. Published exactly once per Flask
+# process lifetime, immediately after the MQTT subscriber starts.
+# The Pi's existing MessageManager subscriber receives this and
+# invokes its registered `check_for_update` handler, which queries
+# /api/sign/boot-config and execs into the loader if the expected
+# SHA differs from the running one.
+#
+# Published via the live `_mqtt_client` (not the once-per-process
+# `publish_envelope` short-lived client) so we don't double the
+# connection setup. paho queues the publish until the CONNACK
+# arrives — if the broker is unreachable at this moment the message
+# is held by paho and delivered on the next connect, which is
+# exactly the resilience we want. Reconnects DO NOT republish
+# (that's the v1 fix — `on_connect_callback` is gone).
+def _publish_check_for_update_once() -> None:
+    """Publish `command=check-for-update` once at Flask startup.
+
+    Runs synchronously after `_mqtt_client.start()`. paho queues
+    the publish until CONNACK. Failures are logged, never raised:
+    a missing hint is recoverable (the next Flask boot will hint
+    again, the Pi's loader re-checks on every boot).
+    """
+    try:
+        envelope = MessageEnvelope("command", {"action": "check-for-update"})
+        ok = _mqtt_client.publish_envelope(envelope)
+        logger.info(
+            "[flask] _publish_check_for_update_once: publish_envelope returned %s",
+            ok,
+        )
+    except Exception as e:
+        logger.warning("[flask] _publish_check_for_update_once raised: %s", e)
+
+
+_publish_check_for_update_once()
 
 
 def _mqtt_client_publish_config(cfg_dict: dict) -> None:
@@ -309,6 +346,48 @@ def api_put_config():
         return err if err is not None else (jsonify({"error": "invalid config"}), 400)
     _save_and_publish(cfg)
     return jsonify({"status": "ok"})
+
+
+# Sign upgrade coordination (Pi loader and app's check-for-update
+# handler both query this on every boot / every MQTT hint)
+
+
+def _resolve_boot_config() -> BootConfig:
+    """Compute the boot config Flask serves via `/api/sign/boot-config`.
+
+    Delegates to `lib_shared.boot_config.from_heroku_or_git` so the
+    Flask server, the loader, and the app-side `check_for_update`
+    handler all use the same logic (HEROKU_SLUG_COMMIT preferred,
+    git rev-parse HEAD fallback). Returns an empty-sha BootConfig
+    if both fail — the endpoint translates that into a 500.
+    """
+    repo_root = Path(__file__).resolve().parent.parent
+    return _boot_config_from_heroku_or_git(repo_root)
+
+
+@app.route("/api/sign/boot-config", methods=["GET"])
+@api_login_required
+def api_sign_boot_config():
+    """GET /api/sign/boot-config — return the commit SHA the Pi should run.
+
+    The Pi queries this on every boot (via the loader) AND on every
+    `check-for-update` MQTT hint (via the app's registered handler).
+    Returns `{"expected_sha": "<sha>"}` where `<sha>` is
+    `HEROKU_SLUG_COMMIT` (production) or local `git rev-parse HEAD`
+    (local dev). Authenticated via the existing `X-API-Key` header —
+    the same key the device uses for /api/config and /api/messages.
+
+    Returns 500 only when both lookups fail (no env var and git
+    invocation failed); 401 when the API key is missing or wrong.
+
+    Path is defined as a constant in `lib_shared.boot_config`
+    (`BOOT_CONFIG_PATH`) so the loader and the app both import
+    the same string — typos or renames are caught at import time.
+    """
+    config = _resolve_boot_config()
+    if not config.expected_sha:
+        return jsonify({"error": "could not resolve expected SHA"}), 500
+    return jsonify({"expected_sha": config.expected_sha})
 
 
 # Admin API (S3 browser)

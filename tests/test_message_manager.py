@@ -525,6 +525,200 @@ class TestDispatchMessage:
 
 
 # ---------------------------------------------------------------------------
+# dispatch — type=command envelopes (handler dispatch)
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchCommand:
+    """Tests for the v2 type=command envelope branch.
+
+    The dispatch logic is a small switch on `payload["action"]` —
+    the only supported action is `check-for-update`, which calls
+    the parameterless `on_check_for_update` callback passed to
+    the constructor. Unknown actions, missing handlers, and
+    malformed payloads are logged + dropped. MessageManager has
+    no built-in command handlers — the matrix controller passes
+    its `check_for_update` handler as a constructor kwarg.
+    """
+
+    def test_command_envelope_round_trips_through_json(self):
+        """MessageEnvelope("command", {"action": "check-for-update"}) round-trips via from_json."""
+        from lib_shared.models import MessageEnvelope
+
+        env = MessageEnvelope("command", {"action": "check-for-update"})
+        raw = env.to_json()
+        assert raw == '{"type":"command","payload":{"action":"check-for-update"}}'
+        restored = MessageEnvelope.from_json(raw)
+        assert restored.type == "command"
+        assert restored.payload == {"action": "check-for-update"}
+
+    def test_dispatch_command_invokes_on_check_for_update(self, messages_api_url, config_api_url, api_key):
+        """A type=command envelope with action=check-for-update calls the callback parameterless."""
+        handler = MagicMock()
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_check_for_update=handler,
+        )
+        env = json.dumps({"type": "command", "payload": {"action": "check-for-update"}})
+        mgr.dispatch(env)
+        handler.assert_called_once_with()
+
+    def test_dispatch_command_unknown_action_is_dropped(self, messages_api_url, config_api_url, api_key):
+        """Unknown actions: no handler invocation; the envelope is dropped."""
+        handler = MagicMock()
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_check_for_update=handler,
+        )
+        env = json.dumps({"type": "command", "payload": {"action": "dance"}})
+        mgr.dispatch(env)
+        handler.assert_not_called()
+
+    def test_dispatch_command_missing_payload_is_dropped(self, messages_api_url, config_api_url, api_key):
+        """A command envelope with payload=None is dropped without side effects."""
+        handler = MagicMock()
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_check_for_update=handler,
+        )
+        env = json.dumps({"type": "command", "payload": None})
+        mgr.dispatch(env)
+        handler.assert_not_called()
+
+    def test_dispatch_command_missing_action_key_is_dropped(self, messages_api_url, config_api_url, api_key):
+        """A command envelope with no 'action' key is dropped."""
+        handler = MagicMock()
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_check_for_update=handler,
+        )
+        env = json.dumps({"type": "command", "payload": {}})
+        mgr.dispatch(env)
+        handler.assert_not_called()
+
+    def test_dispatch_command_non_string_action_is_dropped(self, messages_api_url, config_api_url, api_key):
+        """Non-string action values are dropped (no handler invocation)."""
+        handler = MagicMock()
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_check_for_update=handler,
+        )
+        env = json.dumps({"type": "command", "payload": {"action": 42}})
+        mgr.dispatch(env)
+        handler.assert_not_called()
+
+    def test_dispatch_command_non_dict_payload_is_dropped(self, messages_api_url, config_api_url, api_key):
+        """A command envelope with payload='reboot' (string) is dropped — only dicts are valid."""
+        handler = MagicMock()
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_check_for_update=handler,
+        )
+        env = json.dumps({"type": "command", "payload": "reboot"})
+        mgr.dispatch(env)
+        handler.assert_not_called()
+
+    def test_dispatch_command_without_callback_drops_with_warning(self, messages_api_url, config_api_url, api_key):
+        """check-for-update with no callback is dropped (not raised)."""
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+        env = json.dumps({"type": "command", "payload": {"action": "check-for-update"}})
+        # Must not raise
+        mgr.dispatch(env)
+
+    def test_dispatch_command_handler_exception_is_swallowed(self, messages_api_url, config_api_url, api_key):
+        """A handler that raises does not crash the paho network thread."""
+
+        def boom():
+            raise RuntimeError("listener bug")
+
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_check_for_update=boom,
+        )
+        env = json.dumps({"type": "command", "payload": {"action": "check-for-update"}})
+        # Must not raise
+        mgr.dispatch(env)
+
+    def test_dispatch_message_still_routes_after_command_handler_set(self, messages_api_url, config_api_url, api_key):
+        """Regression: type=message envelope still routes to the ring buffer."""
+        handler = MagicMock()
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_check_for_update=handler,
+        )
+        env = _make_env(
+            {
+                "id": "reg-1",
+                "sender": "+15551234567",
+                "body": "still works",
+                "received_at": "2026-06-01T12:00:00Z",
+            }
+        )
+        mgr.dispatch(env)
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.id == "reg-1"
+        assert msgs[0].message.body == "still works"
+        # The command handler was not invoked for a message envelope.
+        handler.assert_not_called()
+
+    def test_dispatch_config_still_routes_after_command_handler_set(self, messages_api_url, config_api_url, api_key):
+        """Regression: type=config envelope still updates the SignConfig."""
+        handler = MagicMock()
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_check_for_update=handler,
+        )
+        env = _make_config_env(
+            {
+                "filters": [],
+                "senders": [],
+                "effects_settings": {
+                    "effects": [{"name": "Fireworks", "enabled": True}],
+                    "fade_seconds": 2.0,
+                    "hold_seconds": 15.0,
+                    "intro_seconds": 5.0,
+                    "idle_seconds": 300.0,
+                    "recent_count": 5,
+                },
+                "text_settings": {
+                    "speed": 3,
+                    "color": 16711680,
+                    "text_effect": "scroll",
+                },
+                "sign": {"name": "Reg Sign"},
+                "timezone": "US/Pacific",
+                "version": 2,
+            }
+        )
+        mgr.dispatch(env)
+        assert mgr.config.sign.name == "Reg Sign"
+        handler.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
 # Filter rules
 # ---------------------------------------------------------------------------
 

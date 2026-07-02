@@ -124,6 +124,7 @@ class MessageManager:
         api_key: str,
         is_browser: bool = False,
         on_change: Optional[Callable[[], None]] = None,
+        on_check_for_update: Optional[Callable[[], None]] = None,
     ) -> None:
         """Create MessageManager with explicit URLs and an `is_browser` flag.
 
@@ -143,10 +144,18 @@ class MessageManager:
                               per-page `reRender` both rely on this. Exceptions
                               from the callback are swallowed so a faulty
                               listener never breaks the buffer write.
+            on_check_for_update: Optional callback invoked when a
+                              `type=command, action=check-for-update`
+                              envelope arrives. The Pi's controller wires
+                              this to its loader-entrypoint. The browser
+                              leaves it None. Exceptions are logged and
+                              swallowed so a faulty callback never
+                              interrupts the paho network thread.
         """
         self._config = SignConfig()
         self._messages = InMemoryMessages(self._config, maxlen=100)
         self._on_change = on_change
+        self._on_check_for_update = on_check_for_update
         self._messages_api_url = messages_api_url
         self._config_api_url = config_api_url
         self._api_key = api_key
@@ -374,8 +383,49 @@ class MessageManager:
                     [f.get("pattern", "") for f in filters if isinstance(f, dict) and f.get("type") == "message"],
                 )
             self._handle_config(payload)
+        elif envelope.type == "command":
+            self._handle_command(envelope.payload)
         else:
             logger.warning("Unknown envelope type: %r", envelope.type)
+
+    def _handle_command(self, payload) -> None:
+        """Handle a type=command envelope by dispatching on the `action` field.
+
+        v2 supports exactly one action: `check-for-update` (Flask publishes
+        a one-shot hint at startup; the running app compares its
+        `LINDSAY50_ACTIVE_SHA` env var to Flask's expected SHA and
+        `os.execvpe`s into the loader on mismatch). The handler is the
+        `on_check_for_update` callable wired at construction time — a
+        simple switch, not a registry, because we have one command.
+
+        Malformed payloads (None, non-dict, missing or non-string `action`)
+        are logged and dropped: a buggy publisher must never brick the
+        device's render loop. Unknown actions are also logged and dropped
+        — adding a new command is a one-line `elif` plus a constructor
+        kwarg, not a registry mutation.
+
+        Handler exceptions are caught and logged — a faulty handler is a
+        deployment bug, not a render-loop bug, and raising here would
+        interrupt the paho network thread.
+        """
+        if not isinstance(payload, dict):
+            logger.warning("MessageManager dropped command: payload is not a dict: %r", payload)
+            return
+        action = payload.get("action")
+        if not isinstance(action, str) or not action:
+            logger.warning("MessageManager dropped command: missing or invalid 'action': %r", payload)
+            return
+        if action == "check-for-update":
+            callback = self._on_check_for_update
+            if callback is None:
+                logger.warning("MessageManager dropped check-for-update: no handler registered")
+                return
+            try:
+                callback()
+            except Exception as exc:
+                logger.exception("MessageManager on_check_for_update raised: %s", exc)
+            return
+        logger.warning("MessageManager dropped unknown command action: %r", action)
 
     def _handle_message(self, payload: dict) -> None:
         """Convert payload dict to Message, store it, enrich it, and emit change.

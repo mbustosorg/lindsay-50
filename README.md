@@ -175,6 +175,90 @@ message), with the scrolling text composited on top:
 | `honeycomb` | Port of a Pixelblaze HSV pattern (numpy) |
 | `hyperspace` | Star Wars-style jump: a 3D starfield that stretches into a tunnel of streaks and back |
 
+## Self-upgrading Pi (issue #49)
+
+After this change, the Pi controller upgrades itself whenever Flask
+restarts with a new commit. The flow:
+
+1. `git push heroku main` (or any Flask restart) sets a new
+   `HEROKU_SLUG_COMMIT` on Heroku.
+2. Flask publishes a *single* `command=check-for-update` MQTT envelope
+   at startup. (Reconnects do **not** re-publish — that turned broker
+   flaps into reboot storms during testing of an earlier draft.)
+3. The Pi's running `main.py` receives the envelope, compares its
+   own SHA (read from the `LINDSAY50_ACTIVE_SHA` env var) to the SHA
+   Flask reports via `GET /api/sign/boot-config`. If they match,
+   nothing happens — most Flask restarts (config:set, dyno cycle)
+   don't change `HEROKU_SLUG_COMMIT`. If they differ, `main.py`
+   `os.execvpe`s into `loader.py`.
+4. `loader.py` queries Flask itself, stages the new SHA via
+   `git worktree add v-<sha>`, then probes the staged worktree's
+   `.status.json` — it waits for the file to report
+   `mqtt_connected=true` with no `last_error`. (This is the pre-swap
+   health check; failures abort the swap with zero downtime on the
+   running version.) On success the loader atomically swaps the
+   `current` symlink, then `os.execvpe`s into the new
+   `current/.../main.py`.
+5. The new `main.py` inherits `LINDSAY50_ACTIVE_SHA=<new_sha>` and
+   `LINDSAY50_REPO_DIR` from the loader's env dict — it always
+   knows its own identity, even after a swap.
+
+The previous draft had `command=reboot` + a 30-second post-swap grace
+period. The new design is quieter (no reboot on same-SHA deploys),
+faster (no 30-second wait for the swap), and safer (failure detected
+before the swap, not after).
+
+### One-time Pi bootstrap
+
+The Pi's working tree must be organized as a bare repo + per-SHA
+worktrees + a `current` symlink. The first-time operator procedure
+on the Pi (≈ 1 minute of downtime):
+
+```bash
+ssh pi@<pi-host>
+sudo systemctl stop lindsay_50
+cd /home/pi/projects/lindsay-50
+git pull                                       # last manual pull
+sudo /home/pi/projects/lindsay-50/scripts/setup-pi.sh
+```
+
+`setup-pi.sh` is idempotent — re-running on an already-bootstrapped
+repo is a no-op. Verify with:
+
+```bash
+ls -la /home/pi/projects/lindsay-50/current     # should be a symlink to v-<sha>
+systemctl status lindsay_50
+journalctl -u lindsay_50 -f
+cat /home/pi/projects/lindsay-50/.status.json   # should report mqtt_connected=true
+```
+
+`scripts/setup-pi.sh` writes `LINDSAY50_REPO_DIR=/home/pi/projects/lindsay-50`
+to `/etc/default/lindsay-50` (which systemd `EnvironmentFile=`s).
+
+### Operator rollback (after a bad deploy)
+
+The same blue/green layout makes rollback a Heroku-native operation —
+no Flask-side state to forget:
+
+```bash
+heroku rollback v123       # sets HEROKU_SLUG_COMMIT to v123's hash
+                           # Flask restarts, publishes command=check-for-update,
+                           # Pi's main.py compares SHAs, exec's into the loader,
+                           # loader pulls v123, swaps, exec's v123.
+```
+
+Manual rollback (e.g. from the Pi itself):
+
+```bash
+ssh pi@<pi-host>
+sudo systemctl stop lindsay_50
+ln -sfn v-<old-sha> /home/pi/projects/lindsay-50/current
+sudo systemctl start lindsay_50
+```
+
+The old worktrees stay on disk under `v-<sha>/` after every upgrade
+so manual rollback is always available.
+
 ## Project structure
 
 ```
