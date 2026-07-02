@@ -11,8 +11,7 @@ module is importable in either runtime without a top-level network dependency.
 import asyncio
 import json
 import logging
-import os
-from typing import Callable, Optional
+from typing import Callable, Mapping, Optional
 
 from lib_shared.models import EffectsSettings, MessageEnvelope, Message, SignConfig, TextSettings
 from lib_shared.messages import InMemoryMessages
@@ -125,6 +124,7 @@ class MessageManager:
         api_key: str,
         is_browser: bool = False,
         on_change: Optional[Callable[[], None]] = None,
+        command_handlers: Optional[Mapping[str, Callable[[dict], None]]] = None,
     ) -> None:
         """Create MessageManager with explicit URLs and an `is_browser` flag.
 
@@ -144,14 +144,33 @@ class MessageManager:
                               per-page `reRender` both rely on this. Exceptions
                               from the callback are swallowed so a faulty
                               listener never breaks the buffer write.
+            command_handlers: Optional mapping of `action` → handler for
+                              `type=command` envelopes. Each handler is a
+                              callable accepting the command payload dict.
+                              Unknown actions are logged and dropped (a buggy
+                              publisher must never brick the device). The
+                              constructor copies the mapping so callers can
+                              mutate theirs without affecting the manager.
         """
         self._config = SignConfig()
         self._messages = InMemoryMessages(self._config, maxlen=100)
         self._on_change = on_change
+        self._command_handlers: dict[str, Callable[[dict], None]] = dict(command_handlers) if command_handlers else {}
         self._messages_api_url = messages_api_url
         self._config_api_url = config_api_url
         self._api_key = api_key
         self._is_browser = is_browser
+
+    def register_command_handler(self, action: str, handler: Callable[[dict], None]) -> None:
+        """Register (or replace) a handler for a `type=command` action.
+
+        Called after construction for handlers that need the manager
+        instance (e.g. the matrix controller's `check_for_update`
+        handler). The handler is invoked synchronously on the paho
+        network thread — keep it short, non-blocking, and
+        exception-safe.
+        """
+        self._command_handlers[action] = handler
 
     def _emit_change(self) -> None:
         """Fire the `on_change` callback if registered, then persist to sessionStorage.
@@ -381,19 +400,24 @@ class MessageManager:
             logger.warning("Unknown envelope type: %r", envelope.type)
 
     def _handle_command(self, payload) -> None:
-        """Handle a type=command envelope.
+        """Handle a type=command envelope by dispatching to a registered handler.
 
-        Payload is the command dict (e.g. {"action": "reboot"}). Unknown
-        actions are logged and dropped — matches the existing pattern for
-        unknown envelope types. Malformed payloads (None, non-dict, missing
-        action key) are also logged and dropped: a buggy publisher must
-        never brick the device's render loop.
+        The `payload` is the command dict (e.g. {"action": "check-for-update"}).
+        The action string selects a handler from `command_handlers`; unknown
+        actions are logged and dropped. Malformed payloads (None, non-dict,
+        missing or non-string `action`) are also logged and dropped: a buggy
+        publisher must never brick the device's render loop.
 
-        The only built-in action today is "reboot", which shells out to
-        `sudo reboot`. The loader uses this to recover from broken upgrades
-        — any Flask restart publishes a reboot envelope, the Pi reboots,
-        and the loader queries /api/sign/expected-sha to see whether a
-        version swap is needed before exec'ing main.py.
+        Handler exceptions are caught and logged — a faulty handler is a
+        deployment bug, not a render-loop bug, and raising here would
+        interrupt the paho network thread (the only listener we have for
+        live message envelopes).
+
+        Built-in handlers are NOT hardcoded here. The matrix controller
+        registers its `check_for_update` handler after construction;
+        the browser registers nothing (it ignores commands). This keeps
+        MessageManager agnostic to which commands exist — it just
+        dispatches by action string.
         """
         if not isinstance(payload, dict):
             logger.warning("MessageManager dropped command: payload is not a dict: %r", payload)
@@ -402,21 +426,22 @@ class MessageManager:
         if not isinstance(action, str) or not action:
             logger.warning("MessageManager dropped command: missing or invalid 'action': %r", payload)
             return
-        if action == "reboot":
-            logger.warning("MessageManager executing command action=reboot")
-            # `os.system` returns the exit status of the spawned shell.
-            # We deliberately do not raise on a non-zero rc — `sudo reboot`
-            # is expected to either succeed (machine goes away within ~2s)
-            # or fail (no passwordless sudo). Raising here would interrupt
-            # the render loop on the Pi with a confusing traceback when
-            # sudo isn't set up yet.
-            try:
-                rc = os.system("sudo reboot")
-                logger.info("MessageManager sudo reboot returned rc=%s", rc)
-            except Exception as e:
-                logger.warning("MessageManager sudo reboot raised: %s", e)
+        handler = self._command_handlers.get(action)
+        if handler is None:
+            logger.warning(
+                "MessageManager dropped unknown command action: %r (registered: %s)",
+                action,
+                sorted(self._command_handlers),
+            )
             return
-        logger.warning("MessageManager dropped unknown command action: %r", action)
+        try:
+            handler(payload)
+        except Exception as exc:
+            logger.exception(
+                "MessageManager command handler for action=%r raised: %s",
+                action,
+                exc,
+            )
 
     def _handle_message(self, payload: dict) -> None:
         """Convert payload dict to Message, store it, enrich it, and emit change.

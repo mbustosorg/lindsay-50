@@ -3,16 +3,18 @@
 This is the systemd `ExecStart`. On every boot it:
 
   1. Resolves the local active SHA (resolved through `current/`).
-  2. Queries Flask for the expected SHA via /api/sign/expected-sha.
-  3. If they match, execs `current/heart-matrix-controller/main.py`.
-  4. If they differ, stages the new SHA into a worktree, runs
-     `main.py --healthcheck`, atomically swaps `current` if healthy,
-     then execs the new version.
-  5. Watches the subprocess for 30s. If it exits non-zero within
-     that window, swap `current` back to the previous known-good
-     SHA and re-exec.
+  2. Queries Flask for the expected SHA via `/api/sign/boot-config`
+     (using the shared `lib_shared.boot_config.fetch_boot_config`).
+  3. If they match, execs `current/heart-matrix-controller/main.py`
+     with the env vars the app needs (LINDSAY50_ACTIVE_SHA, etc.).
+  4. If they differ, stages the new SHA into a worktree, spawns
+     the staged `main.py` briefly and reads its `.status.json` to
+     decide whether to swap, atomically swaps `current` if healthy,
+     then execs the new version. The loader is gone after exec —
+     systemd's `StartLimitBurst=3` bounds crash loops, and
+     `heroku rollback v<N>` is the operator's rollback primitive.
 
-Failure modes — Flask unreachable, health check fails, worktree
+Failure modes — Flask unreachable, status.json probe fails, worktree
 create fails — all fall through to "exec the existing
 current/.../main.py" so the Pi is never bricked.
 
@@ -20,11 +22,15 @@ Design notes:
   - All side effects go through small, named functions so unit
     tests can drive failure cases without touching real hardware
     or the network.
-  - `os.execvp` is used (not `subprocess.run`) for the active
+  - `os.execvpe` is used (not `subprocess.run`) for the active
     version so systemd sees `main.py` as the direct child — PID
     stays the same, signal handling is preserved.
   - Atomic swap uses `ln -sfn`, which on the same filesystem is
     atomic relative to any concurrent reader.
+  - Env vars (`LINDSAY50_ACTIVE_SHA`, `LINDSAY50_REPO_DIR`,
+    `LINDSAY50_BOOT_ID`) travel with the child via `os.execvpe`,
+    so the app never has to run `git rev-parse HEAD` on the hot
+    path.
 """
 
 from __future__ import annotations
@@ -33,10 +39,30 @@ import logging
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Callable, Optional
 
+from lib_shared.boot_config import (
+    BootConfig,
+    current_sha as _shared_current_sha,
+    fetch_boot_config,
+)
+
 logger = logging.getLogger("loader")
+
+
+# Env vars the loader sets via os.execvpe when handing off to the
+# app. Centralized so tests and the app agree on the spelling.
+ENV_ACTIVE_SHA = "LINDSAY50_ACTIVE_SHA"
+ENV_REPO_DIR = "LINDSAY50_REPO_DIR"
+ENV_BOOT_ID = "LINDSAY50_BOOT_ID"
+
+# Pre-swap probe parameters. The probe spawns the staged main.py
+# and waits for its status.json to reflect a healthy render loop.
+DEFAULT_PROBE_TOTAL_S = 12.0  # wall-clock budget for the whole probe
+DEFAULT_PROBE_KILL_GRACE_S = 2.0  # after SIGTERM before SIGKILL
+DEFAULT_STATUS_PATH = ".status.json"
 
 
 # ---------------------------------------------------------------------------
@@ -66,7 +92,7 @@ def resolve_repo_dir() -> Path:
     via the `LINDSAY50_REPO_DIR` env var for tests + non-standard
     deployments.
     """
-    env = os.environ.get("LINDSAY50_REPO_DIR")
+    env = os.environ.get(ENV_REPO_DIR)
     if env:
         return Path(env).resolve()
     return Path(__file__).resolve().parent.parent
@@ -101,20 +127,7 @@ def current_sha(repo_dir: Path) -> Optional[str]:
     git invocation fails — the caller treats both as "boot into the
     existing current/.../main.py" without staging anything new.
     """
-    cur = current_symlink(repo_dir)
-    if not cur.exists():
-        logger.warning("loader: current symlink does not exist at %s", cur)
-        return None
-    try:
-        out = subprocess.check_output(
-            ["git", "-C", str(cur), "rev-parse", "HEAD"],
-            stderr=subprocess.PIPE,
-            timeout=5,
-        )
-        return out.decode().strip() or None
-    except Exception as e:
-        logger.warning("loader: could not read current SHA via %s: %s", cur, e)
-        return None
+    return _shared_current_sha(repo_dir)
 
 
 def stage_version(repo_dir: Path, expected_sha: str) -> Path:
@@ -144,9 +157,7 @@ def stage_version(repo_dir: Path, expected_sha: str) -> Path:
                 timeout=10,
             )
         except subprocess.CalledProcessError as e:
-            raise StageError(
-                f"reset --hard failed in {cur}: {e.stderr.decode(errors='replace')}"
-            ) from e
+            raise StageError(f"reset --hard failed in {cur}: {e.stderr.decode(errors='replace')}") from e
 
     # Stage the new worktree from the bare repo. The bare repo
     # already has the history (we cloned once via setup-pi.sh),
@@ -168,37 +179,12 @@ def stage_version(repo_dir: Path, expected_sha: str) -> Path:
             timeout=30,
         )
     except subprocess.CalledProcessError as e:
-        raise StageError(
-            f"worktree add failed for {expected_sha}: {e.stderr.decode(errors='replace')}"
-        ) from e
+        raise StageError(f"worktree add failed for {expected_sha}: {e.stderr.decode(errors='replace')}") from e
     except Exception as e:
         raise StageError(f"worktree add raised: {e}") from e
 
     logger.info("loader: staged %s at %s", expected_sha, target)
     return target
-
-
-def run_health_check(repo_dir: Path, expected_sha: str, timeout: float = 60.0) -> int:
-    """Run `v-<sha>/heart-matrix-controller/main.py --healthcheck`.
-
-    Returns the subprocess exit code (0 = pass, non-zero = fail).
-    The loader only inspects the exit code — what the check
-    actually verifies is the app's concern, not ours.
-    """
-    cmd = [
-        sys.executable,
-        str(worktree_dir(repo_dir, expected_sha) / "heart-matrix-controller" / "main.py"),
-        "--healthcheck",
-    ]
-    logger.info("loader: running healthcheck: %s", " ".join(cmd))
-    try:
-        return subprocess.call(cmd, timeout=timeout)
-    except subprocess.TimeoutExpired:
-        logger.error("loader: healthcheck timed out after %.0fs", timeout)
-        return 124  # convention from coreutils timeout(1)
-    except Exception as e:
-        logger.error("loader: healthcheck failed to spawn: %s", e)
-        return 125
 
 
 def atomic_swap(repo_dir: Path, expected_sha: str) -> None:
@@ -220,6 +206,180 @@ def atomic_swap(repo_dir: Path, expected_sha: str) -> None:
     )
 
 
+def _build_exec_env(
+    repo_dir: Path,
+    active_sha: str,
+    *,
+    base_env: Optional[dict[str, str]] = None,
+    boot_id: str = "",
+) -> dict[str, str]:
+    """Build the env dict we pass to `os.execvpe`.
+
+    Inherits the loader's own env (so PYTHONPATH, LOG_LEVEL, and
+    the user's PATH carry through), then sets/refreshes the three
+    `LINDSAY50_*` vars the app reads at module load.
+    """
+    env = dict(base_env if base_env is not None else os.environ)
+    env[ENV_ACTIVE_SHA] = active_sha
+    env[ENV_REPO_DIR] = str(repo_dir)
+    if boot_id:
+        env[ENV_BOOT_ID] = boot_id
+    return env
+
+
+def exec_active(
+    repo_dir: Path,
+    active_sha: str,
+    *,
+    boot_id: str = "",
+) -> None:
+    """Replace the current process with `current/.../main.py`.
+
+    Uses `os.execvpe` (NOT `subprocess.run`) so systemd sees
+    `main.py` as the direct child — PID stays the same, signal
+    handling is preserved. Sets `LINDSAY50_ACTIVE_SHA`, the running
+    version, so the app doesn't have to run `git rev-parse HEAD`
+    on the hot path.
+    """
+    main_py = main_py_for(repo_dir)
+    env = _build_exec_env(repo_dir, active_sha, boot_id=boot_id)
+    logger.info("loader: execvpe python3 %s", main_py)
+    os.execvpe(sys.executable, [sys.executable, main_py], env)
+
+
+# ---------------------------------------------------------------------------
+# Pre-swap probe (status.json from the running app)
+# ---------------------------------------------------------------------------
+
+
+def _spawn_staged_for_probe(
+    repo_dir: Path,
+    expected_sha: str,
+    *,
+    status_path: Path,
+) -> subprocess.Popen:
+    """Spawn the staged `main.py` for the pre-swap probe.
+
+    Returns the Popen; the caller is responsible for terminating
+    it and reading `status_path`. The probe child writes to
+    `status_path` (a tmp file in the repo dir for hermetic tests);
+    in production `status_path` is `<repo_dir>/.status.json`.
+    """
+    staged_main_py = worktree_dir(repo_dir, expected_sha) / "heart-matrix-controller" / "main.py"
+    env = _build_exec_env(repo_dir, expected_sha)
+    env["LINDSAY50_STATUS_PATH"] = str(status_path)
+    return subprocess.Popen(
+        [sys.executable, str(staged_main_py)],
+        env=env,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def probe(
+    repo_dir: Path,
+    expected_sha: str,
+    *,
+    total_timeout_s: float = DEFAULT_PROBE_TOTAL_S,
+    kill_grace_s: float = DEFAULT_PROBE_KILL_GRACE_S,
+    status_path: Optional[Path] = None,
+    read_status_fn: Optional[Callable[..., Optional[dict]]] = None,
+) -> bool:
+    """Validate a staged worktree by spawning it briefly.
+
+    Spawns `v-<sha>/heart-matrix-controller/main.py`, waits up to
+    `total_timeout_s` for it to write a healthy `status.json`,
+    then terminates the child and returns whether the snapshot
+    was fresh + healthy. A healthy snapshot is one whose:
+      - `mqtt_connected` is True
+      - `last_tick_age_ms` is < 2000 (recent render activity)
+      - `last_error` is None
+
+    Failure cases (any of these returns False):
+      - child exits non-zero before the timeout (e.g. ImportError)
+      - status.json is missing or stale at the timeout
+      - status.json reports unhealthy (mqtt disconnected, stale
+        ticks, last_error set)
+
+    The status_path defaults to `<repo_dir>/.status.json` — the
+    same path the running production app writes to. Tests inject
+    a tmp dir to keep the probe hermetic.
+
+    Note: this is a pre-swap probe only. There is intentionally
+    no post-swap watchdog — the loader is gone after exec, and
+    the operator does `heroku rollback v<N>` if a render bug
+    manifests after the swap.
+    """
+    if read_status_fn is None:
+        # Local import to keep the loader importable in tests
+        # without pulling in heavy deps at module load.
+        from status import read_status as _read_status
+
+        _read_status_fn: Callable[..., Optional[dict]] = _read_status
+    else:
+        _read_status_fn = read_status_fn
+
+    status_file = status_path if status_path is not None else repo_dir / DEFAULT_STATUS_PATH
+    proc = _spawn_staged_for_probe(repo_dir, expected_sha, status_path=status_file)
+    deadline = time.monotonic() + total_timeout_s
+    healthy = False
+    try:
+        while time.monotonic() < deadline:
+            try:
+                rc = proc.wait(timeout=0.5)
+                # Process exited early (good or bad) — read the
+                # status file one last time then return.
+                status = _read_status_fn(status_file, now_monotonic=deadline)
+                healthy = _is_status_healthy(status)
+                if rc != 0:
+                    logger.warning(
+                        "loader: probe child exited rc=%s; status healthy=%s",
+                        rc,
+                        healthy,
+                    )
+                return healthy
+            except subprocess.TimeoutExpired:
+                pass
+            status = _read_status_fn(status_file, now_monotonic=time.monotonic())
+            if _is_status_healthy(status):
+                healthy = True
+                break
+    finally:
+        # Always terminate the probe child. The loader is the only
+        # supervisor; we can't leave a child running.
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=kill_grace_s)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                try:
+                    proc.wait(timeout=kill_grace_s)
+                except subprocess.TimeoutExpired:
+                    pass
+        except Exception as exc:
+            logger.warning("loader: failed to terminate probe child: %s", exc)
+    return healthy
+
+
+def _is_status_healthy(
+    status: Optional[dict],
+    *,
+    max_tick_age_ms: int = 2000,
+) -> bool:
+    """Decide whether a status.json snapshot indicates a healthy app."""
+    if not isinstance(status, dict):
+        return False
+    if status.get("mqtt_connected") is not True:
+        return False
+    if status.get("last_error") is not None:
+        return False
+    age_ms = status.get("last_tick_age_ms")
+    if not isinstance(age_ms, int) or age_ms < 0 or age_ms > max_tick_age_ms:
+        return False
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Version source of truth (Flask)
 # ---------------------------------------------------------------------------
@@ -227,148 +387,36 @@ def atomic_swap(repo_dir: Path, expected_sha: str) -> None:
 
 def fetch_expected_sha(
     *,
+    api_url: str,
+    api_key: str,
     requests_module=None,
     timeout: float = 5.0,
 ) -> Optional[str]:
-    """GET /api/sign/expected-sha from Flask, return the SHA or None.
+    """GET `/api/sign/boot-config` from Flask, return the SHA or None.
 
-    Reads the Flask URL + API key from `settings.toml` (located via
-    cwd — the systemd unit's WorkingDirectory is the repo root).
-    Returns None on ANY failure — network error, non-200 status,
-    missing key, malformed JSON — so the caller can fall through to
-    "boot the existing current/.../main.py" without staging anything
-    new. A Pi that can't reach Flask must keep running on the last
-    good version; retry on next boot.
+    Thin wrapper around `lib_shared.boot_config.fetch_boot_config`
+    so the loader shares the URL parsing + auth header logic with
+    the app-side `check_for_update` handler. Returns None on any
+    failure (network error, non-200 status, missing key, malformed
+    JSON) — the caller falls through to "boot the existing
+    current/.../main.py" without staging. A Pi that can't reach
+    Flask keeps running on the last good version.
 
     Args:
-        requests_module: Override for the `requests` module — tests
-            inject a mock. Defaults to `import requests` at call time.
+        api_url: The Flask messages endpoint URL (e.g.
+            `https://example.com/api/messages`); the loader derives
+            the boot-config origin from this.
+        api_key: X-API-Key header value (same key as /api/config).
+        requests_module: Test override for the `requests` module.
         timeout: HTTP timeout in seconds.
     """
-    try:
-        from lib_shared.config_reader import get_config  # type: ignore[import-not-found]
-    except ImportError:
-        logger.warning("loader: cannot import config_reader")
-        return None
-
-    REQUIRED_KEYS: set[str] = {
-        "CONFIG_API_URL",
-        "MESSAGES_API_URL",
-        "API_SECRET_KEY",
-    }
-    try:
-        cfg = get_config(REQUIRED_KEYS)
-    except Exception as e:
-        logger.warning("loader: config_reader failed: %s", e)
-        return None
-
-    base = cfg.if_exists("CONFIG_API_URL") or ""
-    api_key = cfg.if_exists("API_SECRET_KEY") or ""
-    if not base or not api_key:
-        logger.warning("loader: missing CONFIG_API_URL or API_SECRET_KEY in settings")
-        return None
-
-    # CONFIG_API_URL is the config endpoint URL; expected-sha lives
-    # at the same host but a different path. Strip the trailing
-    # path and re-derive the origin so the endpoint is host-relative.
-    from urllib.parse import urlparse
-
-    parsed = urlparse(base)
-    origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else ""
-    if not origin:
-        logger.warning("loader: could not derive origin from %s", base)
-        return None
-    url = f"{origin}/api/sign/expected-sha"
-
-    if requests_module is None:
-        try:
-            import requests as requests_module  # type: ignore[import-untyped]
-        except ImportError:
-            logger.warning("loader: requests not available; cannot query Flask")
-            return None
-
-    try:
-        resp = requests_module.get(
-            url,
-            headers={"X-API-Key": api_key},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        sha = data.get("expected_sha") if isinstance(data, dict) else None
-        if not isinstance(sha, str) or not sha:
-            logger.warning("loader: empty expected_sha in response: %r", data)
-            return None
-        return sha
-    except Exception as e:
-        logger.warning("loader: fetch_expected_sha failed: %s", e)
-        return None
-
-
-# ---------------------------------------------------------------------------
-# Subprocess supervision
-# ---------------------------------------------------------------------------
-
-
-def exec_active(repo_dir: Path) -> None:
-    """Replace the current process with `current/.../main.py`.
-
-    Uses `os.execvp` (NOT `subprocess.run`) so systemd sees
-    `main.py` as the direct child — PID stays the same, signal
-    handling is preserved. Does not return on success; raises
-    `OSError` if `python3` or `main.py` is missing/unexecutable.
-    """
-    main_py = main_py_for(repo_dir)
-    logger.info("loader: execvp python3 %s", main_py)
-    os.execvp(sys.executable, [sys.executable, main_py])
-
-
-def watch_subprocess(
-    proc: subprocess.Popen,
-    repo_dir: Path,
-    previous_sha: str,
-    grace_seconds: float = 30.0,
-) -> None:
-    """Wait up to `grace_seconds` for `proc`; rollback if it exits non-zero.
-
-    The Pi's loader uses this to detect "starts then crashes 10s in"
-    failures that --healthcheck cannot see (the render loop crashes
-    after the initial checks pass). If the subprocess exits non-zero
-    within the grace window, swap `current` back to `v-<previous_sha>`
-    and re-exec. If it stays up past the grace window, exit normally —
-    systemd will restart the loader on next boot, which will exec the
-    same `current/.../main.py` again (because `current` still points
-    at the new version).
-
-    Note: the rollback target is `v-<previous_sha>` (NOT
-    `v-<current_sha>`). After the swap, `current` points to
-    `v-<new_sha>`; `previous_sha` is what was active before the
-    swap. Rolling back to `v-<new_sha>` would be a no-op.
-    """
-    try:
-        rc = proc.wait(timeout=grace_seconds)
-    except subprocess.TimeoutExpired:
-        logger.info(
-            "loader: subprocess stayed up past grace %.0fs; exiting normally",
-            grace_seconds,
-        )
-        return
-    if rc == 0:
-        logger.info(
-            "loader: subprocess exited cleanly rc=0 within grace; exiting normally"
-        )
-        return
-    logger.warning(
-        "loader: subprocess exited rc=%s within %.0fs grace; rolling back to %s",
-        rc,
-        grace_seconds,
-        previous_sha,
+    config: Optional[BootConfig] = fetch_boot_config(
+        api_url=api_url,
+        api_key=api_key,
+        timeout=timeout,
+        requests_module=requests_module,
     )
-    try:
-        atomic_swap(repo_dir, previous_sha)
-    except Exception as e:
-        logger.error("loader: rollback atomic_swap failed: %s", e)
-    exec_active(repo_dir)
+    return config.expected_sha if config is not None else None
 
 
 # ---------------------------------------------------------------------------
@@ -379,75 +427,62 @@ def watch_subprocess(
 def run_upgrade_flow(
     repo_dir: Path,
     *,
-    fetch_fn: Callable[[], Optional[str]] = fetch_expected_sha,
+    api_url: str,
+    api_key: str,
+    boot_id: str = "",
+    fetch_fn: Callable[..., Optional[str]] = fetch_expected_sha,
     stage_fn: Callable[[Path, str], Path] = stage_version,
-    health_check_fn: Callable[[Path, str], int] = run_health_check,
+    probe_fn: Callable[..., bool] = probe,
     swap_fn: Callable[[Path, str], None] = atomic_swap,
-) -> Optional[subprocess.Popen]:
-    """Decide whether to stage + swap + exec, or fall through.
+    exec_fn: Callable[..., None] = exec_active,
+) -> None:
+    """Decide whether to stage + probe + swap + exec, or fall through.
 
-    Returns the subprocess.Popen if a new version was swapped and
-    exec'd (so the caller can `watch_subprocess` on it). Returns
-    None if the loader should fall through to `exec_active` on the
-    existing `current/.../main.py` (Flask unreachable, health check
-    failed, SHAs match, etc).
-
-    Splitting exec from run_upgrade_flow lets tests verify the
-    orchestration logic without actually starting a Python
-    subprocess — they monkey-patch `swap_fn` etc. and assert on
-    the call sequence.
+    Does not return: either we exec the new version, or we exec
+    the existing `current/.../main.py` — `exec_fn` is
+    `os.execvpe`-based and does not return. The function is split
+    out so tests can verify the orchestration logic without
+    actually starting Python subprocesses — they monkey-patch
+    `swap_fn` etc. and assert on the call sequence.
     """
     local = current_sha(repo_dir)
     logger.info("loader: local SHA = %s", local)
 
-    expected = fetch_fn()
+    expected = fetch_fn(api_url=api_url, api_key=api_key)
     if expected is None:
         logger.warning("loader: could not fetch expected SHA; using existing current")
-        return None
+        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        return
     logger.info("loader: expected SHA = %s", expected)
 
     if local == expected:
         logger.info("loader: local SHA matches expected; no upgrade needed")
-        return None
+        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        return
 
     # Mismatch — stage the new version.
     try:
         stage_fn(repo_dir, expected)
     except StageError as e:
         logger.error("loader: staging %s failed: %s; using existing current", expected, e)
-        return None
+        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        return
     except Exception as e:
         logger.error("loader: staging %s raised: %s; using existing current", expected, e)
-        return None
+        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        return
 
-    rc = health_check_fn(repo_dir, expected)
-    if rc != 0:
+    if not probe_fn(repo_dir, expected):
         logger.error(
-            "loader: healthcheck for %s exited rc=%s; NOT swapping; using existing current",
+            "loader: probe for %s reported unhealthy; NOT swapping; using existing current",
             expected,
-            rc,
         )
-        return None
+        exec_fn(repo_dir, local or "", boot_id=boot_id)
+        return
 
     swap_fn(repo_dir, expected)
     logger.info("loader: swapped to %s; exec'ing", expected)
-    # We exec here in production — but for testability we spawn a
-    # subprocess instead. The wrapper `main()` does the actual
-    # os.execvp; tests use `run_upgrade_flow` with monkey-patched
-    # `swap_fn` and verify the orchestration without exec.
-    return _spawn_active(repo_dir)
-
-
-def _spawn_active(repo_dir: Path) -> subprocess.Popen:
-    """Spawn the active version as a child process (test-friendly path).
-
-    Production uses `os.execvp` via `exec_active` so systemd sees
-    `main.py` as the direct child. Tests use this helper to keep
-    the loader alive after staging — they can inspect the child
-    PID, terminate it, etc.
-    """
-    main_py = main_py_for(repo_dir)
-    return subprocess.Popen([sys.executable, main_py])
+    exec_fn(repo_dir, expected, boot_id=boot_id)
 
 
 # ---------------------------------------------------------------------------
@@ -458,36 +493,53 @@ def _spawn_active(repo_dir: Path) -> subprocess.Popen:
 def main() -> int:
     """Loader entrypoint.
 
-    On upgrade mismatch, this does:
-      1. Run the upgrade flow.
-      2. If a new subprocess was spawned, `watch_subprocess` on it
-         with the previous known-good SHA so we can rollback.
-      3. Otherwise, fall through to `exec_active` so the loader
-         process becomes `current/.../main.py`.
-
-    Returns the child's exit code when watch_subprocess returns
-    normally (subprocess stayed up past grace); returns 0 if the
-    flow didn't stage anything (we exec'd in place).
+    Reads config, runs the upgrade flow, and execs the right
+    version. Returns 0 only if exec did not happen (which means
+    something went wrong upstream of exec_active); exec_active
+    itself does not return.
     """
     repo_dir = resolve_repo_dir()
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     logger.info("loader: starting; repo_dir=%s", repo_dir)
 
-    local = current_sha(repo_dir)
-    proc = run_upgrade_flow(repo_dir)
-    if proc is None:
-        # Either SHAs matched, or staging/healthcheck failed — in
-        # both cases, just exec the existing current/.../main.py.
-        exec_active(repo_dir)
-        # exec_active does not return on success.
+    # Pull API credentials and optional boot_id from settings.toml.
+    # The lib_shared.config_reader imports happen at function-scope
+    # so the loader can be imported in unit tests without a settings
+    # file present.
+    try:
+        from lib_shared.config_reader import get_config  # type: ignore[import-not-found]
+    except ImportError:
+        logger.warning("loader: cannot import config_reader; using existing current")
+        exec_active(repo_dir, current_sha(repo_dir) or "", boot_id=os.environ.get(ENV_BOOT_ID, ""))
         return 0
 
-    # New subprocess spawned. Watch it; if it dies early, watch_subprocess
-    # swaps current back to local and execs the previous version.
-    assert local is not None, "spawning implies we had a local SHA to roll back to"
-    watch_subprocess(proc, repo_dir, previous_sha=local)
-    # If we get here, the subprocess stayed up past the grace window.
-    return proc.wait()
+    required = {"CONFIG_API_URL", "API_SECRET_KEY"}
+    try:
+        cfg = get_config(required)
+    except Exception as e:
+        logger.warning("loader: config_reader failed: %s", e)
+        exec_active(repo_dir, current_sha(repo_dir) or "", boot_id=os.environ.get(ENV_BOOT_ID, ""))
+        return 0
+
+    api_url = cfg.if_exists("CONFIG_API_URL") or ""
+    api_key = cfg.if_exists("API_SECRET_KEY") or ""
+    boot_id = os.environ.get(ENV_BOOT_ID, "")
+
+    if not api_url or not api_key:
+        logger.warning("loader: missing CONFIG_API_URL or API_SECRET_KEY; using existing current")
+        exec_active(repo_dir, current_sha(repo_dir) or "", boot_id=boot_id)
+        return 0
+
+    run_upgrade_flow(
+        repo_dir,
+        api_url=api_url,
+        api_key=api_key,
+        boot_id=boot_id,
+    )
+    # run_upgrade_flow always exec's — reaching here means something
+    # threw without being caught. Fall through to a safe default.
+    exec_active(repo_dir, current_sha(repo_dir) or "", boot_id=boot_id)
+    return 0
 
 
 if __name__ == "__main__":

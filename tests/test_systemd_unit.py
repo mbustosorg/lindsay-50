@@ -51,9 +51,9 @@ class TestSystemdUnit:
         # The systemd unit intentionally invokes the startup shell wrapper
         # (not loader.py directly) so the venv activation + PYTHONPATH
         # setup is preserved. The wrapper exec's loader.py.
-        assert "startup_matrix_server.sh" in execstart, (
-            f"ExecStart should reference the startup wrapper, got: {execstart!r}"
-        )
+        assert (
+            "startup_matrix_server.sh" in execstart
+        ), f"ExecStart should reference the startup wrapper, got: {execstart!r}"
 
     def test_startup_script_invoke_loader_py(self):
         """scripts/startup_matrix_server.sh's final exec line runs loader.py, not main.py directly."""
@@ -63,23 +63,18 @@ class TestSystemdUnit:
         # `cd heart-matrix-controller/` doc references). What we
         # actually want to verify is that the final `exec` line
         # invokes loader.py, not main.py.
-        exec_lines = [
-            line for line in text.splitlines()
-            if line.strip().startswith("exec ")
-        ]
+        exec_lines = [line for line in text.splitlines() if line.strip().startswith("exec ")]
         assert exec_lines, "startup script has no `exec` line"
         last_exec = exec_lines[-1]
-        assert "loader.py" in last_exec, (
-            f"final exec should invoke loader.py, got: {last_exec!r}"
-        )
+        assert "loader.py" in last_exec, f"final exec should invoke loader.py, got: {last_exec!r}"
 
     def test_working_directory_is_repo_root(self, unit):
         """WorkingDirectory is the repo root, not heart-matrix-controller."""
         wd = unit.get("Service", "WorkingDirectory", fallback=None)
         assert wd is not None, "Service.WorkingDirectory missing"
-        assert not wd.rstrip("/").endswith("heart-matrix-controller"), (
-            f"WorkingDirectory should be repo root, got: {wd!r}"
-        )
+        assert not wd.rstrip("/").endswith(
+            "heart-matrix-controller"
+        ), f"WorkingDirectory should be repo root, got: {wd!r}"
 
     def test_startlimit_interval_and_burst_set(self, unit):
         """StartLimitIntervalSec=120 and StartLimitBurst=3 throttle crash loops."""
@@ -138,9 +133,9 @@ class TestSetupPiScript:
     def test_is_idempotent(self):
         """Re-running setup-pi.sh on an already-bootstrapped repo is a no-op."""
         text = SETUP_PI_PATH.read_text()
-        assert "already bootstrapped" in text or "already" in text, (
-            "setup-pi.sh should detect a previously-bootstrapped repo"
-        )
+        assert (
+            "already bootstrapped" in text or "already" in text
+        ), "setup-pi.sh should detect a previously-bootstrapped repo"
 
     def test_reloads_systemd_on_completion(self):
         """setup-pi.sh reloads systemd + restarts the service when present."""
@@ -157,9 +152,7 @@ class TestStartupScript:
         exec_lines = [line for line in text.splitlines() if line.strip().startswith("exec ")]
         assert exec_lines, "startup_matrix_server.sh has no `exec` line"
         last_exec = exec_lines[-1]
-        assert "loader.py" in last_exec, (
-            f"final exec should invoke loader.py, got: {last_exec!r}"
-        )
+        assert "loader.py" in last_exec, f"final exec should invoke loader.py, got: {last_exec!r}"
 
     def test_preserves_log_level_env(self):
         """LOG_LEVEL export is preserved from the original startup script."""

@@ -1,22 +1,26 @@
 ## ADDED Requirements
 
 ### Requirement: Loader process is the systemd entrypoint
-The systemd unit (`scripts/lindsay_50.service`) MUST execute `heart-matrix-controller/loader.py` as its `ExecStart`. The loader runs as root (required for `git worktree`, `sudo reboot`, and rgbmatrix GPIO access).
+The systemd unit (`scripts/lindsay_50.service`) MUST execute `heart-matrix-controller/loader.py` as its `ExecStart`. The loader runs as root (required for `git worktree`, `os.execvpe`, and rgbmatrix GPIO access).
+
+The loader MUST resolve its working directory from `LINDSAY50_REPO_DIR` if set, falling back to `/home/pi/projects/lindsay-50`.
 
 #### Scenario: Systemd starts the loader on boot
 - **WHEN** the Pi boots (or systemd restarts the service)
-- **THEN** systemd executes `loader.py` from the directory that `current/` symlink resolves to
+- **THEN** systemd executes `loader.py` which queries Flask and ultimately execs `current/heart-matrix-controller/main.py` as its child process
 
 ### Requirement: Loader detects version mismatch on startup
-The loader MUST query the expected version from Flask, compare it to the local HEAD (resolved through the `current/` symlink), and enter the upgrade flow if they differ.
+The loader MUST query the expected version from Flask via `lib_shared.boot_config.fetch_boot_config`, compare it to the local HEAD (resolved through the `current/` symlink), and enter the upgrade flow if they differ.
+
+If `LINDSAY50_ACTIVE_SHA` is set in the environment (the loader was entered from the running app via `check_for_update`), the loader MUST prefer it for the "current" comparison since `current/` may not yet reflect the swap.
 
 #### Scenario: Local SHA matches expected SHA
 - **WHEN** loader boots and `local_sha == expected_sha`
-- **THEN** loader skips staging and execs `current/heart-matrix-controller/main.py` as a subprocess
+- **THEN** loader skips staging and execs `current/heart-matrix-controller/main.py`
 
 #### Scenario: Local SHA differs from expected SHA
 - **WHEN** loader boots and `local_sha != expected_sha`
-- **THEN** loader stages the expected SHA into a new worktree, runs `--healthcheck`, swaps `current` atomically if healthy, and execs the new subprocess
+- **THEN** loader stages the expected SHA into a new worktree, probes via `.status.json`, atomically swaps `current` if healthy, and execs the new version with the new `LINDSAY50_ACTIVE_SHA` in its env
 
 #### Scenario: Flask is unreachable on boot
 - **WHEN** loader cannot reach Flask (network error, 5xx, timeout)
@@ -37,34 +41,36 @@ The loader MUST stage a new version using `git worktree add` against the existin
 - **WHEN** `git worktree add` fails because git cannot reach the remote
 - **THEN** loader logs the error and continues to exec `current/.../main.py` on the existing local SHA
 
-### Requirement: Loader runs the app health check before swap
-Before swapping the `current` symlink, the loader MUST invoke the staged version's `main.py --healthcheck` and verify exit code 0. If the health check exits non-zero, the loader MUST NOT swap, MUST log the failure, and MUST continue to exec the existing `current/.../main.py`.
+### Requirement: Loader probes the staged version via `.status.json`
+Before swapping the `current` symlink, the loader MUST spawn `v-<sha>/heart-matrix-controller/main.py` as a subprocess, wait up to a probe budget for `$REPO_DIR/v-<sha>/.status.json` to report `mqtt_connected=true` with no `last_error`, then kill the subprocess. If the file becomes healthy in time the probe returns True; otherwise the swap MUST NOT happen and the loader falls through to execing the existing `current/.../main.py`.
 
-#### Scenario: Health check passes
-- **WHEN** `v-<expected_sha>/heart-matrix-controller/main.py --healthcheck` exits 0
-- **THEN** loader proceeds to atomic symlink swap
+The probe MUST NOT install or set up `LINDSAY50_ACTIVE_SHA` — only the post-swap exec does.
 
-#### Scenario: Health check fails (e.g., missing dependency)
-- **WHEN** `v-<expected_sha>/heart-matrix-controller/main.py --healthcheck` exits non-zero
-- **THEN** loader leaves `current` unchanged, logs the failure, and execs the existing `current/.../main.py`
+#### Scenario: Status probe passes
+- **WHEN** `.status.json` reports `mqtt_connected=true` and `last_error=None` within the probe budget
+- **THEN** loader proceeds to atomic symlink swap, kills the probe subprocess, and execs the new version
+
+#### Scenario: Status probe times out
+- **WHEN** `.status.json` never reports `mqtt_connected=true` within the probe budget (or reports `last_error` set)
+- **THEN** loader logs the failure, kills the probe subprocess, and execs the existing `current/.../main.py` without swapping
+
+#### Scenario: `.status.json` missing entirely
+- **WHEN** the staged version's `main.py` did not write `.status.json` at all within the probe budget
+- **THEN** loader treats the staged version as unhealthy and falls through
 
 ### Requirement: Atomic symlink swap
-The loader MUST swap the active version via `ln -sfn v-<expected_sha> current` after the health check passes. The swap MUST be atomic on the same filesystem.
+The loader MUST swap the active version via `ln -sfn v-<expected_sha> current` after the status probe passes. The swap MUST be atomic on the same filesystem.
 
 #### Scenario: Successful swap
 - **WHEN** loader runs `ln -sfn v-<expected_sha> current` and the symlink target changes
 - **THEN** any subsequent `current/...` resolution resolves to the new version directory
 
-### Requirement: Post-swap rollback on early subprocess exit
-After swapping `current` and exec'ing `main.py`, the loader MUST watch the subprocess for 30 seconds. If the subprocess exits unexpectedly during this grace period, the loader MUST swap `current` back to the previous known-good SHA and restart the subprocess.
+### Requirement: Post-exec env vars carry deployment context
+After `os.execvpe` into the new `main.py`, the loader's env dict MUST include `LINDSAY50_ACTIVE_SHA=<new_sha>`, `LINDSAY50_REPO_DIR=<repo_dir>`, and `LINDSAY50_BOOT_ID=<boot_id>` (minted at loader startup if not already set in `os.environ`). All other variables in `os.environ` MUST be inherited unchanged.
 
-#### Scenario: Subprocess stays up past grace period
-- **WHEN** `main.py` runs continuously for 30 seconds after swap
-- **THEN** loader stops watching and exits its own process (systemd restarts the loader, which now execs the new version normally)
-
-#### Scenario: Subprocess exits within grace period
-- **WHEN** `main.py` exits non-zero within 30 seconds of swap
-- **THEN** loader swaps `current` back to the previous `v-<old_sha>/` directory and execs the previous version's `main.py`
+#### Scenario: New `main.py` inherits loader env
+- **WHEN** loader execs the new version's `main.py`
+- **THEN** the new process sees `LINDSAY50_ACTIVE_SHA`, `LINDSAY50_REPO_DIR`, `LINDSAY50_BOOT_ID` plus the loader's other env vars (PATH, LOG_LEVEL, etc.)
 
 ### Requirement: Repository layout uses bare repo + worktrees
 The Pi's working tree MUST be organized as a bare git repo (`.git/`) at the repo root, per-version worktrees (`v-<sha>/`) at the repo root, and a `current` symlink pointing at the active version. Shared resources (`settings.toml`, `fonts/`, `.venv/`) MUST live at the repo root, outside any per-version directory.

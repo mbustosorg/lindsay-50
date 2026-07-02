@@ -14,7 +14,7 @@ automatically on port 8883 (e.g. io.adafruit.com).
 import logging
 import threading
 import time
-from typing import Callable, Optional
+from typing import Callable
 
 import paho.mqtt.client as mqtt
 
@@ -36,7 +36,6 @@ class PahoMqttClient:
         username: str,
         password: str,
         topic: str,
-        on_connect_callback: Optional[Callable[[], None]] = None,
     ) -> None:
         """Initialize the client.
 
@@ -49,18 +48,16 @@ class PahoMqttClient:
             topic: Wire-format topic to subscribe to and publish on. The
                 client does no broker-specific translation; for Adafruit
                 IO this must be the full "{username}/feeds/{feedname}" path.
-            on_connect_callback: Optional parameterless callable fired from
-                paho's on_connect when the broker returns CONNACK rc==0
-                (success). Runs on the paho network thread — keep it short,
-                non-blocking, and exception-safe. Used by the Flask app to
-                publish a one-shot `command=reboot` envelope on every
-                successful (re)connect so the Pi reboots whenever Flask
-                restarts and re-syncs to the expected SHA.
+
+        Note: prior versions accepted an `on_connect_callback` so Flask
+        could publish a one-shot `command=reboot` envelope on every
+        successful (re)connect. That was removed: the v2 design publishes
+        exactly once at Flask startup, and reconnects publish nothing.
+        Network flakiness should not become a reboot hint.
         """
         self._dispatch = dispatch_callback
         self._thread: threading.Thread | None = None
         self._stop: threading.Event | None = None
-        self._on_connect_callback = on_connect_callback
 
         self._host = host
         self._port = int(port)
@@ -81,16 +78,6 @@ class PahoMqttClient:
             if rc == 0:
                 _client.subscribe(topic)
                 logger.info("PahoMqttClient connected, subscribed to %s", topic)
-                cb = self._on_connect_callback
-                if cb is not None:
-                    try:
-                        cb()
-                    except Exception as e:
-                        # A buggy on_connect must never tear down the
-                        # subscriber — paho logs and reconnects on
-                        # exception, but we'd rather keep this specific
-                        # case quiet and recoverable than crash the loop.
-                        logger.warning("PahoMqttClient on_connect_callback raised: %s", e)
             else:
                 logger.warning("PahoMqttClient connection failed: rc=%s", rc)
 

@@ -78,6 +78,29 @@ def _restore_lib_shared():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _restore_time_monotonic():
+    """Some tests in this repo (e.g. `effects_coordinator_test.py`,
+    `lib_shared/effects_coordinator_get_display_message_test.py`) install
+    `pytest.MonkeyPatch()` manually and rely on `monkey.undo()` at the
+    end of the test. If such a test errors out before `undo()`, the
+    patch leaks into later tests and `time.monotonic()` returns a
+    frozen value forever — which makes any subsequent loop using it
+    hang. We restore the real `time.monotonic` before every test to
+    bound the damage. Real `time` doesn't expose `monotonic` as a
+    settable attribute in a way we'd break; if a test legitimately
+    patches it via the `monkeypatch` fixture, that test's restoration
+    runs after this one (monkeypatch undos happen at the end of the
+    test) so the test still sees its own mock during execution.
+    """
+    import time as _time
+
+    real_monotonic = _time.monotonic
+    yield
+    if _time.monotonic is not real_monotonic:
+        _time.monotonic = real_monotonic
+
+
 # ---------------------------------------------------------------------------
 # Sample data fixtures
 # ---------------------------------------------------------------------------

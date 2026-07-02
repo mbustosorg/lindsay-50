@@ -1,20 +1,16 @@
-"""Tests for heart-matrix-controller/loader.py.
+"""Tests for `heart-matrix-controller/loader.py`.
 
-Covers the blue/green upgrade flow added in issue #49:
+v2 design:
+  - status.json probe replaces `--healthcheck` subprocess probe
+  - `run_upgrade_flow` returns None; loader execvpe's the active version
+    (no Popen returned, no post-swap watchdog)
+  - Env vars (LINDSAY50_ACTIVE_SHA, LINDSAY50_REPO_DIR, LINDSAY50_BOOT_ID)
+    travel with the child via os.execvpe's env dict
+  - Failure cases (Flask unreachable, status.json probe fails, stage fails)
+    all fall through to "exec the existing current/.../main.py"
 
-  - atomic_swap updates the `current` symlink without disturbing
-    the old worktree directory on disk.
-  - run_upgrade_flow against a fixture bare repo with two commits
-    stages the second SHA, swaps, and returns a Popen for the
-    active version.
-  - run_upgrade_flow falls through cleanly when Flask is
-    unreachable (fetch_fn returns None) — no stage, no swap.
-  - watch_subprocess rollback targets the previous SHA, not the
-    new one, when the new subprocess exits non-zero within the
-    grace window.
-
-Each test uses a `tmp_path` repo layout (bare repo + worktree +
-symlink) so they're hermetic and don't touch the real
+Hermetic: each test uses tmp_path for the repo layout (bare-style git
+repo with worktrees + symlink), so we don't touch the real
 `/home/pi/projects/lindsay-50` checkout.
 """
 
@@ -25,22 +21,17 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
-LOADER_PATH = (
-    Path(__file__).parent.parent / "heart-matrix-controller" / "loader.py"
-)
+LOADER_PATH = Path(__file__).parent.parent / "heart-matrix-controller" / "loader.py"
 
 
 def _load_loader():
-    """Load loader.py fresh from disk.
-
-    Sibling tests can wipe `sys.modules` between cases; loading by
-    path every time guarantees we exercise the same module the
-    production code imports.
-    """
+    """Load loader.py fresh from disk by path."""
     spec = importlib.util.spec_from_file_location("hmc_loader_under_test", str(LOADER_PATH))
+    assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules["hmc_loader_under_test"] = mod
     spec.loader.exec_module(mod)
@@ -52,13 +43,8 @@ def loader():
     return _load_loader()
 
 
-# ---------------------------------------------------------------------------
-# Bare-repo fixture: real git with two commits
-# ---------------------------------------------------------------------------
-
-
 def _git(cwd: Path, *args: str, check: bool = True) -> str:
-    """Run a git command in `cwd`, return stdout. Raises on failure unless `check=False`."""
+    """Run a git command in `cwd`, return stdout."""
     result = subprocess.run(
         ["git", "-C", str(cwd)] + list(args),
         capture_output=True,
@@ -66,32 +52,16 @@ def _git(cwd: Path, *args: str, check: bool = True) -> str:
         check=False,
     )
     if check and result.returncode != 0:
-        raise AssertionError(
-            f"git {' '.join(args)} failed (rc={result.returncode}): {result.stderr}"
-        )
+        raise AssertionError(f"git {' '.join(args)} failed (rc={result.returncode}): {result.stderr}")
     return result.stdout
 
 
 @pytest.fixture
 def bare_repo_with_two_commits(tmp_path):
-    """Create a real bare-style repo layout under `tmp_path` with two commits.
-
-    Returns `(repo_dir, sha1, sha2)`:
-      - `repo_dir` is the parent of `.git/`, `v-<sha1>/`, `v-<sha2>/`, and `current/`.
-      - `sha1` is the first commit (becomes the rolled-back target).
-      - `sha2` is the second commit (becomes the new version).
-
-    The fixture mirrors the production Pi layout:
-      - `.git/` is a real git dir (not bare — sufficient for worktree add).
-      - `v-<sha>/` are worktrees at the two commits.
-      - `current` is a symlink pointing at `v-<sha1>/`.
-    """
+    """Real-git repo layout with two commits and two worktrees."""
     repo_dir = tmp_path / "repo"
     repo_dir.mkdir()
 
-    # Initialize a real (non-bare) repo with a single file, commit, then
-    # make a second commit. Both commits are real git SHAs the loader can
-    # resolve via `git rev-parse HEAD` and stage via `git worktree add`.
     _git(repo_dir, "init", "--initial-branch=main", check=False)
     _git(repo_dir, "config", "user.email", "test@example.com")
     _git(repo_dir, "config", "user.name", "Test")
@@ -107,15 +77,11 @@ def bare_repo_with_two_commits(tmp_path):
     _git(repo_dir, "commit", "-m", "second commit")
     sha2 = _git(repo_dir, "rev-parse", "HEAD").strip()
 
-    # Create worktrees. The first one becomes `v-<sha1>` and the source
-    # of the `current` symlink. The second one becomes `v-<sha2>` —
-    # already present on disk so we exercise the "skip stage" path.
     v1 = repo_dir / f"v-{sha1}"
     v2 = repo_dir / f"v-{sha2}"
     _git(repo_dir, "worktree", "add", str(v1), sha1)
     _git(repo_dir, "worktree", "add", str(v2), sha2)
 
-    # current -> v-<sha1>
     current = repo_dir / "current"
     if current.exists() or current.is_symlink():
         current.unlink()
@@ -125,33 +91,42 @@ def bare_repo_with_two_commits(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 4.11 — atomic_swap updates current symlink target; old target preserved
+# Env var constants — loader and app agree on the spelling
+# ---------------------------------------------------------------------------
+
+
+class TestEnvVarConstants:
+    def test_active_sha_constant(self, loader):
+        assert loader.ENV_ACTIVE_SHA == "LINDSAY50_ACTIVE_SHA"
+
+    def test_repo_dir_constant(self, loader):
+        assert loader.ENV_REPO_DIR == "LINDSAY50_REPO_DIR"
+
+    def test_boot_id_constant(self, loader):
+        assert loader.ENV_BOOT_ID == "LINDSAY50_BOOT_ID"
+
+
+# ---------------------------------------------------------------------------
+# atomic_swap
 # ---------------------------------------------------------------------------
 
 
 class TestAtomicSwap:
     def test_atomic_swap_updates_current_symlink(self, loader, tmp_path):
-        """atomic_swap(v-<new>) makes `current` point to v-<new>; v-<old> still on disk."""
         repo = tmp_path / "r"
         repo.mkdir()
-        # Two fake "worktrees" — directories only, no git needed for this test.
-        old_dir = repo / "v-old"
-        new_dir = repo / "v-new"
-        old_dir.mkdir()
-        new_dir.mkdir()
+        (repo / "v-old").mkdir()
+        (repo / "v-new").mkdir()
         current = repo / "current"
         os.symlink("v-old", current)
 
         loader.atomic_swap(repo, "new")
 
-        # current now points to v-new
         assert current.is_symlink()
         assert os.readlink(current) == "v-new"
-        # v-old is still on disk (rollback target preserved)
-        assert old_dir.exists()
+        assert (repo / "v-old").exists()  # rollback target preserved
 
     def test_atomic_swap_replaces_existing_symlink_silently(self, loader, tmp_path):
-        """A second atomic_swap overwrites the first without erroring."""
         repo = tmp_path / "r"
         repo.mkdir()
         for name in ("v-a", "v-b", "v-c"):
@@ -161,302 +136,453 @@ class TestAtomicSwap:
 
         loader.atomic_swap(repo, "b")
         assert os.readlink(current) == "v-b"
-
         loader.atomic_swap(repo, "c")
         assert os.readlink(current) == "v-c"
 
     def test_atomic_swap_with_short_sha(self, loader, tmp_path):
-        """atomic_swap accepts short SHAs (matches git's short-hash output)."""
         repo = tmp_path / "r"
         repo.mkdir()
         (repo / "v-abc1234").mkdir()
         current = repo / "current"
         os.symlink("v-old", current)
-
         loader.atomic_swap(repo, "abc1234")
         assert os.readlink(current) == "v-abc1234"
 
 
 # ---------------------------------------------------------------------------
-# 4.13 — Flask-unreachable path: fall through to exec without staging
-# ---------------------------------------------------------------------------
-
-
-class TestFlaskUnreachable:
-    def test_returns_none_when_fetch_returns_none(self, loader, bare_repo_with_two_commits):
-        """When fetch_fn returns None, run_upgrade_flow returns None without staging or swapping."""
-        repo, sha1, _sha2 = bare_repo_with_two_commits
-        stage_calls = []
-        swap_calls = []
-        health_calls = []
-
-        def fetch_fn():
-            return None  # simulates Flask unreachable / 5xx / timeout
-
-        def stage_fn(repo_dir, sha):
-            stage_calls.append(sha)
-            return repo_dir / f"v-{sha}"
-
-        def health_fn(repo_dir, sha):
-            health_calls.append(sha)
-            return 0
-
-        def swap_fn(repo_dir, sha):
-            swap_calls.append(sha)
-
-        result = loader.run_upgrade_flow(
-            repo,
-            fetch_fn=fetch_fn,
-            stage_fn=stage_fn,
-            health_check_fn=health_fn,
-            swap_fn=swap_fn,
-        )
-        assert result is None
-        # Crucially: nothing was staged, nothing was swapped.
-        assert stage_calls == []
-        assert swap_calls == []
-        assert health_calls == []
-        # And `current` is unchanged — still points to v-<sha1>.
-        assert os.readlink(repo / "current") == f"v-{sha1}"
-
-    def test_returns_none_when_local_matches_expected(self, loader, bare_repo_with_two_commits):
-        """When local SHA matches expected SHA, run_upgrade_flow returns None without action."""
-        repo, sha1, _sha2 = bare_repo_with_two_commits
-        stage_calls = []
-
-        def fetch_fn():
-            return sha1  # local == expected → no upgrade needed
-
-        def stage_fn(repo_dir, sha):
-            stage_calls.append(sha)
-            return repo_dir / f"v-{sha}"
-
-        result = loader.run_upgrade_flow(
-            repo,
-            fetch_fn=fetch_fn,
-            stage_fn=stage_fn,
-            health_check_fn=lambda *a: 0,
-            swap_fn=lambda *a: None,
-        )
-        assert result is None
-        assert stage_calls == []
-
-    def test_returns_none_when_healthcheck_fails(self, loader, bare_repo_with_two_commits):
-        """Health check exit non-zero → do not swap, return None, leave current unchanged."""
-        repo, sha1, sha2 = bare_repo_with_two_commits
-        swap_calls = []
-
-        result = loader.run_upgrade_flow(
-            repo,
-            fetch_fn=lambda: sha2,
-            stage_fn=loader.stage_version,
-            health_check_fn=lambda *a: 1,  # health check fails
-            swap_fn=lambda *a: swap_calls.append(a),
-        )
-        assert result is None
-        assert swap_calls == [], "must not swap when healthcheck fails"
-        # current still points to v-<sha1>
-        assert os.readlink(repo / "current") == f"v-{sha1}"
-
-
-# ---------------------------------------------------------------------------
-# 4.12 — Full upgrade flow against a fixture bare repo with two commits
-# ---------------------------------------------------------------------------
-
-
-class TestFullUpgradeFlow:
-    def test_stages_swaps_and_returns_popen_on_mismatch(self, loader, bare_repo_with_two_commits):
-        """SHA mismatch → real `git worktree add` for v-<sha2>, atomic_swap, exec Popen."""
-        repo, sha1, sha2 = bare_repo_with_two_commits
-        # Remove the pre-created v-<sha2> to prove the loader stages it fresh.
-        v2 = repo / f"v-{sha2}"
-        subprocess.run(
-            ["git", "-C", str(repo), "worktree", "remove", "--force", str(v2)],
-            check=True,
-            capture_output=True,
-        )
-        assert not v2.exists(), "precondition: v-<sha2> removed"
-
-        # Use the real stage_version + atomic_swap + _spawn_active, but a
-        # fake fetch returning sha2. _spawn_active returns a real Popen
-        # against `current/heart-matrix-controller/main.py` — which we
-        # satisfy by writing a stub script that just sleeps and exits.
-        stub_main = repo / "current" / "heart-matrix-controller" / "main.py"
-        stub_main.parent.mkdir(parents=True, exist_ok=True)
-        stub_main.write_text(
-            "#!/usr/bin/env python3\n"
-            "import time, sys\n"
-            "sys.stdout.write('stub running\\n')\n"
-            "sys.stdout.flush()\n"
-            "time.sleep(0.3)\n"
-            "sys.exit(0)\n"
-        )
-        stub_main.chmod(0o755)
-
-        proc = loader.run_upgrade_flow(
-            repo,
-            fetch_fn=lambda: sha2,
-            stage_fn=loader.stage_version,
-            health_check_fn=lambda *a: 0,
-            swap_fn=loader.atomic_swap,
-        )
-        try:
-            # Loader returned a Popen — the new subprocess is live.
-            assert proc is not None
-            assert proc.poll() is None or proc.returncode == 0
-            # Loader staged v-<sha2>
-            assert (repo / f"v-{sha2}").exists()
-            # Loader swapped current -> v-<sha2>
-            assert os.readlink(repo / "current") == f"v-{sha2}"
-            # Wait for the stub to finish naturally
-            proc.wait(timeout=5)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-
-    def test_full_flow_skips_staging_when_worktree_already_exists(
-        self, loader, bare_repo_with_two_commits
-    ):
-        """v-<sha2>/ already exists from the fixture → stage_version returns it without re-staging."""
-        repo, sha1, sha2 = bare_repo_with_two_commits
-        # Both worktrees exist from the fixture.
-        assert (repo / f"v-{sha2}").exists()
-
-        # Stub main.py so _spawn_active can fork without rgbmatrix etc.
-        stub_main = repo / "current" / "heart-matrix-controller" / "main.py"
-        stub_main.parent.mkdir(parents=True, exist_ok=True)
-        stub_main.write_text(
-            "#!/usr/bin/env python3\n"
-            "import sys, time\n"
-            "time.sleep(0.3)\n"
-            "sys.exit(0)\n"
-        )
-        stub_main.chmod(0o755)
-
-        proc = loader.run_upgrade_flow(
-            repo,
-            fetch_fn=lambda: sha2,
-            stage_fn=loader.stage_version,
-            health_check_fn=lambda *a: 0,
-            swap_fn=loader.atomic_swap,
-        )
-        try:
-            assert proc is not None
-            proc.wait(timeout=5)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-        # current now points to v-<sha2>
-        assert os.readlink(repo / "current") == f"v-{sha2}"
-
-
-# ---------------------------------------------------------------------------
-# watch_subprocess — rollback to v-<previous_sha>, not v-<current_sha>
-# ---------------------------------------------------------------------------
-
-
-class TestWatchSubprocess:
-    def test_rollback_targets_previous_sha_on_early_nonzero_exit(self, loader, tmp_path):
-        """If the subprocess exits non-zero within grace, swap current back to v-<previous_sha>."""
-        repo = tmp_path / "r"
-        repo.mkdir()
-        # Two worktrees + current -> v-<previous>
-        (repo / "v-previous").mkdir()
-        (repo / "v-current").mkdir()
-        os.symlink("v-previous", repo / "current")
-
-        # Popen stub that exits non-zero immediately
-        proc = subprocess.Popen([sys.executable, "-c", "import sys; sys.exit(7)"])
-
-        # exec_active would replace the test process — monkey-patch it
-        # so we can observe the rollback symlink change instead.
-        exec_calls = []
-
-        def fake_exec_active(repo_dir):
-            exec_calls.append(repo_dir)
-
-        loader.exec_active = fake_exec_active
-
-        loader.watch_subprocess(proc, repo, previous_sha="previous", grace_seconds=2.0)
-
-        # current now points to v-previous (the rollback target)
-        assert os.readlink(repo / "current") == "v-previous"
-        # exec_active was called so the loader would re-exec the old version
-        assert exec_calls == [repo]
-
-    def test_no_rollback_when_subprocess_stays_up_past_grace(self, loader, tmp_path):
-        """A subprocess that survives the grace window leaves `current` pointing at the new version."""
-        repo = tmp_path / "r"
-        repo.mkdir()
-        (repo / "v-previous").mkdir()
-        (repo / "v-current").mkdir()
-        # current -> v-current (the new version)
-        os.symlink("v-current", repo / "current")
-
-        # Popen stub that sleeps longer than the grace window
-        proc = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(2.0)"])
-
-        try:
-            loader.watch_subprocess(proc, repo, previous_sha="previous", grace_seconds=0.3)
-        finally:
-            if proc.poll() is None:
-                proc.kill()
-            proc.wait(timeout=2)
-
-        # current still points to v-current — no rollback
-        assert os.readlink(repo / "current") == "v-current"
-
-    def test_no_rollback_on_clean_exit_within_grace(self, loader, tmp_path):
-        """Subprocess exiting 0 within grace is treated as success — no rollback."""
-        repo = tmp_path / "r"
-        repo.mkdir()
-        (repo / "v-previous").mkdir()
-        (repo / "v-current").mkdir()
-        os.symlink("v-current", repo / "current")
-
-        proc = subprocess.Popen([sys.executable, "-c", "import sys; sys.exit(0)"])
-        loader.watch_subprocess(proc, repo, previous_sha="previous", grace_seconds=2.0)
-        # current still v-current
-        assert os.readlink(repo / "current") == "v-current"
-
-
-# ---------------------------------------------------------------------------
-# resolve_repo_dir + worktree_dir + current_symlink + main_py_for helpers
+# Repo layout helpers
 # ---------------------------------------------------------------------------
 
 
 class TestRepoLayoutHelpers:
     def test_worktree_dir_uses_v_sha_pattern(self, loader):
-        """worktree_dir(repo, sha) returns repo/v-<sha>."""
         assert loader.worktree_dir(Path("/r"), "abc123") == Path("/r/v-abc123")
 
     def test_current_symlink_is_repo_current(self, loader):
         assert loader.current_symlink(Path("/r")) == Path("/r/current")
 
     def test_main_py_for_resolves_through_current(self, loader):
-        """main_py_for joins current -> heart-matrix-controller/main.py."""
         assert loader.main_py_for(Path("/r")) == "/r/current/heart-matrix-controller/main.py"
 
     def test_resolve_repo_dir_uses_env_override(self, loader, tmp_path, monkeypatch):
-        """LINDSAY50_REPO_DIR overrides the default script-relative path."""
         monkeypatch.setenv("LINDSAY50_REPO_DIR", str(tmp_path))
-        result = loader.resolve_repo_dir()
-        assert result == tmp_path.resolve()
-
-
-# ---------------------------------------------------------------------------
-# current_sha — git rev-parse through the symlink
-# ---------------------------------------------------------------------------
+        assert loader.resolve_repo_dir() == tmp_path.resolve()
 
 
 class TestCurrentSha:
     def test_returns_sha_when_current_symlink_resolves_to_git_worktree(self, loader, bare_repo_with_two_commits):
-        """current_sha reads HEAD from the worktree the symlink points at."""
         repo, sha1, _ = bare_repo_with_two_commits
         assert loader.current_sha(repo) == sha1
 
     def test_returns_none_when_current_symlink_missing(self, loader, tmp_path):
         repo = tmp_path / "r"
         repo.mkdir()
-        # No `current` symlink at all
         assert loader.current_sha(repo) is None
+
+
+# ---------------------------------------------------------------------------
+# _build_exec_env — env vars the loader sets when handing off
+# ---------------------------------------------------------------------------
+
+
+class TestBuildExecEnv:
+    def test_sets_active_sha(self, loader):
+        env = loader._build_exec_env(Path("/repo"), "newsha")
+        assert env[loader.ENV_ACTIVE_SHA] == "newsha"
+
+    def test_sets_repo_dir(self, loader):
+        env = loader._build_exec_env(Path("/repo"), "newsha")
+        assert env[loader.ENV_REPO_DIR] == "/repo"
+
+    def test_sets_boot_id_when_provided(self, loader):
+        env = loader._build_exec_env(Path("/repo"), "newsha", boot_id="b123")
+        assert env[loader.ENV_BOOT_ID] == "b123"
+
+    def test_omits_boot_id_when_empty(self, loader):
+        # Empty boot_id is treated as "not set" — don't pollute env.
+        env = loader._build_exec_env(Path("/repo"), "newsha", boot_id="")
+        assert loader.ENV_BOOT_ID not in env
+
+    def test_inherits_base_env(self, loader, monkeypatch):
+        monkeypatch.setenv("LINDSAY50_REPO_DIR", "/whatever")
+        env = loader._build_exec_env(Path("/r"), "newsha")
+        # The os.environ base was inherited (we set + override).
+        assert env[loader.ENV_ACTIVE_SHA] == "newsha"
+        assert env[loader.ENV_REPO_DIR] == "/r"  # overrides the env var
+
+    def test_uses_injected_base_env(self, loader):
+        env = loader._build_exec_env(
+            Path("/r"),
+            "newsha",
+            base_env={"CUSTOM_VAR": "v", loader.ENV_REPO_DIR: "/stale"},
+        )
+        assert env["CUSTOM_VAR"] == "v"
+        assert env[loader.ENV_REPO_DIR] == "/r"  # the new repo_dir overrides
+
+
+# ---------------------------------------------------------------------------
+# exec_active — uses os.execvpe (not subprocess)
+# ---------------------------------------------------------------------------
+
+
+class TestExecActive:
+    def test_execvpe_called_with_python_and_main_py(self, loader, tmp_path):
+        repo = tmp_path / "r"
+        repo.mkdir()
+        (repo / "current").symlink_to(tmp_path / "placeholder")
+        with patch("loader.os.execvpe") as mock_exec:
+            loader.exec_active(repo, "newsha")
+        mock_exec.assert_called_once()
+        # os.execvpe(file, args, env) — file is args[0], argv list is args[1].
+        args = mock_exec.call_args.args
+        assert args[0].endswith("python") or "python" in args[0]
+        assert args[1][1].endswith("/current/heart-matrix-controller/main.py")
+
+    def test_execvpe_env_includes_active_sha(self, loader, tmp_path):
+        repo = tmp_path / "r"
+        repo.mkdir()
+        (repo / "current").symlink_to(tmp_path / "placeholder")
+        with patch("loader.os.execvpe") as mock_exec:
+            loader.exec_active(repo, "newsha", boot_id="b-1")
+        # env is positional args[2] (os.execvpe(file, args, env)).
+        env: dict = mock_exec.call_args.args[2]
+        assert env[loader.ENV_ACTIVE_SHA] == "newsha"
+        assert env[loader.ENV_REPO_DIR] == str(repo)
+        assert env[loader.ENV_BOOT_ID] == "b-1"
+
+
+# Use unittest.mock.patch for the execvpe spy — `patch` is shadowed in the
+# loader module too, so we use a local import.
+from unittest.mock import patch  # noqa: E402
+
+# ---------------------------------------------------------------------------
+# _is_status_healthy — pure function over a status dict
+# ---------------------------------------------------------------------------
+
+
+class TestIsStatusHealthy:
+    def test_healthy_when_all_signs_good(self, loader):
+        status = {
+            "mqtt_connected": True,
+            "last_tick_age_ms": 100,
+            "last_error": None,
+        }
+        assert loader._is_status_healthy(status) is True
+
+    def test_unhealthy_when_mqtt_disconnected(self, loader):
+        assert loader._is_status_healthy({"mqtt_connected": False, "last_tick_age_ms": 0, "last_error": None}) is False
+
+    def test_unhealthy_when_last_error_set(self, loader):
+        assert loader._is_status_healthy({"mqtt_connected": True, "last_tick_age_ms": 0, "last_error": "boom"}) is False
+
+    def test_unhealthy_when_tick_stale(self, loader):
+        assert (
+            loader._is_status_healthy({"mqtt_connected": True, "last_tick_age_ms": 9999, "last_error": None}) is False
+        )
+
+    def test_unhealthy_when_status_none(self, loader):
+        assert loader._is_status_healthy(None) is False  # type: ignore[arg-type]
+
+    def test_unhealthy_when_status_not_dict(self, loader):
+        assert loader._is_status_healthy("not a dict") is False  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# probe — uses status.json reads instead of --healthcheck subprocess
+# ---------------------------------------------------------------------------
+
+
+class TestProbe:
+    def test_probe_returns_true_on_healthy_status(self, loader, tmp_path):
+        repo = tmp_path / "r"
+        repo.mkdir()
+        status_path = tmp_path / ".status.json"
+
+        # Write a healthy status.json so the probe's first read is healthy.
+        import json as _json
+
+        healthy = {
+            "schema_version": 1,
+            "pid": 1,
+            "active_sha": "x",
+            "boot_id": "",
+            "started_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-01T00:00:01Z",
+            "uptime_seconds": 1.0,
+            "mqtt_connected": True,
+            "last_tick_age_ms": 10,
+            "messages_rendered": 0,
+            "last_error": None,
+        }
+        status_path.write_text(_json.dumps(healthy))
+
+        # The probe spawns the staged main.py via _spawn_staged_for_probe.
+        # Patch that to return a stub Popen that always pretends to be
+        # running (raises TimeoutExpired on wait), so the probe loop
+        # reads status.json instead.
+        fake_proc = MagicMock()
+        fake_proc.wait = MagicMock(side_effect=subprocess.TimeoutExpired(cmd="x", timeout=0.5))
+        fake_proc.terminate = MagicMock()
+        fake_proc.kill = MagicMock()
+        with patch.object(loader, "_spawn_staged_for_probe", return_value=fake_proc):
+            result = loader.probe(
+                repo,
+                "anysha",
+                status_path=status_path,
+                read_status_fn=lambda p, **_: _json.loads(p.read_text()),
+                total_timeout_s=2.0,
+                kill_grace_s=0.5,
+            )
+        assert result is True
+        # Spawn was cleaned up.
+        fake_proc.terminate.assert_called()
+
+    def test_probe_returns_false_on_unhealthy_status(self, loader, tmp_path):
+        repo = tmp_path / "r"
+        repo.mkdir()
+        status_path = tmp_path / ".status.json"
+
+        # mqtt disconnected → unhealthy
+        import json as _json
+
+        status_path.write_text(_json.dumps({"mqtt_connected": False}))
+
+        fake_proc = MagicMock()
+        fake_proc.wait = MagicMock(side_effect=subprocess.TimeoutExpired(cmd="x", timeout=0.5))
+        fake_proc.terminate = MagicMock()
+        fake_proc.kill = MagicMock()
+        with patch.object(loader, "_spawn_staged_for_probe", return_value=fake_proc):
+            result = loader.probe(
+                repo,
+                "anysha",
+                status_path=status_path,
+                read_status_fn=lambda p, **_: _json.loads(p.read_text()),
+                total_timeout_s=0.5,
+                kill_grace_s=0.2,
+            )
+        assert result is False
+
+
+# ---------------------------------------------------------------------------
+# fetch_expected_sha — thin wrapper around shared boot_config.fetch_boot_config
+# ---------------------------------------------------------------------------
+
+
+class TestFetchExpectedSha:
+    def test_returns_expected_sha_on_success(self, loader):
+        bc_mock = MagicMock()
+        bc_mock.expected_sha = "newsha"
+        # The loader is loaded into a fresh module by the `loader` fixture;
+        # patch the name on THAT module so we don't accidentally hit the
+        # real fetch (which would resolve hostname 'x' and fail).
+        with patch.object(loader, "fetch_boot_config", return_value=bc_mock):
+            result = loader.fetch_expected_sha(api_url="https://x/api/messages", api_key="k")
+        assert result == "newsha"
+
+    def test_returns_none_when_boot_config_returns_none(self, loader):
+        with patch.object(loader, "fetch_boot_config", return_value=None):
+            result = loader.fetch_expected_sha(api_url="https://x/api/messages", api_key="k")
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# run_upgrade_flow — full orchestration (no Popen return; execvpe instead)
+# ---------------------------------------------------------------------------
+
+
+class TestRunUpgradeFlowFlaskUnreachable:
+    def test_falls_through_when_fetch_returns_none(self, loader, bare_repo_with_two_commits):
+        repo, sha1, _sha2 = bare_repo_with_two_commits
+        stage_calls = []
+        swap_calls = []
+        exec_calls = []
+
+        def fake_fetch(**_kw):
+            return None  # Flask unreachable
+
+        def fake_stage(repo_dir, sha, **_kw):
+            stage_calls.append((repo_dir, sha))
+            return repo_dir / f"v-{sha}"
+
+        def fake_probe(*_a, **_kw):
+            return True
+
+        def fake_swap(*_a, **_kw):
+            swap_calls.append(_a)
+
+        def fake_exec(*_a, **_kw):
+            exec_calls.append((_a, _kw))
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=fake_fetch,
+            stage_fn=fake_stage,
+            probe_fn=fake_probe,
+            swap_fn=fake_swap,
+            exec_fn=fake_exec,
+        )
+        # No stage, no swap — fell through to exec existing current.
+        assert stage_calls == []
+        assert swap_calls == []
+        # Exec called exactly once (with the local SHA we already had).
+        assert len(exec_calls) == 1
+        assert exec_calls[0][0][1] == sha1  # active_sha
+
+    def test_falls_through_when_local_matches_expected(self, loader, bare_repo_with_two_commits):
+        repo, sha1, _sha2 = bare_repo_with_two_commits
+        stage_calls = []
+        exec_calls = []
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=lambda **_kw: sha1,  # local == expected
+            stage_fn=lambda repo_dir, sha, **_kw: (stage_calls.append((repo_dir, sha)) or repo_dir / f"v-{sha}"),
+            probe_fn=lambda *_a, **_kw: True,
+            swap_fn=lambda *_a, **_kw: None,
+            exec_fn=lambda *_a, **_kw: exec_calls.append((_a, _kw)),
+        )
+        assert stage_calls == []
+        assert len(exec_calls) == 1
+
+    def test_falls_through_when_probe_fails(self, loader, bare_repo_with_two_commits):
+        repo, sha1, sha2 = bare_repo_with_two_commits
+        swap_calls = []
+        exec_calls = []
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=lambda **_kw: sha2,
+            stage_fn=loader.stage_version,
+            probe_fn=lambda *_a, **_kw: False,  # probe unhealthy
+            swap_fn=lambda *_a, **_kw: swap_calls.append(_a),
+            exec_fn=lambda *_a, **_kw: exec_calls.append((_a, _kw)),
+        )
+        # Must not swap when probe fails.
+        assert swap_calls == []
+        # Fall through to exec existing current.
+        assert len(exec_calls) == 1
+        assert exec_calls[0][0][1] == sha1
+        # current symlink unchanged.
+        assert os.readlink(repo / "current") == f"v-{sha1}"
+
+    def test_falls_through_when_stage_raises(self, loader, bare_repo_with_two_commits):
+        repo, sha1, sha2 = bare_repo_with_two_commits
+        swap_calls = []
+        exec_calls = []
+
+        def bad_stage(*_a, **_kw):
+            raise loader.StageError("simulated")
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=lambda **_kw: sha2,
+            stage_fn=bad_stage,
+            probe_fn=lambda *_a, **_kw: True,
+            swap_fn=lambda *_a, **_kw: swap_calls.append(_a),
+            exec_fn=lambda *_a, **_kw: exec_calls.append((_a, _kw)),
+        )
+        assert swap_calls == []
+        assert len(exec_calls) == 1
+        assert exec_calls[0][0][1] == sha1
+
+
+class TestRunUpgradeFlowHappyPath:
+    def test_stages_probes_swaps_and_execs_on_mismatch(self, loader, bare_repo_with_two_commits):
+        repo, _sha1, sha2 = bare_repo_with_two_commits
+        # Remove the pre-created v-<sha2> so the stage actually runs.
+        v2 = repo / f"v-{sha2}"
+        subprocess.run(
+            ["git", "-C", str(repo), "worktree", "remove", "--force", str(v2)],
+            check=True,
+            capture_output=True,
+        )
+        exec_calls = []
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=lambda **_kw: sha2,
+            stage_fn=loader.stage_version,
+            probe_fn=lambda *_a, **_kw: True,
+            swap_fn=loader.atomic_swap,
+            exec_fn=lambda *_a, **_kw: exec_calls.append((_a, _kw)),
+        )
+        # Loader staged v-<sha2>
+        assert (repo / f"v-{sha2}").exists()
+        # Loader swapped current -> v-<sha2>
+        assert os.readlink(repo / "current") == f"v-{sha2}"
+        # Loader exec'd the new SHA (not the old one).
+        assert len(exec_calls) == 1
+        assert exec_calls[0][0][1] == sha2
+
+    def test_skips_staging_when_worktree_already_exists(self, loader, bare_repo_with_two_commits):
+        repo, _sha1, sha2 = bare_repo_with_two_commits
+        # v-<sha2> already exists from the fixture → stage returns it.
+        assert (repo / f"v-{sha2}").exists()
+        exec_calls = []
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=lambda **_kw: sha2,
+            stage_fn=loader.stage_version,
+            probe_fn=lambda *_a, **_kw: True,
+            swap_fn=loader.atomic_swap,
+            exec_fn=lambda *_a, **_kw: exec_calls.append((_a, _kw)),
+        )
+        # current swapped to new SHA, exec called with new SHA.
+        assert os.readlink(repo / "current") == f"v-{sha2}"
+        assert exec_calls[0][0][1] == sha2
+
+
+class TestRunUpgradeFlowDoesNotReturn:
+    def test_run_upgrade_flow_calls_exec_fn_on_every_path(self, loader, bare_repo_with_two_commits):
+        """Every code path through run_upgrade_flow calls exec_fn exactly once.
+
+        The function execvpe's the active version (the loader is gone
+        after exec) — there is no return path where the loader
+        continues running. If exec_fn is not called, the loader
+        falls off the end and the systemd service restarts
+        indefinitely.
+        """
+        repo, sha1, sha2 = bare_repo_with_two_commits
+
+        for fetch_result in [None, sha1, sha2]:
+            for stage_raises in [True, False]:
+                for probe_result in [True, False]:
+                    # Skip the "stage raised" + "probe true" combination
+                    # because stage raising means probe never runs.
+                    if stage_raises and probe_result:
+                        continue
+
+                    exec_calls = []
+
+                    def fake_stage(repo_dir, sha, **_kw):
+                        if stage_raises:
+                            raise loader.StageError("simulated")
+                        return repo_dir / f"v-{sha}"
+
+                    loader.run_upgrade_flow(
+                        repo,
+                        api_url="https://x/api/messages",
+                        api_key="k",
+                        fetch_fn=lambda **_kw: fetch_result,
+                        stage_fn=fake_stage,
+                        probe_fn=lambda *_a, **_kw: probe_result,
+                        swap_fn=lambda *_a, **_kw: None,
+                        exec_fn=lambda *_a, **_kw: exec_calls.append((_a, _kw)),
+                    )
+                    assert len(exec_calls) == 1, (
+                        f"exec_fn not called for fetch={fetch_result}, "
+                        f"stage_raises={stage_raises}, probe_result={probe_result}"
+                    )

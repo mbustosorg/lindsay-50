@@ -9,8 +9,6 @@ from __future__ import annotations
 import functools
 import html
 import logging
-import os
-import subprocess
 import uuid
 from pathlib import Path
 import sys
@@ -50,6 +48,7 @@ _cfg = get_config(REQUIRED_KEYS)
 
 import sqlite, s3
 from server_time import format_from_iso, now_utc_iso
+from lib_shared.boot_config import BootConfig, from_heroku_or_git as _boot_config_from_heroku_or_git
 from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.models import MessageEnvelope
@@ -109,36 +108,6 @@ def _noop_dispatch(_payload: str) -> None:
     """Flask no longer subscribes to MQTT envelopes; drop them on the floor."""
 
 
-def _publish_reboot_on_connect() -> None:
-    """Publish a one-shot `command=reboot` envelope on every MQTT connect.
-
-    Runs from the paho network thread (via PahoMqttClient's
-    on_connect_callback). Every Flask restart — code deploy, dyno
-    cycle, manual restart, or `heroku config:set` — triggers a new
-    MQTT connection, which triggers a Pi reboot. The Pi's loader
-    then queries /api/sign/expected-sha on next boot, sees the new
-    SHA (or the same one), and either swaps to the new version or
-    re-execs the current one. Concurrent Flask boots (rolling
-    deploys) emit N reboots — only the first has effect on the Pi;
-    subsequent ones boot onto the same SHA. Idempotent by design.
-
-    Uses the existing `publish_envelope()` path so QoS 1 + PUBACK
-    semantics are preserved (the broker confirms the publish before
-    we consider the reboot "sent"). This is a short, non-blocking
-    path; if it raises, PahoMqttClient's exception guard logs and
-    keeps the subscriber alive.
-    """
-    try:
-        envelope = MessageEnvelope("command", {"action": "reboot"})
-        ok = _mqtt_client.publish_envelope(envelope)
-        logger.info(
-            "[flask] _publish_reboot_on_connect: publish_envelope returned %s",
-            ok,
-        )
-    except Exception as e:
-        logger.warning("[flask] _publish_reboot_on_connect raised: %s", e)
-
-
 _mqtt_client = PahoMqttClient(
     dispatch_callback=_noop_dispatch,
     host=_cfg.MQTT_HOST,
@@ -146,10 +115,45 @@ _mqtt_client = PahoMqttClient(
     username=_cfg.MQTT_USERNAME,
     password=_cfg.MQTT_PASSWORD,
     topic=_cfg.MQTT_TOPIC,
-    on_connect_callback=_publish_reboot_on_connect,
 )
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
+
+
+# One-shot check-for-update hint. Published exactly once per Flask
+# process lifetime, immediately after the MQTT subscriber starts.
+# The Pi's existing MessageManager subscriber receives this and
+# invokes its registered `check_for_update` handler, which queries
+# /api/sign/boot-config and execs into the loader if the expected
+# SHA differs from the running one.
+#
+# Published via the live `_mqtt_client` (not the once-per-process
+# `publish_envelope` short-lived client) so we don't double the
+# connection setup. paho queues the publish until the CONNACK
+# arrives — if the broker is unreachable at this moment the message
+# is held by paho and delivered on the next connect, which is
+# exactly the resilience we want. Reconnects DO NOT republish
+# (that's the v1 fix — `on_connect_callback` is gone).
+def _publish_check_for_update_once() -> None:
+    """Publish `command=check-for-update` once at Flask startup.
+
+    Runs synchronously after `_mqtt_client.start()`. paho queues
+    the publish until CONNACK. Failures are logged, never raised:
+    a missing hint is recoverable (the next Flask boot will hint
+    again, the Pi's loader re-checks on every boot).
+    """
+    try:
+        envelope = MessageEnvelope("command", {"action": "check-for-update"})
+        ok = _mqtt_client.publish_envelope(envelope)
+        logger.info(
+            "[flask] _publish_check_for_update_once: publish_envelope returned %s",
+            ok,
+        )
+    except Exception as e:
+        logger.warning("[flask] _publish_check_for_update_once raised: %s", e)
+
+
+_publish_check_for_update_once()
 
 
 def _mqtt_client_publish_config(cfg_dict: dict) -> None:
@@ -344,60 +348,46 @@ def api_put_config():
     return jsonify({"status": "ok"})
 
 
-# Sign upgrade coordination (Pi loader queries this on every boot)
+# Sign upgrade coordination (Pi loader and app's check-for-update
+# handler both query this on every boot / every MQTT hint)
 
 
-def _resolve_expected_sha() -> str | None:
-    """Return the expected commit SHA for the Pi to run.
+def _resolve_boot_config() -> BootConfig:
+    """Compute the boot config Flask serves via `/api/sign/boot-config`.
 
-    Order:
-      1. `HEROKU_SLUG_COMMIT` — Heroku auto-sets this on every `git push
-         heroku main`, including `heroku rollback v123`. This is the
-         source of truth in production: when the operator rolls back,
-         the slug commit moves to the older commit's hash and the Pi's
-         loader pulls that version on next boot.
-      2. `git rev-parse HEAD` from the repo root — local dev fallback
-         when there's no Heroku environment. Returns the local commit
-         SHA so the loader doesn't try to stage a non-existent version.
-
-    Returns None only if both lookups fail (no env var AND git
-    invocation fails). The endpoint translates that into a 500.
+    Delegates to `lib_shared.boot_config.from_heroku_or_git` so the
+    Flask server, the loader, and the app-side `check_for_update`
+    handler all use the same logic (HEROKU_SLUG_COMMIT preferred,
+    git rev-parse HEAD fallback). Returns an empty-sha BootConfig
+    if both fail — the endpoint translates that into a 500.
     """
-    slug = os.environ.get("HEROKU_SLUG_COMMIT")
-    if slug:
-        return slug
     repo_root = Path(__file__).resolve().parent.parent
-    try:
-        sha = subprocess.check_output(
-            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
-            stderr=subprocess.PIPE,
-            timeout=5,
-        ).decode().strip()
-        return sha or None
-    except Exception as e:
-        logger.warning("[flask] _resolve_expected_sha: git rev-parse failed: %s", e)
-        return None
+    return _boot_config_from_heroku_or_git(repo_root)
 
 
-@app.route("/api/sign/expected-sha", methods=["GET"])
+@app.route("/api/sign/boot-config", methods=["GET"])
 @api_login_required
-def api_sign_expected_sha():
-    """GET /api/sign/expected-sha — return the commit SHA the Pi should run.
+def api_sign_boot_config():
+    """GET /api/sign/boot-config — return the commit SHA the Pi should run.
 
-    The Pi's loader calls this on every boot to decide whether to
-    stage a new version. Returns `{"expected_sha": "<sha>"}` where
-    `<sha>` is `HEROKU_SLUG_COMMIT` (production) or local `git
-    rev-parse HEAD` (local dev). Authenticated via the existing
-    `X-API-Key` header — the same key the device uses for /api/config
-    and /api/messages.
+    The Pi queries this on every boot (via the loader) AND on every
+    `check-for-update` MQTT hint (via the app's registered handler).
+    Returns `{"expected_sha": "<sha>"}` where `<sha>` is
+    `HEROKU_SLUG_COMMIT` (production) or local `git rev-parse HEAD`
+    (local dev). Authenticated via the existing `X-API-Key` header —
+    the same key the device uses for /api/config and /api/messages.
 
     Returns 500 only when both lookups fail (no env var and git
     invocation failed); 401 when the API key is missing or wrong.
+
+    Path is defined as a constant in `lib_shared.boot_config`
+    (`BOOT_CONFIG_PATH`) so the loader and the app both import
+    the same string — typos or renames are caught at import time.
     """
-    sha = _resolve_expected_sha()
-    if not sha:
+    config = _resolve_boot_config()
+    if not config.expected_sha:
         return jsonify({"error": "could not resolve expected SHA"}), 500
-    return jsonify({"expected_sha": sha})
+    return jsonify({"expected_sha": config.expected_sha})
 
 
 # Admin API (S3 browser)
