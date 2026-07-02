@@ -11,6 +11,7 @@ module is importable in either runtime without a top-level network dependency.
 import asyncio
 import json
 import logging
+import os
 from typing import Callable, Optional
 
 from lib_shared.models import EffectsSettings, MessageEnvelope, Message, SignConfig, TextSettings
@@ -374,8 +375,48 @@ class MessageManager:
                     [f.get("pattern", "") for f in filters if isinstance(f, dict) and f.get("type") == "message"],
                 )
             self._handle_config(payload)
+        elif envelope.type == "command":
+            self._handle_command(envelope.payload)
         else:
             logger.warning("Unknown envelope type: %r", envelope.type)
+
+    def _handle_command(self, payload) -> None:
+        """Handle a type=command envelope.
+
+        Payload is the command dict (e.g. {"action": "reboot"}). Unknown
+        actions are logged and dropped — matches the existing pattern for
+        unknown envelope types. Malformed payloads (None, non-dict, missing
+        action key) are also logged and dropped: a buggy publisher must
+        never brick the device's render loop.
+
+        The only built-in action today is "reboot", which shells out to
+        `sudo reboot`. The loader uses this to recover from broken upgrades
+        — any Flask restart publishes a reboot envelope, the Pi reboots,
+        and the loader queries /api/sign/expected-sha to see whether a
+        version swap is needed before exec'ing main.py.
+        """
+        if not isinstance(payload, dict):
+            logger.warning("MessageManager dropped command: payload is not a dict: %r", payload)
+            return
+        action = payload.get("action")
+        if not isinstance(action, str) or not action:
+            logger.warning("MessageManager dropped command: missing or invalid 'action': %r", payload)
+            return
+        if action == "reboot":
+            logger.warning("MessageManager executing command action=reboot")
+            # `os.system` returns the exit status of the spawned shell.
+            # We deliberately do not raise on a non-zero rc — `sudo reboot`
+            # is expected to either succeed (machine goes away within ~2s)
+            # or fail (no passwordless sudo). Raising here would interrupt
+            # the render loop on the Pi with a confusing traceback when
+            # sudo isn't set up yet.
+            try:
+                rc = os.system("sudo reboot")
+                logger.info("MessageManager sudo reboot returned rc=%s", rc)
+            except Exception as e:
+                logger.warning("MessageManager sudo reboot raised: %s", e)
+            return
+        logger.warning("MessageManager dropped unknown command action: %r", action)
 
     def _handle_message(self, payload: dict) -> None:
         """Convert payload dict to Message, store it, enrich it, and emit change.

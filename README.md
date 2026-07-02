@@ -175,6 +175,67 @@ message), with the scrolling text composited on top:
 | `honeycomb` | Port of a Pixelblaze HSV pattern (numpy) |
 | `hyperspace` | Star Wars-style jump: a 3D starfield that stretches into a tunnel of streaks and back |
 
+## Self-upgrading Pi (issue #49)
+
+After this change, the Pi controller upgrades itself whenever Flask restarts
+with a new commit. The flow:
+
+1. `git push heroku main` (or any Flask restart) sets a new
+   `HEROKU_SLUG_COMMIT` on Heroku and triggers a reboot command over MQTT.
+2. The Pi reboots, runs `loader.py`, which queries
+   `GET /api/sign/expected-sha` on Flask and gets the new commit SHA.
+3. `loader.py` stages the new SHA into a `git worktree add v-<sha>`, runs
+   `main.py --healthcheck`, atomically swaps the `current` symlink, then
+   `os.execvp`s the new version.
+4. If the new subprocess exits non-zero within 30s, `loader.py` swaps
+   `current` back to the previous known-good SHA and restarts.
+
+### One-time Pi bootstrap
+
+The Pi's working tree must be organized as a bare repo + per-SHA
+worktrees + a `current` symlink. The first-time operator procedure
+on the Pi (≈ 1 minute of downtime):
+
+```bash
+ssh pi@<pi-host>
+sudo systemctl stop lindsay_50
+cd /home/pi/projects/lindsay-50
+git pull                                       # last manual pull
+sudo /home/pi/projects/lindsay-50/scripts/setup-pi.sh
+```
+
+`setup-pi.sh` is idempotent — re-running on an already-bootstrapped
+repo is a no-op. Verify with:
+
+```bash
+ls -la /home/pi/projects/lindsay-50/current     # should be a symlink to v-<sha>
+systemctl status lindsay_50
+journalctl -u lindsay_50 -f
+```
+
+### Operator rollback (after a bad deploy)
+
+The same blue/green layout makes rollback a Heroku-native operation —
+no Flask-side state to forget:
+
+```bash
+heroku rollback v123       # sets HEROKU_SLUG_COMMIT to v123's hash
+                           # Flask restarts, publishes command=reboot,
+                           # Pi reboots, loader pulls v123, swaps, exec's.
+```
+
+Manual rollback (e.g. from the Pi itself):
+
+```bash
+ssh pi@<pi-host>
+sudo systemctl stop lindsay_50
+ln -sfn v-<old-sha> /home/pi/projects/lindsay-50/current
+sudo systemctl start lindsay_50
+```
+
+The old worktrees stay on disk under `v-<sha>/` after every upgrade
+so manual rollback is always available.
+
 ## Project structure
 
 ```

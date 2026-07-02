@@ -1,7 +1,20 @@
 import os
 import signal
+import sys
 import logging
 import asyncio
+
+# `--healthcheck` short-circuits the rest of this module: run the same
+# init checks as main() and exit 0/1 without entering the render loop.
+# Invoked by `loader.py` as a subprocess against a staged worktree
+# before it swaps the `current` symlink — we never want a broken new
+# version to swap in. Lives BEFORE any heavy import so a missing
+# rgbmatrix install or broken settings.toml doesn't mask the
+# healthcheck signal.
+if "--healthcheck" in sys.argv:
+    from healthcheck import main as _healthcheck_main
+
+    sys.exit(_healthcheck_main(["--healthcheck"]))
 
 # Create the config singleton FIRST: modules imported below (rgb_matrix_display,
 # message_manager, and the MQTT client) call get_config() at import time, so it

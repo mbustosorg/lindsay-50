@@ -525,6 +525,188 @@ class TestDispatchMessage:
 
 
 # ---------------------------------------------------------------------------
+# dispatch — type=command envelopes (reboot, unknown actions, malformed)
+# ---------------------------------------------------------------------------
+
+
+class TestDispatchCommand:
+    """Tests for the type=command envelope branch added in issue #49.
+
+    The existing `MessageEnvelope` constructor already accepts any
+    free-form type string, so the wire-format round-trip works
+    without model changes. The new dispatch branch routes command
+    envelopes to `_handle_command`, which dispatches on
+    `payload["action"]`. Only `action="reboot"` is implemented today;
+    unknown actions and malformed payloads are logged and dropped —
+    a buggy publisher must never brick the device's render loop.
+    """
+
+    def test_command_envelope_round_trips_through_json(self):
+        """MessageEnvelope("command", {"action": "reboot"}) round-trips via from_json."""
+        from lib_shared.models import MessageEnvelope
+
+        env = MessageEnvelope("command", {"action": "reboot"})
+        raw = env.to_json()
+        assert raw == '{"type":"command","payload":{"action":"reboot"}}'
+        restored = MessageEnvelope.from_json(raw)
+        assert restored.type == "command"
+        assert restored.payload == {"action": "reboot"}
+
+    def test_dispatch_command_reboot_invokes_os_system(
+        self, messages_api_url, config_api_url, api_key, monkeypatch
+    ):
+        """A type=command envelope with action=reboot calls os.system('sudo reboot')."""
+        calls = []
+
+        def fake_system(cmd):
+            calls.append(cmd)
+            return 0
+
+        monkeypatch.setattr(_mm().os, "system", fake_system)
+
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+        env = json.dumps({"type": "command", "payload": {"action": "reboot"}})
+        mgr.dispatch(env)
+        assert calls == ["sudo reboot"], f"expected exactly one sudo reboot call, got {calls}"
+
+    def test_dispatch_command_unknown_action_logged_and_dropped(
+        self, messages_api_url, config_api_url, api_key, monkeypatch
+    ):
+        """Unknown command actions do not invoke os.system; the envelope is logged and dropped."""
+        calls = []
+        monkeypatch.setattr(_mm().os, "system", lambda c: calls.append(c) or 0)
+
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+        env = json.dumps({"type": "command", "payload": {"action": "dance"}})
+        # Should not raise
+        mgr.dispatch(env)
+        assert calls == [], f"unknown action must not invoke os.system, got {calls}"
+
+    def test_dispatch_command_missing_payload_is_dropped(
+        self, messages_api_url, config_api_url, api_key, monkeypatch
+    ):
+        """A command envelope with payload=None is logged and dropped without side effects."""
+        calls = []
+        monkeypatch.setattr(_mm().os, "system", lambda c: calls.append(c) or 0)
+
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+        env = json.dumps({"type": "command", "payload": None})
+        mgr.dispatch(env)
+        assert calls == [], f"null payload must not invoke os.system, got {calls}"
+
+    def test_dispatch_command_missing_action_key_is_dropped(
+        self, messages_api_url, config_api_url, api_key, monkeypatch
+    ):
+        """A command envelope with no 'action' key is logged and dropped."""
+        calls = []
+        monkeypatch.setattr(_mm().os, "system", lambda c: calls.append(c) or 0)
+
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+        env = json.dumps({"type": "command", "payload": {}})
+        mgr.dispatch(env)
+        assert calls == []
+
+    def test_dispatch_command_non_dict_payload_is_dropped(
+        self, messages_api_url, config_api_url, api_key, monkeypatch
+    ):
+        """A command envelope with payload='reboot' (string) is dropped — only dicts are valid."""
+        calls = []
+        monkeypatch.setattr(_mm().os, "system", lambda c: calls.append(c) or 0)
+
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+        env = json.dumps({"type": "command", "payload": "reboot"})
+        mgr.dispatch(env)
+        assert calls == []
+
+    def test_dispatch_message_still_routes_after_command_added(
+        self, messages_api_url, config_api_url, api_key, monkeypatch
+    ):
+        """Regression: type=message envelope still routes to the ring buffer after adding the command branch."""
+        # Make sure no reboot sneaks out during this regression test
+        calls = []
+        monkeypatch.setattr(_mm().os, "system", lambda c: calls.append(c) or 0)
+
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+        env = _make_env(
+            {
+                "id": "reg-1",
+                "sender": "+15551234567",
+                "body": "still works",
+                "received_at": "2026-06-01T12:00:00Z",
+            }
+        )
+        mgr.dispatch(env)
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.id == "reg-1"
+        assert msgs[0].message.body == "still works"
+        # No reboot triggered
+        assert calls == []
+
+    def test_dispatch_config_still_routes_after_command_added(
+        self, messages_api_url, config_api_url, api_key, monkeypatch
+    ):
+        """Regression: type=config envelope still updates the SignConfig after adding the command branch."""
+        calls = []
+        monkeypatch.setattr(_mm().os, "system", lambda c: calls.append(c) or 0)
+
+        mgr = _mm().MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+        env = _make_config_env(
+            {
+                "filters": [],
+                "senders": [],
+                "effects_settings": {
+                    "effects": [{"name": "Fireworks", "enabled": True}],
+                    "fade_seconds": 2.0,
+                    "hold_seconds": 15.0,
+                    "intro_seconds": 5.0,
+                    "idle_seconds": 300.0,
+                    "recent_count": 5,
+                },
+                "text_settings": {
+                    "speed": 3,
+                    "color": 16711680,
+                    "text_effect": "scroll",
+                },
+                "sign": {"name": "Reg Sign"},
+                "timezone": "US/Pacific",
+                "version": 2,
+            }
+        )
+        mgr.dispatch(env)
+        assert mgr.config.sign.name == "Reg Sign"
+        assert calls == []
+
+
+# ---------------------------------------------------------------------------
 # Filter rules
 # ---------------------------------------------------------------------------
 

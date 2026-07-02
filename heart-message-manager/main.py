@@ -9,6 +9,8 @@ from __future__ import annotations
 import functools
 import html
 import logging
+import os
+import subprocess
 import uuid
 from pathlib import Path
 import sys
@@ -107,6 +109,36 @@ def _noop_dispatch(_payload: str) -> None:
     """Flask no longer subscribes to MQTT envelopes; drop them on the floor."""
 
 
+def _publish_reboot_on_connect() -> None:
+    """Publish a one-shot `command=reboot` envelope on every MQTT connect.
+
+    Runs from the paho network thread (via PahoMqttClient's
+    on_connect_callback). Every Flask restart — code deploy, dyno
+    cycle, manual restart, or `heroku config:set` — triggers a new
+    MQTT connection, which triggers a Pi reboot. The Pi's loader
+    then queries /api/sign/expected-sha on next boot, sees the new
+    SHA (or the same one), and either swaps to the new version or
+    re-execs the current one. Concurrent Flask boots (rolling
+    deploys) emit N reboots — only the first has effect on the Pi;
+    subsequent ones boot onto the same SHA. Idempotent by design.
+
+    Uses the existing `publish_envelope()` path so QoS 1 + PUBACK
+    semantics are preserved (the broker confirms the publish before
+    we consider the reboot "sent"). This is a short, non-blocking
+    path; if it raises, PahoMqttClient's exception guard logs and
+    keeps the subscriber alive.
+    """
+    try:
+        envelope = MessageEnvelope("command", {"action": "reboot"})
+        ok = _mqtt_client.publish_envelope(envelope)
+        logger.info(
+            "[flask] _publish_reboot_on_connect: publish_envelope returned %s",
+            ok,
+        )
+    except Exception as e:
+        logger.warning("[flask] _publish_reboot_on_connect raised: %s", e)
+
+
 _mqtt_client = PahoMqttClient(
     dispatch_callback=_noop_dispatch,
     host=_cfg.MQTT_HOST,
@@ -114,6 +146,7 @@ _mqtt_client = PahoMqttClient(
     username=_cfg.MQTT_USERNAME,
     password=_cfg.MQTT_PASSWORD,
     topic=_cfg.MQTT_TOPIC,
+    on_connect_callback=_publish_reboot_on_connect,
 )
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
@@ -309,6 +342,62 @@ def api_put_config():
         return err if err is not None else (jsonify({"error": "invalid config"}), 400)
     _save_and_publish(cfg)
     return jsonify({"status": "ok"})
+
+
+# Sign upgrade coordination (Pi loader queries this on every boot)
+
+
+def _resolve_expected_sha() -> str | None:
+    """Return the expected commit SHA for the Pi to run.
+
+    Order:
+      1. `HEROKU_SLUG_COMMIT` — Heroku auto-sets this on every `git push
+         heroku main`, including `heroku rollback v123`. This is the
+         source of truth in production: when the operator rolls back,
+         the slug commit moves to the older commit's hash and the Pi's
+         loader pulls that version on next boot.
+      2. `git rev-parse HEAD` from the repo root — local dev fallback
+         when there's no Heroku environment. Returns the local commit
+         SHA so the loader doesn't try to stage a non-existent version.
+
+    Returns None only if both lookups fail (no env var AND git
+    invocation fails). The endpoint translates that into a 500.
+    """
+    slug = os.environ.get("HEROKU_SLUG_COMMIT")
+    if slug:
+        return slug
+    repo_root = Path(__file__).resolve().parent.parent
+    try:
+        sha = subprocess.check_output(
+            ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
+            stderr=subprocess.PIPE,
+            timeout=5,
+        ).decode().strip()
+        return sha or None
+    except Exception as e:
+        logger.warning("[flask] _resolve_expected_sha: git rev-parse failed: %s", e)
+        return None
+
+
+@app.route("/api/sign/expected-sha", methods=["GET"])
+@api_login_required
+def api_sign_expected_sha():
+    """GET /api/sign/expected-sha — return the commit SHA the Pi should run.
+
+    The Pi's loader calls this on every boot to decide whether to
+    stage a new version. Returns `{"expected_sha": "<sha>"}` where
+    `<sha>` is `HEROKU_SLUG_COMMIT` (production) or local `git
+    rev-parse HEAD` (local dev). Authenticated via the existing
+    `X-API-Key` header — the same key the device uses for /api/config
+    and /api/messages.
+
+    Returns 500 only when both lookups fail (no env var and git
+    invocation failed); 401 when the API key is missing or wrong.
+    """
+    sha = _resolve_expected_sha()
+    if not sha:
+        return jsonify({"error": "could not resolve expected SHA"}), 500
+    return jsonify({"expected_sha": sha})
 
 
 # Admin API (S3 browser)

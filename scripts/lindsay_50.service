@@ -3,19 +3,35 @@
 #   sudo systemctl daemon-reload
 #   sudo systemctl enable --now lindsay_50
 #   journalctl -u lindsay_50 -f      # follow logs
+#
+# One-time Pi bootstrap (issue #49): convert the existing clone to a
+# bare-repo + worktree layout so the loader can stage new versions.
+# See scripts/setup-pi.sh — run that BEFORE reloading this unit.
 
 [Unit]
-Description=Lindsay-50 heart matrix display
+Description=Lindsay-50 heart matrix display (self-upgrading)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
+# loader.py queries Flask for the expected SHA, stages any new version
+# into a git worktree, runs --healthcheck, atomically swaps `current`,
+# then os.execvp's main.py. systemd sees main.py as the direct child
+# so signal handling is preserved.
 ExecStart=/home/pi/projects/lindsay-50/scripts/startup_matrix_server.sh
-WorkingDirectory=/home/pi/projects/lindsay-50/heart-matrix-controller
+WorkingDirectory=/home/pi/projects/lindsay-50
 StandardOutput=inherit
 StandardError=inherit
 Restart=always
 RestartSec=5
+
+# Bound crash loops: after 3 service exits in 2 minutes, systemd
+# stops restarting and the operator must investigate. Defense in
+# depth — if the loader itself has a bug that causes tight crash
+# loops, systemd bounds the damage instead of looping forever.
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
 User=root
 
 [Install]
