@@ -4,18 +4,21 @@ The admin app loads on every authenticated page. The script owns three
 app-scoped singletons that any page can reach through the `window`:
 
   - `window._message_manager` — `MessageManager(is_browser=True)` with an
-    `on_change` callback that fans out to the JS-side `_dispatchChange`
-    (preserves the `window.App.registerOnChange` API for /preview and
-    /testing). Holds the in-browser copy of the SignConfig and the
-    message ring buffer.
+    `on_change` callback that (1) applies the new config to the
+    app-scoped coordinator (`_coordinator.apply_settings(...)`) and
+    (2) fans out to the JS-side `_dispatchChange` (preserves the
+    `window.App.registerOnChange` API for /preview and /testing).
+    Holds the in-browser copy of the SignConfig and the message
+    ring buffer — the single source of truth for both.
 
-  - `window._coordinator` — `EffectsCoordinator` constructed WITHOUT a
-    render layer. The /preview page (`preview_main.py`) creates its
-    page-local canvas + scroller + effects and calls
-    `window._coordinator.bind(...)` once they're in scope. The
-    coordinator is app-scoped (it survives across SPA navigations
-    within the page load) but the render layer is page-scoped
-    (the canvas only exists on /preview).
+  - `window._coordinator` — `EffectsCoordinator(message_manager=...)`
+    constructed WITHOUT a render layer. The /preview page
+    (`preview_main.py`) creates its page-local canvas + scroller +
+    effects and calls `window._coordinator.bind(...)` once they're
+    in scope. The coordinator is app-scoped (it survives across
+    SPA navigations within the page load) but the render layer is
+    page-scoped (the canvas only exists on /preview). The manager
+    reference is set at construction time, not by `bind(...)`.
 
   - `window._mqtt_ws_client` — Python wrapper around the native JS
     MQTT-over-WebSocket shim. Starts the WS connection and forwards
@@ -65,7 +68,7 @@ from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]
 
 from lib_shared.message_manager import MessageManager
 from lib_shared.effects_coordinator import EffectsCoordinator
-from lib_shared.models import SignConfig
+from lib_shared.models import Message, SignConfig
 
 # The existing JS-side `mqtt_ws_client.js` shim is loaded by `base.html`
 # before this script runs. We import it via the `js` global and wrap it
@@ -137,6 +140,9 @@ def _on_change_js() -> None:
     registered via `App.registerOnChange(cb)`. Each listener
     re-renders whatever on its page could be affected by a
     state change (the page's `reRender` aggregator, typically).
+
+    The coordinator reads the manager's config live on every
+    tick — no explicit `apply_settings` call is needed here.
     """
     try:
         app = getattr(js.window, "App", None)
@@ -165,10 +171,13 @@ async def _get_messages_js(limit: int = 100, suppress: bool = True) -> object:
             # Defensive: an entry can be a MessageView (normal path)
             # or, in odd cases, a raw dict (e.g. a partial seed that
             # stored dicts instead of Message objects). Handle both.
-            if hasattr(entry, "message"):
-                d = entry.message.to_dict() if hasattr(entry.message, "to_dict") else dict(entry.message)
+            entry_msg = getattr(entry, "message", None)
+            if isinstance(entry_msg, Message):
+                d: dict = dict(entry_msg.to_dict())
+            elif isinstance(entry, dict):
+                d = dict(entry)
             else:
-                d = dict(entry) if isinstance(entry, dict) else {}
+                d = {}
             d["source"] = getattr(entry, "source", "rest")
             d["suppressed"] = bool(getattr(entry, "suppressed", False))
             rules = getattr(entry, "rules", None) or []
@@ -269,7 +278,7 @@ _message_manager = MessageManager(
     on_change=create_proxy(_on_change_js),
 )
 
-_coordinator = EffectsCoordinator()
+_coordinator = EffectsCoordinator(message_manager=_message_manager)
 
 _mqtt_ws_client = None
 _mqtt_ws_url = str(_cfg.get("mqttWsUrl") or "")

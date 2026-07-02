@@ -22,10 +22,14 @@ def get_messages(msgs, cfg, include_filtered=False, since=None):
     """Filter msgs by cfg rules, return newest-first list.
 
     Mirrors the original test API surface using InMemoryMessages.
+    In production the MessageManager drives enrichment at event time;
+    here we call `_enrich_messages` after the add loop so the buffer
+    is fully enriched before the read.
     """
     store = InMemoryMessages(cfg, maxlen=100)
     for m in msgs:
         store.add(m)
+    store._enrich_messages(list(store._msgs))
     result = store.get_messages(limit=100, suppress=not include_filtered)
     if since is not None:
         result = [e for e in result if e.message.received_at > since]

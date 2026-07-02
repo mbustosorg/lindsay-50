@@ -24,10 +24,10 @@ class ScrollerBase:
 
     The user-facing `speed` kwarg (1..5) is the canonical input; the
     underlying `frame_delay` / `offset_seconds` are derived from
-    `SPEED_TABLE` inside the constructor. Callers that already have raw
-    pacing numbers (tests, the no-config boot path) can pass
-    `frame_delay=` / `offset_seconds=` directly as a back-compat escape
-    hatch; that path skips the speed translation.
+    `SPEED_TABLE` inside the constructor and stored as instance
+    attributes (so `set_speed()` can update them in place). Tests that
+    need a non-default pacing either pass `speed=` or assign the
+    attributes directly after construction.
     """
 
     # Speed 1..5 → (frame_delay, offset_seconds). Index 0 = speed 1.
@@ -65,20 +65,9 @@ class ScrollerBase:
         *,
         speed: int = DEFAULT_SPEED,
         color: int = 0xFF0000,
-        frame_delay: float | None = None,
-        offset_seconds: float | None = None,
-    ):
-        # Caller passed raw pacing directly (tests, no-config boot). Use
-        # those numbers and ignore the speed value.
-        if frame_delay is not None and offset_seconds is not None:
-            self.frame_delay = frame_delay
-            self.offset_seconds = offset_seconds
-        else:
-            # Translate speed → pacing. Validate even if only one of the
-            # raw kwargs was passed.
-            fd, off = self.resolve_pacing(speed)
-            self.frame_delay = fd if frame_delay is None else frame_delay
-            self.offset_seconds = off if offset_seconds is None else offset_seconds
+    ) -> None:
+        # Translate speed → pacing
+        self.frame_delay, self.offset_seconds = self.resolve_pacing(speed)
         self.text = ""
         self.text_width = 0
         self.start_time = 0.0

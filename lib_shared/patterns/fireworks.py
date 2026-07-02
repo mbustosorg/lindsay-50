@@ -1,6 +1,8 @@
 import math
 import random
 import time
+
+from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Bitmap, Palette, Effect
 
 # Saturated hues that read well on HUB75 panels.
@@ -24,12 +26,12 @@ _PALETTE_SIZE = 32  # index 0 = black background; 1..31 = preassigned hues
 class Fireworks(Effect):
     def __init__(
         self,
-        display,
-        frame_delay=0.05,
-        spawn_seconds=0.8,
-        sparks_per_burst=18,
-        gravity=0.15,
-    ):
+        display: DisplayBase,
+        frame_delay: float = 0.05,
+        spawn_seconds: float = 0.8,
+        sparks_per_burst: int = 18,
+        gravity: float = 0.15,
+    ) -> None:
         self.display = display
         self.frame_delay = frame_delay
         self.spawn_seconds = spawn_seconds
@@ -47,7 +49,7 @@ class Fireworks(Effect):
         self._init_render()
 
         # Particle = [x, y, vx, vy, life, color_idx, kind]  kind: 0=rocket, 1=spark
-        self.particles = []
+        self.particles: list[list[float]] = []
 
     def tick(self):
         now = time.monotonic()

@@ -29,21 +29,9 @@ class PreviewScroller(ScrollerBase):
     """
 
     def __init__(
-        self,
-        display,
-        *,
-        speed: int = ScrollerBase.DEFAULT_SPEED,
-        color: int = 0xFF6400,
-        font_path: str | None = None,
-        frame_delay: float | None = None,
-        offset_seconds: float | None = None,
+        self, display, *, speed: int = ScrollerBase.DEFAULT_SPEED, color: int = 0xFF6400, font_path: str | None = None
     ):
-        super().__init__(
-            speed=speed,
-            color=color,
-            frame_delay=frame_delay,
-            offset_seconds=offset_seconds,
-        )
+        super().__init__(speed=speed, color=color)
         self.display = display
 
         path = font_path or os.environ.get("PREVIEW_FONT_PATH")

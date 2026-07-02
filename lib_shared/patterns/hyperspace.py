@@ -25,6 +25,7 @@ import math
 import random
 import time
 
+from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Bitmap, Palette, Effect, arrayblit
 
 _PALETTE_SIZE = 32
@@ -60,12 +61,12 @@ def _smoothstep(t):
 class Hyperspace(Effect):
     def __init__(
         self,
-        display,
-        num_stars=80,
-        frame_max_dt=0.1,
-        core_color=(180, 215, 255),
-        deep_color=(0, 10, 120),
-    ):
+        display: DisplayBase,
+        num_stars: int = 80,
+        frame_max_dt: float = 0.1,
+        core_color: tuple[int, int, int] = (180, 215, 255),
+        deep_color: tuple[int, int, int] = (0, 10, 120),
+    ) -> None:
         self.display = display
         self.w = display.canvas.width
         self.h = display.canvas.height

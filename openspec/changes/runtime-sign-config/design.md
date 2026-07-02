@@ -2,7 +2,7 @@
 
 The sign's runtime behavior is hard-coded. `EffectsCoordinator` is constructed in `heart-matrix-controller/main.py:55-61` with all defaults (no overrides), and the effect list passed in — `[hyperspace, video, png, honeycomb, flame, fireworks, nightsky]` — is a literal in the same file. There is no path for an operator to disable `video_display` (which depends on a video file the operator may not have), reorder the rotation, change the hold time, or change the `recent_count` size — without SSH + edit + reboot.
 
-`SignConfig` already round-trips through Flask → SQLite → S3 → MQTT → `MessageManager._handle_config` (and the browser preview's `MessageManager` reads it on seed). The wire path works. What's missing is the **fields that change behavior** — the schema has `sign`, `filters`, `senders`, `timezone` (and the leftover `tz_offset_mins`); the old `rendering` block is going away (its text-color field moves to the new `text_settings` block). What's NOT there yet is an `effect_settings` block and a `text_settings` block. The Flask `PUT /api/config` endpoint accepts whatever is in the body; `SignConfig.from_dict` drops unknown keys. The Pi's coordinator never reads any of this — it builds the effect list and coordinator from the hard-coded literals in `main.py`.
+`SignConfig` already round-trips through Flask → SQLite → S3 → MQTT → `MessageManager._handle_config` (and the browser preview's `MessageManager` reads it on seed). The wire path works. What's missing is the **fields that change behavior** — the schema has `sign`, `filters`, `senders`, `timezone` (and the leftover `tz_offset_mins`); the old `rendering` block is going away (its text-color field moves to the new `text_settings` block). What's NOT there yet is an `effects_settings` block and a `text_settings` block. The Flask `PUT /api/config` endpoint accepts whatever is in the body; `SignConfig.from_dict` drops unknown keys. The Pi's coordinator never reads any of this — it builds the effect list and coordinator from the hard-coded literals in `main.py`.
 
 The settings page (`heart-message-manager/templates/settings.html`) shows form fields that look like they're configuring the sign, but `rendering.color` and `rendering.speed` are stored and round-tripped but not used by the device. Operators have no way to know that.
 
@@ -15,7 +15,7 @@ This change closes the loop: add the missing blocks to `SignConfig`, validate th
 **Goals:**
 
 - An operator can change the rotation, the pacing (fade / hold / intro / idle / recent), and the scroll speed from the admin UI, save, and the sign updates within one MQTT round trip — no SSH, no redeploy, no Pi reboot.
-`settings.toml` is **not** updated for this change. The defaults for `effect_settings` and `text_settings` come from the `EffectsSettings()` and `TextSettings()` constructor defaults and the `_DEFAULT_EFFECTS_LIST_FULL` constant in `lib_shared/models.py`. The hard-coded defaults are reviewed alongside the effect class definitions in `heart-matrix-controller/main.py` (and the `_EFFECT_CLASSES` map).
+`settings.toml` is **not** updated for this change. The defaults for `effects_settings` and `text_settings` come from the `EffectsSettings()` and `TextSettings()` constructor defaults and the `_DEFAULT_EFFECTS_LIST_FULL` constant in `lib_shared/models.py`. The hard-coded defaults are reviewed alongside the effect class definitions in `heart-matrix-controller/main.py` (and the `_EFFECT_CLASSES` map).
 - The settings page surfaces the controls that map to **pacing and rotation behavior**, not to the technical parameters that operators don't need to reason about (`fade_step`, `gamma` stay as code defaults). The issue says "the goal isn't fine-tuning" — but the operator reviewed the design and explicitly asked to surface `recent_count` (it controls the idle rotation pool size, which is the kind of knob operators want). We surface it; the rest stays as code defaults.
 - A `text_effect` field exists in the config (default `"scroll"`) so future text effects (swirl, bounce) can be added without a schema change. The scroller doesn't branch on it in v1; the field is plumbed end-to-end so the next change is a one-line addition.
 - The wire path is unchanged (`type="config"` `MessageEnvelope`, `SignConfig.from_dict` / `to_dict`). The change is purely additive fields plus the `tz_offset_mins` removal.
@@ -34,9 +34,9 @@ This change closes the loop: add the missing blocks to `SignConfig`, validate th
 
 ## Decisions
 
-### Decision 1: Two new top-level fields on `SignConfig` (`effect_settings` + `text_settings`); `rendering` removed
+### Decision 1: Two new top-level fields on `SignConfig` (`effects_settings` + `text_settings`); `rendering` removed
 
-`SignConfig` gains `effect_settings: EffectsSettings` and `text_settings: TextSettings`. The existing `filters`, `senders`, `sign`, and `timezone` fields stay put. **`rendering` is REMOVED entirely** — the old `RenderingSettings` block (with `speed`, `color`, `mode`) is being replaced by the new `text_settings` block. The old v1 field was a thin wrapper around form values that the device never actually consumed (the device used its own scroller constructor defaults); the new `text_settings` block is what the device actually reads. `tz_offset_mins` is also removed. The `version` field stays (and the default bumps from 1 to 2 — see Decision 2). The text field is named `text_settings` (not `scroller_settings` or `scroller`) because the scroller is just one text effect — future text effects (swirl, bounce) will share the same block and may use different fields. Naming the block after "text" (the general concept) instead of "scroller" (one implementation) leaves room for those.
+`SignConfig` gains `effects_settings: EffectsSettings` and `text_settings: TextSettings`. The existing `filters`, `senders`, `sign`, and `timezone` fields stay put. **`rendering` is REMOVED entirely** — the old `RenderingSettings` block (with `speed`, `color`, `mode`) is being replaced by the new `text_settings` block. The old v1 field was a thin wrapper around form values that the device never actually consumed (the device used its own scroller constructor defaults); the new `text_settings` block is what the device actually reads. `tz_offset_mins` is also removed. The `version` field stays (and the default bumps from 1 to 2 — see Decision 2). The text field is named `text_settings` (not `scroller_settings` or `scroller`) because the scroller is just one text effect — future text effects (swirl, bounce) will share the same block and may use different fields. Naming the block after "text" (the general concept) instead of "scroller" (one implementation) leaves room for those.
 
 **`EffectsSettings`, `TextSettings`, and `_DEFAULT_EFFECTS_LIST_FULL` all live in `lib_shared/models.py`** — alongside `SignConfig`. The classes are small (~20 lines each), they share concepts (defaults, `from_dict` / `to_dict`, the `_DEFAULT_EFFECTS_LIST_FULL` constant), and a single file is the right shape for "a config struct and the two nested settings blocks it carries." Splitting them into separate files would mean three files to edit for any cross-cutting change and would make the test imports noisier. The exception is the migration registry, which is a separate concern (chained forward-only transforms) and stays in `lib_shared/config_migrations.py`. The old `RenderingSettings` class is **deleted** from `lib_shared/models.py` — its only use site was `SignConfig.rendering`, which is also being removed.
 
@@ -166,7 +166,7 @@ def __init__(
     sign=None,
     timezone="US/Pacific",
     version=CURRENT_VERSION,
-    effect_settings=None,                   # NEW
+    effects_settings=None,                   # NEW
     text_settings=None,                      # NEW (replaces the old rendering block)
     allowed_senders=None,
 ):
@@ -175,9 +175,9 @@ def __init__(
     self.sign = sign if isinstance(sign, SignSettings) else SignSettings.from_dict(sign or {})
     self.timezone = timezone
     self.version = version
-    self.effect_settings = (
-        effect_settings if isinstance(effect_settings, EffectsSettings)
-        else EffectsSettings.from_dict(effect_settings or {})
+    self.effects_settings = (
+        effects_settings if isinstance(effects_settings, EffectsSettings)
+        else EffectsSettings.from_dict(effects_settings or {})
     )
     self.text_settings = (
         text_settings if isinstance(text_settings, TextSettings)
@@ -186,9 +186,9 @@ def __init__(
     self._lock = threading.RLock()
 ```
 
-`from_dict`, `to_dict`, `update`, and `update_from_dict` add the two new keys (named `effect_settings` and `text_settings` on the wire). `tz_offset_mins` and `rendering` are removed from all four. The same `threading.RLock` guards mutations. The `migrate(...)` call is added at the top of `from_dict` and `update_from_dict` (see Decision 11).
+`from_dict`, `to_dict`, `update`, and `update_from_dict` add the two new keys (named `effects_settings` and `text_settings` on the wire). `tz_offset_mins` and `rendering` are removed from all four. The same `threading.RLock` guards mutations. The `migrate(...)` call is added at the top of `from_dict` and `update_from_dict` (see Decision 11).
 
-**Why a single `effect_settings` block and not separate `effects` + `pacing` top-level fields?** The coordinator consumes both — pairing them in one object means the coordinator's constructor takes one focused argument (`EffectsSettings`), not "the whole `SignConfig`." Future additions to the coordinator (e.g. a `transition` mode, an `intro_splash` toggle, a `boot_splash_enabled` flag) land in the same block without growing `SignConfig`'s top-level surface, and the coordinator's narrower knowledge (no filters, no sign name, no timezone) is a real win — it's the same shape that lets a future `TextSettings`-like block be consumed by a different class without bleeding the rest of `SignConfig` in.
+**Why a single `effects_settings` block and not separate `effects` + `pacing` top-level fields?** The coordinator consumes both — pairing them in one object means the coordinator's constructor takes one focused argument (`EffectsSettings`), not "the whole `SignConfig`." Future additions to the coordinator (e.g. a `transition` mode, an `intro_splash` toggle, a `boot_splash_enabled` flag) land in the same block without growing `SignConfig`'s top-level surface, and the coordinator's narrower knowledge (no filters, no sign name, no timezone) is a real win — it's the same shape that lets a future `TextSettings`-like block be consumed by a different class without bleeding the rest of `SignConfig` in.
 
 **Why not nest under a `runtime` block (effects + pacing + scroller all under one)?** The two blocks have different consumers (the coordinator vs. the scroller) and different lifecycles. The coordinator is rebuilt on every config message; the scroller is constructed once at boot. Two top-level blocks keep the separation clear and make it obvious which code reads which block.
 
@@ -202,11 +202,11 @@ The existing config has `version: 1`. The new shape is a strict superset (adds b
 
 The wire shape change is: `SignConfig.to_dict()` no longer emits `tz_offset_mins`. The Flask endpoint's `PUT /api/config` accepts payloads without it; the device's `MessageManager._handle_config` calls `update_from_dict`, which runs `migrate(...)` and then ignores the absent key.
 
-**Migration for old stored configs:** the v1 → v2 migration (registered in `MIGRATIONS` in `lib_shared/config_migrations.py`) does the upgrade on read. **Critically, the server also runs the migration on startup** (see Decision 11b): after the existing "rebuild-from-S3 on startup" step reads the latest config from S3, the server runs `migrate(...)` on it, and if a migration ran, writes a new S3 entry, updates the local SQLite cache, and publishes a `type="config"` envelope to MQTT. The point is to avoid months of backward-compatibility — the running code only ever sees the current version. The migration preserves `filters`, `senders`, `sign`, `timezone`; **drops** `tz_offset_mins` AND `rendering` (the old `RenderingSettings` block is being removed; the new `text_settings` block replaces it); adds the two new blocks (`effect_settings` and `text_settings`) with their defaults; bumps the version. Messages stored in S3 (`messages.json`) are not part of the config; the migration doesn't touch them. Suppression rules (in `filters`) are preserved as-is.
+**Migration for old stored configs:** the v1 → v2 migration (registered in `MIGRATIONS` in `lib_shared/config_migrations.py`) does the upgrade on read. **Critically, the server also runs the migration on startup** (see Decision 11b): after the existing "rebuild-from-S3 on startup" step reads the latest config from S3, the server runs `migrate(...)` on it, and if a migration ran, writes a new S3 entry, updates the local SQLite cache, and publishes a `type="config"` envelope to MQTT. The point is to avoid months of backward-compatibility — the running code only ever sees the current version. The migration preserves `filters`, `senders`, `sign`, `timezone`; **drops** `tz_offset_mins` AND `rendering` (the old `RenderingSettings` block is being removed; the new `text_settings` block replaces it); adds the two new blocks (`effects_settings` and `text_settings`) with their defaults; bumps the version. Messages stored in S3 (`messages.json`) are not part of the config; the migration doesn't touch them. Suppression rules (in `filters`) are preserved as-is.
 
 ### Decision 3: Defaults live in code, not in `settings.toml`
 
-`settings.toml` is **not** updated for this change. The defaults for `effect_settings` and `text_settings` come from the `EffectsSettings()` and `TextSettings()` constructor defaults and the `_DEFAULT_EFFECTS_LIST_FULL` constant in `lib_shared/models.py`. The hard-coded defaults are reviewed alongside the effect class definitions in `heart-matrix-controller/main.py` (and the `_EFFECT_CLASSES` map).
+`settings.toml` is **not** updated for this change. The defaults for `effects_settings` and `text_settings` come from the `EffectsSettings()` and `TextSettings()` constructor defaults and the `_DEFAULT_EFFECTS_LIST_FULL` constant in `lib_shared/models.py`. The hard-coded defaults are reviewed alongside the effect class definitions in `heart-matrix-controller/main.py` (and the `_EFFECT_CLASSES` map).
 
 **Why no `[sign]` table in `settings.toml`?** The device's `settings.toml` is intentionally small (Wi-Fi is managed by the Pi OS, MQTT is a flat table, panel geometry is a flat block). Adding a `[sign]` table means another surface for an operator to break (a typo in `effects = ["Flame",]` would either crash the boot or, worse, silently drop effects). The hard-coded defaults in code are unit-tested (the `tests/config_migrations_test.py` and `tests/effects_settings_test.py` suites assert them) and reviewed alongside the effect class definitions.
 
@@ -226,7 +226,7 @@ def __init__(
     effects,
     heart,
     message_manager,                      # NEW: single source of recent messages
-    effect_settings,                       # NEW: EffectsSettings (pacing + recent_count + future)
+    effects_settings,                       # NEW: EffectsSettings (pacing + recent_count + future)
     recent_count=5,                        # kept as an override for tests
 ):
 ```
@@ -244,7 +244,7 @@ asyncio.run(_message_mgr.seed())
 
 coordinator = EffectsCoordinator(
     display, scroller, effects_list, heart=heartbeat,
-    message_manager=_message_mgr, effect_settings=cfg.effect_settings,
+    message_manager=_message_mgr, effects_settings=cfg.effects_settings,
 )
 ```
 
@@ -252,7 +252,7 @@ The `EffectsSettings` fields are read in the constructor and stored as `self.fad
 
 **Why doesn't the coordinator subscribe to config updates?** It would be cleaner, but it would also mean yet another subscriber on the MQTT feed and a thread-safety concern in the middle of `tick()`. The Pi re-reads the config on every `type="config"` envelope and re-constructs the coordinator + scroller + effect list. This is a heavier handoff than mid-run updates, but it's bounded, the fade-in-progress always completes cleanly, and the cost is one config message per UI save. (A future change can add live pacing updates if it matters; the issue doesn't ask for it.)
 
-### Decision 5: Effect list is built from `effect_settings.effects` order (filtered by `enabled`), with graceful skip
+### Decision 5: Effect list is built from `effects_settings.effects` order (filtered by `enabled`), with graceful skip
 
 `heart-matrix-controller/main.py` gains a small helper:
 
@@ -268,9 +268,9 @@ _EFFECT_CLASSES = {
     "Heartbeat": Heartbeat,  # boot-splash only; never in the rotation
 }
 
-def _build_effects(effect_settings, display):
+def _build_effects(effects_settings, display):
     effects = []
-    for entry in effect_settings.effects:
+    for entry in effects_settings.effects:
         if not entry.get("enabled", True):
             continue
         name = entry["name"]
@@ -285,7 +285,7 @@ def _build_effects(effect_settings, display):
     return effects
 ```
 
-The Pi calls `_build_effects(cfg.effect_settings, display)` instead of the hard-coded list. The helper iterates `effect_settings.effects` in order, skips entries with `enabled: false`, and skips entries whose `name` isn't in `_EFFECT_CLASSES` or whose constructor raises (logged at WARNING). `Heartbeat` is excluded from the rotation by being absent from `_DEFAULT_EFFECTS_LIST_FULL` (and is constructed separately for `coordinator.heart`). The same helper is reused on every config update, so a UI change to toggle `VideoDisplay` on takes effect on the next config message.
+The Pi calls `_build_effects(cfg.effects_settings, display)` instead of the hard-coded list. The helper iterates `effects_settings.effects` in order, skips entries with `enabled: false`, and skips entries whose `name` isn't in `_EFFECT_CLASSES` or whose constructor raises (logged at WARNING). `Heartbeat` is excluded from the rotation by being absent from `_DEFAULT_EFFECTS_LIST_FULL` (and is constructed separately for `coordinator.heart`). The same helper is reused on every config update, so a UI change to toggle `VideoDisplay` on takes effect on the next config message.
 
 **Why iterate the full list (not just the enabled subset)?** Re-enabling an effect via the UI keeps its position in the list — the operator's "where does it go" decision is preserved. If the device only saw the enabled subset, the rotation order would be the operator's toggle order, not their original position decision. (A future weighted-random feature could collapse to just the enabled names; the order-aware path is what the v1 UI needs.)
 
@@ -300,7 +300,7 @@ The Pi calls `_build_effects(cfg.effect_settings, display)` instead of the hard-
 `heart-message-manager/templates/settings.html` is a single Tailwind form that POSTs to `/settings` (Flask then PUTs to `/api/config`). The new sections:
 
 - **Effects** (one big section, with two sub-sections) — the whole "what does the sign do?" panel:
-  - **Effects List** sub-section — a checkbox per entry in `cfg.effect_settings.effects` (in the order they appear in the list), excluding `Heartbeat` (which is the boot-splash and is never in the rotation). Checked = `enabled: true`, unchecked = `enabled: false`; the form preserves the list order on save (the order is the rotation order). The checkboxes are populated from `cfg.effect_settings.effects` (returned by `GET /api/config`); no separate endpoint is needed. If a future effect is added to the device's `_EFFECT_CLASSES` map, the operator adds it to the list via the existing form (or via a config message); the UI doesn't auto-discover.
+  - **Effects List** sub-section — a checkbox per entry in `cfg.effects_settings.effects` (in the order they appear in the list), excluding `Heartbeat` (which is the boot-splash and is never in the rotation). Checked = `enabled: true`, unchecked = `enabled: false`; the form preserves the list order on save (the order is the rotation order). The checkboxes are populated from `cfg.effects_settings.effects` (returned by `GET /api/config`); no separate endpoint is needed. If a future effect is added to the device's `_EFFECT_CLASSES` map, the operator adds it to the list via the existing form (or via a config message); the UI doesn't auto-discover.
   - **Settings** sub-section — five labeled controls:
     - **Fade speed** (seconds for one full fade): range 0.1–10.0, step 0.1, default 2.0.
     - **Hold time** (seconds to keep a message fully visible): range 1–120, step 1, default 15.
@@ -326,11 +326,11 @@ The form is still a single POST. The Flask handler reads the new fields from `re
 
 ### Decision 7: No separate `GET /api/effects` endpoint — the data lives in `GET /api/config`
 
-The original draft of this change added a `GET /api/effects` endpoint to return the canonical effect set separately from the config. Reconsidered: the admin UI's only consumer of that list is the settings page's Effects List checkboxes, and the same data is already in `cfg.effect_settings.effects` (returned by `GET /api/config`). A separate endpoint would duplicate state and add a second round-trip on settings-page load. The UI now reads the list from `cfg.effect_settings.effects` directly.
+The original draft of this change added a `GET /api/effects` endpoint to return the canonical effect set separately from the config. Reconsidered: the admin UI's only consumer of that list is the settings page's Effects List checkboxes, and the same data is already in `cfg.effects_settings.effects` (returned by `GET /api/config`). A separate endpoint would duplicate state and add a second round-trip on settings-page load. The UI now reads the list from `cfg.effects_settings.effects` directly.
 
 The `lib_shared.models._DEFAULT_EFFECTS_LIST_FULL` constant IS the canonical effect set (in the `lib_shared/models.py` form, the full 7-entry list with `enabled` flags). The Flask process uses it for validation (rejecting unknown effect names in the PUT handler) and as the default for fresh installs. The device has its own `_EFFECT_CLASSES` map (the class-name → class binding) which is the same set; the unit tests assert the two are in sync.
 
-**What about a future effect added to the device?** When a new effect class is added to `heart-matrix-controller/main.py`'s `_EFFECT_CLASSES` map, the operator adds it to the list via the existing settings form (or a config message) — there's no auto-discovery. The form's HTML is generated server-side from `cfg.effect_settings.effects`, so a new effect appears in the UI only when the config has it. This is intentional: the device is the source of truth for "what exists," and the config is the source of truth for "what's enabled and in what order"; the admin UI is a thin editor over the config.
+**What about a future effect added to the device?** When a new effect class is added to `heart-matrix-controller/main.py`'s `_EFFECT_CLASSES` map, the operator adds it to the list via the existing settings form (or a config message) — there's no auto-discovery. The form's HTML is generated server-side from `cfg.effects_settings.effects`, so a new effect appears in the UI only when the config has it. This is intentional: the device is the source of truth for "what exists," and the config is the source of truth for "what's enabled and in what order"; the admin UI is a thin editor over the config.
 
 **Why no `boot_splash` field either?** The `Heartbeat` boot-splash effect is the device's concern (constructed in `main.py`, passed as `coordinator.heart`); it never appears in the rotation. The UI doesn't need a separate field for it — it's not configurable in v1.
 
@@ -357,7 +357,7 @@ The offset is correct for the current instant (DST-aware). Storing it in the con
 
 ### Decision 9: The dashboard status block surfaces the new fields
 
-`heart-message-manager/static/app.js` reads `window.APP_CONFIG.effect_settings`, `effect_settings.effects`, and `text_settings` (NOT the old `rendering` block — it was removed) and renders them in a small "Sign settings" card. The card shows:
+`heart-message-manager/static/app.js` reads `window.APP_CONFIG.effects_settings`, `effects_settings.effects`, and `text_settings` (NOT the old `rendering` block — it was removed) and renders them in a small "Sign settings" card. The card shows:
 
 - Current effect rotation (comma-separated, the first one bolded as "next")
 - Fade / hold / intro / idle values (human-readable labels)
@@ -402,7 +402,7 @@ from lib_shared.models import (
 
 
 def _v1_to_v2(d: dict) -> dict:
-    """v1 → v2: drop tz_offset_mins + rendering, add effect_settings + text_settings, bump version.
+    """v1 → v2: drop tz_offset_mins + rendering, add effects_settings + text_settings, bump version.
 
     Preserves filters, senders, sign, timezone, version. The
     on-disk message list (messages.json in S3) is not part of the config and
@@ -411,7 +411,7 @@ def _v1_to_v2(d: dict) -> dict:
     out = dict(d)
     out.pop("tz_offset_mins", None)
     out.pop("rendering", None)  # the old RenderingSettings block is being removed
-    out.setdefault("effect_settings", {
+    out.setdefault("effects_settings", {
         "effects": list(_DEFAULT_EFFECTS_LIST_FULL),  # full 7-entry list, 5 enabled + 2 disabled
         "fade_seconds": 2.0,
         "hold_seconds": 15.0,
@@ -455,7 +455,7 @@ def migrate(d: dict, current_version: int) -> dict:
 
 **Why a registry and not a versioned file format or `Union[ConfigV1, ConfigV2]`?** The shape is small (one struct, ~8 fields), the migration list is short (one entry: v1 → v2), and the project doesn't have a database schema — the config is a single JSON blob. A registry that takes the current version and chains upgrade functions is the simplest mechanism that scales to v3+ without changing the read path. The alternative (parse by version, dispatch to a `ConfigV1` or `ConfigV2` class) doubles the type surface and doesn't help when v3 lands.
 
-**Why a `version` flag and not just "drop unknown fields"?** Dropping unknown fields silently loses data — a v1 client receiving a v2 payload would lose `effect_settings`. The `version` flag makes the wire shape explicit: each consumer (Flask, device, browser preview) knows the shape it expects, and the migration registry brings older shapes forward. This is the same pattern that lets a v1 device and a v2 device coexist in the field during a rolling upgrade — the v2 device's `migrate(v1_payload)` returns a v2 payload; the v1 device simply never sees a v2 payload (because the Flask side normalized it on write).
+**Why a `version` flag and not just "drop unknown fields"?** Dropping unknown fields silently loses data — a v1 client receiving a v2 payload would lose `effects_settings`. The `version` flag makes the wire shape explicit: each consumer (Flask, device, browser preview) knows the shape it expects, and the migration registry brings older shapes forward. This is the same pattern that lets a v1 device and a v2 device coexist in the field during a rolling upgrade — the v2 device's `migrate(v1_payload)` returns a v2 payload; the v1 device simply never sees a v2 payload (because the Flask side normalized it on write).
 
 **Why not Pydantic / Django migrations / Alembic?** All three are heavier than this project needs. Pydantic adds a dependency for what is currently plain Python objects; Django migrations assumes a database; Alembic assumes SQLAlchemy. The pattern in `MIGRATIONS` is the *idea* those frameworks implement — a chain of forward-only transforms keyed by version — but it doesn't need their machinery.
 
@@ -508,7 +508,7 @@ This is a wire-breaking change to `SignConfig`, so there IS a migration step (th
 
 **Config payload migration (transparent on read, proactive on startup):**
 
-- Existing `version: 1` configs in S3 and SQLite are migrated to v2 on every read by the `MIGRATIONS` registry. Filters, senders, sign name, and timezone are all preserved. The on-disk message list (`messages.json` in S3) is not part of the config and is not touched. The `tz_offset_mins` field is dropped (its value is recoverable from `timezone` at read-time). The old `rendering` block is also dropped — it's being removed entirely and replaced by the new `text_settings` block. The new `effect_settings` and `text_settings` blocks are added with their code defaults.
+- Existing `version: 1` configs in S3 and SQLite are migrated to v2 on every read by the `MIGRATIONS` registry. Filters, senders, sign name, and timezone are all preserved. The on-disk message list (`messages.json` in S3) is not part of the config and is not touched. The `tz_offset_mins` field is dropped (its value is recoverable from `timezone` at read-time). The old `rendering` block is also dropped — it's being removed entirely and replaced by the new `text_settings` block. The new `effects_settings` and `text_settings` blocks are added with their code defaults.
 - **On server startup** (see Decision 12), the server reads the latest config from S3, runs `migrate(...)`, and if a migration ran, writes a new S3 entry, updates the local SQLite cache, and publishes a `type="config"` envelope to MQTT. This is the central design decision: the running code only ever sees `CURRENT_VERSION` — it doesn't have to be backward-compatible with old shapes for months waiting for an operator to click "Save."
 - The Flask `GET /api/config` endpoint returns the migrated config (Flask normalizes on read; the migration would happen inside `from_dict` if the row is then reloaded, but the GET path runs it explicitly so the response is always at the current version).
 - The Flask `PUT /api/config` endpoint runs the migration on the incoming payload before constructing the `SignConfig`. The saved SQLite row is always at `CURRENT_VERSION`.
@@ -518,8 +518,8 @@ This is a wire-breaking change to `SignConfig`, so there IS a migration step (th
 
 1. Add `lib_shared/config_migrations.py` (with `MIGRATIONS`, `migrate()`, `_v1_to_v2`, and `migrate_on_startup()`). Add `EffectsSettings`, `TextSettings`, and `_DEFAULT_EFFECTS_LIST_FULL` to `lib_shared/models.py` (no separate files). Delete the old `RenderingSettings` class. Add the two new top-level fields to `SignConfig`; remove `tz_offset_mins` AND `rendering`. Bump `version` default to 2; add `CURRENT_VERSION = 2` class constant. Wire `migrate(...)` into `from_dict` and `update_from_dict`.
 2. Add a startup hook in `heart-message-manager/main.py` (or `sqlite.py` — wherever the existing "rebuild-from-S3 on startup" lives) that calls `migrate_on_startup(...)` after the S3 read.
-3. Refactor `EffectsCoordinator` to accept `effect_settings: EffectsSettings`; replace `request_message` and `recent_provider` with a single `message_manager` argument.
-4. Update `heart-matrix-controller/main.py` to build the effect list from `cfg.effect_settings.effects` and pass `cfg.effect_settings` + `_message_mgr` to the coordinator.
+3. Refactor `EffectsCoordinator` to accept `effects_settings: EffectsSettings`; replace `request_message` and `recent_provider` with a single `message_manager` argument.
+4. Update `heart-matrix-controller/main.py` to build the effect list from `cfg.effects_settings.effects` and pass `cfg.effects_settings` + `_message_mgr` to the coordinator.
 5. Update `heart-matrix-controller/scroller.py` to read from `TextSettings`.
 6. Update `heart-message-manager/main.py`: extend `PUT /api/config` validation to the new fields (effects entries must have a `name` from the device's known set and a boolean `enabled`; behavior fields must be non-negative; recent_count must be a positive integer; text fields must be non-negative; text_effect must be one of an enum), add `_build_sign_config_from_request` helper, run `migrate(...)` on the incoming JSON. No new endpoint — the admin UI reads the effects list from `GET /api/config`.
 7. Update `heart-message-manager/templates/settings.html` with the new one-big-Effects-section structure (Effects List + Settings sub-sections) and the Text section. The old "Rendering Defaults" section is removed.
@@ -529,12 +529,12 @@ This is a wire-breaking change to `SignConfig`, so there IS a migration step (th
 11. Update `heart-message-manager/static/app.js` to surface the new fields in the dashboard.
 12. Update test fixtures that reference `tz_offset_mins`.
 
-**Rollback:** revert the commit. The Flask endpoint accepts the old payload (it ignores unknown keys, and the new payload is a strict superset minus `tz_offset_mins` and `rendering`). The device reads the new fields with defaults, so a rollback is a no-op for a device that never received a new config message. The migration registry is forward-only; a rolled-back device reading a v2 config would lose the new fields' values (the old code doesn't know about `effect_settings` or `text_settings`). For a clean rollback, also revert any v2 config the operator has saved in the interim (or, equivalently, deploy the rollback to the device before the Flask side sees any v2 writes). The startup migration in Decision 12 is forward-only and writes new S3 entries; on a rollback, those entries are still at v2 and will be re-migrated on the next startup, so the rollback is safe to deploy and re-deploy.
+**Rollback:** revert the commit. The Flask endpoint accepts the old payload (it ignores unknown keys, and the new payload is a strict superset minus `tz_offset_mins` and `rendering`). The device reads the new fields with defaults, so a rollback is a no-op for a device that never received a new config message. The migration registry is forward-only; a rolled-back device reading a v2 config would lose the new fields' values (the old code doesn't know about `effects_settings` or `text_settings`). For a clean rollback, also revert any v2 config the operator has saved in the interim (or, equivalently, deploy the rollback to the device before the Flask side sees any v2 writes). The startup migration in Decision 12 is forward-only and writes new S3 entries; on a rollback, those entries are still at v2 and will be re-migrated on the next startup, so the rollback is safe to deploy and re-deploy.
 
 ## Open Questions
 
 - **Wi-Fi credentials**: parked for a follow-up change. See Decision 10 for the proposed shape (subprocess + timeout + pre-commit test).
-- **Live pacing updates**: the coordinator doesn't re-read its pacing params mid-run. If a future change wants "save in the UI, see the new fade speed within 1 s," the coordinator needs a `set_effect_settings(effect_settings)` method that takes the lock and updates the fields. The fade-in-progress uses the old values; the next mode transition uses the new ones. Out of scope for v1.
+- **Live pacing updates**: the coordinator doesn't re-read its pacing params mid-run. If a future change wants "save in the UI, see the new fade speed within 1 s," the coordinator needs a `set_effects_settings(effects_settings)` method that takes the lock and updates the fields. The fade-in-progress uses the old values; the next mode transition uses the new ones. Out of scope for v1.
 - **Effect ordering in the UI**: the issue says the UI should be able to toggle effects on/off; it doesn't say the order should be editable. The current design has the order fixed (the hard-coded `_DEFAULT_EFFECTS_LIST_FULL` order, which is the canonical order shared between Flask and the device). The full list IS the order; toggling an effect on/off doesn't reorder it. If the issue evolves to "let me reorder the rotation," the easiest path is drag-and-drop on the checkboxes, which writes the new order back as a list. Parked.
-- **A separate "preset" / "theme" abstraction**: not asked for. The config is the config. If the operator wants "Christmas mode" later, that's an `effect_settings.effects` list + a `hold_seconds` value saved as a config — not a new abstraction.
+- **A separate "preset" / "theme" abstraction**: not asked for. The config is the config. If the operator wants "Christmas mode" later, that's an `effects_settings.effects` list + a `hold_seconds` value saved as a config — not a new abstraction.
 - **Startup migration failure mode**: if the S3 read fails on startup (e.g. credentials rotated), the existing code path raises. The startup migration doesn't change that — it just adds a step after the read succeeds. If the S3 write-back fails (e.g. transient network blip), the server logs the error and continues; the next startup will re-attempt. The in-memory config is at v2 regardless. The biggest risk is a partial write where S3 is updated but the SQLite/MQTT updates fail; this is mitigated by the fact that the S3 update is the last step (so a failure leaves the in-memory + SQLite + MQTT at v2 even if S3 is still v1) — actually, the recommended order is SQLite first (local, fast), then MQTT, then S3 (eventual consistency), so a failure between MQTT and S3 leaves the device seeing v2, the server's SQLite at v2, and S3 at v1 (the next startup will re-migrate, idempotently). Acceptable for v1; a future change can add a "last successful migration" marker to make the failure case more visible.

@@ -11,20 +11,20 @@
   - `from_dict({"effects": [{"name": "NotAnEffect", "enabled": True}]})` is accepted at the `from_dict` level (the canonical-set check happens at the Flask validation layer, not inside `EffectsSettings` — the class is just a value object)
 - [ ] 1.4 Add a unit test in `tests/text_settings_test.py` asserting the defaults, the round-trip, the `text_effect` validation, and that `validate()` raises on negative `frame_delay` / `offset_seconds` and on colors outside 0–0xFFFFFF
 
-## 2. SignConfig gains effect_settings and text_settings; loses tz_offset_mins AND rendering; gains CURRENT_VERSION and migrations
+## 2. SignConfig gains effects_settings and text_settings; loses tz_offset_mins AND rendering; gains CURRENT_VERSION and migrations
 
-- [ ] 2.1 In `lib_shared/models.py`, add a class constant `SignConfig.CURRENT_VERSION = 2`. Add `effect_settings: EffectsSettings` and `text_settings: TextSettings` to `SignConfig.__init__`. Default `effect_settings` to `EffectsSettings()` and `text_settings` to `TextSettings()`. Bump the `version` argument default from 1 to `cls.CURRENT_VERSION`
+- [ ] 2.1 In `lib_shared/models.py`, add a class constant `SignConfig.CURRENT_VERSION = 2`. Add `effects_settings: EffectsSettings` and `text_settings: TextSettings` to `SignConfig.__init__`. Default `effects_settings` to `EffectsSettings()` and `text_settings` to `TextSettings()`. Bump the `version` argument default from 1 to `cls.CURRENT_VERSION`
 - [ ] 2.2 Remove `tz_offset_mins` from `SignConfig.__init__`, `from_dict`, `to_dict`, `update`, and `update_from_dict`. The wire shape SHALL NOT include `tz_offset_mins` after this change
 - [ ] 2.3 Remove the `rendering: RenderingSettings` field from `SignConfig` entirely. Delete the `RenderingSettings` class from `lib_shared/models.py` (it is dead code once `SignConfig.rendering` is gone). The wire shape SHALL NOT include `rendering` after this change. Any code that read `cfg.rendering.*` is updated in the relevant tasks below
-- [ ] 2.4 Add `effect_settings` and `text_settings` to `to_dict` and `from_dict` (using the wire names `effect_settings` and `text_settings` — not `scroller_settings` and not `scroller`). The new fields SHALL be guarded by the same `threading.RLock` as the existing fields (`update_from_dict` and `to_dict` SHALL wrap the read/mutate in `_with_lock`)
+- [ ] 2.4 Add `effects_settings` and `text_settings` to `to_dict` and `from_dict` (using the wire names `effects_settings` and `text_settings` — not `scroller_settings` and not `scroller`). The new fields SHALL be guarded by the same `threading.RLock` as the existing fields (`update_from_dict` and `to_dict` SHALL wrap the read/mutate in `_with_lock`)
 - [ ] 2.5 At the top of `from_dict` and `update_from_dict`, call `data = migrate(data, current_version=cls.CURRENT_VERSION)` from `lib_shared.config_migrations`. The migration SHALL run BEFORE the field-by-field update; the `version` field in the input is treated as the source version. This is defense-in-depth: the primary migration path is the startup hook in task 3.2
 - [ ] 2.6 Add a unit test in `tests/sign_runtime_config_test.py` asserting:
-  - `to_dict()` on a default `SignConfig` includes `effect_settings` (7 entries — 5 enabled + 2 disabled — in canonical rotation order, default pacing, recent_count 5) and `text_settings` (defaults) with `version: 2`, and does NOT include `rendering` or `tz_offset_mins`
+  - `to_dict()` on a default `SignConfig` includes `effects_settings` (7 entries — 5 enabled + 2 disabled — in canonical rotation order, default pacing, recent_count 5) and `text_settings` (defaults) with `version: 2`, and does NOT include `rendering` or `tz_offset_mins`
   - `from_dict(to_dict(cfg))` round-trips losslessly
   - An empty `from_dict({})` produces a config at v2 with the defaults
   - `from_dict({"version": 1, "tz_offset_mins": -420, "rendering": {...}, "filters": [...], "senders": [...]})` produces a v2 config with `tz_offset_mins` and `rendering` not stored, the new blocks at their defaults, and the original `filters` and `senders` preserved
   - `hasattr(cfg, "rendering")` is `False` and `RenderingSettings` is not importable from `lib_shared.models`
-  - A concurrent read of `cfg.effect_settings.fade_seconds` while another thread calls `update_from_dict` with a new `effect_settings` returns either the old or the new value, never a half-mutated value
+  - A concurrent read of `cfg.effects_settings.fade_seconds` while another thread calls `update_from_dict` with a new `effects_settings` returns either the old or the new value, never a half-mutated value
 
 ## 3. Config migrations module in lib_shared; server-side startup migration
 
@@ -35,13 +35,13 @@
 - [ ] 3.2 Implement `_v1_to_v2(d)` as the v1 → v2 migration:
   - Returns a shallow copy of `d` (does not mutate the caller's dict)
   - Pops `tz_offset_mins` if present
-  - Pops `rendering` if present (the old `RenderingSettings` block is being superseded by `text_settings` + `effect_settings`; no v1 → v2 mapping for individual rendering fields — the new blocks start from defaults)
-  - Sets `effect_settings` to the default `EffectsSettings().to_dict()` if absent
+  - Pops `rendering` if present (the old `RenderingSettings` block is being superseded by `text_settings` + `effects_settings`; no v1 → v2 mapping for individual rendering fields — the new blocks start from defaults)
+  - Sets `effects_settings` to the default `EffectsSettings().to_dict()` if absent
   - Sets `text_settings` to the default `TextSettings().to_dict()` if absent
   - Sets `version` to `2`
   - Preserves `filters`, `senders`, `sign`, and `timezone` unchanged
 - [ ] 3.3 Add a unit test in `tests/config_migrations_test.py` asserting:
-  - `migrate({"version": 1, "tz_offset_mins": -420, "rendering": {"speed": 2}, "filters": [{"type": "keyword", "pattern": "spam", "action": "suppress"}]}, current_version=2)` returns a dict at v2 with `tz_offset_mins` and `rendering` dropped, `effect_settings` and `text_settings` set to defaults, `filters` preserved, and `version: 2`
+  - `migrate({"version": 1, "tz_offset_mins": -420, "rendering": {"speed": 2}, "filters": [{"type": "keyword", "pattern": "spam", "action": "suppress"}]}, current_version=2)` returns a dict at v2 with `tz_offset_mins` and `rendering` dropped, `effects_settings` and `text_settings` set to defaults, `filters` preserved, and `version: 2`
   - `migrate({"version": 2, ...}, current_version=2)` returns the input unchanged (idempotency)
   - `migrate({"tz_offset_mins": -420}, current_version=2)` (no version key) is treated as v1 and returns a v2 dict
   - `migrate({"version": 1}, current_version=4)` with only v1 → v2 registered raises `KeyError` with a message naming the missing step
@@ -66,7 +66,7 @@
 
 - [ ] 5.1 Verify (no code change) that `MessageManager._handle_config` already calls `SignConfig.update_from_dict(envelope.payload)` — confirmed in the existing code at `lib_shared/message_manager.py:132-135`. Because `update_from_dict` now calls `migrate(...)` at the top, a v1 payload arriving over MQTT is transparently upgraded to v2 in the device's in-memory config (defense in depth — the primary migration path is the startup hook in task 4)
 - [ ] 5.2 Add a test in `tests/test_message_manager.py` asserting:
-  - A `type="config"` envelope with a v2 payload (new `effect_settings` + `text_settings` keys) updates the in-memory `SignConfig` (read after dispatch returns the new values)
+  - A `type="config"` envelope with a v2 payload (new `effects_settings` + `text_settings` keys) updates the in-memory `SignConfig` (read after dispatch returns the new values)
   - A `type="config"` envelope with a v1 payload (no `version` key, has `tz_offset_mins` and `rendering`) is migrated to v2 on the device: the in-memory `SignConfig` ends up at v2 with `tz_offset_mins` and `rendering` not stored and the new blocks at their defaults
   - A `type="config"` envelope WITHOUT the new blocks leaves the existing values alone (no overwrite with defaults)
 
@@ -88,27 +88,27 @@
 
 ## 8. Flask: extended PUT /api/config validation (NO GET /api/effects)
 
-- [ ] 8.1 In `heart-message-manager/main.py`, do NOT add a `GET /api/effects` endpoint. The canonical effect set is reachable from `GET /api/config`; the UI reads it from `cfg.effect_settings.effects` directly
+- [ ] 8.1 In `heart-message-manager/main.py`, do NOT add a `GET /api/effects` endpoint. The canonical effect set is reachable from `GET /api/config`; the UI reads it from `cfg.effects_settings.effects` directly
 - [ ] 8.2 Add `_build_sign_config_from_request(data: dict) -> tuple[SignConfig | None, Response | None]` that:
   - Calls `migrate(data, current_version=SignConfig.CURRENT_VERSION)` at the top so v1 inputs are normalized to v2 before validation
-  - Validates `effect_settings.effects` as a list of `{"name": str, "enabled": bool}` dicts (NOT a list of strings) and rejects any entry whose `name` is not in the device's canonical effect set (the same set used by the device's `_DEFAULT_EFFECTS_LIST` for instantiating classes) with HTTP 400 and a per-field error
+  - Validates `effects_settings.effects` as a list of `{"name": str, "enabled": bool}` dicts (NOT a list of strings) and rejects any entry whose `name` is not in the device's canonical effect set (the same set used by the device's `_DEFAULT_EFFECTS_LIST` for instantiating classes) with HTTP 400 and a per-field error
   - Returns `(None, jsonify({"error": "..."}), 400)` when an effect entry is malformed, an effect name is unknown, a behavior field is out of range, `recent_count` is not a positive integer, the color is out of range, or `text_effect` is not in the v1 enum
   - Returns `(SignConfig.from_dict(data), None)` when validation passes
-  - Returns per-field error messages in the format `{"error": "effect_settings.effects: unknown effect 'X'"}` (or similar)
+  - Returns per-field error messages in the format `{"error": "effects_settings.effects: unknown effect 'X'"}` (or similar)
 - [ ] 8.3 Update `api_put_config` to call `_build_sign_config_from_request` and return the 400 response on validation failure. The saved SQLite row SHALL be at `version: 2` regardless of the input version (the migration runs before `from_dict` constructs the `SignConfig`, and `from_dict` preserves the migrated `version`)
 - [ ] 8.4 Add tests in `tests/test_auth.py` (or a new `tests/api_config_validation_test.py`) asserting:
   - `GET /api/effects` returns HTTP 404 (the route is intentionally absent)
-  - `PUT /api/config` with `effect_settings.effects=[{"name": "DoesNotExist", "enabled": True}]` returns HTTP 400
-  - `PUT /api/config` with `effect_settings.effects=[{"name": "Flame"}]` (missing `enabled`) returns HTTP 400
-  - `PUT /api/config` with `effect_settings.fade_seconds=-1` returns HTTP 400
-  - `PUT /api/config` with `effect_settings.recent_count=0` returns HTTP 400
+  - `PUT /api/config` with `effects_settings.effects=[{"name": "DoesNotExist", "enabled": True}]` returns HTTP 400
+  - `PUT /api/config` with `effects_settings.effects=[{"name": "Flame"}]` (missing `enabled`) returns HTTP 400
+  - `PUT /api/config` with `effects_settings.fade_seconds=-1` returns HTTP 400
+  - `PUT /api/config` with `effects_settings.recent_count=0` returns HTTP 400
   - `PUT /api/config` with `text_settings.text_effect="swirl"` returns HTTP 400
   - `PUT /api/config` with a v1 payload (no `version` key, has `tz_offset_mins` and `rendering`) returns HTTP 200 and the saved SQLite row is at v2 with `tz_offset_mins` and `rendering` dropped
   - `PUT /api/config` with a well-formed v2 payload (effect entries as `{"name", "enabled"}` dicts) returns HTTP 200 and the new values are persisted to SQLite
 
 ## 9. heart-message-manager/templates/settings.html: one Effects section (Effects List + Settings sub-sections) + a Text section
 
-- [ ] 9.1 Add an "Effects" section that contains two sub-sections. Inside it, an "Effects List" sub-section (named for what the operator sees — a list of which effects are enabled — not "Rotation", which implies cycling) renders one checkbox per entry in `cfg.effect_settings.effects` (the full 7-entry list of `{"name", "enabled"}` dicts), in the order it appears in the config. Each checkbox is named `effect_<classname>` and is checked if the entry's `enabled` flag is `true`. The page does NOT call `GET /api/effects` (that endpoint was dropped — the data lives in `GET /api/config`). Inside the same Effects section, a "Settings" sub-section (named generically because future fields added to the block may not be pacing-related) renders five labeled slider+number pairs:
+- [ ] 9.1 Add an "Effects" section that contains two sub-sections. Inside it, an "Effects List" sub-section (named for what the operator sees — a list of which effects are enabled — not "Rotation", which implies cycling) renders one checkbox per entry in `cfg.effects_settings.effects` (the full 7-entry list of `{"name", "enabled"}` dicts), in the order it appears in the config. Each checkbox is named `effect_<classname>` and is checked if the entry's `enabled` flag is `true`. The page does NOT call `GET /api/effects` (that endpoint was dropped — the data lives in `GET /api/config`). Inside the same Effects section, a "Settings" sub-section (named generically because future fields added to the block may not be pacing-related) renders five labeled slider+number pairs:
   - "Fade speed" (0.1–10.0, step 0.1)
   - "Hold time" (1–120, step 1)
   - "Intro time" (0–30, step 0.5)
@@ -119,8 +119,8 @@
   - A "Scroll speed" slider (0–100) that maps to `text_settings.frame_delay` in the range 0.1–0.01 (inverse)
   - A "Text color" `<input type="color">` plus a hex text input
   - A "Text effect" `<select>` with one option "scroll", rendered as disabled with a tooltip "More text effects coming soon"
-- [ ] 9.3 REMOVE the previous "Rendering Defaults" section entirely. The "Speed" field's value maps to `effect_settings.fade_seconds` for the v2 default; existing v1 `rendering.speed` values are NOT carried over by the UI (the v1 → v2 migration drops the `rendering` block). The other old "Rendering Defaults" fields (font, font_size, letter_spacing, line_spacing, bg_color, align) are gone with no replacement in this change
-- [ ] 9.4 Add a small inline `<script>` block (or extend `static/app.js`) that wires the slider+number pairs and the scroll-speed inverse mapping, and serializes the new fields into the existing form submit (no fetch rewrite; the form is still a single POST to `/settings`). The Effects List sub-section's checkboxes serialize as `effect_settings.effects` entries of the form `{"name": "<classname>", "enabled": <bool>}` — the full 7-entry list is submitted on every save, with each entry's `enabled` flag reflecting the checkbox state at submit time
+- [ ] 9.3 REMOVE the previous "Rendering Defaults" section entirely. The "Speed" field's value maps to `effects_settings.fade_seconds` for the v2 default; existing v1 `rendering.speed` values are NOT carried over by the UI (the v1 → v2 migration drops the `rendering` block). The other old "Rendering Defaults" fields (font, font_size, letter_spacing, line_spacing, bg_color, align) are gone with no replacement in this change
+- [ ] 9.4 Add a small inline `<script>` block (or extend `static/app.js`) that wires the slider+number pairs and the scroll-speed inverse mapping, and serializes the new fields into the existing form submit (no fetch rewrite; the form is still a single POST to `/settings`). The Effects List sub-section's checkboxes serialize as `effects_settings.effects` entries of the form `{"name": "<classname>", "enabled": <bool>}` — the full 7-entry list is submitted on every save, with each entry's `enabled` flag reflecting the checkbox state at submit time
 - [ ] 9.5 Add a test in `tests/sign_settings_ui_test.py` asserting that `GET /settings` returns HTML containing:
   - An "Effects" section that contains both an "Effects List" sub-section AND a "Settings" sub-section
   - The Effects List sub-section has seven checkboxes named after the effect classes (Hyperspace, VideoDisplay, PngDisplay, Honeycomb, Flame, Fireworks, NightSky — but NOT Heartbeat) in canonical rotation order, with the 5 historically-defaulted effects rendered as checked and the 2 asset-dependent effects (VideoDisplay, PngDisplay) rendered as unchecked
@@ -132,23 +132,23 @@
 
 ## 10. EffectsCoordinator: read from EffectsSettings, drop request_message, drop recent_provider
 
-- [ ] 10.1 In `lib_shared/effects_coordinator.py`, change the constructor signature to accept `effect_settings: EffectsSettings` (NOT `config: SignConfig`) and `message_manager` (replacing `recent_provider`). The behavior-related kwargs (`fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, `recent_count`) SHALL be read from `effect_settings` when not provided explicitly
+- [ ] 10.1 In `lib_shared/effects_coordinator.py`, change the constructor signature to accept `effects_settings: EffectsSettings` (NOT `config: SignConfig`) and `message_manager` (replacing `recent_provider`). The behavior-related kwargs (`fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, `recent_count`) SHALL be read from `effects_settings` when not provided explicitly
 - [ ] 10.2 Remove the public `request_message(text)` method. Remove the `self._recent = deque(...)` initialization. Update `_random_recent` to read from `message_manager.get_messages(limit=self.recent_count, suppress=True)` instead of the lambda path
 - [ ] 10.3 Update the docstring at the top of the file (the one explaining the Pi vs. browser paths) to reflect the single-message-manager design and to note that the coordinator does NOT import or depend on `SignConfig`
 - [ ] 10.4 Add a test in `tests/effects_coordinator_cleanup_test.py` asserting:
   - `EffectsCoordinator` no longer has a public `request_message` method
-  - `EffectsCoordinator(..., message_manager=mock_manager, effect_settings=es)` reads recent bodies from `mock_manager.get_messages(limit=5, suppress=True)`
+  - `EffectsCoordinator(..., message_manager=mock_manager, effects_settings=es)` reads recent bodies from `mock_manager.get_messages(limit=5, suppress=True)`
   - `_random_recent` returns `None` when `message_manager.get_messages` returns an empty list
-  - Behavior fields are read from `effect_settings` when not overridden (including `recent_count`)
-  - Explicit `fade_seconds=5.0` kwarg overrides the effect_settings value
+  - Behavior fields are read from `effects_settings` when not overridden (including `recent_count`)
+  - Explicit `fade_seconds=5.0` kwarg overrides the effects_settings value
   - The coordinator's `import` block does NOT include `lib_shared.models.SignConfig` (the coordinator is decoupled from the full config model)
 
-## 11. heart-matrix-controller/main.py: build effects from effect_settings, wire manager to coordinator
+## 11. heart-matrix-controller/main.py: build effects from effects_settings, wire manager to coordinator
 
 - [ ] 11.1 Add a constant `_EFFECT_CLASSES` mapping effect class names to classes (e.g. `{"Hyperspace": Hyperspace, "VideoDisplay": VideoDisplay, "PngDisplay": PngDisplay, "Honeycomb": Honeycomb, "Flame": Flame, "Fireworks": Fireworks, "NightSky": NightSky, "Heartbeat": Heartbeat}`)
-- [ ] 11.2 Add `_build_effects(effect_settings, display) -> list[Effect]` that iterates `effect_settings.effects` in order, includes only entries with `enabled: true`, instantiates the matching class with `display` for each included entry, and skips (with a WARNING log) any name not in `_EFFECT_CLASSES` or whose constructor raises
-- [ ] 11.3 Replace the hard-coded effect list literal in `main.py` with `_build_effects(cfg.effect_settings, display)`. Construct `Heartbeat(display)` separately and pass it as `coordinator.heart`. The default effect list (when `cfg.effect_settings.effects` is the 7-entry default) produces a 5-effect rotation: the 5 enabled entries are instantiated, the 2 disabled ones (VideoDisplay, PngDisplay) are filtered out before the class lookup
-- [ ] 11.4 Construct the `MessageManager` with NO `on_message` argument. Pass `_message_mgr` and `cfg.effect_settings` to `EffectsCoordinator` (do NOT pass `cfg` — the coordinator takes only the block)
+- [ ] 11.2 Add `_build_effects(effects_settings, display) -> list[Effect]` that iterates `effects_settings.effects` in order, includes only entries with `enabled: true`, instantiates the matching class with `display` for each included entry, and skips (with a WARNING log) any name not in `_EFFECT_CLASSES` or whose constructor raises
+- [ ] 11.3 Replace the hard-coded effect list literal in `main.py` with `_build_effects(cfg.effects_settings, display)`. Construct `Heartbeat(display)` separately and pass it as `coordinator.heart`. The default effect list (when `cfg.effects_settings.effects` is the 7-entry default) produces a 5-effect rotation: the 5 enabled entries are instantiated, the 2 disabled ones (VideoDisplay, PngDisplay) are filtered out before the class lookup
+- [ ] 11.4 Construct the `MessageManager` with NO `on_message` argument. Pass `_message_mgr` and `cfg.effects_settings` to `EffectsCoordinator` (do NOT pass `cfg` — the coordinator takes only the block)
 - [ ] 11.5 Add a test in `tests/main_effects_build_test.py` (or extend an existing test) asserting:
   - `_build_effects(EffectsSettings(effects=[{"name": "Hyperspace", "enabled": True}, {"name": "Flame", "enabled": True}, {"name": "Fireworks", "enabled": True}, {"name": "NightSky", "enabled": True}]), stub_display)` returns four instances in the configured order
   - `_build_effects(EffectsSettings(effects=[{"name": "Hyperspace", "enabled": True}, {"name": "DoesNotExist", "enabled": True}, {"name": "Flame", "enabled": True}]), stub_display)` returns the known effects only and logs a WARNING
@@ -167,8 +167,8 @@
 ## 13. heart-message-manager/preview_main.py and static/app.js
 
 - [ ] 13.1 In `heart-message-manager/preview_main.py`, remove the `js.window.request_message = request_message` assignment and the `def request_message(body)` function. Replace the `setInterval(pollLatestMessage, 3000)` body-handoff with a call to the new mechanism (e.g. `message_manager.dispatch(MessageEnvelope("message", {"body": body, ...}).to_json())` or a new `message_manager.feed_to_coordinator(coordinator)` method). The polling loop SHALL still poll `/api/live-messages?limit=1&suppress=true` every 3 s; only the call to the coordinator changes
-- [ ] 13.2 In `heart-message-manager/static/app.js`, add a "Sign settings" card to the dashboard that reads `window.APP_CONFIG.effect_settings`, `effect_settings.effects`, and `text_settings` (NOT `scroller_settings` and NOT `scroller`) and renders the current values with human-readable labels (effect rotation, fade / hold / intro / idle / recent_count, scroll speed in pixels per second, text effect). The card is informational only; the settings are still edited on `/settings`
-- [ ] 13.3 Add a test asserting that `static/app.js` reads the new fields from `window.APP_CONFIG` (e.g. `grep "APP_CONFIG.effect_settings" heart-message-manager/static/app.js` matches and `grep "APP_CONFIG.text_settings" heart-message-manager/static/app.js` matches)
+- [ ] 13.2 In `heart-message-manager/static/app.js`, add a "Sign settings" card to the dashboard that reads `window.APP_CONFIG.effects_settings`, `effects_settings.effects`, and `text_settings` (NOT `scroller_settings` and NOT `scroller`) and renders the current values with human-readable labels (effect rotation, fade / hold / intro / idle / recent_count, scroll speed in pixels per second, text effect). The card is informational only; the settings are still edited on `/settings`
+- [ ] 13.3 Add a test asserting that `static/app.js` reads the new fields from `window.APP_CONFIG` (e.g. `grep "APP_CONFIG.effects_settings" heart-message-manager/static/app.js` matches and `grep "APP_CONFIG.text_settings" heart-message-manager/static/app.js` matches)
 - [ ] 13.4 Add a test asserting that `heart-message-manager/preview_main.py` does NOT contain a `def request_message(` definition (the call site has been replaced)
 
 ## 14. Test fixture cleanup for tz_offset_mins removal
@@ -181,13 +181,13 @@
 
 - [ ] 15.1 Run the full test suite (`PYTHONPATH=. pytest tests/ -v`) and confirm all new + existing tests pass. Fix any failures introduced by the `tz_offset_mins` removal, the `rendering` field removal, the `EffectsCoordinator` signature change, the `scroller` → `text_settings` rename, the `ScrollerSettings` → `TextSettings` class rename, or the `RenderingSettings` class deletion
 - [ ] 15.2 Start the Flask app locally, visit `/settings`, and confirm the one-big-Effects-section structure renders with the current config's values (Effects List sub-section with effect checkboxes, Settings sub-section with the five sliders including recent_count, separate Text section). Confirm there is no "Pacing", "Scrolling", or "Rendering Defaults" section header. Change a settings field, save, and confirm the page reflects the new value on reload
-- [ ] 15.3 Start the Flask app locally and confirm `GET /api/effects` returns HTTP 404 (the route is intentionally absent in this change). The same data is available via `GET /api/config`'s `effect_settings.effects` field
+- [ ] 15.3 Start the Flask app locally and confirm `GET /api/effects` returns HTTP 404 (the route is intentionally absent in this change). The same data is available via `GET /api/config`'s `effects_settings.effects` field
 - [ ] 15.4 Trigger an SMS via the local curl test in the project README. Confirm the new message arrives on the device within one MQTT round trip. Confirm the device's `EffectsCoordinator` queue + display the new message correctly (the `request_message` removal is transparent if the wiring is right)
-- [ ] 15.5 Edit `cfg.effect_settings.effects` to disable an effect (e.g. flip "Flame"'s `enabled` flag to `false` in the settings UI; the entry stays in the list, just with `enabled: false`), save, and confirm the device's rotation skips the disabled effect on the next cycle advance. Confirm the WARNING log for any unconstructable effect
+- [ ] 15.5 Edit `cfg.effects_settings.effects` to disable an effect (e.g. flip "Flame"'s `enabled` flag to `false` in the settings UI; the entry stays in the list, just with `enabled: false`), save, and confirm the device's rotation skips the disabled effect on the next cycle advance. Confirm the WARNING log for any unconstructable effect
 - [ ] 15.6 Confirm `grep -r "tz_offset_mins" lib_shared/ heart-message-manager/ heart-matrix-controller/ tests/` returns no matches (the field is fully removed)
 - [ ] 15.7 Confirm `grep -nE "def request_message|on_message=lambda.*coordinator" heart-matrix-controller/main.py heart-message-manager/preview_main.py` returns no matches (the old wiring is gone)
-- [ ] 15.8 Confirm `grep -nE "EffectsCoordinator\(.*config=" heart-matrix-controller/ heart-message-manager/` returns no matches (the coordinator takes `effect_settings`, not the full `SignConfig`)
-- [ ] 15.9 Confirm `grep -nE 'self\.scroller_settings\b|self\.scroller\b.*=' lib_shared/models.py` returns no matches — `SignConfig` has `effect_settings` and `text_settings` only (the field was renamed; `ScrollerSettings` no longer exists). The class `Scroller` (the device's scroller instance) and the class `TextSettings` (the settings blob) are distinct types
+- [ ] 15.8 Confirm `grep -nE "EffectsCoordinator\(.*config=" heart-matrix-controller/ heart-message-manager/` returns no matches (the coordinator takes `effects_settings`, not the full `SignConfig`)
+- [ ] 15.9 Confirm `grep -nE 'self\.scroller_settings\b|self\.scroller\b.*=' lib_shared/models.py` returns no matches — `SignConfig` has `effects_settings` and `text_settings` only (the field was renamed; `ScrollerSettings` no longer exists). The class `Scroller` (the device's scroller instance) and the class `TextSettings` (the settings blob) are distinct types
 - [ ] 15.10 Confirm `grep -nE 'RenderingSettings|cfg\.rendering|\.rendering\.' lib_shared/ heart-message-manager/ heart-matrix-controller/ tests/` returns no matches — the `RenderingSettings` class is deleted and `SignConfig.rendering` is gone
 - [ ] 15.11 Confirm `git diff` on `lib_shared/message_manager.py` shows no change to the `_handle_config` body (it still calls `update_from_dict`; only the shape of the payload changes, and the migration runs inside `update_from_dict`)
 - [ ] 15.12 Confirm the dashboard's "Sign settings" card renders the current values when the page loads with a non-default config

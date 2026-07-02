@@ -1,15 +1,16 @@
 """Tests for lib_shared.effects_coordinator.EffectsCoordinator.
 
 Covers the lifecycle state machine: intro → out → in → hold → text_out →
-background; the brightness-ramp endpoints; the pending_text consume-on-
-transition behavior; the optional render layer (`bind`); and the
-display.render call per tick.
+background; the brightness-ramp endpoints; the throttled pull from the
+manager; the optional render layer (`bind`); and the display.render call
+per tick.
 """
 
 import importlib
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -47,6 +48,13 @@ class _StubScroller:
         self.tick_calls = []
         self.render_calls = []
         self._brightness = 1.0
+        # Scroller text-settings state — driven by the coordinator's
+        # per-tick `_sync_render_layer` on a text_settings change.
+        self._color = 0xFF0000
+        self.frame_delay = 0.040
+        self.offset_seconds = 1.0
+        self.set_color_calls = []
+        self.set_speed_calls = []
 
     def set_text(self, text, width):
         self.set_text_calls.append((text, width))
@@ -55,6 +63,19 @@ class _StubScroller:
     def set_brightness(self, b):
         self.set_brightness_calls.append(b)
         self._brightness = b
+
+    def set_color(self, c):
+        self.set_color_calls.append(c)
+        self._color = c
+
+    def set_speed(self, s):
+        self.set_speed_calls.append(s)
+        if s <= 1:
+            self.frame_delay, self.offset_seconds = 0.080, 1.5
+        elif s >= 5:
+            self.frame_delay, self.offset_seconds = 0.020, 0.5
+        else:
+            self.frame_delay, self.offset_seconds = 0.040, 1.0
 
     def tick(self, width):
         self.tick_calls.append(width)
@@ -85,6 +106,51 @@ def _make_effect(name):
     return _Fx
 
 
+class _StubMessageManager:
+    """Minimal MessageManager stub for coordinator tests.
+
+    Mirrors the surface the coordinator touches:
+      `messages.get_messages(limit, suppress=True)` — returns a list of
+        MessageView-shaped objects with `.message.id`, `.message.body`,
+        and `.suppressed`.
+      `get_messages(limit, suppress=True)` — the top-level alias used by
+        `EffectsCoordinator.current_messages`.
+      `get_effects_settings()`, `get_text_settings()` — live config
+        getters the coordinator reads each tick via the
+        `effects_settings` / `text_settings` properties.
+      `config.effects_settings`, `config.text_settings` — kept for
+        callers that still reach into the legacy surface.
+    """
+
+    def __init__(self, messages=None, effects_settings=None, text_settings=None):
+        from lib_shared.models import EffectsSettings, TextSettings
+
+        self.messages = SimpleNamespace(get_messages=self._get_messages)
+        self._entries = list(messages or [])
+        self.config = SimpleNamespace(
+            effects_settings=effects_settings or EffectsSettings(),
+            text_settings=text_settings or TextSettings(),
+        )
+
+    def _get_messages(self, limit=100, suppress=True):
+        entries = list(self._entries)
+        if suppress:
+            entries = [e for e in entries if not getattr(e, "suppressed", False)]
+        return sorted(entries, key=lambda e: e.message.received_at, reverse=True)[:limit]
+
+    def get_messages(self, limit=100, suppress=True):
+        return self._get_messages(limit, suppress)
+
+    def get_effects_settings(self):
+        return self.config.effects_settings
+
+    def get_text_settings(self):
+        return self.config.text_settings
+
+    def add_message(self, view):
+        self._entries.append(view)
+
+
 # --- fixtures / helpers -----------------------------------------------------
 
 
@@ -106,27 +172,43 @@ def _build(
     intro_seconds=0.0,
     hold_seconds=10.0,
     idle_seconds=300.0,
+    message_manager=None,
 ):
     """Build a coordinator with a stub render layer already attached.
 
     The default shape every state-machine test uses. Tests that
     need the unbound form (the `bind()` tests + no-op-when-unbound
     tests) call `_build_unbound()` instead.
+
+    The pacing values are plumbed into the stub manager's
+    `EffectSettings` — the coordinator reads them live from the
+    manager (no per-coordinator copy).
     """
     display = _StubDisplay()
     scroller = _StubScroller()
     fx_a = _make_effect("A")()
     fx_b = _make_effect("B")()
     heart = _make_effect("Heart")()
+    from lib_shared.models import EffectsSettings
+
+    if message_manager is None:
+        message_manager = _StubMessageManager()
+    # Always override the manager's effects_settings with the
+    # pacing values from this helper — the coordinator reads
+    # pacing live from the manager, and a passing test needs
+    # those values to land in the manager's EffectSettings.
+    message_manager.config.effects_settings = EffectsSettings(
+        fade_seconds=fade_seconds,
+        intro_seconds=intro_seconds,
+        hold_seconds=hold_seconds,
+        idle_seconds=idle_seconds,
+    )
     coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(
+        message_manager=message_manager,
         display=display,
         scroller=scroller,
         effects=[fx_a, fx_b],
         heart=heart,
-        fade_seconds=fade_seconds,
-        hold_seconds=hold_seconds,
-        intro_seconds=intro_seconds,
-        idle_seconds=idle_seconds,
     )
     return coord, display, scroller, fx_a, fx_b, heart
 
@@ -136,6 +218,7 @@ def _build_unbound(
     intro_seconds=0.0,
     hold_seconds=10.0,
     idle_seconds=300.0,
+    message_manager=None,
 ):
     """Build a coordinator with NO render layer attached.
 
@@ -144,11 +227,19 @@ def _build_unbound(
     Returns only the coordinator (no display/scroller/effects stubs)
     because the test only needs to assert state, not the layer.
     """
+    if message_manager is None:
+        from lib_shared.models import EffectsSettings
+
+        message_manager = _StubMessageManager(
+            effects_settings=EffectsSettings(
+                fade_seconds=fade_seconds,
+                intro_seconds=intro_seconds,
+                hold_seconds=hold_seconds,
+                idle_seconds=idle_seconds,
+            ),
+        )
     coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(
-        fade_seconds=fade_seconds,
-        hold_seconds=hold_seconds,
-        intro_seconds=intro_seconds,
-        idle_seconds=idle_seconds,
+        message_manager=message_manager,
     )
     return coord
 
@@ -166,13 +257,13 @@ def _drive(clock, coord, seconds, step=0.01):
 
 
 def test_intro_then_out_then_in_then_background():
-    """Mode progresses intro → out → in → background when no text is queued."""
+    """Mode progresses intro → out → in → background when no text is pulled."""
     clock = _Clock()
     importlib.import_module("lib_shared.effects_coordinator")  # ensure module is in
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
     coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05)
-    coord.start(None)
+    coord.start()
 
     # First tick: intro has elapsed, transitions to out
     clock.advance(0.001)
@@ -185,72 +276,108 @@ def test_intro_then_out_then_in_then_background():
     assert coord.current is fx_a
     # Drive in
     _drive(clock, coord, 0.1)
-    # No text was queued, so we land in background
+    # No text was pulled (empty buffer), so we land in background
     assert coord.mode == "background"
     assert coord.current is fx_a
     monkey.undo()
 
 
 def test_idx_advances_on_fade_out_complete():
-    """After one full out cycle, idx has advanced by 1 modulo len(effects)."""
+    """After a full out cycle triggered by a pulled message, idx advances by 1 modulo len(effects)."""
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
-    coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05)
-    coord.start(None)
-    _drive(clock, coord, 0.1)  # out + in
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="hi", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1])
+    coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr)
+    coord.start()
+    _drive(clock, coord, 0.3)  # intro → out → in → hold (m1 shown)
     assert coord.idx == 0
-    # Trigger another out: send a message and let it complete
-    coord.set_text("hi")
-    _drive(clock, coord, 0.1)  # out + in
+    # First message has been shown; the hold state now waits for a fresh pull.
+    # Add a NEW message and let the throttled pull pick it up; the coordinator's
+    # hold→out transition will advance idx.
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="next", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    mgr.add_message(msg2)
+    # Bump past the PULL_INTERVAL so the next tick pulls the fresh message.
+    clock.advance(0.5)
+    coord.tick()
+    assert coord.mode == "out"
+    _drive(clock, coord, 0.2)  # out + in
     assert coord.idx == 1
     assert coord.current is fx_b
     monkey.undo()
 
 
 def test_pending_text_consumed_on_out_to_in():
-    """set_text(text) sets pending_text; the next out → in consumes it."""
+    """A pulled message becomes the next text shown on out → in."""
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
-    coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05)
-    coord.start(None)
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="hello", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1])
+    coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr)
+    coord.start()
     _drive(clock, coord, 0.05)  # intro → out
-    coord.set_text("hello")
-    assert coord.pending_text == "hello"
-    _drive(clock, coord, 0.1)  # out completes; consumes pending_text
-    assert coord.pending_text is None
+    clock.advance(0.3)  # advance past PULL_INTERVAL so the next tick pulls
+    coord.tick()
+    # The pulled message is shown on the out→in transition.
+    _drive(clock, coord, 0.1)
     assert scroller.text == "hello"
     assert coord.last_shown_text == "hello"
     monkey.undo()
 
 
 def test_hold_mode_interrupted_by_new_message():
-    """A new message during hold immediately kicks a fade-out, no waiting for hold_seconds."""
+    """A new (different-id) message during hold kicks a fade-out, no waiting for hold_seconds."""
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
-    coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05, hold_seconds=999.0)
-    coord.set_text("first")  # queue a message so we reach hold
-    coord.start(None)
-    _drive(clock, coord, 0.2)  # intro → out → in → hold
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="first", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1])
+    coord, display, scroller, fx_a, fx_b, heart = _build(
+        intro_seconds=0.0,
+        fade_seconds=0.05,
+        hold_seconds=999.0,
+        message_manager=mgr,
+    )
+    coord.start()
+    # Drive to hold: intro → out → in → hold (the "first" message is shown)
+    _drive(clock, coord, 0.2)
     assert coord.mode == "hold"
-    coord.set_text("second")
-    clock.advance(0.001)
+    # Add a NEW message; advance past the PULL_INTERVAL so the next tick pulls it.
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="second", received_at="2026-01-03T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    mgr.add_message(msg2)
+    clock.advance(0.3)
     coord.tick()
     # Immediately transitioned to out without waiting for hold_seconds
     assert coord.mode == "out"
-    assert coord.pending_text == "second"
     monkey.undo()
-
-
-def test_set_text_empty_is_noop():
-    """Empty / None body doesn't kick a fade or alter pending_text."""
-    coord, *_ = _build()
-    coord.set_text("")
-    coord.set_text(None)
-    assert coord.pending_text is None
-    assert coord.mode == "intro"
 
 
 def test_brightness_ramp_endpoints():
@@ -259,7 +386,7 @@ def test_brightness_ramp_endpoints():
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
     coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05)
-    coord.start(None)
+    coord.start()
     # Drive long enough for the out + the in to both complete (with throttling
     # at fade_step=0.04, each fade takes ~0.08s, not the 0.05 nominal).
     _drive(clock, coord, 0.5)
@@ -275,7 +402,7 @@ def test_tick_calls_display_render_exactly_once():
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
     coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05)
-    coord.start(None)
+    coord.start()
     for _ in range(3):
         clock.advance(0.01)
         coord.tick()
@@ -290,7 +417,7 @@ def test_current_effect_name_and_text():
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
     coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05)
-    coord.start(None)
+    coord.start()
     # At start, current is the heart
     assert coord.current_effect_name == "Heart"
     # After driving through to in, current is fx_a
@@ -333,7 +460,6 @@ def test_tick_is_noop_when_unbound():
         coord.tick()
     assert coord.mode == "intro"  # untouched
     assert coord.idx == -1
-    assert coord.pending_text is None
     monkey.undo()
 
 
@@ -346,8 +472,7 @@ def test_start_is_noop_when_unbound():
     should not raise.
     """
     coord = _build_unbound()
-    coord.start("hello")
-    assert coord.pending_text is None
+    coord.start()
     assert coord.mode == "intro"
 
 
@@ -401,7 +526,7 @@ def test_bind_swaps_render_layer_mid_life():
 
     # First layer — runs the boot splash.
     coord, display1, scroller1, fx_a1, fx_b1, heart1 = _build(intro_seconds=0.0, fade_seconds=0.05)
-    coord.start(None)
+    coord.start()
     _drive(clock, coord, 0.1)  # intro → out → in
     assert coord.idx == 0
     assert coord.current is fx_a1

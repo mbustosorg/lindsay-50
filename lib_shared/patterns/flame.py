@@ -1,6 +1,8 @@
 import math
 import random
 import time
+
+from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Bitmap, Palette, Effect, arrayblit
 
 _PALETTE_SIZE = 64
@@ -46,14 +48,14 @@ class Flame(Effect):
 
     def __init__(
         self,
-        display,
-        frame_delay=0.05,
-        cooling=None,
-        fuel_min=165,
-        max_brightness=0.7,
-        scale=1,
-        wind_speed=0.4,
-    ):
+        display: DisplayBase,
+        frame_delay: float = 0.05,
+        cooling: int | None = None,
+        fuel_min: int = 165,
+        max_brightness: float = 0.7,
+        scale: int = 1,
+        wind_speed: float = 0.4,
+    ) -> None:
         self.display = display
         self.frame_delay = frame_delay
         self.last_frame = 0.0

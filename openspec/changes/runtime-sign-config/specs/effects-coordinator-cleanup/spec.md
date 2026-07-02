@@ -27,7 +27,7 @@ The browser preview's `heart-message-manager/preview_main.py` SHALL NOT call `co
 The Pi passes its own `_message_mgr` (a `MessageManager` constructed with no `on_message` callback). The browser preview passes its own `MessageManager` (the same instance the polling loop feeds). One path, one argument.
 
 #### Scenario: The Pi constructs the coordinator with a MessageManager
-- **WHEN** `EffectsCoordinator(display, scroller, effects, heart=heartbeat, message_manager=_message_mgr, effect_settings=cfg.effect_settings)` is called
+- **WHEN** `EffectsCoordinator(display, scroller, effects, heart=heartbeat, message_manager=_message_mgr, effects_settings=cfg.effects_settings)` is called
 - **THEN** the coordinator SHALL hold a reference to `_message_mgr` and SHALL call `_message_mgr.get_messages(limit=self.recent_count, suppress=True)` on every random-recent pick
 
 #### Scenario: The browser constructs the coordinator with a MessageManager
@@ -40,25 +40,25 @@ The Pi passes its own `_message_mgr` (a `MessageManager` constructed with no `on
 
 ### Requirement: EffectsCoordinator takes an EffectsSettings argument, not a full SignConfig
 
-`EffectsCoordinator.__init__` SHALL accept an `effect_settings: EffectsSettings` argument (not a `SignConfig`). The coordinator SHALL NOT receive a reference to the full `SignConfig`; it SHALL NOT know about filters, senders, sign name, or timezone. The pacing-related keyword arguments (`fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, `recent_count`) SHALL be read from `effect_settings` when not provided explicitly. The per-field kwargs SHALL remain as overrides for tests, but the default behavior is to read from the block.
+`EffectsCoordinator.__init__` SHALL accept an `effects_settings: EffectsSettings` argument (not a `SignConfig`). The coordinator SHALL NOT receive a reference to the full `SignConfig`; it SHALL NOT know about filters, senders, sign name, or timezone. The pacing-related keyword arguments (`fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, `recent_count`) SHALL be read from `effects_settings` when not provided explicitly. The per-field kwargs SHALL remain as overrides for tests, but the default behavior is to read from the block.
 
 The coordinator SHALL NOT subscribe to live config updates mid-run. The Pi re-constructs the coordinator on every config message; the new coordinator picks up the new values. The fade-in-progress (if any) completes with the old values; the next mode transition uses the new ones.
 
-#### Scenario: The coordinator initializes pacing from the effect_settings block
-- **WHEN** `EffectsCoordinator(..., effect_settings=EffectsSettings(fade_seconds=3.0, hold_seconds=20.0, intro_seconds=4.0, idle_seconds=120.0, recent_count=10))` is called
+#### Scenario: The coordinator initializes pacing from the effects_settings block
+- **WHEN** `EffectsCoordinator(..., effects_settings=EffectsSettings(fade_seconds=3.0, hold_seconds=20.0, intro_seconds=4.0, idle_seconds=120.0, recent_count=10))` is called
 - **THEN** the coordinator's `self.fade_seconds` SHALL be 3.0, `self.hold_seconds` SHALL be 20.0, `self.intro_seconds` SHALL be 4.0, `self.idle_seconds` SHALL be 120.0, and `self.recent_count` SHALL be 10
 
-#### Scenario: Explicit kwargs override the effect_settings block
-- **WHEN** `EffectsCoordinator(..., effect_settings=cfg.effect_settings, fade_seconds=5.0)` is called
-- **THEN** the coordinator's `self.fade_seconds` SHALL be 5.0 (the explicit override), and the other fields SHALL come from `cfg.effect_settings`
+#### Scenario: Explicit kwargs override the effects_settings block
+- **WHEN** `EffectsCoordinator(..., effects_settings=cfg.effects_settings, fade_seconds=5.0)` is called
+- **THEN** the coordinator's `self.fade_seconds` SHALL be 5.0 (the explicit override), and the other fields SHALL come from `cfg.effects_settings`
 
 #### Scenario: A config message updates pacing on the next coordinator construction
-- **WHEN** a config message with new `effect_settings.pacing` arrives and the device rebuilds the coordinator with the new block
+- **WHEN** a config message with new `effects_settings.pacing` arrives and the device rebuilds the coordinator with the new block
 - **THEN** the new coordinator's pacing fields SHALL equal the new values, and the next `tick()` SHALL use the new fade duration for any active fade
 
 #### Scenario: The coordinator never receives a SignConfig
 - **WHEN** a code reviewer greps the codebase for `EffectsCoordinator(..., config=` (passing a SignConfig)
-- **THEN** there SHALL be no call sites; the only accepted argument is `effect_settings: EffectsSettings`. The coordinator's `import` of `lib_shared.models.SignConfig` SHALL NOT be required (a forward declaration that the coordinator does not depend on the full config model).
+- **THEN** there SHALL be no call sites; the only accepted argument is `effects_settings: EffectsSettings`. The coordinator's `import` of `lib_shared.models.SignConfig` SHALL NOT be required (a forward declaration that the coordinator does not depend on the full config model).
 
 ### Requirement: SignConfig no longer carries tz_offset_mins
 

@@ -68,7 +68,8 @@ def test_set_text_initializes_positions_and_text_width():
 def test_tick_advances_top_x_by_expected_pixels(monkeypatch):
     """After 0.5s with frame_delay=0.05, top_x should drop by 10 pixels."""
     clock = _make_time(monkeypatch)
-    s = _StubScroller(frame_delay=0.05, char_width=1)
+    s = _StubScroller(char_width=1)
+    s.frame_delay = 0.05  # direct attr assignment; speed= kwarg is the public path
     s.compute_layout(64, 64)
     s.set_text("hi", canvas_width=64)
     initial_top = s.top_x
@@ -80,7 +81,9 @@ def test_tick_advances_top_x_by_expected_pixels(monkeypatch):
 def test_tick_bottom_x_lags_top_x_by_offset_seconds(monkeypatch):
     """Within offset_seconds, bottom_x should not move; after, it catches up."""
     clock = _make_time(monkeypatch)
-    s = _StubScroller(frame_delay=0.05, offset_seconds=0.5, char_width=1)
+    s = _StubScroller(char_width=1)
+    s.frame_delay = 0.05
+    s.offset_seconds = 0.5
     s.compute_layout(64, 64)
     s.set_text("hi", canvas_width=64)
     initial_bot = s.bottom_x
@@ -105,7 +108,8 @@ def test_tick_no_text_is_noop():
 
 def test_top_x_wraps_to_canvas_width_when_text_fully_off():
     """When top_x would drop past -text_width, it wraps back to canvas_width."""
-    s = _StubScroller(frame_delay=0.01, char_width=1)
+    s = _StubScroller(char_width=1)
+    s.frame_delay = 0.01
     s.compute_layout(64, 64)
     s.set_text("abc", canvas_width=64)  # text_width = 3
     s.top_x = -2  # 1 pixel away from end_x = -3

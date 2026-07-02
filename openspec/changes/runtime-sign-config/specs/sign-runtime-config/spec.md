@@ -1,14 +1,14 @@
 ## ADDED Requirements
 
-### Requirement: SignConfig carries effect_settings and text_settings blocks (and no rendering field)
+### Requirement: SignConfig carries effects_settings and text_settings blocks (and no rendering field)
 
-`SignConfig` SHALL include two new top-level fields in its serialized form: `effect_settings` (an object containing the `effects` list of `{name, enabled}` entries, `fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, and `recent_count`) and `text_settings` (an object with `frame_delay`, `offset_seconds`, `color`, `text_effect`).
+`SignConfig` SHALL include two new top-level fields in its serialized form: `effects_settings` (an object containing the `effects` list of `{name, enabled}` entries, `fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds`, and `recent_count`) and `text_settings` (an object with `frame_delay`, `offset_seconds`, `color`, `text_effect`).
 
-`SignConfig` SHALL NOT include a `rendering` field. The previous `RenderingSettings` block (which held the historical "Rendering Defaults" UI fields: `speed`, `font`, `font_size`, `color`, `letter_spacing`, `line_spacing`, `bg_color`, `align`) is being superseded by `text_settings` + `effect_settings` in this change, and is removed entirely. The `RenderingSettings` class SHALL be deleted from `lib_shared/models.py` and any code that read `cfg.rendering.*` SHALL be updated to read the new blocks.
+`SignConfig` SHALL NOT include a `rendering` field. The previous `RenderingSettings` block (which held the historical "Rendering Defaults" UI fields: `speed`, `font`, `font_size`, `color`, `letter_spacing`, `line_spacing`, `bg_color`, `align`) is being superseded by `text_settings` + `effects_settings` in this change, and is removed entirely. The `RenderingSettings` class SHALL be deleted from `lib_shared/models.py` and any code that read `cfg.rendering.*` SHALL be updated to read the new blocks.
 
-The `effect_settings.effects` field SHALL be a list of `{"name": str, "enabled": bool}` objects — the FULL canonical set of effect classes (Hyperspace, VideoDisplay, PngDisplay, Honeycomb, Flame, Fireworks, NightSky — 7 entries), each with an `enabled: bool` flag the operator toggles. The list order IS the rotation order; the device builds its rotation by iterating the list and including only entries with `enabled: true`. The list shape is intentional: the "what effects exist" and "which are on" answers live in one place, and re-enabling a disabled effect preserves its position in the rotation.
+The `effects_settings.effects` field SHALL be a list of `{"name": str, "enabled": bool}` objects — the FULL canonical set of effect classes (Hyperspace, VideoDisplay, PngDisplay, Honeycomb, Flame, Fireworks, NightSky — 7 entries), each with an `enabled: bool` flag the operator toggles. The list order IS the rotation order; the device builds its rotation by iterating the list and including only entries with `enabled: true`. The list shape is intentional: the "what effects exist" and "which are on" answers live in one place, and re-enabling a disabled effect preserves its position in the rotation.
 
-The `effect_settings` block SHALL have these validation rules:
+The `effects_settings` block SHALL have these validation rules:
 - `effects` SHALL be a list of objects, each with a string `name` (from the device's known set) and a boolean `enabled`. An entry with an unknown `name` SHALL be rejected at the Flask validation layer; `from_dict` at the value-object layer SHALL reject a non-list or an entry missing `name` / `enabled`.
 - `fade_seconds`, `hold_seconds`, `intro_seconds`, `idle_seconds` SHALL each be non-negative numbers.
 - `recent_count` SHALL be a positive integer.
@@ -21,19 +21,19 @@ The `text_settings` block SHALL have these validation rules:
 
 Both new blocks SHALL have `from_dict` / `to_dict` round-trip support and SHALL be guarded by the same `threading.RLock` that protects the existing fields. The constructor SHALL accept the new fields as keyword arguments and SHALL default each to a known-good value when not provided. Both block classes (`EffectsSettings` and `TextSettings`) and the `_DEFAULT_EFFECTS_LIST_FULL` constant SHALL live in `lib_shared/models.py` alongside `SignConfig` — no separate `effects_settings.py` or `text_settings.py` files.
 
-The default `effect_settings.effects` SHALL be the full 7-entry list in canonical rotation order, with the 5 historically-defaulted effects (Hyperspace, Honeycomb, Flame, Fireworks, NightSky) set to `enabled: true` and the 2 asset-dependent effects (VideoDisplay, PngDisplay) set to `enabled: false` — matches the historical 5-effect rotation visual while keeping the full set visible to the operator (who can toggle the asset-dependent ones on once they have asset files in place). The default `effect_settings` timing values SHALL match the historical `EffectsCoordinator` constructor defaults: `fade_seconds: 2.0`, `hold_seconds: 15.0`, `intro_seconds: 5.0`, `idle_seconds: 300.0`. The default `effect_settings.recent_count` SHALL be `5`. The default `text_settings` values SHALL match the historical `Scroller` constructor defaults: `frame_delay: 0.04`, `offset_seconds: 1.0`, `color: 0xFF0000`, `text_effect: "scroll"`.
+The default `effects_settings.effects` SHALL be the full 7-entry list in canonical rotation order, with the 5 historically-defaulted effects (Hyperspace, Honeycomb, Flame, Fireworks, NightSky) set to `enabled: true` and the 2 asset-dependent effects (VideoDisplay, PngDisplay) set to `enabled: false` — matches the historical 5-effect rotation visual while keeping the full set visible to the operator (who can toggle the asset-dependent ones on once they have asset files in place). The default `effects_settings` timing values SHALL match the historical `EffectsCoordinator` constructor defaults: `fade_seconds: 2.0`, `hold_seconds: 15.0`, `intro_seconds: 5.0`, `idle_seconds: 300.0`. The default `effects_settings.recent_count` SHALL be `5`. The default `text_settings` values SHALL match the historical `Scroller` constructor defaults: `frame_delay: 0.04`, `offset_seconds: 1.0`, `color: 0xFF0000`, `text_effect: "scroll"`.
 
 #### Scenario: A config with the new fields round-trips through `to_dict` and `from_dict`
-- **WHEN** a `SignConfig` is constructed with `effect_settings=EffectsSettings(effects=[{"name": "Flame", "enabled": True}, {"name": "Fireworks", "enabled": True}], fade_seconds=3.0, recent_count=10)` and `text_settings=TextSettings(frame_delay=0.02, color=0x00FF00)`
-- **THEN** `to_dict()` SHALL return a dict whose `effect_settings` and `text_settings` keys match the input, and `from_dict(to_dict())` SHALL produce a `SignConfig` whose blocks equal the original
+- **WHEN** a `SignConfig` is constructed with `effects_settings=EffectsSettings(effects=[{"name": "Flame", "enabled": True}, {"name": "Fireworks", "enabled": True}], fade_seconds=3.0, recent_count=10)` and `text_settings=TextSettings(frame_delay=0.02, color=0x00FF00)`
+- **THEN** `to_dict()` SHALL return a dict whose `effects_settings` and `text_settings` keys match the input, and `from_dict(to_dict())` SHALL produce a `SignConfig` whose blocks equal the original
 
 #### Scenario: A config with no new fields uses the defaults
-- **WHEN** a `SignConfig` is constructed with no `effect_settings` or `text_settings` arguments
-- **THEN** `to_dict()` SHALL return a dict with `effect_settings.effects` equal to `_DEFAULT_EFFECTS_LIST_FULL` (the full 7-entry list, 5 enabled + 2 disabled) and `text_settings` equal to the historical `TextSettings` defaults
+- **WHEN** a `SignConfig` is constructed with no `effects_settings` or `text_settings` arguments
+- **THEN** `to_dict()` SHALL return a dict with `effects_settings.effects` equal to `_DEFAULT_EFFECTS_LIST_FULL` (the full 7-entry list, 5 enabled + 2 disabled) and `text_settings` equal to the historical `TextSettings` defaults
 
 #### Scenario: An empty payload parses to the defaults
 - **WHEN** `SignConfig.from_dict({})` is called
-- **THEN** the resulting `SignConfig` SHALL have the default `effect_settings` (7 effects, 5 enabled + 2 disabled, timing defaults, recent_count 5) and the default `text_settings`
+- **THEN** the resulting `SignConfig` SHALL have the default `effects_settings` (7 effects, 5 enabled + 2 disabled, timing defaults, recent_count 5) and the default `text_settings`
 
 #### Scenario: SignConfig.to_dict() does not include rendering
 - **WHEN** a `SignConfig` is serialized via `to_dict()`
@@ -44,11 +44,11 @@ The default `effect_settings.effects` SHALL be the full 7-entry list in canonica
 - **THEN** `hasattr(cfg, "rendering")` SHALL be `False`; the `RenderingSettings` class SHALL NOT be importable from `lib_shared.models`
 
 #### Scenario: Concurrent reads of the new fields are safe
-- **WHEN** one thread reads `cfg.effect_settings.fade_seconds` while another thread calls `cfg.update_from_dict({...})` with a new `effect_settings`
+- **WHEN** one thread reads `cfg.effects_settings.fade_seconds` while another thread calls `cfg.update_from_dict({...})` with a new `effects_settings`
 - **THEN** the read SHALL NOT raise, SHALL return either the old or the new value (not a half-mutated value), and SHALL be deterministic for any single read
 
-#### Scenario: Out-of-range effect_settings values are rejected
-- **WHEN** a `SignConfig` is constructed with `effect_settings=EffectsSettings(fade_seconds=-1)` or `effect_settings=EffectsSettings(recent_count=0)`
+#### Scenario: Out-of-range effects_settings values are rejected
+- **WHEN** a `SignConfig` is constructed with `effects_settings=EffectsSettings(fade_seconds=-1)` or `effects_settings=EffectsSettings(recent_count=0)`
 - **THEN** construction (or the `validate()` call) SHALL raise `ValueError` with a per-field message
 
 #### Scenario: Out-of-range text_settings values are rejected
@@ -66,8 +66,8 @@ The default `effect_settings.effects` SHALL be the full 7-entry list in canonica
 The registry SHALL contain at least one entry: `MIGRATIONS = {1: _v1_to_v2}`. The `_v1_to_v2` function SHALL:
 - Return a shallow copy of the input dict.
 - Remove `tz_offset_mins` if present.
-- Remove `rendering` if present (the old `RenderingSettings` block is being superseded by `text_settings` + `effect_settings` in this change — there is no v1 → v2 mapping for individual rendering fields; the new blocks start from defaults).
-- Set `effect_settings` to the default `EffectsSettings().to_dict()` if absent.
+- Remove `rendering` if present (the old `RenderingSettings` block is being superseded by `text_settings` + `effects_settings` in this change — there is no v1 → v2 mapping for individual rendering fields; the new blocks start from defaults).
+- Set `effects_settings` to the default `EffectsSettings().to_dict()` if absent.
 - Set `text_settings` to the default `TextSettings().to_dict()` if absent.
 - Set `version` to `2`.
 - Preserve `filters`, `senders`, `sign`, and `timezone` unchanged.
@@ -76,7 +76,7 @@ A payload with no `version` key SHALL be treated as `version: 1` (the historical
 
 #### Scenario: A v1 payload migrates to v2 on read
 - **WHEN** `SignConfig.from_dict({"filters": [...], "senders": [...], "sign": {...}, "timezone": "America/Los_Angeles", "tz_offset_mins": -420, "rendering": {"speed": 2}, "version": 1})` is called
-- **THEN** the resulting `SignConfig` SHALL have `version == 2`, `effect_settings` equal to the default `EffectsSettings()`, `text_settings` equal to the default `TextSettings()`, NO `tz_offset_mins` attribute, NO `rendering` key, and the original `filters`, `senders`, `sign`, and `timezone` preserved
+- **THEN** the resulting `SignConfig` SHALL have `version == 2`, `effects_settings` equal to the default `EffectsSettings()`, `text_settings` equal to the default `TextSettings()`, NO `tz_offset_mins` attribute, NO `rendering` key, and the original `filters`, `senders`, `sign`, and `timezone` preserved
 
 #### Scenario: A v2 payload is idempotent under migration
 - **WHEN** `migrate({"version": 2, ...}, current_version=2)` is called
@@ -116,16 +116,16 @@ The purpose of this requirement is to ensure the running code only ever sees `CU
 The defense-in-depth migration in `SignConfig.from_dict` and `SignConfig.update_from_dict` (from the previous requirement) is kept for safety: a v1 payload arriving over MQTT (e.g. from a stale message cached before the server's startup migration) is upgraded to v2 in the device's in-memory config.
 
 #### Scenario: Server startup with a v1 S3 config migrates it to v2 everywhere
-- **WHEN** the server starts and the latest S3 config is `{"version": 1, "tz_offset_mins": -420, "rendering": {...}, "filters": [...], "senders": [...], "timezone": "America/Los_Angeles"}` (no `effect_settings`, no `text_settings`)
+- **WHEN** the server starts and the latest S3 config is `{"version": 1, "tz_offset_mins": -420, "rendering": {...}, "filters": [...], "senders": [...], "timezone": "America/Los_Angeles"}` (no `effects_settings`, no `text_settings`)
 - **THEN** the startup migration SHALL:
-  - Run `_v1_to_v2` on the payload, producing `{"version": 2, "filters": [...], "senders": [...], "timezone": "America/Los_Angeles", "effect_settings": <defaults>, "text_settings": <defaults>}` (no `tz_offset_mins`, no `rendering`).
+  - Run `_v1_to_v2` on the payload, producing `{"version": 2, "filters": [...], "senders": [...], "timezone": "America/Los_Angeles", "effects_settings": <defaults>, "text_settings": <defaults>}` (no `tz_offset_mins`, no `rendering`).
   - Write the migrated payload as a new S3 entry, replacing the v1 entry.
   - Update the local SQLite cache to the migrated config (verified by reading the SQLite row).
   - Publish a `type="config"` envelope to MQTT with the migrated payload (verified by capturing the published message).
-- **AND** the running code, after startup, SHALL be able to read the config at v2 with `config.effect_settings.effects == _DEFAULT_EFFECTS_LIST_FULL` (the 7-entry default, 5 enabled + 2 disabled), `config.version == 2`, and `config.filters == [...]` (the original v1 filters preserved)
+- **AND** the running code, after startup, SHALL be able to read the config at v2 with `config.effects_settings.effects == _DEFAULT_EFFECTS_LIST_FULL` (the 7-entry default, 5 enabled + 2 disabled), `config.version == 2`, and `config.filters == [...]` (the original v1 filters preserved)
 
 #### Scenario: Server startup with a v2 S3 config is a no-op
-- **WHEN** the server starts and the latest S3 config is `{"version": 2, "effect_settings": {...}, "text_settings": {...}}` (already at `CURRENT_VERSION`)
+- **WHEN** the server starts and the latest S3 config is `{"version": 2, "effects_settings": {...}, "text_settings": {...}}` (already at `CURRENT_VERSION`)
 - **THEN** the startup migration SHALL be a no-op — no S3 write, no SQLite write, no MQTT publish (verified by checking that the S3 write function was NOT called, the SQLite write function was NOT called, and the MQTT publish function was NOT called)
 
 #### Scenario: Server startup with no S3 config (fresh install) initializes the defaults
@@ -138,7 +138,7 @@ The defense-in-depth migration in `SignConfig.from_dict` and `SignConfig.update_
 
 #### Scenario: The startup migration preserves the v1 fields and drops tz_offset_mins + rendering
 - **WHEN** the startup migration runs on a v1 config with `sign.name="Lindsay's Heart"`, `rendering.speed=2`, `tz_offset_mins=-420`, `timezone="America/Los_Angeles"`, `filters=[...]`, and `senders={"+15551234567": "Lindsay"}`
-- **THEN** the migrated config SHALL preserve `sign`, `filters`, `senders`, and `timezone` byte-for-byte, SHALL drop `tz_offset_mins` and `rendering` entirely, and SHALL add the new `effect_settings` and `text_settings` blocks at their defaults. Verified by reading the post-migration S3 entry
+- **THEN** the migrated config SHALL preserve `sign`, `filters`, `senders`, and `timezone` byte-for-byte, SHALL drop `tz_offset_mins` and `rendering` entirely, and SHALL add the new `effects_settings` and `text_settings` blocks at their defaults. Verified by reading the post-migration S3 entry
 
 #### Scenario: The startup migration handles a missing S3 gracefully
 - **WHEN** the server starts and the S3 read raises (e.g. credentials rotated, network error)
@@ -149,11 +149,11 @@ The defense-in-depth migration in `SignConfig.from_dict` and `SignConfig.update_
 The new blocks SHALL round-trip through the same `MessageEnvelope(type="config", payload=SignConfig.to_dict())` wire path that already exists. No new envelope type is introduced. The `MessageManager._handle_config` path SHALL continue to call `SignConfig.update_from_dict` on the payload; `update_from_dict` SHALL run the migration at the top of the method body, then do the field-by-field update.
 
 #### Scenario: A type="config" envelope with the new fields updates the in-memory config
-- **WHEN** a `type="config"` envelope arrives over MQTT whose `payload` is a dict containing `effect_settings` and `text_settings`
-- **THEN** `MessageManager._handle_config` SHALL call `SignConfig.update_from_dict(payload)`, and the in-memory `SignConfig` SHALL reflect the new values (verified by reading `config.effect_settings.fade_seconds`, `config.text_settings.frame_delay` after the dispatch returns)
+- **WHEN** a `type="config"` envelope arrives over MQTT whose `payload` is a dict containing `effects_settings` and `text_settings`
+- **THEN** `MessageManager._handle_config` SHALL call `SignConfig.update_from_dict(payload)`, and the in-memory `SignConfig` SHALL reflect the new values (verified by reading `config.effects_settings.fade_seconds`, `config.text_settings.frame_delay` after the dispatch returns)
 
 #### Scenario: A type="config" envelope without the new blocks leaves them at their defaults
-- **WHEN** a `type="config"` envelope arrives whose `payload` is a dict that does NOT contain `effect_settings` or `text_settings`
+- **WHEN** a `type="config"` envelope arrives whose `payload` is a dict that does NOT contain `effects_settings` or `text_settings`
 - **THEN** `SignConfig.update_from_dict` SHALL keep the existing values for the missing blocks (not overwrite them with defaults)
 
 #### Scenario: The Flask PUT endpoint normalizes the incoming payload to v2
@@ -166,42 +166,42 @@ The device's `heart-matrix-controller/main.py` SHALL construct the initial `Sign
 
 #### Scenario: The device boots with the code defaults
 - **WHEN** the device starts with no incoming config message
-- **THEN** the boot-time `SignConfig` SHALL have `effect_settings.effects == _DEFAULT_EFFECTS_LIST_FULL` (the full 7-entry list, 5 enabled + 2 disabled), the `EffectsSettings` timing defaults, `recent_count: 5`, and the `TextSettings` defaults; the coordinator's timing params and the scroller's frame_delay / offset_seconds / color SHALL be initialized from those defaults; the boot-time rotation SHALL be the 5 enabled effects (Hyperspace, Honeycomb, Flame, Fireworks, NightSky) in that order
+- **THEN** the boot-time `SignConfig` SHALL have `effects_settings.effects == _DEFAULT_EFFECTS_LIST_FULL` (the full 7-entry list, 5 enabled + 2 disabled), the `EffectsSettings` timing defaults, `recent_count: 5`, and the `TextSettings` defaults; the coordinator's timing params and the scroller's frame_delay / offset_seconds / color SHALL be initialized from those defaults; the boot-time rotation SHALL be the 5 enabled effects (Hyperspace, Honeycomb, Flame, Fireworks, NightSky) in that order
 
 #### Scenario: A config message after boot updates the in-memory config
-- **WHEN** the device is running and a `type="config"` envelope arrives with new `effect_settings` or `text_settings` values
-- **THEN** the in-memory `SignConfig` SHALL be updated in place, the effect list SHALL be re-built from the new `effect_settings.effects` (filtering by `enabled: true`), and the next coordinator construction SHALL use the new timing. The fade-in-progress (if any) SHALL complete with the old timing values; the next mode transition SHALL use the new ones.
+- **WHEN** the device is running and a `type="config"` envelope arrives with new `effects_settings` or `text_settings` values
+- **THEN** the in-memory `SignConfig` SHALL be updated in place, the effect list SHALL be re-built from the new `effects_settings.effects` (filtering by `enabled: true`), and the next coordinator construction SHALL use the new timing. The fade-in-progress (if any) SHALL complete with the old timing values; the next mode transition SHALL use the new ones.
 
 ### Requirement: The device builds the effect rotation from the configured order (filtered by `enabled`)
 
-The device SHALL maintain a constant map of effect class names to classes (e.g. `{"Hyperspace": Hyperspace, "VideoDisplay": VideoDisplay, ...}`). On boot and on every config message, the device SHALL iterate the configured `effect_settings.effects` list in order, include only entries with `enabled: true`, and instantiate the named class for each with the display. Entries that are not in the map SHALL be logged and skipped. Entries whose constructor raises SHALL be logged and skipped. The resulting list SHALL be passed to the `EffectsCoordinator` as its `effects` argument. `Heartbeat` SHALL be constructed separately (it is the boot-splash effect, not part of the rotation) and SHALL be passed as `coordinator.heart`.
+The device SHALL maintain a constant map of effect class names to classes (e.g. `{"Hyperspace": Hyperspace, "VideoDisplay": VideoDisplay, ...}`). On boot and on every config message, the device SHALL iterate the configured `effects_settings.effects` list in order, include only entries with `enabled: true`, and instantiate the named class for each with the display. Entries that are not in the map SHALL be logged and skipped. Entries whose constructor raises SHALL be logged and skipped. The resulting list SHALL be passed to the `EffectsCoordinator` as its `effects` argument. `Heartbeat` SHALL be constructed separately (it is the boot-splash effect, not part of the rotation) and SHALL be passed as `coordinator.heart`.
 
 #### Scenario: All enabled effects in the config initialize successfully
-- **WHEN** the device boots with `effect_settings.effects = [{"name": "Hyperspace", "enabled": True}, {"name": "Flame", "enabled": True}, {"name": "Fireworks", "enabled": True}, {"name": "NightSky", "enabled": True}]`
+- **WHEN** the device boots with `effects_settings.effects = [{"name": "Hyperspace", "enabled": True}, {"name": "Flame", "enabled": True}, {"name": "Fireworks", "enabled": True}, {"name": "NightSky", "enabled": True}]`
 - **THEN** the device SHALL construct one instance of each, in that order, and pass the list to the coordinator
 
 #### Scenario: An unknown effect name is logged and skipped
-- **WHEN** the device boots with `effect_settings.effects = [{"name": "Hyperspace", "enabled": True}, {"name": "DoesNotExist", "enabled": True}, {"name": "Flame", "enabled": True}]`
+- **WHEN** the device boots with `effects_settings.effects = [{"name": "Hyperspace", "enabled": True}, {"name": "DoesNotExist", "enabled": True}, {"name": "Flame", "enabled": True}]`
 - **THEN** the device SHALL construct `Hyperspace` and `Flame` only; the "DoesNotExist" entry SHALL be logged at WARNING level and the rotation SHALL contain two effects
 
 #### Scenario: An effect that fails to construct is logged and skipped
-- **WHEN** the device boots with `effect_settings.effects = [{"name": "VideoDisplay", "enabled": True}, {"name": "Flame", "enabled": True}]` and `VideoDisplay(display)` raises (e.g. the video file is missing)
+- **WHEN** the device boots with `effects_settings.effects = [{"name": "VideoDisplay", "enabled": True}, {"name": "Flame", "enabled": True}]` and `VideoDisplay(display)` raises (e.g. the video file is missing)
 - **THEN** `VideoDisplay` SHALL be logged at WARNING level with the exception, `Flame` SHALL be constructed normally, and the rotation SHALL contain one effect
 
 #### Scenario: Disabled effects are not in the rotation
-- **WHEN** the device boots with `effect_settings.effects = [{"name": "Hyperspace", "enabled": True}, {"name": "VideoDisplay", "enabled": False}, {"name": "Flame", "enabled": True}]`
+- **WHEN** the device boots with `effects_settings.effects = [{"name": "Hyperspace", "enabled": True}, {"name": "VideoDisplay", "enabled": False}, {"name": "Flame", "enabled": True}]`
 - **THEN** the device SHALL construct `Hyperspace` and `Flame` only; `VideoDisplay` SHALL be skipped (not even attempted) because `enabled: false`, and the rotation SHALL contain two effects in the order `[Hyperspace, Flame]`
 
 #### Scenario: Heartbeat is never in the rotation
 - **WHEN** the device boots
-- **THEN** the `Heartbeat` effect SHALL be constructed separately and passed as `coordinator.heart`, and SHALL NOT appear in the rotation list regardless of the `effect_settings.effects` config
+- **THEN** the `Heartbeat` effect SHALL be constructed separately and passed as `coordinator.heart`, and SHALL NOT appear in the rotation list regardless of the `effects_settings.effects` config
 
 #### Scenario: A config message can disable an effect
-- **WHEN** the device is running with the rotation `[Hyperspace, Honeycomb, Flame, Fireworks, NightSky]` and a config message arrives with `effect_settings.effects = [{"name": "Hyperspace", "enabled": True}, {"name": "Honeycomb", "enabled": False}, {"name": "Flame", "enabled": False}, {"name": "Fireworks", "enabled": True}, {"name": "NightSky", "enabled": True}]`
+- **WHEN** the device is running with the rotation `[Hyperspace, Honeycomb, Flame, Fireworks, NightSky]` and a config message arrives with `effects_settings.effects = [{"name": "Hyperspace", "enabled": True}, {"name": "Honeycomb", "enabled": False}, {"name": "Flame", "enabled": False}, {"name": "Fireworks", "enabled": True}, {"name": "NightSky", "enabled": True}]`
 - **THEN** the rotation SHALL be re-built to `[Hyperspace, Fireworks, NightSky]`, the `Honeycomb` and `Flame` instances SHALL be dropped, and the next cycle advance SHALL move to `Fireworks`
 
 #### Scenario: A config message can re-enable an asset-dependent effect
-- **WHEN** the device is running with the default 7-entry config (5 enabled, VideoDisplay and PngDisplay disabled) and a config message arrives with `effect_settings.effects = [..., {"name": "VideoDisplay", "enabled": True}, ...]` (VideoDisplay's `enabled` flag flipped to `true`)
+- **WHEN** the device is running with the default 7-entry config (5 enabled, VideoDisplay and PngDisplay disabled) and a config message arrives with `effects_settings.effects = [..., {"name": "VideoDisplay", "enabled": True}, ...]` (VideoDisplay's `enabled` flag flipped to `true`)
 - **THEN** the rotation SHALL be re-built to include `VideoDisplay` in its original list position, and `VideoDisplay(display)` SHALL be constructed (or skipped-and-logged if the asset file is missing)
 
 ### Requirement: Scroller reads frame_delay, offset_seconds, color, and text_effect from config
@@ -218,7 +218,7 @@ The device's `Scroller` SHALL be constructed with a `TextSettings` object. `fram
 
 ### Requirement: No separate `GET /api/effects` endpoint (data lives in `GET /api/config`)
 
-The Flask process SHALL NOT expose a `GET /api/effects` endpoint. The canonical effect set is reachable from `GET /api/config`'s `effect_settings.effects` field (a list of `{"name", "enabled"}` dicts). The admin UI SHALL render its Effects List sub-section from that field directly. The device's `_DEFAULT_EFFECTS_LIST` constant remains the source of truth for the canonical effect class map, used by both the device (to instantiate classes) and the Flask process (to validate incoming `effect_settings.effects` names against the canonical set in `PUT /api/config`).
+The Flask process SHALL NOT expose a `GET /api/effects` endpoint. The canonical effect set is reachable from `GET /api/config`'s `effects_settings.effects` field (a list of `{"name", "enabled"}` dicts). The admin UI SHALL render its Effects List sub-section from that field directly. The device's `_DEFAULT_EFFECTS_LIST` constant remains the source of truth for the canonical effect class map, used by both the device (to instantiate classes) and the Flask process (to validate incoming `effects_settings.effects` names against the canonical set in `PUT /api/config`).
 
 #### Scenario: GET /api/effects returns 404
 - **WHEN** any client calls `GET /api/effects`

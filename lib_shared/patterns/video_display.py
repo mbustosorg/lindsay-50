@@ -14,6 +14,7 @@ import logging
 import time
 from pathlib import Path
 
+from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Effect
 from lib_shared.config_reader import get_config
 
@@ -25,7 +26,7 @@ _VIDEO_EXTS = (".mp4", ".mov", ".avi", ".mkv", ".webm", ".gif")
 class VideoDisplay(Effect):
     """Looping video, blitted whole-frame via canvas.SetImage()."""
 
-    def __init__(self, display, path=None, fps=None):
+    def __init__(self, display: DisplayBase, path: str | None = None, fps: float | None = None) -> None:
         cfg = get_config()
         self._w = display.canvas.width
         self._h = display.canvas.height

@@ -13,7 +13,7 @@ import json
 import logging
 from typing import Callable, Optional
 
-from lib_shared.models import MessageEnvelope, Message, SignConfig
+from lib_shared.models import EffectsSettings, MessageEnvelope, Message, SignConfig, TextSettings
 from lib_shared.messages import InMemoryMessages
 
 logger = logging.getLogger(__name__)
@@ -210,6 +210,14 @@ class MessageManager:
                 "messages": [m.to_dict() for m in self._messages._msgs],
                 "config": self._config.to_dict(),
             }
+            logger.info(
+                "[debug-dispatch] CACHE_WRITE key=%s filter_count=%d filter_ids=%s suppressed_in_buffer=%d buffer_size=%d",
+                key,
+                len(payload["config"].get("filters", [])),
+                [f.get("pattern", "") for f in payload["config"].get("filters", []) if f.get("type") == "message"],
+                sum(1 for m in payload["messages"] if m.get("suppressed")),
+                len(payload["messages"]),
+            )
             # `payload` is a Python dict with nested dicts (the
             # `config` value comes from `SignConfig.to_dict()`,
             # which returns a dict-of-dicts of effects / text
@@ -321,6 +329,10 @@ class MessageManager:
                     source=src,
                 )
             self._config.update_from_dict(cfg_raw)
+            # Hydrate enriches the whole buffer in one pass — the
+            # hydrate is rare and a per-message enrich would be O(n²)
+            # for no benefit.
+            self._messages._enrich_messages(list(self._messages._msgs))
         except Exception as e:
             logger.warning("MessageManager cache hydrate failed: %s", e)
             return False
@@ -344,21 +356,35 @@ class MessageManager:
             return
 
         if envelope.type == "message":
-            self._handle_message(envelope.payload)
+            payload = envelope.payload
+            if isinstance(payload, dict):
+                logger.info(
+                    "[debug-dispatch] ENVELOPE_RECEIVED type=message id=%s body=%r",
+                    payload.get("id", ""),
+                    (payload.get("body", "") or "")[:40],
+                )
+            self._handle_message(payload)
         elif envelope.type == "config":
-            self._handle_config(envelope.payload)
+            payload = envelope.payload
+            if isinstance(payload, dict):
+                filters = payload.get("filters") or []
+                logger.info(
+                    "[debug-dispatch] ENVELOPE_RECEIVED type=config filter_count=%d filter_ids=%s",
+                    len(filters),
+                    [f.get("pattern", "") for f in filters if isinstance(f, dict) and f.get("type") == "message"],
+                )
+            self._handle_config(payload)
         else:
             logger.warning("Unknown envelope type: %r", envelope.type)
 
     def _handle_message(self, payload: dict) -> None:
-        """Convert payload dict to Message, store it, and emit change.
+        """Convert payload dict to Message, store it, enrich it, and emit change.
 
         The buffer's `add` does its own duplicate-suppression
-        (silently drops re-deliveries). Whether a message is
-        filtered (suppressed) is computed at READ time, not write
-        time, so the change event fires for every new message —
-        listeners that care about suppression re-read with
-        `get_messages(limit, suppress=True)`.
+        (silently drops re-deliveries; returns `None` on dup).
+        Enrichment of the new view runs here at event time so the
+        next read sees up-to-date derived fields without paying the
+        filter / formatter cost on the read path.
         """
         msg = Message(
             id=payload.get("id", ""),
@@ -367,14 +393,32 @@ class MessageManager:
             received_at=payload.get("received_at", ""),
         )
 
-        self._messages.add(msg, source="mqtt")
+        view = self._messages.add(msg, source="mqtt")
+        if view is not None:
+            self._messages._enrich_messages([view])
         logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
         self._emit_change()
 
     def _handle_config(self, payload: dict) -> None:
-        """Apply a SignConfig dict to the in-memory config and emit change."""
+        """Apply a SignConfig dict to the in-memory config and re-enrich buffered messages.
+
+        Filter rules and timezone changes can reclassify previously-stored
+        entries (e.g. a message that wasn't suppressed before now matches a
+        new rule). Re-enrich on the event that changes the inputs so the
+        next `get_messages()` read returns up-to-date values without paying
+        the filter / formatter cost on the read path.
+        """
         self._config.update_from_dict(payload)
-        logger.info("MessageManager applied config update")
+        self._messages._enrich_messages(list(self._messages._msgs))
+        post_filters = list(self._config.filters)
+        post_suppressed = sum(1 for m in self._messages._msgs if getattr(m, "suppressed", False))
+        logger.info(
+            "[debug-dispatch] HANDLE_CONFIG_DONE filter_count=%d filter_ids=%s suppressed_in_buffer=%d buffer_size=%d",
+            len(post_filters),
+            [f.pattern for f in post_filters if f.type == "message"],
+            post_suppressed,
+            len(self._messages._msgs),
+        )
         self._emit_change()
 
     async def _fetch(self, url: str) -> dict:
@@ -473,7 +517,7 @@ class MessageManager:
                             body=item.get("body", ""),
                             received_at=item.get("received_at", ""),
                         )
-                        for item in data[-100:]
+                        for item in data[:100]
                     ]
                     self._messages.add_many(msgs, source="rest")
                 logger.info(
@@ -491,6 +535,11 @@ class MessageManager:
             except Exception as e:
                 logger.warning("MessageManager config seed failed: %s", e)
 
+        # Seed populates messages first, then config — enrich once at
+        # the end so the derived fields reflect the final config. The
+        # buffer is empty if both fetches failed, so this is a cheap
+        # no-op in that case.
+        self._messages._enrich_messages(list(self._messages._msgs))
         self._emit_change()
 
     def get_messages(self, limit: int = 100, suppress: bool = True):
@@ -504,3 +553,11 @@ class MessageManager:
 
     def get_config(self) -> SignConfig:
         return self._config
+
+    def get_effects_settings(self) -> EffectsSettings:
+        """Live reference to the effects-settings block (rotation + pacing)."""
+        return self._config.effects_settings
+
+    def get_text_settings(self) -> TextSettings:
+        """Live reference to the text-settings block (color, speed)."""
+        return self._config.text_settings

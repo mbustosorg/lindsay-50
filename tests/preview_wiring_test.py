@@ -1,7 +1,7 @@
 """Tests for the browser preview's live wiring of all SignConfig settings.
 
 Covers:
-- `build_effects(effect_settings, effect_classes)` — shared builder
+- `build_effects(effects_settings, effect_classes)` — shared builder
 - `EffectsCoordinator.apply_settings(...)` — live pacing + recent_count
 - `ScrollerBase.set_color(...)` / `set_speed(...)` — live text updates
 - `PreviewScroller` accepts the same kwargs as `ScrollerBase`
@@ -31,6 +31,8 @@ except ImportError:
         "Pillow is required for preview_wiring_test on the host",
         allow_module_level=True,
     )
+
+from types import SimpleNamespace
 
 from lib_shared.effects_coordinator import EffectsCoordinator, build_effects
 from lib_shared.models import EffectsSettings, SignConfig, TextSettings
@@ -69,6 +71,13 @@ class _StubScroller:
         self.tick_calls = []
         self.render_calls = []
         self._brightness = 1.0
+        # Scroller text-settings state — driven by the coordinator's
+        # `_sync_render_layer` on a text_settings change.
+        self._color = 0xFF6400
+        self.frame_delay = 0.040
+        self.offset_seconds = 1.0
+        self.set_color_calls = []
+        self.set_speed_calls = []
 
     def set_text(self, text, width):
         self.set_text_calls.append((text, width))
@@ -77,6 +86,20 @@ class _StubScroller:
     def set_brightness(self, b):
         self.set_brightness_calls.append(b)
         self._brightness = b
+
+    def set_color(self, c):
+        self.set_color_calls.append(c)
+        self._color = c
+
+    def set_speed(self, s):
+        self.set_speed_calls.append(s)
+        # Mirror the real PreviewScroller's speed-to-(frame_delay, offset_seconds) map.
+        if s <= 1:
+            self.frame_delay, self.offset_seconds = 0.080, 1.5
+        elif s >= 5:
+            self.frame_delay, self.offset_seconds = 0.020, 0.5
+        else:
+            self.frame_delay, self.offset_seconds = 0.040, 1.0
 
     def tick(self, width):
         self.tick_calls.append(width)
@@ -195,52 +218,101 @@ def test_build_effects_requires_display():
 # --- EffectsCoordinator.apply_settings --------------------------------------
 
 
-def _build_coord(**kwargs):
+def _build_coord(message_manager=None, **kwargs):
+    from lib_shared.models import EffectsSettings, TextSettings
+
     display = _StubDisplay()
     scroller = _StubScroller()
     fx = _make_effect("A")()
     heart = _make_effect("Heart")()
+    if message_manager is None:
+        message_manager = SimpleNamespace(
+            messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+            config=SimpleNamespace(
+                effects_settings=EffectsSettings(),
+                text_settings=TextSettings(),
+            ),
+        )
+        message_manager.get_effects_settings = lambda: message_manager.config.effects_settings
+        message_manager.get_text_settings = lambda: message_manager.config.text_settings
+        message_manager.get_messages = lambda limit=100, suppress=True: []
     return EffectsCoordinator(
+        message_manager=message_manager,
         display=display,
         scroller=scroller,
         effects=[fx],
         heart=heart,
-        **kwargs,
     )
 
 
-def test_apply_settings_mutates_pacing():
-    """apply_settings updates fade_seconds, hold_seconds, etc. in place."""
-    coord = _build_coord(
-        fade_seconds=2.0,
-        hold_seconds=15.0,
-        intro_seconds=5.0,
-        idle_seconds=300.0,
+def test_coordinator_reads_pacing_from_message_manager():
+    """The coordinator holds no per-instance pacing — it reads
+    `message_manager.config.effects_settings.fade_seconds` /
+    `.hold_seconds` / `.intro_seconds` / `.idle_seconds` at tick time.
+    Updating the manager's config is observed by the coordinator on
+    the next tick (no explicit `apply_settings` call needed).
+    """
+    from lib_shared.models import EffectsSettings
+
+    mgr = SimpleNamespace(
+        messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+        config=SimpleNamespace(
+            effects_settings=EffectsSettings(
+                fade_seconds=2.0,
+                hold_seconds=15.0,
+                intro_seconds=5.0,
+                idle_seconds=300.0,
+            ),
+            text_settings=TextSettings(),
+        ),
     )
-    new = EffectsSettings(fade_seconds=0.5, hold_seconds=7.0, intro_seconds=2.0, idle_seconds=120.0)
-    coord.apply_settings(new)
-    assert coord.fade_seconds == 0.5
-    assert coord.hold_seconds == 7.0
-    assert coord.intro_seconds == 2.0
-    assert coord.idle_seconds == 120.0
+    mgr.get_effects_settings = lambda: mgr.config.effects_settings
+    mgr.get_text_settings = lambda: mgr.config.text_settings
+    mgr.get_messages = lambda limit=100, suppress=True: []
+    coord = _build_coord(message_manager=mgr, effects_settings=mgr.config.effects_settings)
+    # Pacing is read off the manager — no need to call apply_settings.
+    assert mgr.config.effects_settings.fade_seconds == 2.0
+    assert mgr.config.effects_settings.hold_seconds == 15.0
+    # Mutating the manager's config is the new way to change pacing.
+    mgr.config.effects_settings = EffectsSettings(
+        fade_seconds=0.5, hold_seconds=7.0, intro_seconds=2.0, idle_seconds=120.0
+    )
+    assert mgr.config.effects_settings.fade_seconds == 0.5
+    assert mgr.config.effects_settings.hold_seconds == 7.0
+    assert mgr.config.effects_settings.intro_seconds == 2.0
+    assert mgr.config.effects_settings.idle_seconds == 120.0
+    # The coordinator has no cached copy (no `coord.fade_seconds`).
+    assert not hasattr(coord, "fade_seconds")
+    assert not hasattr(coord, "hold_seconds")
+    assert not hasattr(coord, "intro_seconds")
+    assert not hasattr(coord, "idle_seconds")
 
 
-def test_apply_settings_none_is_noop():
-    """apply_settings(None) does nothing (defensive: the caller may
-    pass None when the envelope is malformed)."""
-    coord = _build_coord(fade_seconds=1.5)
-    coord.apply_settings(None)
-    assert coord.fade_seconds == 1.5
-
-
-def test_apply_settings_does_not_touch_effects_rotation():
-    """apply_settings is pacing-only — the effects list is left alone.
-    The caller rebuilds the rotation via build_effects + .effects = ...,
-    which is the documented pattern."""
+def test_coordinator_no_apply_settings_method():
+    """The EffectsCoordinator no longer has an `apply_settings` method —
+    config updates are read live from the manager at tick time."""
     coord = _build_coord()
-    fx_a = coord.effects[0]
-    coord.apply_settings(EffectsSettings())
-    assert coord.effects[0] is fx_a
+    assert not hasattr(coord, "apply_settings"), (
+        "EffectsCoordinator should not have apply_settings — "
+        "the coordinator reads config live from message_manager.config"
+    )
+
+
+def test_coordinator_does_not_touch_effects_rotation_when_unchanged():
+    """When the rotation hash matches, the per-tick sync is a no-op —
+    the rotation stays as it was. Pin the contract that the
+    hash-guarded refresh is a real cache (not a rebuild every tick).
+    """
+    coord = _build_coord()
+    # The first tick runs `_sync_render_layer`, which rebuilds the
+    # rotation from the manager's default `EffectSettings()` (empty
+    # effects list — `build_effects` falls back to the first canonical
+    # effect so the list is non-empty).
+    coord.tick()
+    fx_after_first = coord.effects[0]
+    # Second tick with the same default config: hash matches, no rebuild.
+    coord.tick()
+    assert coord.effects[0] is fx_after_first
 
 
 # --- PreviewScroller: kwargs + live updates ---------------------------------
@@ -316,50 +388,59 @@ def test_preview_scroller_set_speed_rejects_invalid():
 # --- apply_config (preview_main.py live rebind) ----------------------------
 
 
-def test_apply_config_rebinds_full_preview_state(tmp_path):
-    """preview_main.apply_config takes a v2 dict and rewires everything
-    end-to-end: builds a new effects rotation, applies pacing, updates
-    the scroller's color + speed.
-
-    We import preview_main dynamically and skip it on the host if its
-    top-of-file pyodide_js import fails (the file is designed to run
-    inside PyScript, not CPython).
+def test_config_update_live_applies_to_render_layer():
+    """The full rebind path is now: change `message_manager.config`,
+    call `coord.tick()`. The coordinator's per-tick
+    `_sync_render_layer` reads the new config and updates the
+    rotation + scroller color/speed. Pacing changes are visible on
+    the next transition (the coordinator reads pacing from the
+    manager at every decision point, no cached copy).
     """
-    try:
-        pm = importlib.import_module("heart_message_manager.preview_main")
-    except Exception as exc:
-        pytest.skip(f"preview_main.py can't import under host CPython (expected): {exc}")
+    scroller = _StubScroller()
+    fx_a = _make_effect("A")()
+    heart = _make_effect("Heart")()
+    mgr = SimpleNamespace(
+        messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+        config=SimpleNamespace(
+            effects_settings=EffectsSettings(),
+            text_settings=TextSettings(),
+        ),
+    )
+    mgr.get_effects_settings = lambda: mgr.config.effects_settings
+    mgr.get_text_settings = lambda: mgr.config.text_settings
+    mgr.get_messages = lambda limit=100, suppress=True: []
+    coord = EffectsCoordinator(
+        message_manager=mgr,
+        display=_StubDisplay(),
+        scroller=scroller,
+        effects=[fx_a],
+        heart=heart,
+    )
 
-    # Seed the module-level coordinator + scroller (in case apply_config
-    # relies on _coordinator already being initialized — it does).
-    display = pm._display
-    scroller = pm._scroller
-    coord = pm._coordinator
+    # First tick refreshes the render layer from the current (default) config.
+    coord.tick()
+    assert scroller._color == 0xFF6400  # default TextSettings().color
+    assert scroller.frame_delay == 0.040  # default TextSettings().speed = 3
 
-    # Capture the existing rotation, color, speed so we can assert they change.
-    original_speed = scroller.frame_delay, scroller.offset_seconds
-    original_color = scroller._color
-
-    # Build a v2 SignConfig dict with non-default settings.
+    # Now update the manager's config to a non-default SignConfig.
     cfg = SignConfig(
         text_settings=TextSettings(speed=5, color=0x00FF00),
-        effect_settings=EffectsSettings(
+        effects_settings=EffectsSettings(
             effects=[{"name": "Fireworks", "enabled": True}],
             fade_seconds=0.5,
             hold_seconds=10.0,
         ),
     )
-    pm.apply_config(cfg.to_dict())
+    mgr.config.effects_settings = cfg.effects_settings
+    mgr.config.text_settings = cfg.text_settings
 
-    # Scroller color + speed changed.
+    # Next tick: rotation hash differs, scroller color/speed differ.
+    coord.tick()
     assert scroller._color == 0x00FF00
     assert scroller.frame_delay == 0.020
     assert scroller.offset_seconds == 0.5
-    # Coordinator pacing changed.
-    assert coord.fade_seconds == 0.5
-    assert coord.hold_seconds == 10.0
-    # Effects rotation is non-empty (Fireworks was built).
-    assert len(coord.effects) >= 1
-    # Restore for cleanliness.
-    scroller.set_color(original_color)
-    scroller.set_speed(3)
+    # Pacing lives on the manager; the coordinator has no copy.
+    assert mgr.config.effects_settings.fade_seconds == 0.5
+    assert mgr.config.effects_settings.hold_seconds == 10.0
+    # The Fireworks effect was built and added to the rotation.
+    assert any(type(fx).__name__ == "Fireworks" for fx in coord.effects)
