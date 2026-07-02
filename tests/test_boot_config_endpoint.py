@@ -2,7 +2,7 @@
 
 v2 design:
   - Endpoint renamed from /api/sign/expected-sha → /api/sign/boot-config
-  - Response shape is just `{"expected_sha": "<sha>"}` (no boot_id, no force_reboot)
+  - Response shape is `{"expected_sha": "<sha>"}` and nothing else
   - Flask publishes `command=check-for-update` MQTT envelope EXACTLY ONCE
     at startup (not on every MQTT on_connect reconnect — that was the v1
     anti-pattern that turned network flakiness into a reboot hint)
@@ -241,7 +241,7 @@ class TestBootConfigEndpointShape:
         assert response.status_code == 404
 
     def test_response_has_only_expected_sha_key(self, app, client, esp32_headers, monkeypatch):
-        """v2 response shape is just {expected_sha}; no boot_id / force_reboot fields."""
+        """v2 response shape is exactly one key: expected_sha."""
         monkeypatch.setenv("HEROKU_SLUG_COMMIT", "newsha")
         response = client.get(EXPECTED_BOOT_CONFIG_PATH, headers=esp32_headers)
         assert response.status_code == 200

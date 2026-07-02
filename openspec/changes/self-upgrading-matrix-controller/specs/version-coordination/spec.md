@@ -1,9 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: Flask exposes the expected version via boot-config endpoint
-Flask MUST expose `GET /api/sign/boot-config` returning `{"expected_sha": "<sha>"}`. The SHA MUST be sourced from `lib_shared.boot_config.from_heroku_or_git()`, which returns `HEROKU_SLUG_COMMIT` when set and falls back to `git rev-parse HEAD` for local dev. The endpoint MUST require authentication via the existing `X-API-Key` header.
-
-The response MUST NOT include any other fields — `boot_id` and `force_reboot` (planned in v1) are NOT part of the v2 contract.
+Flask MUST expose `GET /api/sign/boot-config` returning `{"expected_sha": "<sha>"}` and nothing else. The SHA MUST be sourced from `lib_shared.boot_config.from_heroku_or_git()`, which returns `HEROKU_SLUG_COMMIT` when set and falls back to `git rev-parse HEAD` for local dev. The endpoint MUST require authentication via the existing `X-API-Key` header.
 
 #### Scenario: Heroku deploy (slug commit set)
 - **WHEN** Flask runs on Heroku with `HEROKU_SLUG_COMMIT=abc123`

@@ -18,7 +18,7 @@
 - [x] 2.1 Create `lib_shared/boot_config.py` — `BootConfig` dataclass with `expected_sha: str` field; `from_response(payload)`; `fetch_boot_config(api_url, api_key, *, timeout_s=5.0) -> Optional[BootConfig]`; `current_sha(repo_dir=None)`; `from_heroku_or_git()` helper
 - [x] 2.2 Test: `BootConfig.from_response({"expected_sha": "abc"})`; `fetch_boot_config` succeeds/401/500/network/timeout/malformed/missing-key/empty/unparseable-url/custom-timeout
 - [x] 2.3 Rename `GET /api/sign/expected-sha` → `GET /api/sign/boot-config` in `heart-message-manager/main.py`
-- [x] 2.4 Response shape: `{"expected_sha": "<sha>"}` ONLY (drop `boot_id` and `force_reboot` from the v1 response)
+- [x] 2.4 Response shape: `{"expected_sha": "<sha>"}` and nothing else
 - [x] 2.5 Endpoint uses `lib_shared.boot_config.from_heroku_or_git()` so the local-dev fallback is shared
 - [x] 2.6 Flask publishes `MessageEnvelope("command", {"action": "check-for-update"})` ONCE at startup, right after the paho client constructs (NOT on every MQTT reconnect — drop the `on_connect_callback` parameter from v1)
 - [x] 2.7 Drop the v1 `on_connect_callback` kwarg from `PahoMqttClient.__init__`; verify absence is part of `test_paho_mqtt_client.py`
