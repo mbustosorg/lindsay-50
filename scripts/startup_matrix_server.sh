@@ -4,23 +4,22 @@
 #
 # Issue #49: this script now exec's loader.py — the systemd entrypoint that
 # handles the blue/green upgrade flow (see heart-matrix-controller/loader.py).
-# loader.py then os.execvp's main.py once the right version is staged and
-# health-checked. systemd sees main.py as the direct child so signal
-# handling is preserved.
+# loader.py then os.execvpe's main.py once the right version is staged and
+# the status.json probe confirms it's healthy. systemd sees main.py as the
+# direct child so signal handling is preserved.
 set -e
 
 # Where this repo is cloned on the Pi — adjust if yours differs.
-REPO_DIR="/home/pi/projects/lindsay-50"
+REPO_DIR="${REPO_DIR:-/srv/lindsay-50}"
 
-# Run from the repo root so config_reader (called by both loader.py and
-# healthcheck.py) finds settings.toml in $REPO_DIR/heart-matrix-controller/.
+# Run from the repo root so config_reader (called by loader.py and main.py)
+# finds settings.toml in $REPO_DIR/heart-matrix-controller/.
 cd "$REPO_DIR"
-
-# Activate the repo-root venv (created per CLAUDE.md: python3 -m venv .venv).
-. "/home/mauricio/.virtualenvs/lindsay-50/bin/activate"
 
 # lib_shared lives at the repo root; LOG_LEVEL is read by both loader.py and main.py.
 export PYTHONPATH="$REPO_DIR"
 export LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
+# System Python with rgbmatrix installed via setup-pi.sh. (No venv on this
+# single-purpose Pi — keeps the install trivial.)
 exec python3 "$REPO_DIR/current/heart-matrix-controller/loader.py"
