@@ -8,6 +8,11 @@ v2 design:
     child via os.execvpe's env dict
   - Failure cases (Flask unreachable, status.json probe fails, stage fails)
     all fall through to "exec the existing current/.../main.py"
+  - v3: worktree directory names use the short SHA (7 chars). The
+    full SHA still flows through comparison + git operations; only
+    the directory name is normalized. Test fixtures mirror that:
+    they capture the full SHA from `rev-parse` for git ops, then
+    derive the short form for path assertions.
 
 Hermetic: each test uses tmp_path for the repo layout (bare-style git
 repo with worktrees + symlink), so we don't touch the real
@@ -26,6 +31,11 @@ from unittest.mock import MagicMock
 import pytest
 
 LOADER_PATH = Path(__file__).parent.parent / "heart-matrix-controller" / "loader.py"
+
+
+def _short(sha: str) -> str:
+    """Test-local short_sha — keeps the fixture hermetic from lib_shared imports."""
+    return sha[:7] if len(sha) > 7 else sha
 
 
 def _load_loader():
@@ -77,15 +87,18 @@ def bare_repo_with_two_commits(tmp_path):
     _git(repo_dir, "commit", "-m", "second commit")
     sha2 = _git(repo_dir, "rev-parse", "HEAD").strip()
 
-    v1 = repo_dir / f"v-{sha1}"
-    v2 = repo_dir / f"v-{sha2}"
+    # Worktree dirs use the SHORT form. Keep the full SHA in the return
+    # value because tests need it for git ops (e.g. `git worktree remove`);
+    # path assertions derive short via `_short(...)`.
+    v1 = repo_dir / f"v-{_short(sha1)}"
+    v2 = repo_dir / f"v-{_short(sha2)}"
     _git(repo_dir, "worktree", "add", str(v1), sha1)
     _git(repo_dir, "worktree", "add", str(v2), sha2)
 
     current = repo_dir / "current"
     if current.exists() or current.is_symlink():
         current.unlink()
-    os.symlink(f"v-{sha1}", current)
+    os.symlink(f"v-{_short(sha1)}", current)
 
     return repo_dir, sha1, sha2
 
@@ -158,6 +171,14 @@ class TestAtomicSwap:
 class TestRepoLayoutHelpers:
     def test_worktree_dir_uses_v_sha_pattern(self, loader):
         assert loader.worktree_dir(Path("/r"), "abc123") == Path("/r/v-abc123")
+
+    def test_worktree_dir_truncates_full_sha_to_short(self, loader):
+        """Full 40-char SHA input must produce the same directory as its
+        short form, so the loader stage path and the symlink stay in sync
+        regardless of which representation Flask returned."""
+        full = "b5e191c5df481d51c4e7d1cced51cf7c656f1ead"
+        assert loader.worktree_dir(Path("/r"), full) == Path("/r/v-b5e191c")
+        assert loader.worktree_dir(Path("/r"), "b5e191c") == Path("/r/v-b5e191c")
 
     def test_current_symlink_is_repo_current(self, loader):
         assert loader.current_symlink(Path("/r")) == Path("/r/current")
@@ -414,7 +435,7 @@ class TestRunUpgradeFlowFlaskUnreachable:
 
         def fake_stage(repo_dir, sha, **_kw):
             stage_calls.append((repo_dir, sha))
-            return repo_dir / f"v-{sha}"
+            return repo_dir / f"v-{_short(sha)}"
 
         def fake_probe(*_a, **_kw):
             return True
@@ -452,7 +473,9 @@ class TestRunUpgradeFlowFlaskUnreachable:
             api_url="https://x/api/messages",
             api_key="k",
             fetch_fn=lambda **_kw: sha1,  # local == expected
-            stage_fn=lambda repo_dir, sha, **_kw: (stage_calls.append((repo_dir, sha)) or repo_dir / f"v-{sha}"),
+            stage_fn=lambda repo_dir, sha, **_kw: (
+                stage_calls.append((repo_dir, sha)) or repo_dir / f"v-{_short(sha)}"
+            ),
             probe_fn=lambda *_a, **_kw: True,
             swap_fn=lambda *_a, **_kw: None,
             exec_fn=lambda *_a, **_kw: exec_calls.append((_a, _kw)),
@@ -481,7 +504,7 @@ class TestRunUpgradeFlowFlaskUnreachable:
         assert len(exec_calls) == 1
         assert exec_calls[0][0][1] == sha1
         # current symlink unchanged.
-        assert os.readlink(repo / "current") == f"v-{sha1}"
+        assert os.readlink(repo / "current") == f"v-{_short(sha1)}"
 
     def test_falls_through_when_stage_raises(self, loader, bare_repo_with_two_commits):
         repo, sha1, sha2 = bare_repo_with_two_commits
@@ -509,8 +532,8 @@ class TestRunUpgradeFlowFlaskUnreachable:
 class TestRunUpgradeFlowHappyPath:
     def test_stages_probes_swaps_and_execs_on_mismatch(self, loader, bare_repo_with_two_commits):
         repo, _sha1, sha2 = bare_repo_with_two_commits
-        # Remove the pre-created v-<sha2> so the stage actually runs.
-        v2 = repo / f"v-{sha2}"
+        # Remove the pre-created v-<short_sha2> so the stage actually runs.
+        v2 = repo / f"v-{_short(sha2)}"
         subprocess.run(
             ["git", "-C", str(repo), "worktree", "remove", "--force", str(v2)],
             check=True,
@@ -528,18 +551,18 @@ class TestRunUpgradeFlowHappyPath:
             swap_fn=loader.atomic_swap,
             exec_fn=lambda *_a, **_kw: exec_calls.append((_a, _kw)),
         )
-        # Loader staged v-<sha2>
-        assert (repo / f"v-{sha2}").exists()
-        # Loader swapped current -> v-<sha2>
-        assert os.readlink(repo / "current") == f"v-{sha2}"
+        # Loader staged v-<short_sha2>
+        assert (repo / f"v-{_short(sha2)}").exists()
+        # Loader swapped current -> v-<short_sha2>
+        assert os.readlink(repo / "current") == f"v-{_short(sha2)}"
         # Loader exec'd the new SHA (not the old one).
         assert len(exec_calls) == 1
         assert exec_calls[0][0][1] == sha2
 
     def test_skips_staging_when_worktree_already_exists(self, loader, bare_repo_with_two_commits):
         repo, _sha1, sha2 = bare_repo_with_two_commits
-        # v-<sha2> already exists from the fixture → stage returns it.
-        assert (repo / f"v-{sha2}").exists()
+        # v-<short_sha2> already exists from the fixture → stage returns it.
+        assert (repo / f"v-{_short(sha2)}").exists()
         exec_calls = []
 
         loader.run_upgrade_flow(
@@ -553,7 +576,7 @@ class TestRunUpgradeFlowHappyPath:
             exec_fn=lambda *_a, **_kw: exec_calls.append((_a, _kw)),
         )
         # current swapped to new SHA, exec called with new SHA.
-        assert os.readlink(repo / "current") == f"v-{sha2}"
+        assert os.readlink(repo / "current") == f"v-{_short(sha2)}"
         assert exec_calls[0][0][1] == sha2
 
 
@@ -582,7 +605,7 @@ class TestRunUpgradeFlowDoesNotReturn:
                     def fake_stage(repo_dir, sha, **_kw):
                         if stage_raises:
                             raise loader.StageError("simulated")
-                        return repo_dir / f"v-{sha}"
+                        return repo_dir / f"v-{_short(sha)}"
 
                     loader.run_upgrade_flow(
                         repo,

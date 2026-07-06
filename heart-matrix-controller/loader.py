@@ -47,6 +47,7 @@ from lib_shared.boot_config import (
     current_sha as _shared_current_sha,
     fetch_boot_config,
 )
+from lib_shared.short_sha import short_sha
 
 logger = logging.getLogger("loader")
 
@@ -99,8 +100,15 @@ def resolve_repo_dir() -> Path:
 
 
 def worktree_dir(repo_dir: Path, sha: str) -> Path:
-    """Return the per-SHA worktree directory: `<repo_dir>/v-<sha>`."""
-    return repo_dir / f"v-{sha}"
+    """Return the per-SHA worktree directory: `<repo_dir>/v-<short_sha>`.
+
+    Accepts a full or short SHA; the directory name always uses the
+    short form (7 chars) so paths like `v-b5e191c/` stay readable in
+    `ls`, journalctl, and recovery commands. Comparison and git
+    operations still use whatever the caller passed — only the
+    directory name is normalized here.
+    """
+    return repo_dir / f"v-{short_sha(sha)}"
 
 
 def current_symlink(repo_dir: Path) -> Path:
@@ -131,7 +139,12 @@ def current_sha(repo_dir: Path) -> Optional[str]:
 
 
 def stage_version(repo_dir: Path, expected_sha: str) -> Path:
-    """Stage `expected_sha` into a new git worktree at `<repo_dir>/v-<sha>`.
+    """Stage `expected_sha` into a new git worktree at `<repo_dir>/v-<short_sha>`.
+
+    The directory name uses the short form (7 chars) so the on-disk
+    layout stays readable; the full SHA is the one git resolves
+    against — `git worktree add` accepts a full ref, short SHA, or
+    branch name, and the bare repo's refdb has the full form.
 
     On a dirty working tree in the existing version, runs
     `git reset --hard` first to clear it (the operator should not
@@ -183,19 +196,25 @@ def stage_version(repo_dir: Path, expected_sha: str) -> Path:
     except Exception as e:
         raise StageError(f"worktree add raised: {e}") from e
 
-    logger.info("loader: staged %s at %s", expected_sha, target)
+    logger.info("loader: staged %s at %s", short_sha(expected_sha), target)
     return target
 
 
 def atomic_swap(repo_dir: Path, expected_sha: str) -> None:
-    """Atomically retarget the `current` symlink to `v-<expected_sha>`.
+    """Atomically retarget the `current` symlink to `v-<short_sha>`.
+
+    The symlink target uses the short SHA so the visible result in
+    `ls -l /srv/lindsay-50/` matches `v-b5e191c`, not
+    `v-b5e191c5df481d51c4e7d1cced51cf7c656f1ead`. The full SHA is
+    what `stage_version` already wrote on disk at `v-<short>/`, so
+    this name is consistent.
 
     Uses `ln -sfn`, which is atomic on the same filesystem: a
     concurrent reader either sees the old target or the new one,
     never a half-constructed link. The `-f` flag replaces an
     existing symlink silently.
     """
-    target_rel = f"v-{expected_sha}"
+    target_rel = f"v-{short_sha(expected_sha)}"
     cur = current_symlink(repo_dir)
     logger.info("loader: swapping %s -> %s", cur, target_rel)
     subprocess.check_call(
@@ -440,14 +459,14 @@ def run_upgrade_flow(
     `swap_fn` etc. and assert on the call sequence.
     """
     local = current_sha(repo_dir)
-    logger.info("loader: local SHA = %s", local)
+    logger.info("loader: local SHA = %s", short_sha(local) if local else "(none)")
 
     expected = fetch_fn(api_url=api_url, api_key=api_key)
     if expected is None:
         logger.warning("loader: could not fetch expected SHA; using existing current")
         exec_fn(repo_dir, local or "")
         return
-    logger.info("loader: expected SHA = %s", expected)
+    logger.info("loader: expected SHA = %s", short_sha(expected))
 
     if local == expected:
         logger.info("loader: local SHA matches expected; no upgrade needed")
@@ -475,7 +494,7 @@ def run_upgrade_flow(
         return
 
     swap_fn(repo_dir, expected)
-    logger.info("loader: swapped to %s; exec'ing", expected)
+    logger.info("loader: swapped to %s; exec'ing", short_sha(expected))
     exec_fn(repo_dir, expected)
 
 

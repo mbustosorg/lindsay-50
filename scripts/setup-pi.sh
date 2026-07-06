@@ -139,32 +139,38 @@ done
 if [ -n "$CURRENT_TARGET" ] && [ -d "$REPO_DIR/$CURRENT_TARGET" ]; then
     echo "==> setup-pi: repo already bootstrapped (current -> $CURRENT_TARGET); skipping conversion"
     HEAD_SHA=$(git -C "$REPO_DIR" rev-parse "$CURRENT_TARGET")
+    # Existing Pi may have a long-form v-<full_sha>/ from before the
+    # short-SHA convention landed — preserve its directory name but
+    # still use the short form when staging anything new.
+    HEAD_SHA_SHORT=$(git -C "$REPO_DIR" rev-parse --short=7 "$HEAD_SHA")
 elif [ "$IS_BARE" = "true" ]; then
     # Partial bootstrap — finish without re-converting.
     echo "==> setup-pi: bare repo detected, bootstrap incomplete; finishing"
     HEAD_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
-    echo "    HEAD at $HEAD_SHA"
+    HEAD_SHA_SHORT=$(git -C "$REPO_DIR" rev-parse --short=7 HEAD)
+    echo "    HEAD at $HEAD_SHA (v-$HEAD_SHA_SHORT)"
 
-    echo "==> setup-pi: creating v-$HEAD_SHA worktree"
-    git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA" "$HEAD_SHA"
+    echo "==> setup-pi: creating v-$HEAD_SHA_SHORT worktree"
+    git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA_SHORT" "$HEAD_SHA"
 
-    ln -sfn "v-$HEAD_SHA" "$REPO_DIR/current"
-    echo "==> setup-pi: current -> v-$HEAD_SHA"
+    ln -sfn "v-$HEAD_SHA_SHORT" "$REPO_DIR/current"
+    echo "==> setup-pi: current -> v-$HEAD_SHA_SHORT"
 else
     # Non-bare clone — do the full conversion.
     echo "==> setup-pi: converting .git/ to bare .git/..."
     HEAD_SHA=$(git rev-parse HEAD)
-    echo "    HEAD at $HEAD_SHA"
+    HEAD_SHA_SHORT=$(git rev-parse --short=7 HEAD)
+    echo "    HEAD at $HEAD_SHA (v-$HEAD_SHA_SHORT)"
 
     mv "$REPO_DIR/.git" "$REPO_DIR/.git.tmp"
     git clone --bare "$REPO_DIR/.git.tmp" "$REPO_DIR/.git" >/dev/null
     rm -rf "$REPO_DIR/.git.tmp"
 
-    echo "==> setup-pi: creating v-$HEAD_SHA worktree"
-    git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA" "$HEAD_SHA"
+    echo "==> setup-pi: creating v-$HEAD_SHA_SHORT worktree"
+    git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA_SHORT" "$HEAD_SHA"
 
-    ln -sfn "v-$HEAD_SHA" "$REPO_DIR/current"
-    echo "==> setup-pi: current -> v-$HEAD_SHA"
+    ln -sfn "v-$HEAD_SHA_SHORT" "$REPO_DIR/current"
+    echo "==> setup-pi: current -> v-$HEAD_SHA_SHORT"
 fi
 
 # Resolve the active worktree (where settings.toml must live)
