@@ -135,10 +135,15 @@ if [ ! -f "$SETTINGS" ]; then
     echo "ERROR: $SETTINGS is missing." >&2
     echo "The sign will not boot without it (no MQTT creds, no panel geometry)." >&2
     echo "" >&2
-    echo "To fix:" >&2
+    echo "To fix (existing Pi with v1 install — preserves creds/geometry):" >&2
+    echo "  sudo cp /home/<your-user>/lindsay-50/heart-matrix-controller/settings.toml \\" >&2
+    echo "          $SETTINGS" >&2
+    echo "" >&2
+    echo "To fix (fresh Pi — copy from example and fill in real values):" >&2
     echo "  sudo cp $SETTINGS_EXAMPLE $SETTINGS" >&2
     echo "  sudo nano $SETTINGS" >&2
-    echo "  sudo $0" >&2
+    echo "" >&2
+    echo "Then re-run: sudo $0" >&2
     exit 1
 fi
 echo "==> setup-pi: settings.toml present"
