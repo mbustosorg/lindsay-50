@@ -89,7 +89,7 @@ def fresh_module(monkeypatch):
 
     The scroller module reads FONT_PATH via get_config() at __init__ time;
     we point get_config at a MagicMock with no FONT_PATH so the constructor
-    falls back to the hardcoded 'fonts/6x9.bdf' (never read because
+    falls back to the hardcoded 'fonts/8x13.bdf' (never read because
     rgbmatrix.graphics.Font is mocked).
     """
     cfg_mock = MagicMock()
@@ -179,9 +179,9 @@ def test_matrix_scroller_falls_back_to_vendored_when_loadfont_raises(monkeypatch
     """A FONT_PATH pointing at a missing file should fall back to the vendored
     font instead of crashing the boot path. This is the issue #49 v1→v2
     onboarding hazard: a legacy settings.toml may still name a font path that
-    no longer ships with the repo (e.g. the old rpi-rgb-led-matrix
+    no longer ships with the repo (e.g. a stale relative path like
     "../../fonts/8x13.bdf"). On LoadFont exception we retry with the vendored
-    "fonts/6x9.bdf" before raising."""
+    "fonts/8x13.bdf" before raising."""
     # Configure FONT_PATH to a known-broken path.
     cfg_mock = MagicMock()
     cfg_mock.if_exists = lambda key: "/nonexistent/8x13.bdf" if key == "FONT_PATH" else None
@@ -200,7 +200,7 @@ def test_matrix_scroller_falls_back_to_vendored_when_loadfont_raises(monkeypatch
     assert font.LoadFont.call_count == 2
     args = font.LoadFont.call_args_list
     assert args[0].args[0] == "/nonexistent/8x13.bdf"
-    assert args[1].args[0] == "fonts/6x9.bdf"
+    assert args[1].args[0] == "fonts/8x13.bdf"
     assert s.single_line is True  # layout was still populated post-fallback
 
 
@@ -212,7 +212,7 @@ def test_matrix_scroller_raises_when_vendored_also_unavailable(monkeypatch):
     cfg_mock.if_exists = lambda key: None  # forces vendored default
 
     font = _make_mock_font()
-    font.LoadFont.side_effect = Exception("Couldn't load font 6x9.bdf")
+    font.LoadFont.side_effect = Exception("Couldn't load font 8x13.bdf")
     monkeypatch.setattr(_graphics, "Font", lambda: font)
     monkeypatch.setattr("lib_shared.config_reader.get_config", lambda *a, **k: cfg_mock)
 

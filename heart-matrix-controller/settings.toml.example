@@ -22,10 +22,11 @@ MQTT_TOPIC = "YOUR_AIO_USERNAME/feeds/YOUR_AIO_FEED_NAME"
 MESSAGES_API_URL = "http://YOUR_FLASK_HOST/api/messages"
 CONFIG_API_URL = "http://YOUR_FLASK_HOST/api/config"
 
-# BDF font for scrolling text. Copy one from the rpi-rgb-led-matrix repo's
-# `fonts/` directory onto the Pi (e.g. into ./fonts/). Path is relative to the
-# working directory the app is launched from.
-FONT_PATH = "fonts/6x9.bdf"
+# BDF font for scrolling text. The repo ships `fonts/8x13.bdf` (the
+# hzeller rpi-rgb-led-matrix "8x13" font, public domain Markus Kuhn);
+# override here if you copy a different font onto the Pi. Path is
+# relative to the working directory the app is launched from.
+FONT_PATH = "fonts/8x13.bdf"
 
 # HUB75 panel geometry (hzeller rpi-rgb-led-matrix RGBMatrixOptions).
 # Defaults: 64x64 logical panel from two 64x32 panels, serpentine-wired
