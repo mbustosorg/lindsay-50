@@ -103,6 +103,21 @@ if [ -d "$REPO_DIR/.git" ]; then
     IS_BARE=$(git -C "$REPO_DIR" rev-parse --is-bare-repository 2>/dev/null || echo "false")
 fi
 
+# Refresh the bare repo's remote refs so re-running setup-pi.sh actually sees
+# commits the operator pushed after the original clone. Without this the
+# bare repo's HEAD stays pinned at whatever the initial `git clone` carried
+# in — every subsequent push was invisible to this script. No-op (exit 0)
+# on offline or already-current repos. We tolerate failure so a Pi that's
+# briefly offline during bootstrap isn't blocked.
+if [ "$IS_BARE" = "true" ]; then
+    if git -C "$REPO_DIR" remote >/dev/null 2>&1; then
+        git -C "$REPO_DIR" fetch origin \
+            $(git -C "$REPO_DIR" for-each-ref --format='%(refname:short)' refs/remotes/origin/ 2>/dev/null \
+                | tr '\n' ' ') \
+            >/dev/null 2>&1 || true
+    fi
+fi
+
 # Pre-flight cleanup: prune stale worktree metadata and remove orphan
 # v-<sha>/ directories left over from prior failed runs. Without this,
 # `git worktree add` bails on the leftover dir even though no live
