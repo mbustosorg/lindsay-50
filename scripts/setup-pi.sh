@@ -144,21 +144,17 @@ fi
 echo "==> setup-pi: settings.toml present"
 
 # ---------------------------------------------------------------------------
-# Phase 5: BDF font — idempotent (the chore commit vendors it; this is
-#           defense for an older checkout that doesn't have it yet)
+# Phase 5: BDF font — vendored in the repo, just verify
 # ---------------------------------------------------------------------------
 
-FONT_DIR="$WORKTREE_DIR/heart-matrix-controller/fonts"
-FONT_FILE="$FONT_DIR/6x9.bdf"
-if [ -f "$FONT_FILE" ]; then
-    echo "==> setup-pi: font already vendored"
-else
-    echo "==> setup-pi: vendoring BDF font"
-    mkdir -p "$FONT_DIR"
-    curl -fsSL -o "$FONT_FILE" \
-        https://raw.githubusercontent.com/hzeller/rpi-rgb-led-matrix/master/fonts/6x9.bdf
-    chmod 644 "$FONT_FILE"
+FONT_FILE="$WORKTREE_DIR/heart-matrix-controller/fonts/6x9.bdf"
+if [ ! -f "$FONT_FILE" ]; then
+    echo "ERROR: $FONT_FILE is missing." >&2
+    echo "The repo should vendor this file (see the chore commit that added fonts/6x9.bdf)." >&2
+    echo "A corrupted or stale checkout is the most likely cause. Re-clone and re-run." >&2
+    exit 1
 fi
+echo "==> setup-pi: font present"
 
 # ---------------------------------------------------------------------------
 # Phase 6: systemd unit — install, reload, enable
