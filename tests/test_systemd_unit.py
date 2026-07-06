@@ -137,6 +137,47 @@ class TestSetupPiScript:
             "already bootstrapped" in text or "already" in text
         ), "setup-pi.sh should detect a previously-bootstrapped repo"
 
+    def test_handles_partial_bootstrap_state(self):
+        """Bare repo with no `current` symlink is a valid state — finish, don't reconvert.
+
+        This was the bug on issue #49: the original idempotency check only
+        covered "fully bootstrapped" and "non-bare clone", missing the
+        partial-bootstrap state (bare repo present but `current` symlink
+        missing because a prior run died mid-worktree-add). Re-running on
+        that state would re-do the bare conversion and hit
+        `worktree add: already exists`. The fix branches on bare-vs-not
+        rather than just symlink presence.
+        """
+        text = SETUP_PI_PATH.read_text()
+        # The new state machine mentions all three branches:
+        assert "bare repo detected, bootstrap incomplete" in text, (
+            "setup-pi.sh must detect a bare repo with no current symlink "
+            "and finish the bootstrap without re-converting"
+        )
+        assert (
+            "non-bare clone" in text.lower() or "Non-bare clone" in text
+        ), "setup-pi.sh must explicitly handle the non-bare clone branch"
+        # And it must NOT re-run the bare conversion when one already exists
+        # (the bug was: bare + no symlink → re-convert → worktree add fails).
+        bare_convert_path = text.find("git clone --bare")
+        partial_branch = text.find("bare repo detected, bootstrap incomplete")
+        assert bare_convert_path != -1, "bare conversion step missing"
+        assert partial_branch != -1, "partial-bootstrap branch missing"
+        # Partial-bootstrap branch must be reached BEFORE the bare-conversion
+        # branch so it short-circuits on partial state. (If conversion came
+        # first, the bug recurs.)
+        assert partial_branch < bare_convert_path, (
+            "partial-bootstrap branch should be reached BEFORE the bare "
+            "conversion (otherwise partial-state runs would re-convert)"
+        )
+
+    def test_worktree_add_is_idempotent(self):
+        """setup-pi.sh must not blow up if v-<HEAD_SHA>/ is already on disk."""
+        text = SETUP_PI_PATH.read_text()
+        assert "already on disk" in text or "already exists" in text, (
+            "setup-pi.sh must detect an existing v-<HEAD_SHA>/ worktree " "rather than letting git worktree add fail"
+        )
+
     def test_reloads_systemd_on_completion(self):
         """setup-pi.sh reloads systemd + restarts the service when present."""
         text = SETUP_PI_PATH.read_text()

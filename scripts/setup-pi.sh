@@ -84,30 +84,51 @@ fi
 # Phase 3: Bare-repo + worktree layout — idempotent
 # ---------------------------------------------------------------------------
 
-# Idempotency check: if `.git` is already a file (bare) AND `current` is a
-# symlink pointing at a v-<sha>/ dir, we've already bootstrapped the layout.
-if [ -f "$REPO_DIR/.git" ] && [ -L "$REPO_DIR/current" ]; then
-    target=$(readlink "$REPO_DIR/current")
-    if [ -d "$REPO_DIR/$target" ]; then
-        echo "==> setup-pi: repo already bootstrapped (current -> $target); skipping conversion"
+# Three valid bootstrap states:
+#   (a) .git is a directory (non-bare clone): convert to bare + create worktree
+#   (b) .git is bare + current symlink + v-<sha>/ worktree dir: fully done, skip
+#   (c) .git is bare + missing/invalid current symlink: partial bootstrap
+#       (prior run died mid-flow). Finish by creating the worktree + symlink
+#       without re-running the conversion. This is the state that broke
+#       issue #49 retries — `git worktree add` rejects an existing v-<sha>/.
+
+CURRENT_TARGET=""
+if [ -L "$REPO_DIR/current" ]; then
+    CURRENT_TARGET=$(readlink "$REPO_DIR/current")
+fi
+
+if [ -d "$REPO_DIR/v-${CURRENT_TARGET}" ] && [ -n "$CURRENT_TARGET" ]; then
+    echo "==> setup-pi: repo already bootstrapped (current -> $CURRENT_TARGET); skipping conversion"
+    HEAD_SHA=$(git -C "$REPO_DIR" rev-parse "$CURRENT_TARGET")
+elif [ -f "$REPO_DIR/.git" ]; then
+    # Partial bootstrap: bare repo present, no current symlink (or symlink
+    # points at a missing worktree). Finish without re-converting.
+    echo "==> setup-pi: bare repo detected, bootstrap incomplete; finishing"
+    HEAD_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
+    echo "    HEAD at $HEAD_SHA"
+
+    if [ ! -d "$REPO_DIR/v-$HEAD_SHA" ]; then
+        echo "==> setup-pi: creating v-$HEAD_SHA worktree"
+        git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA" "$HEAD_SHA"
     else
-        echo "==> setup-pi: WARNING: current symlink points at missing $target; will repair"
+        echo "==> setup-pi: v-$HEAD_SHA worktree already on disk; reusing"
     fi
+
+    ln -sfn "v-$HEAD_SHA" "$REPO_DIR/current"
+    echo "==> setup-pi: current -> v-$HEAD_SHA"
 else
+    # Non-bare clone — do the full conversion.
     echo "==> setup-pi: converting .git/ to bare .git/..."
     HEAD_SHA=$(git rev-parse HEAD)
     echo "    HEAD at $HEAD_SHA"
 
-    # Move existing .git aside, build a fresh bare clone from it.
     mv "$REPO_DIR/.git" "$REPO_DIR/.git.tmp"
     git clone --bare "$REPO_DIR/.git.tmp" "$REPO_DIR/.git" >/dev/null
     rm -rf "$REPO_DIR/.git.tmp"
 
-    # Create the first worktree at HEAD
     echo "==> setup-pi: creating v-$HEAD_SHA worktree"
     git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA" "$HEAD_SHA"
 
-    # Symlink `current` at the worktree
     ln -sfn "v-$HEAD_SHA" "$REPO_DIR/current"
     echo "==> setup-pi: current -> v-$HEAD_SHA"
 fi
@@ -149,20 +170,7 @@ fi
 echo "==> setup-pi: settings.toml present"
 
 # ---------------------------------------------------------------------------
-# Phase 5: BDF font — vendored in the repo, just verify
-# ---------------------------------------------------------------------------
-
-FONT_FILE="$WORKTREE_DIR/heart-matrix-controller/fonts/6x9.bdf"
-if [ ! -f "$FONT_FILE" ]; then
-    echo "ERROR: $FONT_FILE is missing." >&2
-    echo "The repo should vendor this file (see the chore commit that added fonts/6x9.bdf)." >&2
-    echo "A corrupted or stale checkout is the most likely cause. Re-clone and re-run." >&2
-    exit 1
-fi
-echo "==> setup-pi: font present"
-
-# ---------------------------------------------------------------------------
-# Phase 6: systemd unit — install, reload, enable
+# Phase 5: systemd unit — install, reload, enable
 # ---------------------------------------------------------------------------
 
 if [ ! -f "$UNIT_SRC" ]; then
