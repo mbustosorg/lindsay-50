@@ -141,7 +141,13 @@ class TestSetupPiScript:
         """setup-pi.sh reloads systemd + restarts the service when present."""
         text = SETUP_PI_PATH.read_text()
         assert "daemon-reload" in text
-        assert "systemctl restart lindsay_50" in text
+        # The script uses a SERVICE_NAME variable for the service identifier;
+        # accept either the literal or the variable form.
+        assert (
+            "systemctl restart lindsay_50" in text
+            or 'systemctl restart "$SERVICE_NAME"' in text
+            or "systemctl restart '$SERVICE_NAME'" in text
+        ), "setup-pi.sh must restart the lindsay_50 service"
 
 
 class TestStartupScript:
