@@ -10,4 +10,4 @@ opencv-python-headless
 # rgbmatrix bindings live in a subdirectory and build a C extension (needs the
 # Pi's build toolchain). Alternatively: clone the repo and run
 # `make build-python && sudo make install-python`.
-git+https://github.com/hzeller/rpi-rgb-led-matrix#subdirectory=bindings/python
+git+https://github.com/hzeller/rpi-rgb-led-matrix
