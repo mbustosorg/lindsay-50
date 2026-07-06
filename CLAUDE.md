@@ -151,10 +151,11 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r heart-matrix-controller/requirements.txt   # builds the rgbmatrix C extension
 
-# Scrolling text uses `heart-matrix-controller/fonts/8x13.bdf`, which
-# ships with the repo (the hzeller rpi-rgb-led-matrix 8x13 font, public
-# domain). Override via the FONT_PATH key in settings.toml if you want
-# to use a different font.
+# Scrolling text uses `heart-matrix-controller/fonts/8x13.bdf` by
+# default. The repo also ships `heart-matrix-controller/fonts/6x9.bdf`
+# as a smaller alternative — both are public-domain Markus Kuhn fonts
+# vendored from the hzeller rpi-rgb-led-matrix repo. Switch via the
+# FONT_PATH key in settings.toml.
 
 cp heart-matrix-controller/settings.toml.example heart-matrix-controller/settings.toml
 # fill in MQTT_*, the API URLs, FONT_PATH, and the MATRIX_* panel geometry
