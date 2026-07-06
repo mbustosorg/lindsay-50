@@ -169,6 +169,28 @@ class TestRepoLayoutHelpers:
         monkeypatch.setenv("LINDSAY50_REPO_DIR", str(tmp_path))
         assert loader.resolve_repo_dir() == tmp_path.resolve()
 
+    def test_resolve_repo_dir_walks_through_current_symlink(self, loader, tmp_path, monkeypatch):
+        """resolve_repo_dir() must return the repo root, not the worktree dir.
+
+        The loader's __file__ lives at `<repo_root>/current/heart-matrix-controller/loader.py`
+        (the `current` symlink resolves to `v-<sha>/...`, but the symlink
+        name is what matters for the walk). Three parents up gets us to
+        `<repo_root>/`; two parents lands on the worktree dir, which then
+        makes the loader look for the `current` symlink INSIDE the
+        worktree (where it doesn't exist). This was the issue #49 startup
+        failure on 2026-07-06.
+        """
+        monkeypatch.delenv("LINDSAY50_REPO_DIR", raising=False)
+        repo_root = tmp_path / "r"
+        wt_dir = repo_root / "v-abc123" / "heart-matrix-controller"
+        wt_dir.mkdir(parents=True)
+        loader_py = wt_dir / "loader.py"
+        loader_py.write_text("# stub")
+        # Force __file__ onto the loader.py in the worktree, simulating
+        # the real production layout where `current` is a symlink.
+        monkeypatch.setattr(loader, "__file__", str(loader_py))
+        assert loader.resolve_repo_dir() == repo_root.resolve()
+
 
 class TestCurrentSha:
     def test_returns_sha_when_current_symlink_resolves_to_git_worktree(self, loader, bare_repo_with_two_commits):

@@ -12,9 +12,11 @@ set -e
 # Where this repo is cloned on the Pi — adjust if yours differs.
 REPO_DIR="${REPO_DIR:-/srv/lindsay-50}"
 
-# Run from the repo root so config_reader (called by loader.py and main.py)
-# finds settings.toml in $REPO_DIR/heart-matrix-controller/.
-cd "$REPO_DIR"
+# Run from the worktree's heart-matrix-controller/ dir so config_reader
+# (called by both loader.py and main.py) finds settings.toml in cwd.
+# This mirrors the v1 startup script, which did `cd heart-matrix-controller`.
+# The `current` symlink may point at any v-<sha>/ worktree after an upgrade.
+cd "$REPO_DIR/current/heart-matrix-controller"
 
 # lib_shared lives at the repo root; LOG_LEVEL is read by both loader.py and main.py.
 export PYTHONPATH="$REPO_DIR"

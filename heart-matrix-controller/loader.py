@@ -85,15 +85,17 @@ class StageError(Exception):
 def resolve_repo_dir() -> Path:
     """Return the absolute path to the repo root.
 
-    Defaults to the parent of this script's directory
-    (`heart-matrix-controller/loader.py` → `<repo_root>/`). Override
-    via the `LINDSAY50_REPO_DIR` env var for tests + non-standard
-    deployments.
+    Defaults to `<repo_root>/` by walking three parents up from this
+    script: `heart-matrix-controller/loader.py` → `heart-matrix-controller/`
+    → `current/` → `<repo_root>/`. The `current` symlink makes the
+    first hop name-resolve to `v-<sha>/`, so we have to walk through
+    it explicitly. Override via the `LINDSAY50_REPO_DIR` env var for
+    tests + non-standard deployments.
     """
     env = os.environ.get(ENV_REPO_DIR)
     if env:
         return Path(env).resolve()
-    return Path(__file__).resolve().parent.parent
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def worktree_dir(repo_dir: Path, sha: str) -> Path:
