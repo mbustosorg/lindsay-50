@@ -89,7 +89,7 @@ def fresh_module(monkeypatch):
 
     The scroller module reads FONT_PATH via get_config() at __init__ time;
     we point get_config at a MagicMock with no FONT_PATH so the constructor
-    falls back to the hardcoded 'fonts/8x13B.bdf' (never read because
+    falls back to the hardcoded 'fonts/6x9.bdf' (never read because
     rgbmatrix.graphics.Font is mocked).
     """
     cfg_mock = MagicMock()

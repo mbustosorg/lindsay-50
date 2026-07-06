@@ -6,7 +6,6 @@
 #   - Converts the clone into a bare repo with per-SHA worktrees
 #   - Creates a `current` symlink pointing at the active version
 #   - Verifies settings.toml is in place (hard-stops if not — the sign won't boot)
-#   - Vendors the BDF font into the worktree if missing
 #   - Installs the systemd unit and starts the service
 #
 # Usage (as root on the Pi):
@@ -153,7 +152,7 @@ else
     echo "==> setup-pi: current -> v-$HEAD_SHA"
 fi
 
-# Resolve the active worktree (where settings.toml and fonts/ must live)
+# Resolve the active worktree (where settings.toml must live)
 WORKTREE_DIR="$REPO_DIR/$(readlink "$REPO_DIR/current")"
 if [ ! -d "$WORKTREE_DIR" ]; then
     echo "ERROR: $WORKTREE_DIR does not exist after bootstrap" >&2
