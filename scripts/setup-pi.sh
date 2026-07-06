@@ -85,34 +85,54 @@ fi
 # ---------------------------------------------------------------------------
 
 # Three valid bootstrap states:
-#   (a) .git is a directory (non-bare clone): convert to bare + create worktree
-#   (b) .git is bare + current symlink + v-<sha>/ worktree dir: fully done, skip
-#   (c) .git is bare + missing/invalid current symlink: partial bootstrap
-#       (prior run died mid-flow). Finish by creating the worktree + symlink
-#       without re-running the conversion. This is the state that broke
-#       issue #49 retries — `git worktree add` rejects an existing v-<sha>/.
+#   (a) current symlink -> valid v-<sha>/ dir: fully bootstrapped, skip
+#   (b) bare repo present, no current symlink: partial bootstrap — finish
+#       without re-running the conversion (worktree-add itself is idempotent)
+#   (c) non-bare clone (default branch checkout): full conversion
+#
+# Note: `git clone --bare` produces a *directory* (not a file) at the
+# target path — it just has no working tree. So `[ -f .git ]` is the wrong
+# bare-detector; use `git rev-parse --is-bare-repository`.
 
 CURRENT_TARGET=""
 if [ -L "$REPO_DIR/current" ]; then
     CURRENT_TARGET=$(readlink "$REPO_DIR/current")
 fi
 
-if [ -d "$REPO_DIR/v-${CURRENT_TARGET}" ] && [ -n "$CURRENT_TARGET" ]; then
+IS_BARE="false"
+if [ -d "$REPO_DIR/.git" ]; then
+    IS_BARE=$(git -C "$REPO_DIR" rev-parse --is-bare-repository 2>/dev/null || echo "false")
+fi
+
+# Pre-flight cleanup: prune stale worktree metadata and remove orphan
+# v-<sha>/ directories left over from prior failed runs. Without this,
+# `git worktree add` bails on the leftover dir even though no live
+# worktree references it. This was the issue #49 retry failure mode.
+if [ "$IS_BARE" = "true" ]; then
+    git -C "$REPO_DIR" worktree prune 2>/dev/null || true
+fi
+for stale in "$REPO_DIR"/v-*/; do
+    if [ -d "$stale" ]; then
+        # If `current` points at this dir, leave it alone.
+        if [ "$CURRENT_TARGET" = "$(basename "$stale")" ]; then
+            continue
+        fi
+        echo "==> setup-pi: removing stale worktree dir $(basename "$stale")"
+        rm -rf "$stale"
+    fi
+done
+
+if [ -n "$CURRENT_TARGET" ] && [ -d "$REPO_DIR/$CURRENT_TARGET" ]; then
     echo "==> setup-pi: repo already bootstrapped (current -> $CURRENT_TARGET); skipping conversion"
     HEAD_SHA=$(git -C "$REPO_DIR" rev-parse "$CURRENT_TARGET")
-elif [ -f "$REPO_DIR/.git" ]; then
-    # Partial bootstrap: bare repo present, no current symlink (or symlink
-    # points at a missing worktree). Finish without re-converting.
+elif [ "$IS_BARE" = "true" ]; then
+    # Partial bootstrap — finish without re-converting.
     echo "==> setup-pi: bare repo detected, bootstrap incomplete; finishing"
     HEAD_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
     echo "    HEAD at $HEAD_SHA"
 
-    if [ ! -d "$REPO_DIR/v-$HEAD_SHA" ]; then
-        echo "==> setup-pi: creating v-$HEAD_SHA worktree"
-        git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA" "$HEAD_SHA"
-    else
-        echo "==> setup-pi: v-$HEAD_SHA worktree already on disk; reusing"
-    fi
+    echo "==> setup-pi: creating v-$HEAD_SHA worktree"
+    git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA" "$HEAD_SHA"
 
     ln -sfn "v-$HEAD_SHA" "$REPO_DIR/current"
     echo "==> setup-pi: current -> v-$HEAD_SHA"

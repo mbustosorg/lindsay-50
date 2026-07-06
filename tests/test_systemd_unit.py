@@ -159,7 +159,9 @@ class TestSetupPiScript:
         ), "setup-pi.sh must explicitly handle the non-bare clone branch"
         # And it must NOT re-run the bare conversion when one already exists
         # (the bug was: bare + no symlink → re-convert → worktree add fails).
-        bare_convert_path = text.find("git clone --bare")
+        # Use a unique substring for the actual command so we don't match
+        # the explanatory comment that mentions `git clone --bare` earlier.
+        bare_convert_path = text.find('.git.tmp" "$REPO_DIR/.git"')
         partial_branch = text.find("bare repo detected, bootstrap incomplete")
         assert bare_convert_path != -1, "bare conversion step missing"
         assert partial_branch != -1, "partial-bootstrap branch missing"
@@ -172,10 +174,30 @@ class TestSetupPiScript:
         )
 
     def test_worktree_add_is_idempotent(self):
-        """setup-pi.sh must not blow up if v-<HEAD_SHA>/ is already on disk."""
+        """setup-pi.sh prunes stale v-<sha>/ dirs before worktree add.
+
+        This was the issue #49 retry failure mode: a prior failed run left
+        a v-<oldsha>/ directory behind. `git worktree prune` clears the
+        metadata but not the directory, and the next `git worktree add`
+        bails on 'already exists'. The fix: prune + remove orphan dirs
+        in Phase 3 before invoking worktree add.
+        """
         text = SETUP_PI_PATH.read_text()
-        assert "already on disk" in text or "already exists" in text, (
-            "setup-pi.sh must detect an existing v-<HEAD_SHA>/ worktree " "rather than letting git worktree add fail"
+        assert "worktree prune" in text, "setup-pi.sh must run `git worktree prune` to clean stale metadata"
+        assert "stale worktree dir" in text, "setup-pi.sh must remove stale v-<sha>/ dirs before worktree add"
+
+    def test_uses_canonical_bare_detector(self):
+        """Bare-detector must be `git rev-parse --is-bare-repository`, not `[ -f .git ]`.
+
+        `git clone --bare` produces a bare repo as a *directory* (just one
+        without a working tree), not a file. The original `[ -f .git ]`
+        check was always false and the partial-bootstrap branch never fired.
+        """
+        text = SETUP_PI_PATH.read_text()
+        assert "rev-parse --is-bare-repository" in text, (
+            "setup-pi.sh must use `git rev-parse --is-bare-repository` for "
+            "bare detection — `[ -f .git ]` is wrong because bare repos "
+            "are directories"
         )
 
     def test_reloads_systemd_on_completion(self):
