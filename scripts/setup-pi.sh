@@ -218,9 +218,22 @@ else
     HEAD_SHA_SHORT=$(git rev-parse --short=7 HEAD)
     echo "    HEAD at $HEAD_SHA (v-$HEAD_SHA_SHORT)"
 
+    # Capture the origin URL before the mv destroys .git/config.
+    # `git clone --bare <local-path> <target>` rewrites origin to the
+    # local source path; we then rm -rf that path — leaving the new
+    # bare repo with a broken origin pointing at .git.tmp. Every
+    # subsequent `git fetch origin` (loader.py upgrades, re-running
+    # provision-pi.sh) would fatal. We restore the original URL after
+    # the conversion so future fetches hit GitHub, not a deleted path.
+    ORIGIN_URL=$(git -C "$REPO_DIR/.git" config remote.origin.url 2>/dev/null || true)
+
     mv "$REPO_DIR/.git" "$REPO_DIR/.git.tmp"
     git clone --bare "$REPO_DIR/.git.tmp" "$REPO_DIR/.git" >/dev/null
     rm -rf "$REPO_DIR/.git.tmp"
+
+    if [ -n "$ORIGIN_URL" ]; then
+        git -C "$REPO_DIR/.git" remote set-url origin "$ORIGIN_URL"
+    fi
 
     # The bare .git/ now exists; install the hook before worktree-add
     # so settings.toml lands in the just-created worktree.

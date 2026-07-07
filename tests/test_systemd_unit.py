@@ -285,6 +285,45 @@ class TestSetupPiScript:
             # sufficient for the 2-call pattern in this script.
             text = text[worktree_idx + 1 :]
 
+    def test_preserves_origin_across_bare_conversion(self):
+        """Bare conversion must restore origin; `git clone --bare <local-path>`
+        rewrites origin to the local source path, which then gets rm-rf'd.
+
+        Symptom if missing: every subsequent `git fetch origin` (loader.py
+        upgrades, re-running provision-pi.sh) fataled with
+        "'.git.tmp' does not appear to be a git repository / Could not read
+        from remote repository" — first surfaced in the wipe+provision retry
+        after the 7c43589 hook-install commit.
+        """
+        text = SETUP_PI_PATH.read_text()
+        # Find the non-bare conversion branch and check its body.
+        else_branch_idx = text.find("# Non-bare clone")
+        assert else_branch_idx > 0, "non-bare conversion branch missing"
+        else_branch = text[else_branch_idx : else_branch_idx + 1500]
+        # The conversion must read the origin URL from the OLD .git/config
+        # BEFORE the `mv .git .git.tmp` line destroys it.
+        capture_idx = else_branch.find("remote.origin.url")
+        mv_idx = else_branch.find('mv "$REPO_DIR/.git"')
+        assert capture_idx > 0, (
+            "non-bare conversion must capture remote.origin.url before " "the mv clobbers .git/config"
+        )
+        assert mv_idx > 0, "non-bare conversion mv line missing"
+        assert capture_idx < mv_idx, (
+            "origin capture must happen BEFORE `mv .git .git.tmp` " "(otherwise the source config is already gone)"
+        )
+        # The conversion must restore origin AFTER `git clone --bare` (which
+        # rewrote it to the local source path).
+        restore_idx = else_branch.find("remote set-url origin")
+        clone_idx = else_branch.find("git clone --bare")
+        assert restore_idx > 0, (
+            "non-bare conversion must restore origin after `git clone --bare` "
+            "(which set it to the local source path that gets rm-rf'd)"
+        )
+        assert clone_idx > 0, "non-bare conversion git clone --bare line missing"
+        assert restore_idx > clone_idx, (
+            "origin restoration must happen AFTER `git clone --bare` " "(restoring before the rewrite is a no-op)"
+        )
+
     def test_reloads_systemd_on_completion(self):
         """setup-pi.sh reloads systemd + restarts the service when present."""
         text = SETUP_PI_PATH.read_text()
