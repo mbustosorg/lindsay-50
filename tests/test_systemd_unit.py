@@ -246,6 +246,45 @@ class TestSetupPiScript:
             "not the dynamically-discovered for-each-ref form"
         )
 
+    def test_wires_up_post_checkout_hook(self):
+        """setup-pi.sh must symlink hooks/post-checkout → .git/hooks/post-checkout
+        before each `git worktree add`, so the hook fires on the bootstrap and on
+        every future loader.py upgrade.
+
+        Background: git only fires hooks from <gitdir>/hooks/. Without this
+        symlink, git falls back to post-checkout.sample (disabled), the hook
+        silently no-ops, and Phase 4 hard-stops on missing settings.toml —
+        the failure mode seen at 1676e70 during the wipe+provision test.
+        """
+        text = SETUP_PI_PATH.read_text()
+        # The function must exist (so the install is reusable across
+        # the three branches) and must use ln -sfn (idempotent).
+        assert "install_post_checkout_hook" in text, "setup-pi.sh must define install_post_checkout_hook"
+        # The symlink target and source must both be referenced.
+        assert ".git/hooks/post-checkout" in text
+        assert "hooks/post-checkout" in text
+        # The install call must happen BEFORE each `git worktree add`
+        # in both the partial-bootstrap and non-bare-conversion
+        # branches. (The already-bootstrapped branch doesn't add a
+        # worktree, but should still install the hook self-heal-style
+        # for future loader.py upgrades.)
+        #
+        # Find each `install_post_checkout_hook` call site and the
+        # nearest-following `worktree add`. The call must come first
+        # in each branch.
+        for _ in range(2):  # exactly 2 worktree-add call sites in the state machine
+            call_idx = text.find("install_post_checkout_hook")
+            worktree_idx = text.find("worktree add", call_idx)
+            assert call_idx > 0, "no install_post_checkout_hook call found"
+            assert worktree_idx > call_idx, (
+                "install_post_checkout_hook must be called BEFORE "
+                "`git worktree add` (otherwise the hook won't fire "
+                "on this add)"
+            )
+            # Advance past this pair to find the next one. Crude but
+            # sufficient for the 2-call pattern in this script.
+            text = text[worktree_idx + 1 :]
+
     def test_reloads_systemd_on_completion(self):
         """setup-pi.sh reloads systemd + restarts the service when present."""
         text = SETUP_PI_PATH.read_text()
@@ -299,9 +338,9 @@ class TestProvisionPiScript:
         """When LOCAL_SETTINGS doesn't exist, the script must exit non-zero with a clear message."""
         text = PROVISION_PI_PATH.read_text()
         # The "file not found" path:
-        assert "settings.toml not found at" in text, (
-            "provision-pi.sh must check settings.toml existence and surface a clear error"
-        )
+        assert (
+            "settings.toml not found at" in text
+        ), "provision-pi.sh must check settings.toml existence and surface a clear error"
         # And it must do so BEFORE doing any ssh/scp work — so the
         # operator with a missing file gets a fast failure, not a
         # half-bootstrapped Pi.
@@ -310,23 +349,22 @@ class TestProvisionPiScript:
         assert not_found_idx > 0, "missing-file error message not found"
         assert first_ssh_idx > 0, "no ssh invocation in script — must fail fast before network calls"
         assert not_found_idx < first_ssh_idx, (
-            "settings.toml check must come BEFORE any ssh/scp work so the "
-            "operator with a missing file fails fast"
+            "settings.toml check must come BEFORE any ssh/scp work so the " "operator with a missing file fails fast"
         )
 
     def test_detects_repo_root_or_fails(self):
         """Script must verify cwd is the lindsay-50 repo root (has .git + heart-matrix-controller/)."""
         text = PROVISION_PI_PATH.read_text()
-        assert "has no .git" in text or "not the lindsay-50 repo root" in text, (
-            "provision-pi.sh must verify cwd is the repo root before proceeding"
-        )
+        assert (
+            "has no .git" in text or "not the lindsay-50 repo root" in text
+        ), "provision-pi.sh must verify cwd is the repo root before proceeding"
 
     def test_ssh_preflight_is_used(self):
         """A BatchMode ssh pre-flight prevents the rest of the script running against an unreachable Pi."""
         text = PROVISION_PI_PATH.read_text()
-        assert "BatchMode" in text or "ConnectTimeout" in text, (
-            "provision-pi.sh must preflight ssh before doing destructive work"
-        )
+        assert (
+            "BatchMode" in text or "ConnectTimeout" in text
+        ), "provision-pi.sh must preflight ssh before doing destructive work"
 
     def test_ships_settings_via_scp(self):
         """settings.toml is shipped via scp to the canonical Pi path."""
@@ -347,8 +385,7 @@ class TestProvisionPiScript:
         handoff_idx = text.find("setup-pi.sh", scp_idx)
         assert scp_idx > 0, "no scp call found"
         assert handoff_idx > scp_idx, (
-            "scp of settings.toml must come before the final ssh-to-pi "
-            "hand-off to setup-pi.sh"
+            "scp of settings.toml must come before the final ssh-to-pi " "hand-off to setup-pi.sh"
         )
 
 

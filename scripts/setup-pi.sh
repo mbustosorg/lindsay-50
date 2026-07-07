@@ -104,6 +104,24 @@ fi
 # Phase 3: Bare-repo + worktree layout — idempotent
 # ---------------------------------------------------------------------------
 
+# install_post_checkout_hook: wire up the post-checkout hook so
+# `git worktree add` (whether in this script now, or in loader.py on
+# a future upgrade) auto-copies settings.toml into the new
+# worktree via scripts/sync_settings.sh.
+#
+# Background: git only fires hooks from <gitdir>/hooks/ (i.e.
+# /srv/lindsay-50/.git/hooks/). The hook we care about ships in
+# the repo at hooks/post-checkout (a regular tracked file). Without
+# the symlink, git falls back to post-checkout.sample (disabled),
+# the hook silently no-ops, and Phase 4 below hard-stops on missing
+# settings.toml. ln -sfn is idempotent — re-running just re-points.
+install_post_checkout_hook() {
+    if [ -d "$REPO_DIR/.git/hooks" ] && [ -f "$REPO_DIR/hooks/post-checkout" ]; then
+        ln -sfn "$REPO_DIR/hooks/post-checkout" "$REPO_DIR/.git/hooks/post-checkout"
+        echo "==> setup-pi: installed hooks/post-checkout → .git/hooks/post-checkout"
+    fi
+}
+
 # Three valid bootstrap states (only valid when the repo IS BARE):
 #   (a) bare + current symlink -> valid v-<sha>/ worktree: fully bootstrapped, skip
 #   (b) bare + no current symlink: partial bootstrap — finish without
@@ -173,12 +191,19 @@ if [ -n "$CURRENT_TARGET" ] && [ -d "$REPO_DIR/$CURRENT_TARGET" ] && [ "$IS_BARE
     # v-<sha>` here but the result wasn't used downstream, and the
     # call fataled on a non-bare repo with a stale `current` symlink.
     HEAD_SHA_SHORT="${CURRENT_TARGET#v-}"
+    # Self-heal: make sure the post-checkout hook is wired for future
+    # worktree-adds (e.g. loader.py upgrade flow). Idempotent.
+    install_post_checkout_hook
 elif [ "$IS_BARE" = "true" ]; then
     # Partial bootstrap — finish without re-converting.
     echo "==> setup-pi: bare repo detected, bootstrap incomplete; finishing"
     HEAD_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
     HEAD_SHA_SHORT=$(git -C "$REPO_DIR" rev-parse --short=7 HEAD)
     echo "    HEAD at $HEAD_SHA (v-$HEAD_SHA_SHORT)"
+
+    # Wire the post-checkout hook before worktree-add so the just-
+    # created worktree receives its settings.toml copy.
+    install_post_checkout_hook
 
     echo "==> setup-pi: creating v-$HEAD_SHA_SHORT worktree"
     git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA_SHORT" "$HEAD_SHA"
@@ -196,6 +221,10 @@ else
     mv "$REPO_DIR/.git" "$REPO_DIR/.git.tmp"
     git clone --bare "$REPO_DIR/.git.tmp" "$REPO_DIR/.git" >/dev/null
     rm -rf "$REPO_DIR/.git.tmp"
+
+    # The bare .git/ now exists; install the hook before worktree-add
+    # so settings.toml lands in the just-created worktree.
+    install_post_checkout_hook
 
     echo "==> setup-pi: creating v-$HEAD_SHA_SHORT worktree"
     git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA_SHORT" "$HEAD_SHA"
