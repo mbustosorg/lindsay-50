@@ -44,10 +44,10 @@ from typing import Callable, Optional
 
 from lib_shared.boot_config import (
     BootConfig,
-    current_sha as _shared_current_sha,
+    current_sha,
     fetch_boot_config,
+    short_sha,
 )
-from lib_shared.short_sha import short_sha
 
 logger = logging.getLogger("loader")
 
@@ -124,18 +124,6 @@ def main_py_for(repo_dir: Path) -> str:
 # ---------------------------------------------------------------------------
 # Stage / swap / status helpers
 # ---------------------------------------------------------------------------
-
-
-def current_sha(repo_dir: Path) -> Optional[str]:
-    """Resolve the active SHA through the `current/` symlink.
-
-    Reads `git -C <current_worktree> rev-parse HEAD` so the value
-    reflects what's actually live (not what's in the bare repo's
-    detached HEAD). Returns None if the symlink is missing or the
-    git invocation fails — the caller treats both as "boot into the
-    existing current/.../main.py" without staging anything new.
-    """
-    return _shared_current_sha(repo_dir)
 
 
 def stage_version(repo_dir: Path, expected_sha: str) -> Path:

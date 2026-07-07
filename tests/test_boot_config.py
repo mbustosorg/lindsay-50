@@ -22,11 +22,13 @@ import pytest
 
 from lib_shared.boot_config import (
     BOOT_CONFIG_PATH,
+    SHORT_SHA_LEN,
     BootConfig,
     current_sha,
     fetch_boot_config,
     from_heroku_or_git,
     from_response,
+    short_sha,
 )
 
 
@@ -293,3 +295,23 @@ class TestFromHerokuOrGit:
             assert bc.expected_sha in ("", "")  # either empty or from git
         finally:
             del os.environ["HEROKU_SLUG_COMMIT"]
+
+
+class TestShortSha:
+    def test_truncates_to_first_seven(self):
+        assert short_sha("b5e191c5df481d51c4e7d1cced51cf7c656f1ead") == "b5e191c"
+
+    def test_passes_through_short_input(self):
+        assert short_sha("abc1234") == "abc1234"
+
+    def test_handles_exact_length(self):
+        """A string exactly equal to SHORT_SHA_LEN should be passed through,
+        not truncated to zero or otherwise mangled."""
+        assert SHORT_SHA_LEN == 7
+        assert short_sha("abc1234") == "abc1234"
+        assert len(short_sha("abc1234")) == 7
+
+    def test_handles_empty_string(self):
+        """Empty input is a degenerate case (a SHA-less ref) — passed through
+        rather than exploded, so callers can log it without crashing."""
+        assert short_sha("") == ""
