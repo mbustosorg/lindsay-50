@@ -730,6 +730,25 @@ def settings():
                 _save_and_publish(cfg)
                 return redirect(url_for("settings"))
 
+        # Pretty-print the raw POST so an operator (or the next debugging
+        # session) can see EXACTLY what the /settings form submitted.
+        # Without this, form field-name mismatches look like "the value
+        # silently didn't save" with no on-the-wire evidence. We log at
+        # INFO because the volume is low (1 POST per settings save) and
+        # the diagnostic value is high.
+        import json as _json
+        form_keys = sorted(request.form.keys())
+        logger.info(
+            "[settings] POST /settings raw_form_keys=%d form=%s",
+            len(form_keys),
+            _json.dumps(
+                {k: request.form.get(k) for k in form_keys},
+                indent=2,
+                sort_keys=True,
+                default=str,
+            ),
+        )
+
         sign_name = request.form.get("sign_name", "").strip()
         if sign_name:
             cfg.sign.name = sign_name
@@ -765,20 +784,41 @@ def settings():
 
         # Effect settings: pacing (fade/hold/intro/idle seconds), recent_count,
         # and the rotation list (handled by the multi-effect form below).
+        #
+        # BUGFIX (2026-07-07): the previous handler built field names as
+        # `f"effects_settings{field}"` which produced `effects_settingsfade_seconds`
+        # — the template (templates/settings.html) actually sends
+        # `effects_settings_fade_seconds` with a separating underscore. The
+        # mismatch made `request.form.get(...)` return None for every pacing
+        # field and `recent_count`, so setattr() never ran and saves looked
+        # like "the value silently reverted". The per-field log below now
+        # reports the raw value actually submitted vs. what landed on the cfg.
         es_form = cfg.effects_settings
+        pacing_summary: dict[str, str] = {}
         for field in ("fade_seconds", "hold_seconds", "intro_seconds", "idle_seconds"):
-            raw = request.form.get(f"effects_settings{field}")
+            raw = request.form.get(f"effects_settings_{field}")
             if raw is not None and raw != "":
                 try:
-                    setattr(es_form, field, float(raw))
+                    new_val = float(raw)
+                    setattr(es_form, field, new_val)
+                    pacing_summary[field] = f"POST={raw!r} saved={new_val}"
                 except ValueError:
-                    pass
-        rc_raw = request.form.get("effects_settings")
+                    pacing_summary[field] = f"POST={raw!r} DROPPED (not a float)"
+            else:
+                pacing_summary[field] = "absent"
+        rc_raw = request.form.get("effects_settings_recent_count")
         if rc_raw is not None and rc_raw != "":
             try:
                 es_form.recent_count = int(rc_raw)
+                pacing_summary["recent_count"] = f"POST={rc_raw!r} saved={rc_raw}"
             except ValueError:
-                pass
+                pacing_summary["recent_count"] = f"POST={rc_raw!r} DROPPED (not an int)"
+        else:
+            pacing_summary["recent_count"] = "absent"
+        logger.info(
+            "[settings] effect pacing merge: %s",
+            _json.dumps(pacing_summary, sort_keys=True),
+        )
 
         # Effect rotation list: the form posts the canonical order with each
         # entry's `enabled` checkbox value (or absence). Rebuild the list

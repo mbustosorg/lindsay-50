@@ -464,3 +464,163 @@ class TestTwilioSignature:
         # "at least one pretty-printed record + one summary record".
         pretty_records = [r for r in caplog.records if "Twilio webhook fields" in r.getMessage()]
         assert len(pretty_records) >= 1, "expected at least one pretty-printed fields log line"
+
+
+# ---------------------------------------------------------------------------
+# 5.11 — /settings POST: form field-name merge contract
+# ---------------------------------------------------------------------------
+
+
+class TestSettingsSaveFormFieldMerge:
+    """`templates/settings.html` posts pacing fields as
+    `effects_settings_fade_seconds`, `effects_settings_hold_seconds`,
+    etc. (underscore separators). The Python handler MUST look those
+    exact field names up — if it concatenates ``f"effects_settings{field}"``
+    it builds ``effects_settingsfade_seconds`` (no separator) and the
+    ``request.form.get(...)`` returns ``None`` for every pacing field,
+    so ``setattr`` never runs and the user's value silently doesn't
+    save. These tests pin the contract — both that the right name is
+    queried AND that the raw POST is logged for future debugging.
+    """
+
+    def _baseline_cfg(self):
+        """A MagicMock that mimics SignConfig well enough for the merge.
+
+        The /settings handler reads `.sign.name`, `.timezone`,
+        `.text_settings.<attr>`, `.effects_settings.<attr>`, `.filters`,
+        `.senders`. MagicMock returns a child mock for every attribute
+        access, so the read paths work; the setattr calls also work
+        because MagicMock records attribute writes and returns the
+        last-written value on subsequent reads — which is what we use
+        to verify the merge landed.
+        """
+        cfg = MagicMock()
+        cfg.sign.name = "Lindsay's Heart"
+        cfg.timezone = "America/Los_Angeles"
+        cfg.filters = []
+        cfg.senders = {}
+        return cfg
+
+    def test_post_settings_saves_fade_seconds_from_form(self, app, client):
+        """If the user POSTs effects_settings_fade_seconds=5, the saved
+        config's effects_settings.fade_seconds must equal 5.0.
+        Regression for the field-name mismatch that previously made
+        every pacing save silently revert to the loaded baseline."""
+        import sqlite as sqlite_mod
+
+        baseline_cfg = self._baseline_cfg()
+        sqlite_mod.get_config.return_value = baseline_cfg
+
+        # Login via the standard path so the session is authenticated.
+        client.post("/login", data={"username": "admin", "password": "secret123"})
+
+        response = client.post(
+            "/settings",
+            data={
+                "sign_name": "Lindsay's Heart",
+                "timezone": "America/Los_Angeles",
+                "effects_settings_fade_seconds": "5",
+                "effects_settings_hold_seconds": "20",
+                "effects_settings_intro_seconds": "5",
+                "effects_settings_idle_seconds": "300",
+                "effects_settings_recent_count": "7",
+            },
+            follow_redirects=False,
+        )
+
+        # Successful save → 302 redirect to /settings
+        assert response.status_code == 302, response.data
+
+        # All four pacing fields and recent_count must have landed on the
+        # cfg that was passed to put_config (MagicMock attribute writes are
+        # recordable, so we read them back through the cfg MagicMock).
+        assert baseline_cfg.effects_settings.fade_seconds == 5.0
+        assert baseline_cfg.effects_settings.hold_seconds == 20.0
+        assert baseline_cfg.effects_settings.intro_seconds == 5.0
+        assert baseline_cfg.effects_settings.idle_seconds == 300.0
+        assert baseline_cfg.effects_settings.recent_count == 7
+
+        # And the saved cfg must have been persisted to sqlite.
+        assert sqlite_mod.put_config.called, "expected sqlite.put_config to be called"
+
+    def test_post_settings_leaves_pacing_alone_when_field_absent(self, app, client):
+        """If the form omits a pacing field (e.g. a /settings save that
+        only filters), the existing value must survive. This pins the
+        guard that `if raw is not None and raw != "":` provides — without
+        that guard the field would silently reset to 0.0 on every save."""
+        import sqlite as sqlite_mod
+
+        baseline_cfg = self._baseline_cfg()
+        # Set non-zero baselines so we can detect an accidental zero.
+        baseline_cfg.effects_settings.fade_seconds = 2.0
+        baseline_cfg.effects_settings.hold_seconds = 15.0
+        sqlite_mod.get_config.return_value = baseline_cfg
+
+        client.post("/login", data={"username": "admin", "password": "secret123"})
+
+        # POST with NONE of the pacing fields (e.g. a filter-only save).
+        response = client.post(
+            "/settings",
+            data={
+                "sign_name": "Lindsay's Heart",
+                "timezone": "America/Los_Angeles",
+            },
+            follow_redirects=False,
+        )
+
+        assert response.status_code == 302, response.data
+        # Baselines must still be intact (not overwritten with 0 or None).
+        assert baseline_cfg.effects_settings.fade_seconds == 2.0
+        assert baseline_cfg.effects_settings.hold_seconds == 15.0
+
+    def test_post_settings_logs_raw_form_and_merge_summary(self, app, client, caplog):
+        """The /settings handler MUST log the raw POST fields and a
+        per-field pacing merge summary at INFO level. Without that, the
+        next time a field-name bug shows up, there's no on-the-wire
+        evidence of what the form actually submitted."""
+        import logging
+        import sqlite as sqlite_mod
+
+        baseline_cfg = self._baseline_cfg()
+        sqlite_mod.get_config.return_value = baseline_cfg
+
+        client.post("/login", data={"username": "admin", "password": "secret123"})
+        caplog.set_level(logging.INFO)
+
+        response = client.post(
+            "/settings",
+            data={
+                "sign_name": "Lindsay's Heart",
+                "timezone": "America/Los_Angeles",
+                "effects_settings_fade_seconds": "5",
+                "effects_settings_hold_seconds": "15",
+                "effects_settings_intro_seconds": "5",
+                "effects_settings_idle_seconds": "300",
+                "effects_settings_recent_count": "5",
+            },
+            follow_redirects=False,
+        )
+        assert response.status_code == 302, response.data
+
+        joined = "\n".join(record.getMessage() for record in caplog.records)
+
+        # Raw-form log line must be present and contain every form key.
+        raw_records = [r for r in caplog.records if "[settings] POST /settings raw_form_keys=" in r.getMessage()]
+        assert len(raw_records) >= 1, "expected a raw-form log line"
+        for key in (
+            "sign_name",
+            "effects_settings_fade_seconds",
+            "effects_settings_recent_count",
+        ):
+            assert key in raw_records[0].getMessage(), (
+                f"raw-form log missing {key!r}; got: {raw_records[0].getMessage()[:500]}"
+            )
+
+        # Pacing merge summary must report fade_seconds as POST='5' saved=5.0.
+        merge_records = [r for r in caplog.records if "[settings] effect pacing merge" in r.getMessage()]
+        assert len(merge_records) >= 1, "expected a pacing-merge log line"
+        merge_msg = merge_records[0].getMessage()
+        assert "fade_seconds" in merge_msg
+        assert "POST='5'" in merge_msg, merge_msg
+        assert "saved=5.0" in merge_msg, merge_msg
+        assert "recent_count" in merge_msg
