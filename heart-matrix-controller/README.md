@@ -8,6 +8,65 @@ Runs on a Raspberry Pi with a 64×64 HUB75 LED panel (two stacked 64×32 panels,
 - **Controller**: Raspberry Pi with [hzeller rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library
 - **Configuration**: `settings.toml` or environment variables
 
+## Pi deployment
+
+The Pi needs one operator-provided file: `settings.toml` (MQTT creds,
+panel geometry, log level, etc.). Everything else ships in the repo.
+Copy the file **once** from your laptop; subsequent version bumps are
+handled by the post-checkout hook.
+
+### One-time copy
+
+The systemd service runs as root and reads `settings.toml` from the
+bare repo's parent dir on the Pi:
+
+```
+/srv/lindsay-50/heart-matrix-controller/settings.toml
+```
+
+From your laptop, scp it as root (sudo on the Pi side handles
+ownership; the file is in the bare repo's parent dir which is only
+writable as root):
+
+```bash
+sudo scp ~/secrets/lindsay-50/heart-matrix-controller/settings.toml \
+    root@lindsay-50:/srv/lindsay-50/heart-matrix-controller/settings.toml
+```
+
+Replace `~/secrets/lindsay-50/...` with wherever you keep the
+canonical copy (the repo's `.gitignore` excludes
+`heart-matrix-controller/settings.toml`, so a sibling of a checked-out
+source tree is also fine).
+
+### Bootstrap
+
+```bash
+sudo /srv/lindsay-50/scripts/setup-pi.sh
+```
+
+The script converts the clone into a bare repo + per-version
+worktrees, installs the systemd unit, and starts the `lindsay_50`
+service. If `settings.toml` is missing, the script hard-stops with
+recovery instructions — copy it in (see above) and re-run.
+
+### Subsequent version bumps
+
+After the first setup, every `git worktree add` (whether triggered by
+`setup-pi.sh`, the upgrade flow in `loader.py`, or manually) fires
+`hooks/post-checkout`, which calls `scripts/sync_settings.sh` to copy
+the canonical `settings.toml` into the new `v-<sha>/` worktree. You
+only need to drop a fresh `settings.toml` at the canonical Pi path
+when your settings **change**; you do **not** have to re-scp on every
+version bump.
+
+To force-refresh an existing worktree (e.g. after a settings change
+didn't survive a worktree swap):
+
+```bash
+# On the Pi, inside any v-<sha>/heart-matrix-controller/ worktree:
+../../scripts/sync_settings.sh --force
+```
+
 ## Architecture
 
 ```

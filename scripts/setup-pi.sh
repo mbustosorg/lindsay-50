@@ -17,6 +17,27 @@
 #
 # Expected downtime on a fresh Pi: 5–10 minutes (rgbmatrix C build is slow).
 # On an already-bootstrapped Pi: < 5 seconds.
+#
+# --------------------------------------------------------------------------
+# settings.toml — operator-provided, NOT in the repo
+# --------------------------------------------------------------------------
+# settings.toml is the one file the operator drops onto the Pi by hand:
+# MQTT creds, panel geometry, log level. It is .gitignore'd (so git
+# never sees it) and lives at the canonical path:
+#
+#     $REPO_DIR/heart-matrix-controller/settings.toml
+#
+# (root-owned, since systemd runs as root). This script does NOT
+# handle the canonical copy — the operator runs `scp` once from their
+# laptop. On every subsequent `git worktree add`, the chain
+#
+#     hooks/post-checkout → scripts/sync_settings.sh
+#
+# auto-copies the canonical file into the new v-<sha>/worktree, so
+# a version bump does not require another scp. See
+# heart-matrix-controller/README.md#pi-deployment for the scp
+# one-liner. If Phase 4 below hard-stops, the canonical file is
+# missing; scp it in and re-run this script.
 
 set -euo pipefail
 
@@ -206,15 +227,15 @@ if [ ! -f "$SETTINGS" ]; then
     echo "ERROR: $SETTINGS is missing." >&2
     echo "The sign will not boot without it (no MQTT creds, no panel geometry)." >&2
     echo "" >&2
-    echo "To fix (existing Pi with v1 install — preserves creds/geometry):" >&2
-    echo "  sudo cp /home/<your-user>/lindsay-50/heart-matrix-controller/settings.toml \\" >&2
-    echo "          $SETTINGS" >&2
+    echo "The canonical copy lives at the bare repo's parent dir:" >&2
+    echo "  $REPO_DIR/heart-matrix-controller/settings.toml" >&2
     echo "" >&2
-    echo "To fix (fresh Pi — copy from example and fill in real values):" >&2
-    echo "  sudo cp $SETTINGS_EXAMPLE $SETTINGS" >&2
-    echo "  sudo nano $SETTINGS" >&2
+    echo "On your laptop, scp it from wherever you keep the canonical copy:" >&2
+    echo "  sudo scp <local-settings.toml> \\" >&2
+    echo "      root@<this-pi>:$REPO_DIR/heart-matrix-controller/settings.toml" >&2
     echo "" >&2
     echo "Then re-run: sudo $0" >&2
+    echo "(see heart-matrix-controller/README.md#pi-deployment for details)" >&2
     exit 1
 fi
 echo "==> setup-pi: settings.toml present"
