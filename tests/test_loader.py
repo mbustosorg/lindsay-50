@@ -418,6 +418,72 @@ class TestFetchExpectedSha:
         assert result is None
 
 
+class TestRefreshBareRepo:
+    """`refresh_bare_repo` runs `git fetch origin` to update the bare repo's
+    remote-tracking refs before staging. Without this, the bare repo's
+    refdb is frozen at provision time and `git worktree add <new_sha>`
+    fails for any commit the operator pushed AFTER provisioning —
+    which is the normal case."""
+
+    def test_returns_true_on_success(self, loader, monkeypatch, tmp_path):
+        called = []
+
+        def fake_check_call(args, **kwargs):
+            called.append(args)
+            return 0
+
+        monkeypatch.setattr(loader.subprocess, "check_call", fake_check_call)
+        result = loader.refresh_bare_repo(tmp_path)
+        assert result is True
+        assert len(called) == 1
+        # Verify the args: git -C <repo> fetch <remote> <refspec>
+        args = called[0]
+        assert args[0] == "git"
+        assert args[1] == "-C"
+        assert args[2] == str(tmp_path)
+        assert args[3] == "fetch"
+        assert args[4] == "origin"
+        assert "+refs/heads/*" in args[5]
+
+    def test_returns_false_on_calledprocesserror(self, loader, monkeypatch, tmp_path):
+        def fake_check_call(args, **kwargs):
+            raise loader.subprocess.CalledProcessError(
+                128, args, stderr=b"fatal: could not resolve host"
+            )
+
+        monkeypatch.setattr(loader.subprocess, "check_call", fake_check_call)
+        result = loader.refresh_bare_repo(tmp_path)
+        assert result is False
+
+    def test_returns_false_on_timeout(self, loader, monkeypatch, tmp_path):
+        def fake_check_call(args, **kwargs):
+            raise loader.subprocess.TimeoutExpired(args, 30)
+
+        monkeypatch.setattr(loader.subprocess, "check_call", fake_check_call)
+        result = loader.refresh_bare_repo(tmp_path)
+        assert result is False
+
+    def test_returns_false_when_git_missing(self, loader, monkeypatch, tmp_path):
+        def fake_check_call(args, **kwargs):
+            raise FileNotFoundError("git not found")
+
+        monkeypatch.setattr(loader.subprocess, "check_call", fake_check_call)
+        result = loader.refresh_bare_repo(tmp_path)
+        assert result is False
+
+    def test_uses_provided_remote_name(self, loader, monkeypatch, tmp_path):
+        called = []
+
+        def fake_check_call(args, **kwargs):
+            called.append(args)
+            return 0
+
+        monkeypatch.setattr(loader.subprocess, "check_call", fake_check_call)
+        result = loader.refresh_bare_repo(tmp_path, remote="upstream")
+        assert result is True
+        assert called[0][4] == "upstream"
+
+
 # ---------------------------------------------------------------------------
 # run_upgrade_flow — full orchestration (no Popen return; execvpe instead)
 # ---------------------------------------------------------------------------

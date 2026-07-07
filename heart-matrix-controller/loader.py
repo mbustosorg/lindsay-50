@@ -63,6 +63,17 @@ DEFAULT_PROBE_TOTAL_S = 12.0  # wall-clock budget for the whole probe
 DEFAULT_PROBE_KILL_GRACE_S = 2.0  # after SIGTERM before SIGKILL
 DEFAULT_STATUS_PATH = ".status.json"
 
+# Refspec used to refresh the bare repo's remote-tracking branches.
+# Mirrors what `scripts/setup-pi.sh` does at provision time so the
+# fetch behavior is consistent whether we boot or re-provision.
+FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*"
+
+# Default timeout for `git fetch origin`. Generous enough that a
+# cold SSL handshake to GitHub doesn't trip the timer on slow
+# networks; short enough that a fully-down link doesn't stall the
+# boot sequence for more than ~30s.
+DEFAULT_FETCH_TIMEOUT_S = 30.0
+
 
 # ---------------------------------------------------------------------------
 # Custom exceptions (typed so callers can catch specific failures)
@@ -186,6 +197,65 @@ def stage_version(repo_dir: Path, expected_sha: str) -> Path:
 
     logger.info("loader: staged %s at %s", short_sha(expected_sha), target)
     return target
+
+
+def refresh_bare_repo(
+    repo_dir: Path,
+    *,
+    remote: str = "origin",
+    refspec: str = FETCH_REFSPEC,
+    timeout_s: float = DEFAULT_FETCH_TIMEOUT_S,
+) -> bool:
+    """Refresh the bare repo's remote-tracking refs.
+
+    Required before `stage_version`: the bare repo's refdb only
+    carries the refs that were present at provision time (when
+    `scripts/setup-pi.sh` ran `git clone --bare` and a one-shot
+    `git fetch`). Without this refresh, `git worktree add
+    <expected_sha>` fails with "invalid reference" whenever the
+    expected SHA was pushed to the source branch AFTER the Pi was
+    provisioned — which is the normal case (the operator pushes
+    to main on their laptop, the Pi picks it up on next boot).
+
+    Uses the same refspec as setup-pi.sh's bootstrap fetch so the
+    behavior is consistent across both paths. Refspec pins to
+    `refs/remotes/origin/*` (not `refs/heads/*`) so the bare
+    repo's `HEAD` stays where setup-pi.sh pinned it; the loader
+    only consumes the remote-tracking branches, never the bare
+    repo's HEAD.
+
+    Returns True on success, False on any failure (no remote,
+    network down, git missing, timeout). The caller treats False
+    as "couldn't refresh refs, fall through to existing current"
+    — same posture as a failed boot-config fetch.
+
+    The loader runs as root (matches the systemd unit's `User=root`)
+    and the bare repo's `origin` points at GitHub over HTTPS, so
+    no SSH agent or credential material is needed.
+    """
+    try:
+        subprocess.check_call(
+            [
+                "git",
+                "-C",
+                str(repo_dir),
+                "fetch",
+                remote,
+                refspec,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            timeout=timeout_s,
+        )
+        logger.info("loader: fetched %s on %s", remote, repo_dir)
+        return True
+    except (
+        subprocess.CalledProcessError,
+        subprocess.TimeoutExpired,
+        FileNotFoundError,
+    ) as exc:
+        logger.warning("loader: fetch from %s failed: %s", remote, exc)
+        return False
 
 
 def atomic_swap(repo_dir: Path, expected_sha: str) -> None:
@@ -458,6 +528,17 @@ def run_upgrade_flow(
 
     if local == expected:
         logger.info("loader: local SHA matches expected; no upgrade needed")
+        exec_fn(repo_dir, local or "")
+        return
+
+    # Mismatch — refresh the bare repo's remote-tracking refs first.
+    # The bare repo's refdb is frozen at provision time (setup-pi.sh
+    # does one fetch on bootstrap), so any commit the operator pushed
+    # AFTER the Pi was installed isn't reachable via `git worktree add`
+    # until we fetch. Refreshing before staging is the fix.
+    # On failure, fall through to existing current — same posture as a
+    # failed boot-config fetch above.
+    if not refresh_bare_repo(repo_dir):
         exec_fn(repo_dir, local or "")
         return
 
