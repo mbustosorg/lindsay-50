@@ -63,6 +63,91 @@ LINDSAY50_LOCAL_SETTINGS=~/secrets/lindsay-50/settings.toml \
     scripts/provision-pi.sh root@lindsay-50
 ```
 
+### SSH access — publickey and password
+
+The Pi accepts root login via both **publickey** (what
+`provision-pi.sh` uses for unattended provisioning) and **password**
+(useful for ad-hoc / shared access). Enable both once with:
+
+```bash
+# On the Pi, as a user with sudo (e.g. the default `rosie` user):
+sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak-$(date +%F)   # optional safety
+sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sudo systemctl restart ssh
+sudo sshd -T | grep -iE "permitroot|passwordauth"
+# expect: permitrootlogin yes / passwordauthentication yes
+```
+
+Setting `PermitRootLogin yes` (rather than `prohibit-password`)
+allows both methods simultaneously — that's the point: pick whichever
+works at the moment. `setup-pi.sh` doesn't touch sshd_config, so
+this state persists across all subsequent re-runs and version bumps.
+
+#### Publickey path (recommended — what `provision-pi.sh` uses)
+
+Key-only auth, no prompts. Required for `provision-pi.sh`'s
+`BatchMode=yes` preflight.
+
+On the laptop, generate or pick a key:
+
+```bash
+test -f ~/.ssh/id_ed25519.pub || ssh-keygen -t ed25519
+# (If you already use ssh keys for GitHub / Heroku, you have one already.)
+```
+
+Install that key into the Pi's root `authorized_keys`. The cleanest
+path avoids password auth entirely:
+
+```bash
+# 1. Print the key on the laptop:
+cat ~/.ssh/id_ed25519.pub
+# 2. On the Pi, paste the line:
+sudo install -d -m 700 -o root -g root /root/.ssh
+echo 'PASTE_PUBKEY_LINE_HERE' | sudo tee /root/.ssh/authorized_keys >/dev/null
+sudo chmod 600 /root/.ssh/authorized_keys
+```
+
+Or push it over the working `pi`/`rosie` user's SSH:
+
+```bash
+scp ~/.ssh/id_ed25519.pub <user>@lindsay-50.local:/tmp/id_ed25519.pub
+ssh <user>@lindsay-50.local \
+  'sudo install -m 600 -o root -g root /tmp/id_ed25519.pub /root/.ssh/authorized_keys \
+   && sudo rm /tmp/id_ed25519.pub'
+```
+
+Verify from the laptop — should print `ok` with **no password prompt**:
+
+```bash
+ssh root@lindsay-50.local 'echo ok'
+```
+
+#### Password path (fallback for ad-hoc / shared access)
+
+With `PasswordAuthentication yes` set above, anyone with the root
+password can `ssh root@lindsay-50.local` from a fresh machine:
+
+```bash
+# Set the root password first (you'll be prompted twice):
+ssh root@lindsay-50.local 'sudo passwd root'
+
+# Then from any machine with this Pi's network reach:
+ssh root@lindsay-50.local   # password prompt
+```
+
+To turn password off later (key-only mode) without losing the
+publickey install:
+
+```bash
+sudo sed -i 's/^PasswordAuthentication yes$/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo systemctl restart ssh
+```
+
+`PermitRootLogin yes` should remain `yes` even in key-only mode (so
+publickey auth still works) — only flip it to `prohibit-password`
+if you want the server to actively reject every other method.
+
 ### Running `setup-pi.sh` directly on the Pi
 
 You normally don't need to. But if you want to bootstrap the Pi
