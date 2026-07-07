@@ -63,6 +63,15 @@ DEFAULT_PROBE_TOTAL_S = 12.0  # wall-clock budget for the whole probe
 DEFAULT_PROBE_KILL_GRACE_S = 2.0  # after SIGTERM before SIGKILL
 DEFAULT_STATUS_PATH = ".status.json"
 
+# `git worktree add` timeout. The checkout step on a Raspberry Pi SD
+# card can easily take 30-90s for a repo of this size (the bare repo
+# has hundreds of objects; checkout under SD-card IO pressure is the
+# slow part, not the network fetch). 30s was too tight — empirically
+# the loader hit it on the 2026-07-07 v-0232104→f960136 swap. 120s
+# stays bounded (operator won't wait minutes) but tolerates slow
+# storage.
+DEFAULT_WORKTREE_ADD_TIMEOUT_S = 120.0
+
 # Refspec used to refresh the bare repo's remote-tracking branches.
 # Mirrors what `scripts/setup-pi.sh` does at provision time so the
 # fetch behavior is consistent whether we boot or re-provision.
@@ -196,7 +205,7 @@ def stage_version(repo_dir: Path, expected_sha: str) -> Path:
             check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
-            timeout=30,
+            timeout=DEFAULT_WORKTREE_ADD_TIMEOUT_S,
         )
     except subprocess.CalledProcessError as e:
         stderr_text = e.stderr.decode(errors="replace") if e.stderr else ""
