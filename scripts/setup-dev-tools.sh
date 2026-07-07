@@ -30,9 +30,9 @@ fi
 . .venv/bin/activate
 pip install -q --upgrade pip
 
-if [ -f "requirements.txt" ]; then
-  pip install -q -r requirements.txt
-  echo "Installed deps from requirements.txt"
+if [ -f "requirements-flask.txt" ]; then
+  pip install -q -r requirements-flask.txt
+  echo "Installed Flask deps from requirements-flask.txt"
 fi
 
 if [ -d "tests" ]; then

@@ -4,23 +4,29 @@
 The `MessageEnvelope` class MUST accept `type="command"` with a payload dict. The `from_json` and `to_json` constructors MUST round-trip the new type without modification (the type field is already a free-form string).
 
 #### Scenario: Command envelope serializes and deserializes
-- **WHEN** code constructs `MessageEnvelope("command", {"action": "reboot"})` and calls `to_json`
-- **THEN** output is `{"type":"command","payload":{"action":"reboot"}}` and `from_json` round-trips it identically
+- **WHEN** code constructs `MessageEnvelope("command", {"action": "check-for-update"})` and calls `to_json`
+- **THEN** output is `{"type":"command","payload":{"action":"check-for-update"}}` and `from_json` round-trips it identically
 
-### Requirement: MessageManager dispatches command envelopes
-`MessageManager.dispatch` MUST route envelopes with `type="command"` to a command handler. Unknown command actions MUST be logged and dropped without side effects.
+### Requirement: MessageManager dispatches command envelopes to registered handlers
+`MessageManager.dispatch` MUST route envelopes with `type="command"` to a handler looked up from the `command_handlers` mapping by the payload's `action` field. Unknown command actions and missing handlers MUST be logged and dropped without side effects.
 
-#### Scenario: Valid reboot command
-- **WHEN** dispatcher receives `{"type":"command","payload":{"action":"reboot"}}`
-- **THEN** command handler runs `os.system("sudo reboot")` and the Pi reboots within ~5 seconds
+The `command_handlers` mapping is supplied at construction time (and may be extended via `register_command_handler`); it MUST default to an empty mapping. The mapping returned by `MessageManager.command_handlers` MUST be a copy of the internal state (callers cannot mutate it).
+
+#### Scenario: Valid check-for-update command
+- **WHEN** dispatcher receives `{"type":"command","payload":{"action":"check-for-update"}}` and a `check-for-update` handler is registered
+- **THEN** dispatcher invokes the registered handler with the envelope's payload
 
 #### Scenario: Unknown command action
-- **WHEN** dispatcher receives `{"type":"command","payload":{"action":"dance"}}`
-- **THEN** command handler logs a warning and takes no action
+- **WHEN** dispatcher receives `{"type":"command","payload":{"action":"dance"}}` and no `dance` handler is registered
+- **THEN** dispatcher logs a warning and takes no action
 
 #### Scenario: Missing or malformed payload
 - **WHEN** dispatcher receives `{"type":"command","payload":null}` or `{"type":"command"}`
-- **THEN** command handler logs a warning and takes no action
+- **THEN** dispatcher logs a warning and takes no action
+
+#### Scenario: Handler raises an exception
+- **WHEN** the registered handler raises (any exception) while being invoked
+- **THEN** dispatcher logs the error and continues running (does NOT crash, does NOT propagate to MQTT loop)
 
 ### Requirement: Existing envelope types continue to work
 Adding the `type=command` branch MUST NOT change the dispatch behavior for `type=message` or `type=config`.

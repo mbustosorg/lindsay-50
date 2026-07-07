@@ -1,0 +1,22 @@
+# Flask server dependencies (heart-message-manager/) — deployed to Heroku.
+# Install on the laptop for dev: pip install -r requirements-flask.txt
+# Install on Heroku: requires PIP_REQUIREMENTS_PATH=requirements-flask.txt
+# to be set on the app (Heroku's default lookup is requirements.txt at
+# the repo root, which no longer exists after the split — see README.md
+# for the one-time heroku config:set command).
+# Python is pinned to 3.12 via .python-version.
+
+# Web app
+flask>=3.0
+flask-login>=0.6
+gunicorn>=21.0
+
+# AWS / storage
+boto3>=1.34
+
+# Messaging
+paho-mqtt         # MQTT — every platform (Flask, Pi, browser-side WS URL)
+twilio>=8.0       # inbound SMS webhook signature validation
+
+# HTTP (MessageManager seed)
+requests>=2.31

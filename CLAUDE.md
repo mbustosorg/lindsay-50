@@ -49,7 +49,9 @@ lindsay-50/
 │   ├── pngs/                    # artwork for the png_display pattern
 │   └── videos/                  # clips for the video_display pattern
 ├── scripts/                     # start/stop helpers, Pi systemd service + startup
-├── requirements.txt
+├── requirements-flask.txt       # Flask server deps (Heroku + laptop dev)
+├── requirements-pi.txt          # Pi display device deps (setup-pi.sh)
+├── requirements-provisioner.txt # Laptop-side provisioner deps (provision-pi.sh)
 └── .venv/
 ```
 
@@ -59,7 +61,9 @@ lindsay-50/
 # Create venv and install dependencies
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-flask.txt
+# (Pi deps installed by scripts/setup-pi.sh; provisioner deps via
+# requirements-provisioner.txt — see "Laptop provisioner" below.)
 
 # Copy settings files and fill in values
 cp heart-message-manager/settings.toml.example heart-message-manager/settings.toml
@@ -144,16 +148,21 @@ If a design conversation drifts toward "let's write a JS version of `MessageMana
 
 ## Raspberry Pi 4 setup
 
-Wi-Fi is managed by the Pi OS (`nmcli` / `raspi-config`), not this process. The LED panel is driven by the [hzeller rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library (its Python bindings, `rgbmatrix`, are pulled in by `requirements.txt`).
+Wi-Fi is managed by the Pi OS (`nmcli` / `raspi-config`), not this process. The LED panel is driven by the [hzeller rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library (its Python bindings, `rgbmatrix`, are pulled in by `requirements-pi.txt`).
+
+The Pi only needs its own deps (not the Flask server's). `scripts/setup-pi.sh`
+runs `pip install -r requirements-pi.txt` automatically on first bootstrap.
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r heart-matrix-controller/requirements.txt   # builds the rgbmatrix C extension
+pip install -r requirements-pi.txt   # builds the rgbmatrix C extension
 
-# Scrolling text needs a BDF font. Copy one from the rpi-rgb-led-matrix repo:
-mkdir -p heart-matrix-controller/fonts
-# cp <rpi-rgb-led-matrix>/fonts/6x9.bdf heart-matrix-controller/fonts/
+# Scrolling text uses `heart-matrix-controller/fonts/8x13.bdf` by
+# default. The repo also ships `heart-matrix-controller/fonts/6x9.bdf`
+# as a smaller alternative — both are public-domain Markus Kuhn fonts
+# vendored from the hzeller rpi-rgb-led-matrix repo. Switch via the
+# FONT_PATH key in settings.toml.
 
 cp heart-matrix-controller/settings.toml.example heart-matrix-controller/settings.toml
 # fill in MQTT_*, the API URLs, FONT_PATH, and the MATRIX_* panel geometry
@@ -168,7 +177,7 @@ sudo PYTHONPATH=.. LOG_LEVEL=INFO python3 main.py
 
 ### Run as a systemd service
 
-`scripts/lindsay_50.service` runs the controller at boot via `scripts/startup_matrix_server.sh` (which cds into `heart-matrix-controller/`, activates the repo-root `.venv`, sets `PYTHONPATH` to the repo root, and runs `main.py` as root). Both files assume the repo is cloned at `/home/pi/projects/lindsay-50` — edit `REPO_DIR` in the script and the paths in the unit file if yours differs.
+`scripts/lindsay_50.service` runs the controller at boot via `scripts/startup_matrix_server.sh` (which cds into `heart-matrix-controller/`, activates the repo-root `.venv`, sets `PYTHONPATH` to the repo root, and runs `main.py` as root). Both files assume the repo is cloned at `/srv/lindsay-50` — edit `REPO_DIR` in the script and the paths in the unit file if yours differs.
 
 ```bash
 sudo cp scripts/lindsay_50.service /etc/systemd/system/

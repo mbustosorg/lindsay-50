@@ -26,12 +26,23 @@ its live message ring buffer.
 
 ### 1. Install dependencies
 
+The repo has three requirements files, one per consumer. Laptop Flask
+dev installs just the Flask one; the Pi has its own (installed
+automatically by `scripts/setup-pi.sh`); and the laptop-side
+provisioner installs only its own.
+
 ```bash
 git clone https://github.com/mbustosorg/lindsay-50
 cd lindsay-50
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-flask.txt
+```
+
+For the provisioner (one-time, on the laptop):
+
+```bash
+pip install -r requirements-provisioner.txt
 ```
 
 (`./scripts/setup-dev-tools.sh` is optional — it installs OpenSpec,
@@ -109,6 +120,21 @@ In Twilio Console → your phone number → **Messaging**:
 - **A message comes in**: Webhook, `POST`
 - URL: `https://your-ngrok-url/api/messages`
 
+### 5. Deploy to Heroku
+
+The Flask server's dependencies live in `requirements-flask.txt`. Heroku
+defaults to `requirements.txt` at the repo root, which no longer
+exists — set the override once after creating the app:
+
+```bash
+heroku config:set PIP_REQUIREMENTS_PATH=requirements-flask.txt
+```
+
+`Procfile` (single web process) is at the repo root and needs no
+changes. Heroku uses the Adafruit IO MQTT client (`MQTT_CLIENT =
+"adafruit"` in `settings.toml`); `requirements-flask.txt` is the
+source of truth for what's installed.
+
 ## Admin UI
 
 Flask serves an admin UI at:
@@ -139,41 +165,13 @@ source .venv/bin/activate
 PYTHONPATH=. pytest tests/ -v
 ```
 
-## Raspberry Pi 4 (display device) Setup
+## Pi Setup
 
-The display runs on a Raspberry Pi 4 driving a 64×64 HUB75 panel via the hzeller
-[rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library. Wi-Fi
-is managed by the Pi OS, not this process.
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r heart-matrix-controller/requirements.txt   # builds the rgbmatrix C extension
-
-cp heart-matrix-controller/settings.toml.example heart-matrix-controller/settings.toml
-# fill in MQTT_*, the API URLs, FONT_PATH, and the MATRIX_* panel geometry
-
-# Run from the controller dir (so settings.toml/FONT_PATH resolve); root is needed for GPIO:
-cd heart-matrix-controller
-sudo PYTHONPATH=.. LOG_LEVEL=INFO python3 main.py
-```
-
-To run it at boot, install the systemd unit `scripts/lindsay_50.service`. See
-**Raspberry Pi 4 setup** in [CLAUDE.md](CLAUDE.md) for the `MATRIX_*` panel
-geometry keys and the service install steps.
-
-### Patterns
-
-The display cycles through background patterns (one switches in with each new
-message), with the scrolling text composited on top:
-
-| Pattern | Notes |
-|---------|-------|
-| `flame`, `fireworks`, `nightsky` | Generative palette-based effects |
-| `png_display` | Slideshow of PNGs in `design/pngs/` (crossfades; `PNG_INTERVAL`, `PNG_FADE`) |
-| `video_display` | Loops a video from `design/videos/` — or `VIDEO_PATH` (`VIDEO_FPS` to override). Needs OpenCV; pre-scale clips to 64×64 with ffmpeg |
-| `honeycomb` | Port of a Pixelblaze HSV pattern (numpy) |
-| `hyperspace` | Star Wars-style jump: a 3D starfield that stretches into a tunnel of streaks and back |
+The display runs on a Raspberry Pi driving a 64×64 HUB75 panel via the
+[hzeller rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix)
+library. One-time provisioning, SSH config, the self-upgrading mechanism,
+patterns, and the rendering pipeline are all documented in
+[heart-matrix-controller/README.md](heart-matrix-controller/README.md).
 
 ## Project structure
 
@@ -210,6 +208,8 @@ lindsay-50/
 │   ├── adafruit_mqtt_client.py  # Adafruit IO MQTT client (Heroku)
 │   └── paho_mqtt_client.py      # Paho MQTT client (local dev + Pi)
 ├── scripts/                      # start/stop helpers, Pi systemd service + startup
-├── requirements.txt
+├── requirements-flask.txt        # Flask server deps (Heroku + laptop dev)
+├── requirements-pi.txt           # Pi display device deps (setup-pi.sh)
+├── requirements-provisioner.txt  # Laptop-side provisioner deps (provision-pi.sh)
 └── .venv/
 ```

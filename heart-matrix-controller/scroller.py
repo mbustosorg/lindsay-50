@@ -44,7 +44,20 @@ class MatrixScroller(ScrollerBase):
         cfg = get_config()
         path = font_path or cfg.if_exists("FONT_PATH") or "fonts/8x13.bdf"
         self.font = graphics.Font()
-        self.font.LoadFont(path)
+        try:
+            self.font.LoadFont(path)
+        except Exception:
+            vendored = "fonts/8x13.bdf"
+            if path != vendored:
+                log.warning(
+                    "Scroller: failed to load font %s; falling back to vendored %s",
+                    path,
+                    vendored,
+                )
+                path = vendored
+                self.font.LoadFont(path)
+            else:
+                raise
         log.info("Scroller loaded font %s (height=%d)", path, self.font.height)
 
         # The font metrics drive compute_layout — the base class's render

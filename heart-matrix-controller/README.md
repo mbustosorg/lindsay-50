@@ -8,6 +8,207 @@ Runs on a Raspberry Pi with a 64×64 HUB75 LED panel (two stacked 64×32 panels,
 - **Controller**: Raspberry Pi with [hzeller rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library
 - **Configuration**: `settings.toml` or environment variables
 
+## Pi deployment
+
+The Pi needs one operator-provided file: `settings.toml` (MQTT creds,
+panel geometry, log level, etc.). Everything else ships in the repo.
+The `scripts/provision-pi.sh` flow ships it + bootstraps the Pi in one
+shot — no manual `scp` + re-run cycle.
+
+### One-time provisioning (from your laptop)
+
+Run `scripts/provision-pi.sh` from the repo root on your laptop, with
+your filled-in `heart-matrix-controller/settings.toml` in place:
+
+```bash
+scripts/provision-pi.sh root@lindsay-50
+```
+
+The script:
+
+1. Detects the local repo (cwd has `.git` + `heart-matrix-controller/`).
+2. Verifies `<cwd>/heart-matrix-controller/settings.toml` exists
+   locally — fails fast with a clear message if not.
+3. Pre-flights SSH to the Pi (so a typo'd hostname fails before any
+   destructive work).
+4. SSHes in, clones the repo at `$LINDSAY50_PI_REPO_DIR` (default
+   `/srv/lindsay-50`), and checks out the current HEAD of your
+   laptop checkout.
+5. Pipes the local `settings.toml` to the Pi via `ssh ... cat > FILE`
+   (atomic `.tmp` + `mv`). `sftp` and `scp` were tried first but both
+   ignore `SSH_ASKPASS_REQUIRE=force` on macOS OpenSSH, breaking the
+   password path — the pipe-over-ssh path is the one that works.
+6. SSHes in once more to run `setup-pi.sh`, which is the
+   authoritative on-Pi bootstrap (apt + pip → bare repo + per-version
+   worktree → systemd).
+
+Expected downtime: 5–10 min on a fresh Pi (rgbmatrix C build);
+under 5 seconds on an already-bootstrapped Pi.
+
+### Configuration via env vars
+
+If the defaults don't match your setup, override via env vars
+(positional arg `PI_HOST` takes precedence over `LINDSAY50_PI_HOST`):
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LINDSAY50_PI_HOST` | `root@lindsay-50` | SSH target |
+| `LINDSAY50_PI_REPO_DIR` | `/srv/lindsay-50` | Where the Pi keeps the repo |
+| `LINDSAY50_LOCAL_SETTINGS` | `<cwd>/heart-matrix-controller/settings.toml` | Where you keep the canonical copy |
+| `LINDSAY50_GIT_REF` | `HEAD` of cwd | Commit / branch the Pi should run |
+
+Example: pointing at a non-default settings path:
+
+```bash
+LINDSAY50_LOCAL_SETTINGS=~/secrets/lindsay-50/settings.toml \
+    scripts/provision-pi.sh root@lindsay-50
+```
+
+### SSH access — publickey and password
+
+The Pi accepts root login via both **publickey** (the unattended
+default; what `provision-pi.sh` prefers) and **password** (used
+for ad-hoc / shared access, and as a `provision-pi.sh` fallback
+when run from a TTY — the script prompts once and routes the
+remaining ssh calls through an encrypted SSH_ASKPASS, with
+the plaintext password never touching disk). Enable both once with:
+
+```bash
+# On the Pi, as a user with sudo (e.g. the default `rosie` user):
+sudo cp /etc/ssh/sshd_config /etc/ssh/sshd_config.bak-$(date +%F)   # optional safety
+sudo sed -i 's/^#\?PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config
+sudo sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config
+sudo systemctl restart ssh
+sudo sshd -T | grep -iE "permitroot|passwordauth"
+# expect: permitrootlogin yes / passwordauthentication yes
+```
+
+Setting `PermitRootLogin yes` (rather than `prohibit-password`)
+allows both methods simultaneously — that's the point: pick whichever
+works at the moment. `setup-pi.sh` doesn't touch sshd_config, so
+this state persists across all subsequent re-runs and version bumps.
+
+#### Publickey path (recommended — what `provision-pi.sh` uses)
+
+Key-only auth, no prompts. Required for `provision-pi.sh`'s
+`BatchMode=yes` preflight.
+
+On the laptop, generate or pick a key:
+
+```bash
+test -f ~/.ssh/id_ed25519.pub || ssh-keygen -t ed25519
+# (If you already use ssh keys for GitHub / Heroku, you have one already.)
+```
+
+Install that key into the Pi's root `authorized_keys`. The cleanest
+path avoids password auth entirely:
+
+```bash
+# 1. Print the key on the laptop:
+cat ~/.ssh/id_ed25519.pub
+# 2. On the Pi, paste the line:
+sudo install -d -m 700 -o root -g root /root/.ssh
+echo 'PASTE_PUBKEY_LINE_HERE' | sudo tee /root/.ssh/authorized_keys >/dev/null
+sudo chmod 600 /root/.ssh/authorized_keys
+```
+
+Or push it over the working `pi`/`rosie` user's SSH:
+
+```bash
+scp ~/.ssh/id_ed25519.pub <user>@lindsay-50.local:/tmp/id_ed25519.pub
+ssh <user>@lindsay-50.local \
+  'sudo install -m 600 -o root -g root /tmp/id_ed25519.pub /root/.ssh/authorized_keys \
+   && sudo rm /tmp/id_ed25519.pub'
+```
+
+Verify from the laptop — should print `ok` with **no password prompt**:
+
+```bash
+ssh root@lindsay-50.local 'echo ok'
+```
+
+#### Password path (fallback for ad-hoc / shared access)
+
+With `PasswordAuthentication yes` set above, anyone with the root
+password can `ssh root@lindsay-50.local` from a fresh machine:
+
+```bash
+# Set the root password first (you'll be prompted twice):
+ssh root@lindsay-50.local 'sudo passwd root'
+
+# Then from any machine with this Pi's network reach:
+ssh root@lindsay-50.local   # password prompt
+```
+
+To turn password off later (key-only mode) without losing the
+publickey install:
+
+```bash
+sudo sed -i 's/^PasswordAuthentication yes$/PasswordAuthentication no/' /etc/ssh/sshd_config
+sudo systemctl restart ssh
+```
+
+`PermitRootLogin yes` should remain `yes` even in key-only mode (so
+publickey auth still works) — only flip it to `prohibit-password`
+if you want the server to actively reject every other method.
+
+#### Troubleshooting — `passwordauthentication no` after enabling
+
+If `sudo sshd -T | grep passwordauth` still reports `no` after the
+sed + restart, a drop-in in `/etc/ssh/sshd_config.d/` is overriding
+the main file. Drop-ins load alphabetically *before* the main-file
+directives and win via first-match-wins — so the canonical Debian /
+Ubuntu gotcha is:
+
+```
+/etc/ssh/sshd_config.d/50-cloud-init.conf   # says PasswordAuthentication no
+```
+
+This is Ubuntu's cloud-init setting, present on Debian-family
+images even when cloud-init isn't actively used. It silently
+overrides your main-file edit. On a Pi that doesn't run cloud-init,
+the file is dead config and safe to remove:
+
+```bash
+sudo rm /etc/ssh/sshd_config.d/50-cloud-init.conf
+sudo systemctl restart ssh
+sudo sshd -T | grep -iE "permitroot|passwordauth"
+# expect: permitrootlogin yes / passwordauthentication yes
+```
+
+Alternatively, if you want to keep the drop-in (e.g. cloud-init is
+in use elsewhere), make yours load earlier with a `00-` prefix —
+alphabetically before any `50-`-ranged files:
+
+```bash
+sudo mv /etc/ssh/sshd_config.d/enable-password-for-bootstrap.conf \
+        /etc/ssh/sshd_config.d/00-enable-password.conf
+sudo systemctl restart ssh
+```
+
+### Running `setup-pi.sh` directly on the Pi
+
+You normally don't need to. But if you want to bootstrap the Pi
+without going through `provision-pi.sh` (e.g. headless, no laptop
+involved), `setup-pi.sh` still hard-stops with a clear message if
+`settings.toml` is missing at the canonical path — scp it in and
+re-run.
+
+### Subsequent version bumps
+
+After the first setup, every `git worktree add` (whether triggered by
+`setup-pi.sh`, the upgrade flow in `loader.py`, or manually) fires
+`hooks/post-checkout`, which calls `scripts/sync_settings.sh` to copy
+the canonical `settings.toml` into the new `v-<sha>/` worktree. You
+only need to drop a fresh `settings.toml` at the canonical Pi path
+when your settings **change**; you do **not** have to re-provision on
+every version bump.
+
+To force-refresh an existing worktree (e.g. after a settings change
+that didn't survive a worktree swap), just re-run the laptop-side
+provisioner — it ships the file and re-runs `setup-pi.sh`, both
+idempotent.
+
 ## Architecture
 
 ```

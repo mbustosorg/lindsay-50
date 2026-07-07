@@ -89,7 +89,7 @@ def fresh_module(monkeypatch):
 
     The scroller module reads FONT_PATH via get_config() at __init__ time;
     we point get_config at a MagicMock with no FONT_PATH so the constructor
-    falls back to the hardcoded 'fonts/8x13B.bdf' (never read because
+    falls back to the hardcoded 'fonts/8x13.bdf' (never read because
     rgbmatrix.graphics.Font is mocked).
     """
     cfg_mock = MagicMock()
@@ -173,3 +173,51 @@ def test_matrix_scroller_color_obj_scales_by_brightness(fresh_module):
     assert color.r == 127
     assert color.g == 64
     assert color.b == 32
+
+
+def test_matrix_scroller_falls_back_to_vendored_when_loadfont_raises(monkeypatch):
+    """A FONT_PATH pointing at a missing file should fall back to the vendored
+    font instead of crashing the boot path. This is the issue #49 v1→v2
+    onboarding hazard: a legacy settings.toml may still name a font path that
+    no longer ships with the repo (e.g. a stale relative path like
+    "../../fonts/8x13.bdf"). On LoadFont exception we retry with the vendored
+    "fonts/8x13.bdf" before raising."""
+    # Configure FONT_PATH to a known-broken path.
+    cfg_mock = MagicMock()
+    cfg_mock.if_exists = lambda key: "/nonexistent/8x13.bdf" if key == "FONT_PATH" else None
+
+    # fresh_module builds a per-test font; we want LoadFont to raise the
+    # first time and succeed thereafter, so the catch+retry path runs once.
+    font = _make_mock_font()
+    font.LoadFont.side_effect = [Exception("Couldn't load font 8x13.bdf"), None]
+    monkeypatch.setattr(_graphics, "Font", lambda: font)
+    monkeypatch.setattr("lib_shared.config_reader.get_config", lambda *a, **k: cfg_mock)
+
+    mod = _load_scroller_module()
+    s = mod.MatrixScroller(_StubDisplay())  # should NOT raise
+
+    # First call with the broken FONT_PATH, second call with vendored fallback.
+    assert font.LoadFont.call_count == 2
+    args = font.LoadFont.call_args_list
+    assert args[0].args[0] == "/nonexistent/8x13.bdf"
+    assert args[1].args[0] == "fonts/8x13.bdf"
+    assert s.single_line is True  # layout was still populated post-fallback
+
+
+def test_matrix_scroller_raises_when_vendored_also_unavailable(monkeypatch):
+    """If even the vendored fallback fails, the scroller must propagate the
+    error — we don't want silent black-screen fallbacks that mask a real
+    font installation problem on the Pi."""
+    cfg_mock = MagicMock()
+    cfg_mock.if_exists = lambda key: None  # forces vendored default
+
+    font = _make_mock_font()
+    font.LoadFont.side_effect = Exception("Couldn't load font 8x13.bdf")
+    monkeypatch.setattr(_graphics, "Font", lambda: font)
+    monkeypatch.setattr("lib_shared.config_reader.get_config", lambda *a, **k: cfg_mock)
+
+    mod = _load_scroller_module()
+    with pytest.raises(Exception, match="Couldn't load font"):
+        mod.MatrixScroller(_StubDisplay())
+    # Only one LoadFont call: the failing vendored fallback is not retried.
+    assert font.LoadFont.call_count == 1

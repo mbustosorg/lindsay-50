@@ -1,0 +1,11 @@
+# Laptop-side provisioner dependencies (scripts/provision-pi.sh).
+# Install once on the laptop: pip install -r requirements-provisioner.txt
+# Provisioner-only — neither the Flask server nor the Pi needs this.
+#
+# The provisioner's password-auth fallback uses Fernet (AES-128-CBC +
+# HMAC-SHA256, via the `cryptography` package) to encrypt the
+# plaintext root password before writing it to a private temp dir.
+# The key lives only in script memory; the on-disk artifact is
+# worthless without it. See scripts/provision-pi.sh's header comment
+# for the full security model.
+cryptography>=42.0
