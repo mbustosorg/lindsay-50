@@ -32,6 +32,15 @@ from typing import Any, Optional
 logger = logging.getLogger(__name__)
 
 
+# Heroku's dyno manager writes this JSON file at dyno startup when the
+# `runtime-dyno-build-metadata` labs feature is enabled. It contains the
+# release id, the slug commit SHA, and the dyno/app identifiers. Used as
+# a fallback for `HEROKU_SLUG_COMMIT` on the heroku-22 stack, which does
+# not auto-set that env var (and ships no `git` binary, so the git
+# fallback below fails too).
+HEROKU_DYNO_METADATA_PATH = Path("/etc/heroku/dyno")
+
+
 # Endpoint path — single source of truth for renaming. Both Flask
 # (the server) and the loader / app (the clients) import this
 # constant so a typo or rename is caught at import time.
@@ -199,21 +208,31 @@ def current_sha(repo_dir: Path) -> Optional[str]:
 
 
 def from_heroku_or_git(repo_dir: Path) -> BootConfig:
-    """Server-side: read HEROKU_SLUG_COMMIT or fall back to git rev-parse.
+    """Server-side: read HEROKU_SLUG_COMMIT, dyno metadata, or fall back to git rev-parse.
 
     Used by Flask to compute the `expected_sha` for `/api/sign/boot-config`.
-    On Heroku, `HEROKU_SLUG_COMMIT` is set automatically on every
-    `git push heroku main`, including `heroku rollback v<N>` — that
-    is how operator-initiated rollback propagates to the Pi.
+    On Heroku, `HEROKU_SLUG_COMMIT` is set automatically on older stacks
+    for every `git push heroku main`, including `heroku rollback v<N>` —
+    that is how operator-initiated rollback propagates to the Pi.
 
-    In local dev there is no Heroku env var, so we fall back to
-    the local HEAD. If git is missing (e.g. a slim Docker image
-    without git), we return an empty SHA — the endpoint will
-    still respond 200, but the Pi will treat it as "no upgrade".
+    On the heroku-22 stack, `HEROKU_SLUG_COMMIT` is NOT auto-set and the
+    slug has no `git` binary, so neither the env var nor the git fallback
+    succeed. We then read `/etc/heroku/dyno` — a JSON file the dyno manager
+    writes at startup when the `runtime-dyno-build-metadata` labs feature
+    is enabled — and parse `release.commit` from it.
+
+    In local dev there is no Heroku env var and no `/etc/heroku/dyno`,
+    so we fall back to the local HEAD. If git is missing (e.g. a slim
+    Docker image without git), we return an empty SHA — the endpoint
+    will respond 500 with `could not resolve expected SHA` and the
+    loader will treat it as "no upgrade".
     """
     slug = os.environ.get("HEROKU_SLUG_COMMIT", "").strip()
     if slug:
         return BootConfig(expected_sha=slug)
+    dyn_commit = _from_dyno_metadata()
+    if dyn_commit:
+        return BootConfig(expected_sha=dyn_commit)
     try:
         result = subprocess.run(
             ["git", "-C", str(repo_dir), "rev-parse", "HEAD"],
@@ -225,5 +244,49 @@ def from_heroku_or_git(repo_dir: Path) -> BootConfig:
         sha = result.stdout.strip()
         return BootConfig(expected_sha=sha or "")
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
-        logger.warning("boot_config: HEROKU_SLUG_COMMIT unset and git rev-parse failed: %s", exc)
+        logger.warning(
+            "boot_config: HEROKU_SLUG_COMMIT unset, /etc/heroku/dyno missing, and git rev-parse failed: %s",
+            exc,
+        )
         return BootConfig(expected_sha="")
+
+
+def _from_dyno_metadata(path: Path = HEROKU_DYNO_METADATA_PATH) -> Optional[str]:
+    """Read the slug commit from the runtime-dyno-build-metadata JSON file.
+
+    Returns `None` on any failure (file missing, unreadable, malformed
+    JSON, missing `release.commit`). The caller falls through to the
+    git rev-parse fallback. Tests inject a different `path` to exercise
+    both the success and the failure paths without writing to
+    `/etc/heroku/dyno`.
+    """
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError) as exc:
+        logger.debug("boot_config: dyno metadata file not readable at %s: %s", path, exc)
+        return None
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        logger.warning("boot_config: dyno metadata JSON parse failed at %s: %s", path, exc)
+        return None
+    if not isinstance(payload, dict):
+        logger.warning(
+            "boot_config: dyno metadata is not a JSON object at %s: %r",
+            path,
+            type(payload).__name__,
+        )
+        return None
+    release = payload.get("release")
+    if not isinstance(release, dict):
+        logger.warning("boot_config: dyno metadata missing release object at %s: %r", path, payload)
+        return None
+    commit = release.get("commit")
+    if not isinstance(commit, str) or not commit:
+        logger.warning(
+            "boot_config: dyno metadata release.commit missing or empty at %s: %r",
+            path,
+            release,
+        )
+        return None
+    return commit

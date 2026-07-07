@@ -16,14 +16,17 @@ import json
 import os
 import subprocess
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
 
 from lib_shared.boot_config import (
     BOOT_CONFIG_PATH,
+    HEROKU_DYNO_METADATA_PATH,
     SHORT_SHA_LEN,
     BootConfig,
+    _from_dyno_metadata,
     current_sha,
     fetch_boot_config,
     from_heroku_or_git,
@@ -295,6 +298,101 @@ class TestFromHerokuOrGit:
             assert bc.expected_sha in ("", "")  # either empty or from git
         finally:
             del os.environ["HEROKU_SLUG_COMMIT"]
+
+    def test_falls_back_to_dyno_metadata_when_slug_unset(self, tmp_path):
+        os.environ.pop("HEROKU_SLUG_COMMIT", None)
+        # No git repo — git fallback will fail. Point the helper at a
+        # fake /etc/heroku/dyno via the module-level constant monkeypatch
+        # so we don't touch the real path. Patching the bound default
+        # argument via the function's __defaults__ keeps the call site
+        # unchanged for the rest of the suite.
+        dyno_file = tmp_path / "dyno"
+        dyno_file.write_text(
+            json.dumps({"release": {"commit": "dynocafe1234567890abcdef"}})
+        )
+        original_default = _from_dyno_metadata.__defaults__
+        try:
+            _from_dyno_metadata.__defaults__ = (dyno_file,)
+            bc = from_heroku_or_git(tmp_path)
+            assert bc.expected_sha == "dynocafe1234567890abcdef"
+        finally:
+            _from_dyno_metadata.__defaults__ = original_default
+
+    def test_continues_past_bad_dyno_metadata(self, tmp_path):
+        os.environ.pop("HEROKU_SLUG_COMMIT", None)
+        # Dyno metadata is unreadable; no git repo; both fail — empty SHA.
+        dyno_file = tmp_path / "dyno"
+        original_default = _from_dyno_metadata.__defaults__
+        try:
+            _from_dyno_metadata.__defaults__ = (dyno_file,)
+            bc = from_heroku_or_git(tmp_path)
+            assert bc.expected_sha == ""
+        finally:
+            _from_dyno_metadata.__defaults__ = original_default
+
+    def test_slug_env_takes_precedence_over_dyno_metadata(self, tmp_path):
+        # When the env var is set, we should never even read the file.
+        os.environ["HEROKU_SLUG_COMMIT"] = "slugabc"
+        dyno_file = tmp_path / "dyno"
+        dyno_file.write_text(
+            json.dumps({"release": {"commit": "dynocafe1234567890abcdef"}})
+        )
+        original_default = _from_dyno_metadata.__defaults__
+        try:
+            _from_dyno_metadata.__defaults__ = (dyno_file,)
+            bc = from_heroku_or_git(tmp_path)
+            assert bc.expected_sha == "slugabc"
+        finally:
+            _from_dyno_metadata.__defaults__ = original_default
+            del os.environ["HEROKU_SLUG_COMMIT"]
+
+
+class TestFromDynoMetadata:
+    def test_path_constant_is_heroku_default(self):
+        assert HEROKU_DYNO_METADATA_PATH == Path("/etc/heroku/dyno")
+
+    def test_reads_release_commit(self, tmp_path):
+        f = tmp_path / "dyno"
+        f.write_text(json.dumps({"release": {"commit": "abc1234"}}))
+        assert _from_dyno_metadata(f) == "abc1234"
+
+    def test_returns_none_when_file_missing(self, tmp_path):
+        assert _from_dyno_metadata(tmp_path / "nope") is None
+
+    def test_returns_none_on_malformed_json(self, tmp_path):
+        f = tmp_path / "dyno"
+        f.write_text("{not valid json")
+        assert _from_dyno_metadata(f) is None
+
+    def test_returns_none_on_non_dict_payload(self, tmp_path):
+        f = tmp_path / "dyno"
+        f.write_text(json.dumps(["not", "a", "dict"]))
+        assert _from_dyno_metadata(f) is None
+
+    def test_returns_none_on_missing_release(self, tmp_path):
+        f = tmp_path / "dyno"
+        f.write_text(json.dumps({"app": {"name": "x"}}))
+        assert _from_dyno_metadata(f) is None
+
+    def test_returns_none_on_release_not_dict(self, tmp_path):
+        f = tmp_path / "dyno"
+        f.write_text(json.dumps({"release": "v123"}))
+        assert _from_dyno_metadata(f) is None
+
+    def test_returns_none_on_missing_commit(self, tmp_path):
+        f = tmp_path / "dyno"
+        f.write_text(json.dumps({"release": {"id": "abc"}}))
+        assert _from_dyno_metadata(f) is None
+
+    def test_returns_none_on_empty_commit(self, tmp_path):
+        f = tmp_path / "dyno"
+        f.write_text(json.dumps({"release": {"commit": ""}}))
+        assert _from_dyno_metadata(f) is None
+
+    def test_returns_none_on_non_string_commit(self, tmp_path):
+        f = tmp_path / "dyno"
+        f.write_text(json.dumps({"release": {"commit": 123}}))
+        assert _from_dyno_metadata(f) is None
 
 
 class TestShortSha:
