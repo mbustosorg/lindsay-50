@@ -65,9 +65,12 @@ LINDSAY50_LOCAL_SETTINGS=~/secrets/lindsay-50/settings.toml \
 
 ### SSH access — publickey and password
 
-The Pi accepts root login via both **publickey** (what
-`provision-pi.sh` uses for unattended provisioning) and **password**
-(useful for ad-hoc / shared access). Enable both once with:
+The Pi accepts root login via both **publickey** (the unattended
+default; what `provision-pi.sh` prefers) and **password** (used
+for ad-hoc / shared access, and as a `provision-pi.sh` fallback
+when run from a TTY — the script prompts once and routes the
+remaining ssh/sftp calls through an encrypted SSH_ASKPASS, with
+the plaintext password never touching disk). Enable both once with:
 
 ```bash
 # On the Pi, as a user with sudo (e.g. the default `rosie` user):

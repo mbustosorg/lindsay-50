@@ -405,26 +405,42 @@ class TestProvisionPiScript:
             "BatchMode" in text or "ConnectTimeout" in text
         ), "provision-pi.sh must preflight ssh before doing destructive work"
 
-    def test_ships_settings_via_scp(self):
-        """settings.toml is shipped via scp to the canonical Pi path."""
+    def test_ships_settings_via_sftp(self):
+        """settings.toml is shipped via sftp to the canonical Pi path.
+
+        We use sftp (not scp) so the SSH_ASKPASS password path works
+        reliably — scp doesn't honor SSH_ASKPASS consistently across
+        OpenSSH versions, and sftp is what OpenSSH itself recommends
+        for new code.
+        """
         text = PROVISION_PI_PATH.read_text()
-        assert "scp" in text, "provision-pi.sh must use scp to ship settings.toml"
+        assert "sftp" in text, "provision-pi.sh must use sftp to ship settings.toml"
+        # Regression guard: future contributors shouldn't re-introduce scp.
+        # Look for an actual `scp ` invocation (not the word in comments).
+        import re
+
+        scp_invocations = re.findall(r"^\s*scp\s+", text, re.MULTILINE)
+        assert not scp_invocations, (
+            "provision-pi.sh must not invoke scp — sftp honors SSH_ASKPASS "
+            "consistently and is what OpenSSH recommends. "
+            f"Found invocations: {scp_invocations}"
+        )
         assert "heart-matrix-controller/settings.toml" in text, (
             "provision-pi.sh must place settings.toml at the canonical "
             "<repo_dir>/heart-matrix-controller/settings.toml path"
         )
 
     def test_hands_off_to_setup_pi_over_ssh(self):
-        """After scp, the script invokes setup-pi.sh on the Pi over ssh."""
+        """After sftp, the script invokes setup-pi.sh on the Pi over ssh."""
         text = PROVISION_PI_PATH.read_text()
         # setup-pi.sh invocation via ssh must be present.
         assert "setup-pi.sh" in text
-        # scp must come BEFORE the ssh-to-pi-setup-pi.sh step.
-        scp_idx = text.find("scp ")
-        handoff_idx = text.find("setup-pi.sh", scp_idx)
-        assert scp_idx > 0, "no scp call found"
-        assert handoff_idx > scp_idx, (
-            "scp of settings.toml must come before the final ssh-to-pi " "hand-off to setup-pi.sh"
+        # sftp must come BEFORE the ssh-to-pi-setup-pi.sh step.
+        sftp_idx = text.find("sftp ")
+        handoff_idx = text.find("setup-pi.sh", sftp_idx)
+        assert sftp_idx > 0, "no sftp call found"
+        assert handoff_idx > sftp_idx, (
+            "sftp of settings.toml must come before the final ssh-to-pi " "hand-off to setup-pi.sh"
         )
 
     def test_does_not_checkout_in_bare_repo(self):
@@ -458,6 +474,91 @@ class TestProvisionPiScript:
         assert "+refs/heads/*:refs/remotes/origin/*" in text, (
             "provision-pi.sh must fetch with the explicit heads-* refspec "
             "(same pattern as setup-pi.sh's bare-refresh fetch)"
+        )
+
+    def test_resolves_python_from_repo_venv(self):
+        """The password helper uses the repo's .venv python, not system python.
+
+        cryptography.fernet is a pip dep, only installed in the venv. The
+        askpass binary needs it to decrypt the password file, so the
+        helper must point at $LOCAL_REPO_DIR/.venv/bin/python3.
+        """
+        text = PROVISION_PI_PATH.read_text()
+        assert "$LOCAL_REPO_DIR/.venv/bin/python3" in text, (
+            "setup_password_auth must resolve python from the repo venv "
+            "($LOCAL_REPO_DIR/.venv/bin/python3) — cryptography.fernet "
+            "is a pip dep, not guaranteed to be in system python"
+        )
+        # Fail-fast check: the helper should refuse to proceed if the
+        # venv python is missing, with a clear message.
+        assert "not found" in text or "not executable" in text, (
+            "setup_password_auth should fail fast with a clear message " "if the venv python is missing"
+        )
+
+    def test_prompts_for_password_on_fallback(self):
+        """When publickey preflight fails, the helper prompts for the password.
+
+        No env-var input by design — see header doc. The prompt must
+        be silent (no terminal echo) and a TTY check must gate it
+        (so non-interactive invocations fail cleanly).
+        """
+        text = PROVISION_PI_PATH.read_text()
+        assert "read -rs" in text, "setup_password_auth must use `read -rs` (silent, raw) " "to prompt for the password"
+        assert "Pi root password" in text, "setup_password_auth must include a 'Pi root password' prompt"
+        # Non-TTY gate: the helper must check `[ ! -t 0 ]` and abort
+        # with a clear message rather than try to prompt on stdin.
+        assert "[ ! -t 0 ]" in text, (
+            "setup_password_auth must check that stdin is a TTY and "
+            "abort cleanly if not (no env-var fallback by design)"
+        )
+
+    def test_cleanups_tempdir_on_trap(self):
+        """The password temp dir is cleaned up on EXIT/INT/TERM/HUP.
+
+        The trap registration is the only thing standing between a
+        crash mid-script and a leaked encrypted password file. Verify
+        all four signals are covered (SIGKILL can't be trapped, but
+        the other common kill signals can).
+        """
+        text = PROVISION_PI_PATH.read_text()
+        import re
+
+        # Find trap ... EXIT INT TERM HUP — must include all four.
+        trap_pattern = re.compile(r"trap\s+['\"].*?['\"]\s+EXIT\s+INT\s+TERM\s+HUP", re.DOTALL)
+        assert trap_pattern.search(text), (
+            "provision-pi.sh must register a trap on EXIT/INT/TERM/HUP "
+            "to clean up the password temp dir and sftp batch file"
+        )
+        # The trap must rm -rf the password temp dir, not just the sftp batch.
+        assert 'rm -rf "$PW_TMPDIR"' in text, "the trap must rm -rf $PW_TMPDIR (the password temp dir)"
+
+    def test_uses_ssh_askpass_for_subsequent_calls(self):
+        """After password auth is set up, the helper exports SSH_ASKPASS.
+
+        All subsequent ssh/sftp invocations inherit SSH_ASKPASS from
+        the script's env, so they need never prompt again.
+        """
+        text = PROVISION_PI_PATH.read_text()
+        assert "SSH_ASKPASS=" in text, (
+            "setup_password_auth must export SSH_ASKPASS for subsequent " "ssh/sftp invocations"
+        )
+        assert "SSH_ASKPASS_REQUIRE" in text, (
+            "setup_password_auth must set SSH_ASKPASS_REQUIRE=force so "
+            "ssh uses the askpass binary even when it has a tty"
+        )
+
+    def test_uses_fernet_for_encryption(self):
+        """Password is encrypted with Fernet (AES + HMAC) before being written.
+
+        Fernet is a vetted AEAD construction from the cryptography
+        package. The script must use it (not, say, plain base64 or
+        a hand-rolled XOR) to keep the on-disk artifact worthless
+        without the in-memory key.
+        """
+        text = PROVISION_PI_PATH.read_text()
+        assert "Fernet" in text, "setup_password_auth must use cryptography.fernet.Fernet " "to encrypt the password"
+        assert "Fernet.generate_key" in text, (
+            "setup_password_auth must generate a per-run Fernet key " "(not reuse a hard-coded one)"
         )
 
 
