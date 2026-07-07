@@ -387,7 +387,10 @@ def api_sign_boot_config():
     config = _resolve_boot_config()
     if not config.expected_sha:
         return jsonify({"error": "could not resolve expected SHA"}), 500
-    return jsonify({"expected_sha": config.expected_sha})
+    return jsonify({
+        "expected_sha": config.expected_sha,
+        "short_sha": config.short_sha,
+    })
 
 
 # Admin API (S3 browser)
@@ -796,6 +799,12 @@ def settings():
         cfg=cfg,
         sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
         speed_labels=ScrollerBase.SPEED_LABELS,
+        # Deployed SHA: what Flask expects the Pi to be running.
+        # This is the last-deployed commit, not the Pi's literal live
+        # running SHA (those differ during the ~12s swap window). See
+        # ISA.md ISC-A3 — querying the Pi's live SHA is out of scope.
+        deployed_sha_short=_resolve_boot_config().short_sha or None,
+        deployed_sha_full=_resolve_boot_config().expected_sha or None,
     )
 
 

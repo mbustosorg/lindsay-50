@@ -1,12 +1,12 @@
 ---
-task: v2 refactor of self-upgrading matrix controller (issue #49)
+task: short SHA on boot-config + deployed-SHA card on settings page
 slug: v2-refactor-self-upgrading-matrix-controller
 effort: E3
-phase: execute
-progress: 0/36
+phase: observe
+progress: 0/26
 mode: algorithm
 started: 2026-07-02
-updated: 2026-07-02
+updated: 2026-07-07
 project: lindsay-50
 ---
 
@@ -151,6 +151,56 @@ modules.
 - [ ] ISC-40: `PYTHONPATH=. pytest tests/ -v` shows all tests passing
 - [ ] ISC-41: `refactor:` commit on `feat/issue-49` branch (no push, no new PR)
 
+## Criteria (Phase 7 follow-ups — short SHA + UI surface)
+
+v2 shipped and merged into `main` (PR #50, commits `f1bc5ca..81bf12b..0232104..464674d..184f60a`).
+ISCs 1-41 above are operationally complete; the per-ISC verification records live in the
+phase log below. New follow-up work is captured below as ISC-42+ per ID-stability rule.
+
+### BootConfig dataclass — short_sha field
+
+- [ ] ISC-42: `BootConfig` adds a `short_sha: str` field (frozen dataclass, alongside `expected_sha`)
+- [ ] ISC-43: `short_sha` is the first 7 chars of `expected_sha` — single source of truth, never recomputed downstream
+- [ ] ISC-44: Empty `expected_sha` ⇒ empty `short_sha` (consistent empty-state, not None)
+
+### Server-side — boot-config endpoint exposes both fields
+
+- [ ] ISC-45: `/api/sign/boot-config` 200 response is `{"expected_sha": "<full>", "short_sha": "<7-char>"}`
+- [ ] ISC-46: 500 response (`{"error": "could not resolve expected SHA"}`) unchanged — no `short_sha` key when resolution fails
+- [ ] ISC-47: 401 response unchanged (X-API-Key gate)
+- [ ] ISC-48: `from_heroku_or_git()` populates both `expected_sha` and `short_sha` on all three resolution paths (env var, dyno metadata, git)
+
+### Settings route + template — deployed-SHA card
+
+- [ ] ISC-49: `/settings` GET handler resolves boot_config and passes `deployed_sha_short` + `deployed_sha_full` to template
+- [ ] ISC-50: Empty expected_sha ⇒ template receives `deployed_sha_short = None` (graceful empty state)
+- [ ] ISC-51: Settings template renders new "Deployed SHA" card between Sign Settings and Effects sections
+- [ ] ISC-52: Card displays short SHA in monospace font; full SHA in `title=` tooltip on hover
+- [ ] ISC-53: Empty-state styling when `deployed_sha_short` is None ("(unknown — see Flask logs)")
+- [ ] ISC-54: Card visual style matches existing settings cards (white bg, indigo accents, rounded-2xl)
+
+### Tests
+
+- [ ] ISC-55: `tests/test_boot_config.py::TestBootConfigDataclass` covers `short_sha` field
+- [ ] ISC-56: `tests/test_boot_config.py::TestFromHerokuOrGit` covers `short_sha` derivation on slug env, dyno metadata, git paths
+- [ ] ISC-57: `tests/test_boot_config_endpoint.py` updated to assert both `expected_sha` and `short_sha` keys in 200 response
+- [ ] ISC-58: All existing 401/500/error path tests still pass (no regression)
+
+### Deploy + verify
+
+- [ ] ISC-59: Conventional-commit message (`feat(boot-config): ...`) on `main`
+- [ ] ISC-60: `git push origin main` succeeds
+- [ ] ISC-61: `git push heroku main` succeeds; new release v96+
+- [ ] ISC-62: Live curl on Heroku returns both fields (operator-side probe, may be `[DEFERRED-VERIFY]` per credential gate)
+- [ ] ISC-63: `pytest tests/ -v` shows all tests passing (including the new ones)
+- [ ] ISC-64: `Interceptor` screenshot of `/settings` shows the deployed SHA card (or `[DEFERRED-VERIFY]`)
+
+### Anti-criteria (regression-prevention)
+
+- [ ] ISC-A1: **Anti:** `expected_sha` (40-char full SHA) is REMOVED from the boot-config response — loader invariant, `git worktree add` needs full SHA
+- [ ] ISC-A2: **Anti:** SHA card appears in the playful variant template (`*-playful.html`) — out of scope, original variant only
+- [ ] ISC-A3: **Anti:** The Pi's true running SHA is queried from the matrix controller — out of scope (would require Pi → Flask MQTT round-trip; this card shows Flask's last-deployed expectation, not the Pi's live state)
+
 ## Test Strategy
 
 | ISC | type | check | threshold | tool |
@@ -191,6 +241,15 @@ modules.
 - **F14: README + CHANGELOG** (satisfies ISC-38,39) | Update README.md self-upgrading-Pi section; update CHANGELOG.md v2 entry | parallelizable: true (depends on F13)
 - **F15: Test gate + commit** (satisfies ISC-40,41) | Run pytest, fix any issues, commit with `refactor:` prefix | parallelizable: false (final)
 
+## Features (Phase 7 follow-ups)
+
+- **F16: BootConfig.short_sha field** (satisfies ISC-42..44) | Add `short_sha: str` field to the frozen dataclass; derive as `expected_sha[:7]`; empty string when expected_sha empty | parallelizable: false (foundation)
+- **F17: Boot-config endpoint exposes short_sha** (satisfies ISC-45..48) | Flask endpoint returns both fields in JSON 200; `from_heroku_or_git` populates both | parallelizable: false (depends on F16)
+- **F18: Settings route passes deployed SHA to template** (satisfies ISC-49,50) | `/settings` GET handler resolves BootConfig and passes `deployed_sha_short`/`deployed_sha_full` to Jinja | parallelizable: true (depends on F17)
+- **F19: Settings template — deployed-SHA card** (satisfies ISC-51..54) | New card between Sign Settings and Effects sections; monospace short SHA; tooltip with full; empty-state styling | parallelizable: true (depends on F18)
+- **F20: Tests for short_sha surface** (satisfies ISC-55..58) | Extend test_boot_config.py + test_boot_config_endpoint.py | parallelizable: true
+- **F21: Deploy + verify** (satisfies ISC-59..64) | Commit, push origin + heroku, live curl + Interceptor screenshot | parallelizable: false (final)
+
 ## Decisions
 
 - **2026-07-02 — Drop healthcheck.py + --healthcheck entirely** | The user asked to drop `healthcheck.py` and replace with `status.json` written by the app itself. The status.json is throttled (~3s) and atomic (tmp+rename), so the loader can read it without coordinating with the app. The pre-swap probe is now "spawn the staged main.py, wait ~8s, read status.json, decide" — not "spawn a separate healthcheck.py".
@@ -202,6 +261,10 @@ modules.
 - **2026-07-02 — Pre-swap probe stays, post-swap grace period goes** | The user asked: "are we dropping the health check entirely?" Answer: no, the pre-swap check stays (now via status.json), but the post-swap grace period is dropped because the loader is gone after exec.
 - **2026-07-02 — LINDSAY50_ACTIVE_SHA via os.execvpe, not git rev-parse from the app** | The user asked: "can the actual pi app determine what sha it's running?" Two options: app runs `git -C current/ rev-parse HEAD` or the loader passes it as an env var. Env var is simpler — no git invocation on the hot path, and the loader has the SHA it just staged.
 - **2026-07-02 — Conversation-context override to E3** | The classifier returned E3 (fail-safe). Conversation context is a follow-up to extensive prior work on the same feature — the work IS substantial multi-file. Honor E3.
+- **2026-07-07 — Honor classifier E3 for short-SHA + UI surface work** | Classifier returned E3, no override. Tier is honest — multi-file (dataclass, endpoint, route, template, tests) but the change surface is narrow. Honored E3 and documented under-floor (26 ISCs vs 32 soft floor) rather than inflating criteria.
+- **2026-07-07 — Wire format stays full SHA, additive short_sha field** | User asked "I thought we were always supposed to use the short sha?" — interpreted as display-layer consistency, not wire-format replacement. Loader's `git worktree add <expected_sha>` requires full SHA; changing the wire format would require coordinated loader deploy. Additive JSON (`expected_sha` preserved + new `short_sha` field) preserves loader invariant.
+- **2026-07-07 — UI card shows deployed SHA, not Pi's running SHA** | The user said "surface the sha that's running directly in the UI". Flasked's `expected_sha` is what Flask expects the Pi to be running, not what the Pi is currently rendering. These differ during the ~12s swap window. The card labels the value as "Deployed SHA" to be honest; querying the Pi's live running SHA would require MQTT round-trip (out of scope per ISC-A3).
+- **2026-07-07 — Delegation under soft floor** | E3 soft delegation floor is ≥2; this work ships 0 delegations. Show-your-math: the change surface is 4 small files (1 dataclass field, 1 endpoint edit, 1 route edit, 1 template card) totaling ~30 lines. Forge roundtrip latency exceeds direct-edit cost. Cato is E4/E5 only.
 - **2026-07-02 — Use `refactor:` commit prefix on same branch** | Per CLAUDE.md project rules: "Use conventional commits (feat:, fix:, chore:, docs:, refactor:, test:). Link issue numbers in commit messages." The existing PR #50 will auto-update from `feat/issue-49`. Do NOT push or open a new PR.
 
 ## Changelog

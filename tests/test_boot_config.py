@@ -39,8 +39,26 @@ class TestBootConfigDataclass:
     def test_construction_and_immutability(self):
         bc = BootConfig(expected_sha="abc123")
         assert bc.expected_sha == "abc123"
+        assert bc.short_sha == "abc123"  # first 7 chars
         with pytest.raises(FrozenInstanceError):
             bc.expected_sha = "def456"  # type: ignore[misc]
+
+    def test_short_sha_is_first_seven_chars(self):
+        bc = BootConfig(expected_sha="b5e191c5df481d51c4e7d1cced51cf7c656f1ead")
+        assert bc.short_sha == "b5e191c"
+
+    def test_short_sha_derives_from_expected_sha_when_omitted(self):
+        # Caller passes only expected_sha; short_sha should be derived.
+        bc = BootConfig(expected_sha="abcdefghijk")
+        assert bc.short_sha == "abcdefg"
+
+    def test_short_sha_recomputes_when_mismatched(self):
+        # If a caller passes a mismatched short_sha, the __post_init__
+        # hook forces it back into sync with expected_sha[:7]. Single
+        # source of truth — the dataclass construction is the only
+        # place the short form is computed.
+        bc = BootConfig(expected_sha="abcdefghijk", short_sha="WRONGSHX")
+        assert bc.short_sha == "abcdefg"
 
     def test_construction_with_empty_sha(self):
         # Empty SHA is valid at the type level — the HTTP caller
@@ -48,6 +66,7 @@ class TestBootConfigDataclass:
         # non-empty.
         bc = BootConfig(expected_sha="")
         assert bc.expected_sha == ""
+        assert bc.short_sha == ""  # consistent empty state
 
 
 class TestFromResponse:

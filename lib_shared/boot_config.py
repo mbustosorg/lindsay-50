@@ -78,13 +78,38 @@ def short_sha(full_sha: str) -> str:
 class BootConfig:
     """The version Flask expects the Pi to be running.
 
-    Only `expected_sha` carries business logic today. Future fields
-    (sign_name, feature_flags, etc.) can be added without changing
-    the wire shape — Flask returns the dataclass as JSON, callers
-    ignore unknown keys.
+    `expected_sha` carries the full 40-char SHA — the loader needs it
+    for `git worktree add` and for matching against the Pi's local
+    HEAD. `short_sha` is the 7-char form used for display everywhere
+    else (logs, worktree directory names like `v-<short>`, the admin
+    UI). Always derived from `expected_sha[:7]`; the loader never
+    receives the short form on the wire.
+
+    Both fields are populated by `from_heroku_or_git()` so the wire
+    format and the display form come from a single source of truth —
+    the dataclass construction is the only place the short form is
+    computed, eliminating drift between the two.
+
+    Empty `expected_sha` ⇒ empty `short_sha` (consistent empty-state,
+    not None — JSON serialization keeps the keys present).
+
+    Future fields (sign_name, feature_flags, etc.) can be added
+    without changing the wire shape — Flask returns the dataclass
+    as JSON, callers ignore unknown keys.
     """
 
     expected_sha: str
+    short_sha: str = ""
+
+    def __post_init__(self) -> None:
+        # Derive short_sha from expected_sha at construction time. We
+        # don't trust callers to keep them in sync — `from_heroku_or_git`
+        # always sets both, but a test or future caller might construct
+        # with only one. Enforce the invariant here.
+        expected = self.expected_sha or ""
+        derived_short = expected[:SHORT_SHA_LEN] if expected else ""
+        if self.short_sha != derived_short:
+            object.__setattr__(self, "short_sha", derived_short)
 
 
 def from_response(payload: Any) -> Optional[BootConfig]:

@@ -233,19 +233,30 @@ class TestBootConfigEndpointShape:
         monkeypatch.setenv("HEROKU_SLUG_COMMIT", "abc1234567890")
         response = client.get(EXPECTED_BOOT_CONFIG_PATH, headers=esp32_headers)
         assert response.status_code == 200
-        assert response.json == {"expected_sha": "abc1234567890"}
+        assert response.json == {
+            "expected_sha": "abc1234567890",
+            "short_sha": "abc1234",
+        }
 
     def test_drops_old_expected_sha_endpoint(self, app, client, esp32_headers):
         """The v1 /api/sign/expected-sha URL no longer exists."""
         response = client.get("/api/sign/expected-sha", headers=esp32_headers)
         assert response.status_code == 404
 
-    def test_response_has_only_expected_sha_key(self, app, client, esp32_headers, monkeypatch):
-        """v2 response shape is exactly one key: expected_sha."""
-        monkeypatch.setenv("HEROKU_SLUG_COMMIT", "newsha")
+    def test_response_has_expected_sha_and_short_sha_keys(self, app, client, esp32_headers, monkeypatch):
+        """Response shape: {expected_sha: <full>, short_sha: <7-char>}."""
+        monkeypatch.setenv("HEROKU_SLUG_COMMIT", "b5e191c5df481d51c4e7d1cced51cf7c656f1ead")
         response = client.get(EXPECTED_BOOT_CONFIG_PATH, headers=esp32_headers)
         assert response.status_code == 200
-        assert set(response.json.keys()) == {"expected_sha"}
+        assert set(response.json.keys()) == {"expected_sha", "short_sha"}
+        assert response.json["expected_sha"] == "b5e191c5df481d51c4e7d1cced51cf7c656f1ead"
+        assert response.json["short_sha"] == "b5e191c"
+
+    def test_short_sha_is_first_seven_of_expected_sha(self, app, client, esp32_headers, monkeypatch):
+        """short_sha must be exactly expected_sha[:7] — single source of truth."""
+        monkeypatch.setenv("HEROKU_SLUG_COMMIT", "0123456789abcdef0123456789abcdef01234567")
+        response = client.get(EXPECTED_BOOT_CONFIG_PATH, headers=esp32_headers)
+        assert response.json["short_sha"] == response.json["expected_sha"][:7]
 
     def test_returns_401_without_api_key(self, app, client, monkeypatch):
         monkeypatch.setenv("HEROKU_SLUG_COMMIT", "abc1234567890")
