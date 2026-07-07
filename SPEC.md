@@ -333,7 +333,9 @@ lindsay-50/
 ├── README.md
 ├── CLAUDE.md
 ├── Procfile                        # Heroku startup
-├── requirements.txt
+├── requirements-flask.txt     # Flask server deps
+├── requirements-pi.txt        # Pi display device deps
+├── requirements-provisioner.txt # Laptop provisioner deps
 ├── pyrightconfig.json
 ├── heart-message-manager/
 │   ├── main.py

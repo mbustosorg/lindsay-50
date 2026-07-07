@@ -561,6 +561,126 @@ class TestProvisionPiScript:
             "setup_password_auth must generate a per-run Fernet key " "(not reuse a hard-coded one)"
         )
 
+    def test_fail_fast_points_at_provisioner_requirements(self):
+        """provision-pi.sh's venv-missing error references the right requirements file.
+
+        The provisioner has its own requirements-provisioner.txt (cryptography
+        only) — distinct from requirements-flask.txt / requirements-pi.txt.
+        A bare `pip install -r requirements.txt` reference would imply the
+        old layout and fail (no root requirements.txt exists after the split).
+        """
+        text = PROVISION_PI_PATH.read_text()
+        assert "requirements-provisioner.txt" in text, (
+            "provision-pi.sh fail-fast messages must point at "
+            "requirements-provisioner.txt (the laptop-side deps), "
+            "not the old root requirements.txt"
+        )
+        # Regression guard: the old root path should not be referenced
+        # as a requirements source anywhere in the provisioner.
+        assert "requirements.txt" not in text, (
+            "provision-pi.sh must not reference the old root requirements.txt "
+            "(split into requirements-flask.txt / requirements-pi.txt / "
+            "requirements-provisioner.txt)"
+        )
+
+
+class TestSetupPiRequirements:
+    """Verify setup-pi.sh installs only the Pi's deps, not Flask's.
+
+    The repo's three requirements files split cleanly by consumer:
+    - requirements-flask.txt: Heroku / laptop Flask dev
+    - requirements-pi.txt: Pi display device (this script)
+    - requirements-provisioner.txt: laptop-side provisioner
+
+    setup-pi.sh must install ONLY from requirements-pi.txt — pulling in
+    flask/boto3/twilio on the Pi would be wasted bandwidth and image size.
+    """
+
+    def test_setup_pi_installs_only_pi_deps(self):
+        """setup-pi.sh pip-installs requirements-pi.txt and nothing else."""
+        text = SETUP_PI_PATH.read_text()
+        assert "requirements-pi.txt" in text, "setup-pi.sh must install from requirements-pi.txt (the Pi's deps)"
+        # Regression guards: the Flask and provisioner files must not be
+        # pip-installed on the Pi. Heroku / provisioner deps have no
+        # business on the display device. Match on `pip install ... -r`
+        # lines specifically — comments may legitimately mention the
+        # other filenames to explain *why* they're excluded.
+        # Walk the file joining line-continuations (`\`-terminated) so a
+        # `pip install -r foo.txt` that spans two lines (the actual layout
+        # in setup-pi.sh) is matched as one logical line.
+        logical_lines: list[str] = []
+        for line in text.splitlines():
+            if logical_lines and logical_lines[-1].rstrip().endswith("\\"):
+                logical_lines[-1] = logical_lines[-1].rstrip()[:-1] + " " + line.lstrip()
+            else:
+                logical_lines.append(line)
+        pip_install_lines = [line for line in logical_lines if "pip install" in line and "-r" in line]
+        assert any(
+            "requirements-pi.txt" in line for line in pip_install_lines
+        ), "setup-pi.sh must have a `pip install ... -r requirements-pi.txt` line"
+        for forbidden in ("requirements-flask.txt", "requirements-provisioner.txt"):
+            assert not any(
+                forbidden in line for line in pip_install_lines
+            ), f"setup-pi.sh must NOT pip-install {forbidden} on the Pi"
+
+    def test_pi_requirements_file_exists(self):
+        """requirements-pi.txt exists at the repo root and lists rgbmatrix."""
+        path = PROJECT_ROOT / "requirements-pi.txt"
+        assert path.exists(), (
+            "requirements-pi.txt must exist at the repo root — setup-pi.sh " "and Pi operators both reference this path"
+        )
+        contents = path.read_text()
+        # Sanity: rgbmatrix is the one dep that's expensive to build (C
+        # extension) and distinctive to the Pi. If it's missing, someone
+        # may have copied the Flask list over by mistake.
+        assert "rgbmatrix" in contents, (
+            "requirements-pi.txt must include rgbmatrix (the Pi-specific "
+            "C-extension build that's the whole reason this file is separate)"
+        )
+
+    def test_provisioner_requirements_exists(self):
+        """requirements-provisioner.txt exists with only laptop-side deps."""
+        path = PROJECT_ROOT / "requirements-provisioner.txt"
+        assert path.exists(), (
+            "requirements-provisioner.txt must exist at the repo root — "
+            "provision-pi.sh points operators at this file"
+        )
+        contents = path.read_text()
+        assert "cryptography" in contents, (
+            "requirements-provisioner.txt must include cryptography (Fernet "
+            "for the password-auth fallback in provision-pi.sh)"
+        )
+        # Regression guards: Flask- and Pi-only deps don't belong on the
+        # laptop. Check dep lines (non-comment) — comments may legitimately
+        # mention these names to explain why they're excluded.
+        dep_lines = [
+            line.strip() for line in contents.splitlines() if line.strip() and not line.strip().startswith("#")
+        ]
+        joined = "\n".join(dep_lines).lower()
+        assert "flask" not in joined, (
+            "requirements-provisioner.txt must NOT include flask as a dep " "(that's requirements-flask.txt)"
+        )
+        assert "rgbmatrix" not in joined, (
+            "requirements-provisioner.txt must NOT include rgbmatrix as a dep "
+            "(that's requirements-pi.txt — the C extension would "
+            "fail to build on the laptop anyway)"
+        )
+
+    def test_no_root_requirements_txt(self):
+        """The old root requirements.txt has been split — it must not exist.
+
+        A lingering root requirements.txt would silently get picked up by
+        Heroku (which defaults to that path) — masking the new file layout
+        and re-introducing the split bug.
+        """
+        path = PROJECT_ROOT / "requirements.txt"
+        assert not path.exists(), (
+            "requirements.txt must NOT exist at the repo root after the "
+            "split — Heroku's default lookup would silently re-export the "
+            "old combined deps. Use requirements-flask.txt via the "
+            "PIP_REQUIREMENTS_PATH heroku config var instead."
+        )
+
 
 class TestStartupScript:
     def test_exec_loader_py(self):

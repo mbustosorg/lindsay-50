@@ -122,12 +122,12 @@ setup_password_auth() {
     if [ ! -x "$PYTHON_BIN" ]; then
         echo "❌ $PYTHON_BIN not found." >&2
         echo "   provision-pi.sh needs the repo's .venv to encrypt the password." >&2
-        echo "   Run from the repo root after: python3 -m venv .venv && pip install -r requirements.txt" >&2
+        echo "   Run from the repo root after: python3 -m venv .venv && pip install -r requirements-provisioner.txt" >&2
         return 1
     fi
     if ! "$PYTHON_BIN" -c "from cryptography.fernet import Fernet" 2>/dev/null; then
         echo "❌ cryptography.fernet not importable in $PYTHON_BIN." >&2
-        echo "   Run: source .venv/bin/activate && pip install cryptography" >&2
+        echo "   Run: source .venv/bin/activate && pip install -r requirements-provisioner.txt" >&2
         return 1
     fi
 

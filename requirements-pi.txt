@@ -1,5 +1,7 @@
 # Raspberry Pi display device dependencies.
-# Install on the Pi: pip install -r heart-matrix-controller/requirements.txt
+# Install on the Pi: pip install -r requirements-pi.txt
+# Called by scripts/setup-pi.sh (Phase 2, idempotent — skipped on
+# re-runs if rgbmatrix is already importable).
 paho-mqtt
 requests>=2.31
 Pillow            # PNG loading/scaling for the png_display pattern

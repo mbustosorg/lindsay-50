@@ -26,12 +26,23 @@ its live message ring buffer.
 
 ### 1. Install dependencies
 
+The repo has three requirements files, one per consumer. Laptop Flask
+dev installs just the Flask one; the Pi has its own (installed
+automatically by `scripts/setup-pi.sh`); and the laptop-side
+provisioner installs only its own.
+
 ```bash
 git clone https://github.com/mbustosorg/lindsay-50
 cd lindsay-50
 python3.12 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-flask.txt
+```
+
+For the provisioner (one-time, on the laptop):
+
+```bash
+pip install -r requirements-provisioner.txt
 ```
 
 (`./scripts/setup-dev-tools.sh` is optional — it installs OpenSpec,
@@ -109,6 +120,21 @@ In Twilio Console → your phone number → **Messaging**:
 - **A message comes in**: Webhook, `POST`
 - URL: `https://your-ngrok-url/api/messages`
 
+### 5. Deploy to Heroku
+
+The Flask server's dependencies live in `requirements-flask.txt`. Heroku
+defaults to `requirements.txt` at the repo root, which no longer
+exists — set the override once after creating the app:
+
+```bash
+heroku config:set PIP_REQUIREMENTS_PATH=requirements-flask.txt
+```
+
+`Procfile` (single web process) is at the repo root and needs no
+changes. Heroku uses the Adafruit IO MQTT client (`MQTT_CLIENT =
+"adafruit"` in `settings.toml`); `requirements-flask.txt` is the
+source of truth for what's installed.
+
 ## Admin UI
 
 Flask serves an admin UI at:
@@ -182,6 +208,8 @@ lindsay-50/
 │   ├── adafruit_mqtt_client.py  # Adafruit IO MQTT client (Heroku)
 │   └── paho_mqtt_client.py      # Paho MQTT client (local dev + Pi)
 ├── scripts/                      # start/stop helpers, Pi systemd service + startup
-├── requirements.txt
+├── requirements-flask.txt        # Flask server deps (Heroku + laptop dev)
+├── requirements-pi.txt           # Pi display device deps (setup-pi.sh)
+├── requirements-provisioner.txt  # Laptop-side provisioner deps (provision-pi.sh)
 └── .venv/
 ```

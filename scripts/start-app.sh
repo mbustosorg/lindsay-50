@@ -11,7 +11,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 if [ -d "$PROJECT_ROOT/.venv" ]; then
     source "$PROJECT_ROOT/.venv/bin/activate"
 else
-    echo "Error: .venv not found. Run: python -m venv .venv && pip install -r requirements.txt"
+    echo "Error: .venv not found. Run: python -m venv .venv && pip install -r requirements-flask.txt"
     exit 1
 fi
 

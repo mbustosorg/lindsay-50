@@ -95,9 +95,14 @@ if python3 -c "import rgbmatrix" 2>/dev/null; then
     echo "==> setup-pi: rgbmatrix already importable, skipping pip install"
 else
     echo "==> setup-pi: installing Python requirements (rgbmatrix C build, ~2-5 min)"
+    # Only the Pi's deps — the Flask server's deps (requirements-flask.txt)
+    # are NOT installed here. The Pi doesn't run Flask; installing
+    # flask/boto3/twilio on it is wasted bandwidth and image size. If
+    # the operator wants both, they can `pip install -r
+    # requirements-flask.txt` manually after setup, but the matrix
+    # controller's runtime never imports them.
     pip install --break-system-packages \
-        -r "$REPO_DIR/requirements.txt" \
-        -r "$REPO_DIR/heart-matrix-controller/requirements.txt"
+        -r "$REPO_DIR/requirements-pi.txt"
 fi
 
 # ---------------------------------------------------------------------------
