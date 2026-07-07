@@ -162,21 +162,28 @@ def stage_version(repo_dir: Path, expected_sha: str) -> Path:
     cur = current_symlink(repo_dir)
     if cur.exists():
         try:
-            subprocess.check_call(
+            subprocess.run(
                 ["git", "-C", str(cur), "reset", "--hard", "HEAD"],
+                check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 timeout=10,
             )
         except subprocess.CalledProcessError as e:
-            raise StageError(f"reset --hard failed in {cur}: {e.stderr.decode(errors='replace')}") from e
+            # `subprocess.run(check=True)` populates `e.stderr` with
+            # the captured stderr bytes — `subprocess.check_call`
+            # would NOT, which is why the old code crashed on the
+            # `e.stderr.decode(...)` call and reported a misleading
+            # "'NoneType' object has no attribute 'decode'".
+            stderr_text = e.stderr.decode(errors="replace") if e.stderr else ""
+            raise StageError(f"reset --hard failed in {cur}: {stderr_text}") from e
 
     # Stage the new worktree from the bare repo. The bare repo
-    # already has the history (we cloned once via setup-pi.sh),
-    # so this is a fast local operation — only fails if `expected_sha`
-    # isn't actually in the bare repo's refs.
+    # already has the history (refresh_bare_repo fetched it earlier
+    # in the flow), so this is a fast local operation — only fails
+    # if `expected_sha` isn't actually in the bare repo's refs.
     try:
-        subprocess.check_call(
+        subprocess.run(
             [
                 "git",
                 "-C",
@@ -186,12 +193,14 @@ def stage_version(repo_dir: Path, expected_sha: str) -> Path:
                 str(target),
                 expected_sha,
             ],
+            check=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             timeout=30,
         )
     except subprocess.CalledProcessError as e:
-        raise StageError(f"worktree add failed for {expected_sha}: {e.stderr.decode(errors='replace')}") from e
+        stderr_text = e.stderr.decode(errors="replace") if e.stderr else ""
+        raise StageError(f"worktree add failed for {expected_sha}: {stderr_text}") from e
     except Exception as e:
         raise StageError(f"worktree add raised: {e}") from e
 
@@ -275,8 +284,14 @@ def atomic_swap(repo_dir: Path, expected_sha: str) -> None:
     target_rel = f"v-{short_sha(expected_sha)}"
     cur = current_symlink(repo_dir)
     logger.info("loader: swapping %s -> %s", cur, target_rel)
-    subprocess.check_call(
+    # `subprocess.run(check=True)` (not `subprocess.check_call`) so the
+    # `CalledProcessError` carries the captured stderr; the fall-through
+    # `except Exception` in `run_upgrade_flow` will log the real error
+    # string instead of the misleading "'NoneType' object has no
+    # attribute 'decode'" that the previous shape produced.
+    subprocess.run(
         ["ln", "-sfn", target_rel, str(cur)],
+        check=True,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         timeout=5,

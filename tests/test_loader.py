@@ -484,6 +484,68 @@ class TestRefreshBareRepo:
         assert called[0][4] == "upstream"
 
 
+class TestStageVersionExceptionCapturesStderr:
+    """Regression: `stage_version` used `subprocess.check_call`, which raises
+    `CalledProcessError(returncode, cmd)` WITHOUT attaching captured stderr.
+    The except clause then crashed on `e.stderr.decode(...)` and reported
+    the misleading `'NoneType' object has no attribute 'decode'`.
+
+    After the fix to `subprocess.run(check=True)`, `CalledProcessError`
+    carries `e.stderr` populated, so the operator sees the real git error
+    (e.g. "fatal: invalid reference: f960136..."), not a Python
+    AttributeError. These tests pin that contract."""
+
+    def test_stage_error_carries_subprocess_stderr_not_attributeerror(
+        self, loader, monkeypatch, tmp_path
+    ):
+        """When `git worktree add` fails with a real error, the StageError
+        message must contain the stderr text — NOT the misleading
+        "'NoneType' object has no attribute 'decode'."""
+
+        def fake_run(args, **kwargs):
+            # Simulate what `subprocess.run(check=True)` produces: a
+            # CalledProcessError with `e.stderr` populated.
+            raise loader.subprocess.CalledProcessError(
+                returncode=128,
+                cmd=args,
+                stderr=b"fatal: invalid reference: f9601364b80f92452a662d69ecb69eb0a6aa6ff5",
+            )
+
+        monkeypatch.setattr(loader.subprocess, "run", fake_run)
+
+        with pytest.raises(loader.StageError) as excinfo:
+            loader.stage_version(tmp_path, "f9601364b80f92452a662d69ecb69eb0a6aa6ff5")
+
+        # The real git stderr text is present — proving the new shape
+        # surfaces the actual failure.
+        assert "invalid reference" in str(excinfo.value)
+        # The misleading AttributeError message is NOT present — proving
+        # we never crash on `e.stderr.decode(...)`.
+        assert "'NoneType' object" not in str(excinfo.value)
+
+    def test_stage_error_handles_none_stderr_gracefully(
+        self, loader, monkeypatch, tmp_path
+    ):
+        """Defensive: if a future `subprocess.run` somehow produces a
+        CalledProcessError with `stderr=None`, the StageError message
+        stays informative (no spurious AttributeError)."""
+
+        def fake_run(args, **kwargs):
+            raise loader.subprocess.CalledProcessError(
+                returncode=128, cmd=args, stderr=None
+            )
+
+        monkeypatch.setattr(loader.subprocess, "run", fake_run)
+
+        with pytest.raises(loader.StageError) as excinfo:
+            loader.stage_version(tmp_path, "f9601364b80f92452a662d69ecb69eb0a6aa6ff5")
+
+        # Message references the SHA + the failure mode, even without
+        # stderr captured. Does NOT raise AttributeError.
+        assert "f960136" in str(excinfo.value)
+        assert "'NoneType' object" not in str(excinfo.value)
+
+
 # ---------------------------------------------------------------------------
 # run_upgrade_flow — full orchestration (no Popen return; execvpe instead)
 # ---------------------------------------------------------------------------
