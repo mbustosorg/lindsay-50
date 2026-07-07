@@ -703,3 +703,164 @@ def test_pull_change_emits_info_log(caplog):
         f"Pull-change log should show prev= and new= bodies; got: {msg!r}"
     )
     monkey.undo()
+
+
+def test_hold_does_not_interrupt_on_random_picks_from_shown_set(caplog):
+    """v2 hold semantics: a fresh, un-shown SMS (head.id differs from
+    `_last_shown_message_id`) interrupts the hold; a random re-pick from
+    the already-shown pool does NOT. Without this, every pull with
+    `random.choice` over a multi-message buffer would interrupt the
+    hold instantly and `hold_seconds` would never be observed — that
+    was the bug operators saw: messages would appear briefly then
+    disappear after a few seconds regardless of hold_seconds setting.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    # Two messages; both stay in the recent pool. After the first
+    # pull, get_display_message() will fall through to random.choice,
+    # which CAN return the other body — but neither body is "fresh"
+    # in id-terms after both have been consumed once. The hold must
+    # survive `hold_seconds` of repeated random re-picks.
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="alpha", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="beta", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1, msg2])
+    # hold_seconds = 0.5 so we can measure whether it elapses; idle_seconds irrelevant here.
+    coord, *_ = _build(
+        intro_seconds=0.0,
+        fade_seconds=0.05,
+        hold_seconds=0.5,
+        idle_seconds=999.0,
+        message_manager=mgr,
+    )
+    coord.start()
+
+    caplog.set_level(logging.INFO)
+    # Drain to background via text_out so we enter the hold state cleanly.
+    _drive(clock, coord, 0.4)  # intro → out → in → hold
+    # Drain through hold_seconds to let it reach text_out naturally.
+    _drive(clock, coord, 0.6)  # hold → text_out → background
+
+    hold_to_text_out = _info_records(caplog, "Coordinator hold→text_out")
+    assert hold_to_text_out, (
+        "hold_seconds must elapse to text_out without being interrupted. "
+        "If this fails, the bug returned: random re-picks are interrupting holds."
+    )
+    # And: no 'Coordinator hold interrupt' should have fired — that
+    # log line only fires when a FRESH id arrives.
+    interrupts = _info_records(caplog, "Coordinator hold interrupt")
+    assert not interrupts, (
+        f"Expected zero hold interrupts from random re-picks; got: {[r.getMessage() for r in interrupts]}"
+    )
+    monkey.undo()
+
+
+def test_background_re_rolls_on_idle_timeout(caplog):
+    """v2 background semantics: idle_seconds is honored as a hard ceiling.
+    Without this, idle_seconds was exposed in the admin UI and the
+    model but never read by the coordinator — the sign could sit
+    dormant for the full 5-minute default even with idle_seconds=10.
+
+    Drive the coordinator into `background` mode and advance the clock
+    past idle_seconds with no fresh SMS; the next tick should fire
+    `_begin_out` and log the idle trigger.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg = MessageView(
+        Message(id="m1", sender="+1", body="hi", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg])
+    coord, *_ = _build(
+        intro_seconds=0.0,
+        fade_seconds=0.05,
+        hold_seconds=0.05,
+        idle_seconds=0.3,  # short so the test runs fast
+        message_manager=mgr,
+    )
+    coord.start()
+
+    caplog.set_level(logging.INFO)
+    # Drain past intro → out → in → hold → text_out → background.
+    _drive(clock, coord, 0.3)
+    assert coord.mode == "background", (
+        f"Setup expected to land in background mode; got {coord.mode!r}"
+    )
+
+    # Now sit idle for longer than idle_seconds without sending a new SMS.
+    # Each tick advances by ~0.01s; advance 1s total to comfortably exceed 0.3s.
+    _drive(clock, coord, 1.0)
+
+    # The idle trigger must have fired at least once.
+    matches = _info_records(caplog, "Coordinator background→out", "(idle)")
+    assert matches, (
+        "Expected at least one 'Coordinator background→out' INFO log with "
+        "the (idle) trigger when the coordinator sat in background past "
+        "idle_seconds. If missing, the fix isn't wired up."
+    )
+    msg_log = matches[0].getMessage()
+    assert "0.3" in msg_log, (
+        f"Expected idle_seconds=0.3 in the log; got: {msg_log!r}"
+    )
+    monkey.undo()
+
+
+def test_background_re_rolls_on_fresh_id(caplog):
+    """A genuinely-new SMS arriving in background mode kicks a fade
+    immediately — same as before, but via the new `fresh_id_landed`
+    trigger rather than the legacy body-string compare. Confirms the
+    new path covers the existing fresh-SMS flow.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="first", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="second", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1])
+    coord, *_ = _build(
+        intro_seconds=0.0,
+        fade_seconds=0.05,
+        hold_seconds=0.05,
+        idle_seconds=999.0,  # isolate the new-id trigger from the idle trigger
+        message_manager=mgr,
+    )
+    coord.start()
+
+    caplog.set_level(logging.INFO)
+    _drive(clock, coord, 0.3)  # reach background
+    assert coord.mode == "background"
+
+    # Inject a fresh-id message mid-background.
+    mgr.add_message(msg2)
+    clock.advance(0.5)  # past PULL_INTERVAL
+    coord.tick()
+
+    matches = _info_records(caplog, "Coordinator background→out", "(new_id)")
+    assert matches, (
+        "Expected background→out with (new_id) trigger when an un-shown SMS lands."
+    )
+    # And the actual fade-in path should also fire.
+    assert _info_records(caplog, "Coordinator out→in"), (
+        "After background→out (new_id), out→in should follow and set scroller text."
+    )
+    monkey.undo()

@@ -202,6 +202,18 @@ class EffectsCoordinator:
         self._last_message_pull: float = 0.0
         self._last_display_message: str | None = None
         self._last_shown_message_id: str | None = None
+        # `_consumed_message_ids` is the set of message ids that have
+        # actually FADED IN on the scroller during this process's
+        # lifetime. Distinct from `_last_shown_message_id`, which
+        # `get_display_message` mutates on every pull (random.choice
+        # included) — too noisy to use as a "is this a genuinely new
+        # SMS?" sentinel because random.choice over a multi-message
+        # pool bounces the comparison and falsely trips every other
+        # pull. We need the full history (a set, not a single id)
+        # because a "fresh" id is one that has never been shown yet;
+        # recency of the *last* consumed id is not enough when there
+        # are N ≥ 2 messages in the recent pool.
+        self._consumed_message_ids: set[str] = set()
         # Render-layer diff state: structural fingerprints of the
         # rotation list and text settings, used to gate the
         # rotation rebuild and scroller setter calls in `tick()`.
@@ -316,6 +328,23 @@ class EffectsCoordinator:
     def text_settings(self) -> TextSettings:
         """Returns the current text settings"""
         return self.message_manager.get_text_settings()
+
+    def _consumed_message_id_at_pick(self, body: str) -> str | None:
+        """Return the id of the buffered message whose body matches `body`.
+
+        Called at the out→in transition to mark "this is the message we
+        just faded in." The buffer (held by the manager) is searched in
+        recent-first order so the most-recent match wins — relevant when
+        the same body was sent twice (rare but possible). Returns None
+        when the buffer no longer holds the body (e.g. evicted by a
+        flood of newer messages before the fade-in completed); the
+        caller treats that as "no consumption tracking" and the next
+        fresh-id check defaults to a no-match.
+        """
+        for entry in self.current_messages:
+            if entry.message.body == body:
+                return entry.message.id
+        return None
 
     def get_display_message(self) -> str | None:
         """Pick the body to display next, from the manager's buffered messages.
@@ -494,6 +523,14 @@ class EffectsCoordinator:
                     scroller.set_brightness(0.0)
                     self.showing_text = True
                     self.last_shown_text = text
+                    # Mark this message id as "consumed" — a
+                    # follow-on hold or background should not treat
+                    # the same id as fresh. A genuine fresh-id
+                    # interrupt requires an id that has never been
+                    # consumed (i.e. an SMS we haven't shown yet).
+                    consumed = self._consumed_message_id_at_pick(text)
+                    if consumed is not None:
+                        self._consumed_message_ids.add(consumed)
                 else:
                     scroller.set_text("", display.width)
                     self.showing_text = False
@@ -521,22 +558,37 @@ class EffectsCoordinator:
                 self.mode = next_mode
 
         elif mode == "hold":
-            # A fresh message (one whose id differs from the last we showed)
-            # interrupts the hold. We compare against `_last_shown_message_id`,
-            # which `get_display_message` updates on every pick. Use the
-            # pulled `text` to detect "a new pick since we last consumed one"
-            # by checking that the pull produced a different body than we
-            # already have on screen.
-            if text and text != self.last_shown_text:
+            # Hold semantics (v2):
+            #   - Stay on the current message until `hold_seconds` elapses,
+            #     UNLESS a genuinely *new* SMS arrives — i.e. the head of the
+            #     recent pool has an id we haven't shown yet. Random re-picks
+            #     from already-shown messages do NOT interrupt the hold;
+            #     they only kick a re-roll in the `background` mode below.
+            #   - The previous comparison (`text != self.last_shown_text`)
+            #     compared BODY strings, which meant `random.choice` over a
+            #     5-entry pool could land on a different body every pull and
+            #     effectively keep hold duration clamped to the throttle
+            #     interval (~0.25s). That bug is why `hold_seconds` was
+            #     observed "taking a long time, then disappearing after a
+            #     few seconds" — every random pick interrupted the hold
+            #     instantly. The fix: gate the interrupt on the ID, not the
+            #     body, and idle `hold_seconds` otherwise.
+            fresh_id_landed = (
+                self.current_messages
+                and self.current_messages[0].message.id not in self._consumed_message_ids
+            )
+            if fresh_id_landed:
                 log.info(
-                    "Coordinator hold interrupt: pending_text=%r last_shown=%r",
+                    "Coordinator hold interrupt (new id): pending_text=%r last_shown=%r new_id=%s",
                     text, self.last_shown_text,
+                    self.current_messages[0].message.id,
                 )
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= effects_settings.hold_seconds:
                 log.info(
-                    "Coordinator hold→text_out: effect=%s held_text=%r",
+                    "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
                     self.current_effect_name, self.last_shown_text,
+                    now - self.phase_start, effects_settings.hold_seconds,
                 )
                 self.mode = "text_out"
                 self.fade_start = now
@@ -556,8 +608,39 @@ class EffectsCoordinator:
                 self.mode = "background"
 
         elif mode == "background":
-            # A new pull (different body than we last showed) kicks a fade.
-            if text and text != self.last_shown_text:
+            # Background semantics (v2):
+            #   - A genuinely new SMS (head.id differs from last-shown) kicks
+            #     a fade immediately — the operator just texted, show it now.
+            #   - A random re-pick from the already-shown pool ALSO kicks a
+            #     fade, so the rotating buffer of recent messages keeps the
+            #     sign alive even with zero inbound traffic.
+            #   - `idle_seconds` is honored as a hard ceiling: if neither
+            #     trigger fires within `idle_seconds` of entering background,
+            #     force a re-roll. This was the prior bug — idle_seconds was
+            #     defined and exposed in the admin UI but never read by the
+            #     coordinator, so the sign could sit dormant for 5+ minutes
+            #     even with idle_seconds=10. Now: background kicks a re-roll
+            #     on whichever of (fresh_id, new_random_pick, idle_timeout)
+            #     fires first.
+            fresh_id_landed = (
+                self.current_messages
+                and self.current_messages[0].message.id not in self._consumed_message_ids
+            )
+            random_pick_changed = bool(text) and text != self.last_shown_text
+            idle_timed_out = (
+                now - self.phase_start >= effects_settings.idle_seconds
+            )
+            if fresh_id_landed or random_pick_changed or idle_timed_out:
+                trigger = (
+                    "new_id" if fresh_id_landed
+                    else "random_repick" if random_pick_changed
+                    else "idle"
+                )
+                log.info(
+                    "Coordinator background→out (%s): waited=%.1fs idle_seconds=%.1f next_text=%r",
+                    trigger, now - self.phase_start,
+                    effects_settings.idle_seconds, text or "",
+                )
                 self._begin_out(now)  # show the queued message
 
         current = self.current
