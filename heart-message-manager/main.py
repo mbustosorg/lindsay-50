@@ -199,10 +199,24 @@ def api_messages():
         validator = RequestValidator(twilio_token)
         signature = request.headers.get("X-Twilio-Signature", "")
         params = request.form.to_dict()
+        # Pretty-print every incoming field so the operator can see exactly
+        # what Twilio sent. Twilio's MMS webhooks include NumMedia,
+        # MediaUrl0..N, MediaContentType0..N, SmsSid, MessageStatus,
+        # ApiVersion, etc. — we want all of them visible in journalctl
+        # for debugging, not just From/Body. `default=str` coerces any
+        # non-JSON-serializable value (FileStorage, etc.) to its repr.
+        import json as _json
         logger.info(
-            "Twilio validation: reconstructed_url=%s X-Forwarded-Proto=%s",
+            "Twilio webhook: reconstructed_url=%s X-Forwarded-Proto=%s "
+            "X-Twilio-Signature=%s",
             webhook_url,
             forwarded_proto,
+            (signature[:12] + "...") if signature else "(none)",
+        )
+        logger.info(
+            "Twilio webhook fields (%d):\n%s",
+            len(params),
+            _json.dumps(params, indent=2, sort_keys=True, default=str),
         )
         if not validator.validate(webhook_url, params, signature):
             logger.warning("Twilio signature verification failed for %s", webhook_url)

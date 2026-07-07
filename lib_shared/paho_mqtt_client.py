@@ -70,14 +70,46 @@ class PahoMqttClient:
 
         def on_connect(_client, _userdata, _flags, rc):
             if rc == 0:
-                _client.subscribe(topic)
-                logger.info("PahoMqttClient connected, subscribed to %s", topic)
+                # Subscribe returns (result, mid) where result is an MQTT
+                # error code (0 = success) and mid is the message id the
+                # broker will use for the SUBACK. Log both so we can tell
+                # if the broker silently refused the subscription.
+                result, mid = _client.subscribe(topic)
+                logger.info(
+                    "PahoMqttClient connected, subscribed to %s "
+                    "(subscribe_result=%s mid=%s)",
+                    topic,
+                    result,
+                    mid,
+                )
             else:
                 logger.warning("PahoMqttClient connection failed: rc=%s", rc)
 
+        def on_subscribe(_client, _userdata, _mid, _granted_qos):
+            # Fired when the broker sends SUBACK. Confirms the subscription
+            # is now active — without this, a successful on_connect can
+            # still leave us receiving nothing (broker accepted the TCP
+            # connection but rejected the topic). With both on_connect +
+            # on_subscribe logged, "no messages" gaps in the journalctl
+            # mean the broker isn't delivering, not that we're not subscribed.
+            logger.info(
+                "PahoMqttClient subscribe ACKed: mid=%s granted_qos=%s",
+                _mid,
+                _granted_qos,
+            )
+
         def on_message(_client, _userdata, msg):
             logger.info("PahoMqttClient received: topic=%s payload=%r", msg.topic, msg.payload)
-            self._dispatch(msg.payload.decode(errors="replace"))
+            try:
+                self._dispatch(msg.payload.decode(errors="replace"))
+                logger.debug("PahoMqttClient dispatch callback returned cleanly")
+            except Exception as e:
+                # A throwing dispatch handler should NOT kill the paho
+                # network loop, but if it does, we want the cause in the
+                # journal — not just a hung subscription with no clue why.
+                logger.warning(
+                    "PahoMqttClient dispatch callback raised: %s", e, exc_info=True
+                )
 
         def on_disconnect(_client, _userdata, rc):
             if rc != 0:
@@ -93,6 +125,7 @@ class PahoMqttClient:
                     client = mqtt.Client(clean_session=True)  # type: ignore[reportPrivateImportUsage]
                     client.username_pw_set(self._username, self._password)
                     client.on_connect = on_connect  # type: ignore[reportAttributeAccessIssue]
+                    client.on_subscribe = on_subscribe  # type: ignore[reportAttributeAccessIssue]
                     client.on_message = on_message  # type: ignore[reportAttributeAccessIssue]
                     client.on_disconnect = on_disconnect  # type: ignore[reportAttributeAccessIssue]
                     # TLS required for port 8883 (e.g. io.adafruit.com).

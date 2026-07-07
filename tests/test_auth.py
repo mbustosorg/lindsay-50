@@ -400,3 +400,67 @@ class TestTwilioSignature:
             },
         )
         assert response.status_code == 403
+
+    def test_twilio_webhook_logs_all_fields_including_media_urls(self, app, client, caplog):
+        """Every incoming Twilio field — NumMedia, MediaUrl0..N, SmsSid,
+        MessageStatus, etc. — must appear in the journalctl output so
+        the operator can debug MMS webhooks, status callbacks, and any
+        future Twilio fields without re-deploying.
+
+        The pretty-printed log uses ``json.dumps(indent=2)`` so each
+        field is on its own line; the test asserts the field NAMES are
+        present (and the values are reachable via substring match), not
+        the exact indent, so it doesn't break on dict-ordering changes.
+        """
+        import logging
+        from twilio.request_validator import RequestValidator
+
+        url = "https://lindsay-50.herokuapp.com/api/messages"
+        # A realistic MMS webhook payload: From/Body + NumMedia=1 +
+        # MediaUrl0 + the matching content-type. Twilio's actual webhook
+        # also includes SmsSid, AccountSid, ApiVersion, MessageSid,
+        # MessagingServiceSid, etc.; we test the ones the user asked
+        # about (MediaUrl) plus the standard SMS fields.
+        params = {
+            "From": "+15551234567",
+            "To": "+15559999999",
+            "Body": "photo of my dog",
+            "NumMedia": "1",
+            "MediaUrl0": "https://api.twilio.com/2010-04-01/Accounts/AC.../Messages/MM.../Media/ME...",
+            "MediaContentType0": "image/jpeg",
+            "SmsSid": "SMxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "SmsStatus": "received",
+            "AccountSid": "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+            "ApiVersion": "2010-04-01",
+        }
+        validator = RequestValidator("twilio-auth-token")
+        signature = validator.compute_signature(url, params)
+
+        with caplog.at_level(logging.INFO):
+            response = client.post(
+                "/api/messages",
+                data=params,
+                headers={
+                    "X-Twilio-Signature": signature,
+                    "Host": "lindsay-50.herokuapp.com",
+                    "X-Forwarded-Proto": "https",
+                },
+            )
+
+        assert response.status_code in (200, 204)
+        # The pretty-printed field log must contain every incoming key.
+        # We join caplog text once and substring-search — JSON indent
+        # rendering shouldn't matter, only that the keys + values are
+        # both there.
+        joined = "\n".join(record.getMessage() for record in caplog.records)
+        for key, value in params.items():
+            assert f'"{key}"' in joined, f"key {key!r} missing from webhook log"
+            # The string-form of the value must also be present (json
+            # dumps with default=str will render MediaUrl0 as-is).
+            assert str(value) in joined, f"value {value!r} for key {key!r} missing from webhook log"
+
+        # Sanity: the validation summary line is also logged (different
+        # message but same level), so the count assertion is on
+        # "at least one pretty-printed record + one summary record".
+        pretty_records = [r for r in caplog.records if "Twilio webhook fields" in r.getMessage()]
+        assert len(pretty_records) >= 1, "expected at least one pretty-printed fields log line"
