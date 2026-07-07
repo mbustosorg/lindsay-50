@@ -148,6 +148,40 @@ sudo systemctl restart ssh
 publickey auth still works) — only flip it to `prohibit-password`
 if you want the server to actively reject every other method.
 
+#### Troubleshooting — `passwordauthentication no` after enabling
+
+If `sudo sshd -T | grep passwordauth` still reports `no` after the
+sed + restart, a drop-in in `/etc/ssh/sshd_config.d/` is overriding
+the main file. Drop-ins load alphabetically *before* the main-file
+directives and win via first-match-wins — so the canonical Debian /
+Ubuntu gotcha is:
+
+```
+/etc/ssh/sshd_config.d/50-cloud-init.conf   # says PasswordAuthentication no
+```
+
+This is Ubuntu's cloud-init setting, present on Debian-family
+images even when cloud-init isn't actively used. It silently
+overrides your main-file edit. On a Pi that doesn't run cloud-init,
+the file is dead config and safe to remove:
+
+```bash
+sudo rm /etc/ssh/sshd_config.d/50-cloud-init.conf
+sudo systemctl restart ssh
+sudo sshd -T | grep -iE "permitroot|passwordauth"
+# expect: permitrootlogin yes / passwordauthentication yes
+```
+
+Alternatively, if you want to keep the drop-in (e.g. cloud-init is
+in use elsewhere), make yours load earlier with a `00-` prefix —
+alphabetically before any `50-`-ranged files:
+
+```bash
+sudo mv /etc/ssh/sshd_config.d/enable-password-for-bootstrap.conf \
+        /etc/ssh/sshd_config.d/00-enable-password.conf
+sudo systemctl restart ssh
+```
+
 ### Running `setup-pi.sh` directly on the Pi
 
 You normally don't need to. But if you want to bootstrap the Pi
