@@ -1,0 +1,9 @@
+# Heroku's python buildpack only recognizes requirements.txt at the repo
+# root as a package manager file. The v2 chore(requirements) split (fe7d92f)
+# removed this file, assuming PIP_REQUIREMENTS_PATH would redirect the
+# buildpack to requirements-flask.txt — but that env var is not honored
+# at the buildpack's initial detection step. So we ship a one-line shim
+# that defers to the consumer-specific file. requirements-flask.txt stays
+# the single source of truth for Flask deps; Pi and provisioner tracks
+# are untouched.
+-r requirements-flask.txt
