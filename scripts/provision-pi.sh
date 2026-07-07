@@ -58,6 +58,16 @@ LOCAL_REPO_DIR="$(pwd -P)"
 # etc.).
 LOCAL_SETTINGS="${LINDSAY50_LOCAL_SETTINGS:-$LOCAL_REPO_DIR/heart-matrix-controller/settings.toml}"
 GIT_REF="${LINDSAY50_GIT_REF:-$(git rev-parse HEAD)}"
+# LAPTOP_BRANCH: the branch the laptop is on, OR empty if detached HEAD.
+# `--abbrev-ref HEAD` returns "HEAD" on detached HEAD, so we detect
+# that case explicitly. We pass this to `git clone --branch` so the
+# Pi's fresh clone matches the laptop's working branch — without this,
+# `git clone <url>` silently defaults to GitHub's default branch (main),
+# leaving the working tree on main and missing setup-pi.sh itself.
+LAPTOP_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+if [ "$LAPTOP_BRANCH" = "HEAD" ]; then
+    LAPTOP_BRANCH=""
+fi
 
 # ---------------------------------------------------------------------------
 # Pre-flight: cwd is the repo root, settings.toml is here, ssh works
@@ -243,17 +253,39 @@ fi
 
 echo "==> provisioning $PI_HOST (repo at $PI_REPO_DIR, ref $GIT_REF)"
 
-# 1. Ensure the Pi has a clone. Skip if $PI_REPO_DIR/.git already
-#    exists (the user's existing repo state — including the bare-repo
-#    layout setup-pi.sh creates — is preserved across re-runs).
-echo "==> ensuring clone at $PI_HOST:$PI_REPO_DIR"
-ssh "$PI_HOST" "test -d '$PI_REPO_DIR/.git' || git clone https://github.com/mbustosorg/lindsay-50.git '$PI_REPO_DIR'"
+# 1. Ensure the Pi has a fresh clone, on the same branch the laptop
+#    is on. We always wipe /srv/lindsay-50 and re-clone rather than
+#    reusing existing state — the working tree on the Pi must match
+#    the laptop's branch exactly, and we don't have a separate
+#    "version-pin" state to preserve on a Pi that hasn't been
+#    bootstrapped yet. (Once setup-pi.sh runs, the bare+worktree
+#    layout handles `current`/`v-<sha>` versioning — but the
+#    *initial* clone must land on the right branch.) `git clone
+#    --branch X --single-branch` works here because on a freshly-
+#    wiped Pi there's nothing for it to collide with.
+#
+#    On detached HEAD (LAPTOP_BRANCH is empty) we clone the default
+#    branch instead and rely on setup-pi.sh's `git worktree add ...
+#    $GIT_REF` (which uses the explicit SHA) to pin the version —
+#    `git clone` can't accept a SHA via --branch.
+echo "==> ensuring clone at $PI_HOST:$PI_REPO_DIR (laptop on ${LAPTOP_BRANCH:-<detached>}, ref $GIT_REF)"
+if [ -n "$LAPTOP_BRANCH" ]; then
+    # Wipe any existing state on the Pi — a stale/wrong-branch clone,
+    # or a previously-bootstrapped install the operator wants to reset
+    # to match a new laptop branch. setup-pi.sh starts fresh on the
+    # next ssh and rebuilds the bare+worktree layout from scratch.
+    ssh "$PI_HOST" "rm -rf '$PI_REPO_DIR' && git clone --branch '$LAPTOP_BRANCH' --single-branch https://github.com/mbustosorg/lindsay-50.git '$PI_REPO_DIR'"
+else
+    # Detached HEAD — clone default branch; GIT_REF pins the version
+    # for setup-pi.sh downstream.
+    ssh "$PI_HOST" "rm -rf '$PI_REPO_DIR'; git clone https://github.com/mbustosorg/lindsay-50.git '$PI_REPO_DIR'"
+fi
 
-# 2. Fetch the laptop's ref into the Pi's repo. We do NOT
-#    `git checkout -f` here because:
-#      - On a fresh non-bare clone (post step 1), checkout would
-#        work but the working tree gets overwritten by setup-pi.sh's
-#        bare conversion in Phase 3 anyway — wasted work.
+# 2. Fetch all the laptop's other branches into the Pi's refdb. We do
+#    NOT `git checkout -f $GIT_REF` here because:
+#      - On a fresh non-bare clone (post step 1, no --branch path),
+#        checkout would work but the working tree gets overwritten by
+#        setup-pi.sh's bare conversion in Phase 3 anyway — wasted work.
 #      - On an already-bootstrapped bare repo (the common re-run
 #        case), bare repos reject checkout with "this operation must
 #        be run in a work tree" — fatal, breaking the re-run.

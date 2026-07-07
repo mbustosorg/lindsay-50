@@ -498,6 +498,74 @@ class TestProvisionPiScript:
             "(same pattern as setup-pi.sh's bare-refresh fetch)"
         )
 
+    def test_clones_laptop_branch_not_default(self):
+        """provision-pi.sh clones the laptop's branch, not GitHub's default.
+
+        Discovered during #49 end-to-end testing: `git clone <url>` defaults
+        to GitHub's default branch (main), which leaves in-progress
+        feature branches (like feat/issue-49) WITHOUT setup-pi.sh on disk —
+        even though git's refdb has the branch ref. The next ssh handoff to
+        setup-pi.sh then fataled with "No such file or directory" because
+        the working tree was on main, not on the laptop's branch.
+
+        Fix: clone with `--branch $LAPTOP_BRANCH --single-branch` so the
+        working tree lands on the laptop's branch from the start.
+
+        LAPTOP_BRANCH detection: `git rev-parse --abbrev-ref HEAD` returns
+        the actual branch name on a branch checkout, or "HEAD" on detached
+        HEAD — the script must handle both (and on detached HEAD, fall
+        back to cloning the default branch and letting setup-pi.sh's
+        `git worktree add ... $GIT_REF` pin the version).
+        """
+        text = PROVISION_PI_PATH.read_text()
+        # The clone invocation must pass --branch with the laptop's branch.
+        assert "git clone --branch" in text, (
+            "provision-pi.sh must clone with `--branch $LAPTOP_BRANCH` so "
+            "the Pi's working tree matches the laptop's branch. Without "
+            "this, fresh clones land on GitHub's default branch (main), "
+            "which can leave setup-pi.sh itself missing on in-progress "
+            "feature branches."
+        )
+        # LAPTOP_BRANCH detection: --abbrev-ref HEAD, with HEAD→empty fallthrough.
+        assert "rev-parse --abbrev-ref HEAD" in text, (
+            "provision-pi.sh must detect the laptop's branch via "
+            "`git rev-parse --abbrev-ref HEAD` to pass it to `git clone --branch`"
+        )
+        # Detached HEAD case: when abbrev-ref returns "HEAD", we set it
+        # to empty and fall through to a default-branch clone.
+        assert 'LAPTOP_BRANCH=""' in text or "LAPTOP_BRANCH=''" in text, (
+            "provision-pi.sh must detect detached HEAD (abbrev-ref returns 'HEAD') "
+            "and set LAPTOP_BRANCH to empty so the --branch path is skipped"
+        )
+
+    def test_wipes_existing_repo_before_cloning(self):
+        """provision-pi.sh wipes /srv/lindsay-50 before cloning.
+
+        The branch-aligned clone only works on a fresh state — if
+        /srv/lindsay-50 already has the wrong branch, `git clone` fails
+        with "destination path already exists". Wiping + cloning in one
+        ssh command guarantees the laptop's branch always wins, even on
+        a Pi the operator switched branches on. setup-pi.sh will run
+        setup fresh on the next step and rebuild the bare+worktree
+        layout from scratch.
+        """
+        text = PROVISION_PI_PATH.read_text()
+        # Find the rm-and-clone sequence: the git clone line should be
+        # preceded by an rm -rf of the same path on the same remote
+        # command.
+        import re
+
+        # Look for a single ssh command containing both rm -rf and git clone.
+        rm_clone_pattern = re.compile(
+            r"ssh\s+\"\$PI_HOST\"\s+\"[^\"]*rm\s+-rf\s+'?\"?\$PI_REPO_DIR\"?'?[^\"]*git\s+clone[^\"]*\"",
+            re.DOTALL,
+        )
+        assert rm_clone_pattern.search(text), (
+            "provision-pi.sh must wipe /srv/lindsay-50 and re-clone in "
+            "one ssh command — otherwise a stale branch could survive "
+            "and the --branch alignment wouldn't take effect."
+        )
+
     def test_resolves_python_from_repo_venv(self):
         """The password helper uses the repo's .venv python, not system python.
 
