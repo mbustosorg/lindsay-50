@@ -114,7 +114,16 @@ class ScrollerBase:
         now = time.monotonic()
         self.start_time = now
         self.last_frame = now
-        log.debug("New scroll text: %r", self.text)
+        # INFO (not DEBUG): the Pi can't easily change LOG_LEVEL at runtime, and
+        # the coordinator's state machine calls set_text exactly when a new
+        # message enters the scroller (out→in transitions + interrupt by new
+        # SMS during hold/background). Every scroller-text change is therefore
+        # a sign-lifecycle event operators need to see in the journal without
+        # toggling LOG_LEVEL.
+        log.info(
+            "Scroller.set_text: text=%r text_width=%d canvas_width=%d",
+            self.text, self.text_width, canvas_width,
+        )
 
     def tick(self, canvas_width):
         if not self.text:

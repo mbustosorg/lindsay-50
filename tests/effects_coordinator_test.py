@@ -553,3 +553,153 @@ def test_bind_swaps_render_layer_mid_life():
     # First display did not get any more render() calls after the swap.
     assert len(display1.render_calls) == render_count_before
     monkey.undo()
+
+
+# --- observability tests (sign lifecycle must log at INFO) ------------------
+#
+# The Pi can't toggle LOG_LEVEL at runtime — every sign-lifecycle event
+# has to surface in journalctl when LOG_LEVEL=INFO. These tests pin that
+# contract: if a future refactor moves one of these log lines back to
+# DEBUG, the operator diagnostic story degrades and the test fails.
+
+
+def _info_records(caplog, *substrings):
+    """Return caplog INFO records whose message contains every substring."""
+    return [
+        r
+        for r in caplog.records
+        if r.levelno == logging.INFO
+        and all(sub in r.getMessage() for sub in substrings)
+    ]
+
+
+import logging  # noqa: E402 — kept at module level for the helpers below
+
+
+def test_begin_out_emits_info_log(caplog):
+    """`_begin_out` fires for boot's intro→out + every new-SMS interrupt
+    during hold/background; both must surface at INFO so the journal shows
+    "the sign just received a message" without flipping LOG_LEVEL."""
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05)
+    coord.start()
+
+    caplog.set_level(logging.INFO)
+    clock.advance(0.001)
+    coord.tick()  # intro → out via _begin_out
+
+    matches = _info_records(caplog, "Coordinator._begin_out")
+    assert matches, (
+        "Expected INFO log line 'Coordinator._begin_out'; got: "
+        + "; ".join(r.getMessage() for r in caplog.records)
+    )
+    # The log line carries the from-mode and the active effect for context.
+    assert "from mode=intro" in matches[0].getMessage()
+    monkey.undo()
+
+
+def test_out_to_in_and_in_to_hold_emit_info_logs(caplog):
+    """A full intro → out → in → hold cycle logs at INFO at each transition
+    so the journal shows the sign's lifecycle progression on every boot."""
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg = MessageView(
+        Message(id="m1", sender="+1", body="hi", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg])
+    coord, display, scroller, fx_a, fx_b, heart = _build(
+        intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr
+    )
+    coord.start()
+
+    caplog.set_level(logging.INFO)
+    _drive(clock, coord, 0.3)  # intro → out → in → hold
+
+    # out → in fires with the new effect name + the text that was set.
+    out_to_in = _info_records(caplog, "Coordinator out→in")
+    assert out_to_in, "Expected 'Coordinator out→in' INFO log"
+    assert "hi" in out_to_in[0].getMessage()
+
+    # in → hold fires once the fade-in completes (showing_text was True).
+    in_to_hold = _info_records(caplog, "Coordinator in→hold")
+    assert in_to_hold, "Expected 'Coordinator in→hold' INFO log"
+    monkey.undo()
+
+
+def test_hold_to_text_out_and_text_out_to_background_log_at_info(caplog):
+    """A full hold→text_out→background cycle also logs each transition."""
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg = MessageView(
+        Message(id="m1", sender="+1", body="hi", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    # hold_seconds tiny so the cycle drains naturally
+    mgr = _StubMessageManager(messages=[msg])
+    coord, *_ = _build(
+        intro_seconds=0.0,
+        fade_seconds=0.05,
+        hold_seconds=0.05,
+        message_manager=mgr,
+    )
+    coord.start()
+
+    caplog.set_level(logging.INFO)
+    _drive(clock, coord, 0.4)  # intro → out → in → hold → text_out → background
+
+    assert _info_records(caplog, "Coordinator hold→text_out"), "expected hold→text_out INFO log"
+    assert _info_records(caplog, "Coordinator text_out→background"), "expected text_out→background INFO log"
+    monkey.undo()
+
+
+def test_pull_change_emits_info_log(caplog):
+    """When get_display_message returns a different body than the cached one,
+    the coordinator logs at INFO — operators see 'a fresh message entered
+    the consideration set' in the journal without a debug toggle."""
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="first", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1])
+    coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr)
+    coord.start()
+
+    # Drain past the initial pull so _last_display_message is set to "first".
+    _drive(clock, coord, 0.1)
+
+    # Add a fresh message; next pull should see body change.
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="second", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+
+    caplog.set_level(logging.INFO)
+    mgr.add_message(msg2)
+    clock.advance(0.5)  # past PULL_INTERVAL
+    coord.tick()
+
+    matches = _info_records(caplog, "Coordinator pull changed")
+    assert matches, "Expected 'Coordinator pull changed' INFO log when a new message lands"
+    msg = matches[0].getMessage()
+    assert "first" in msg and "second" in msg, (
+        f"Pull-change log should show prev= and new= bodies; got: {msg!r}"
+    )
+    monkey.undo()

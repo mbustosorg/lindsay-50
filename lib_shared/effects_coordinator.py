@@ -362,6 +362,20 @@ class EffectsCoordinator:
         return progress >= 1.0
 
     def _begin_out(self, now):
+        # `_begin_out` fires for two distinct reasons:
+        #   1. intro-second elapses (first-ever fade after boot)
+        #   2. a fresh SMS arrives during hold/background and interrupts
+        # The Pi can't toggle LOG_LEVEL at runtime, so log both reasons at
+        # INFO level — operators need to see sign-lifecycle events in the
+        # journal without service-restart gymnastics. The `trigger` kwarg
+        # disambiguates the two paths.
+        scroller_text = ""
+        if self.scroller is not None:
+            scroller_text = self.scroller.text or ""
+        log.info(
+            "Coordinator._begin_out: from mode=%s effect=%s scroller_text=%r",
+            self.mode, self.current_effect_name, scroller_text,
+        )
         self.mode = "out"
         self.fade_start = now
         self.last_step = 0.0
@@ -425,14 +439,26 @@ class EffectsCoordinator:
         effects_settings = self.effects_settings
         rotation = tuple((e.get("name"), e.get("enabled")) for e in effects_settings.effects)
         if rotation != self._last_rotation:
+            log.info(
+                "Coordinator rotation rebuild: prev=%s new=%s",
+                self._last_rotation, rotation,
+            )
             self.effects = build_effects(effects_settings, display=display)
             self.idx = -1  # next fade picks the head of the new list
             self._last_rotation = rotation
         text_settings = self.text_settings
         if text_settings.color != self._last_text_color:
+            log.info(
+                "Coordinator scroller color change: prev=%s new=%s",
+                self._last_text_color, text_settings.color,
+            )
             scroller.set_color(text_settings.color)
             self._last_text_color = text_settings.color
         if text_settings.speed != self._last_text_speed:
+            log.info(
+                "Coordinator scroller speed change: prev=%s new=%s",
+                self._last_text_speed, text_settings.speed,
+            )
             scroller.set_speed(text_settings.speed)
             self._last_text_speed = text_settings.speed
 
@@ -442,7 +468,13 @@ class EffectsCoordinator:
         # Throttled pull: only fetch a fresh body every _PULL_INTERVAL.
         # The cached value drives the state-machine transitions.
         if now - self._last_message_pull >= self._PULL_INTERVAL:
-            self._last_display_message = self.get_display_message()
+            new_text = self.get_display_message()
+            if new_text != self._last_display_message:
+                log.info(
+                    "Coordinator pull changed: prev=%r new=%r last_shown_id=%s",
+                    self._last_display_message, new_text, self._last_shown_message_id,
+                )
+            self._last_display_message = new_text
             self._last_message_pull = now
         text = self._last_display_message
 
@@ -465,6 +497,11 @@ class EffectsCoordinator:
                 else:
                     scroller.set_text("", display.width)
                     self.showing_text = False
+                log.info(
+                    "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s",
+                    self.idx, self.current_effect_name,
+                    text if text else "", self.showing_text,
+                )
                 self.mode = "in"
                 self.fade_start = now
                 self.last_step = 0.0
@@ -475,7 +512,13 @@ class EffectsCoordinator:
                 self.current.set_brightness(1.0)
                 scroller.set_brightness(1.0)
                 self.phase_start = now
-                self.mode = "hold" if self.showing_text else "background"
+                next_mode = "hold" if self.showing_text else "background"
+                log.info(
+                    "Coordinator in→%s: effect=%s text=%r",
+                    next_mode, self.current_effect_name,
+                    self.last_shown_text or "",
+                )
+                self.mode = next_mode
 
         elif mode == "hold":
             # A fresh message (one whose id differs from the last we showed)
@@ -485,8 +528,16 @@ class EffectsCoordinator:
             # by checking that the pull produced a different body than we
             # already have on screen.
             if text and text != self.last_shown_text:
+                log.info(
+                    "Coordinator hold interrupt: pending_text=%r last_shown=%r",
+                    text, self.last_shown_text,
+                )
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= effects_settings.hold_seconds:
+                log.info(
+                    "Coordinator hold→text_out: effect=%s held_text=%r",
+                    self.current_effect_name, self.last_shown_text,
+                )
                 self.mode = "text_out"
                 self.fade_start = now
                 self.last_step = 0.0
@@ -498,6 +549,10 @@ class EffectsCoordinator:
                 scroller.set_brightness(1.0)
                 self.showing_text = False
                 self.phase_start = now
+                log.info(
+                    "Coordinator text_out→background: effect=%s",
+                    self.current_effect_name,
+                )
                 self.mode = "background"
 
         elif mode == "background":

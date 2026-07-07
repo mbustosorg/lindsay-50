@@ -165,3 +165,34 @@ def test_set_text_with_bytes_decodes_utf8():
     s.compute_layout(64, 64)
     s.set_text("hi".encode("utf-8"), canvas_width=64)
     assert s.text == "hi"
+
+
+def test_set_text_emits_info_log(caplog):
+    """set_text must log at INFO (not DEBUG) so Pi operators see scroller-text
+    changes in journalctl without toggling LOG_LEVEL.
+
+    The Pi is running in production with LOG_LEVEL=INFO; if this log line
+    drops back to DEBUG, every "what is the sign showing right now?"
+    diagnostic has to wait for a service restart that flips LOG_LEVEL. With
+    an INFO log here, every coordinator-driven text change (out→in on a
+    fresh message, hold/background interrupt by a new SMS) is one
+    `journalctl -u lindsay_50 -f` grep away.
+    """
+    import logging
+
+    s = _StubScroller()
+    s.compute_layout(64, 64)
+    # Set root logger to INFO so the lib_shared.scroller_base logger
+    # (which defaults to WARNING with no propagate=False) lets INFO
+    # records through. caplog's handler is attached to root by default.
+    caplog.set_level(logging.INFO)
+    s.set_text("hello world", canvas_width=64)
+
+    info_records = [r for r in caplog.records if r.levelno == logging.INFO]
+    assert any(
+        "Scroller.set_text" in r.getMessage() and "hello world" in r.getMessage()
+        for r in info_records
+    ), (
+        "scroller.set_text must emit an INFO log line naming the new text. "
+        f"Got: {[r.getMessage() for r in caplog.records]}"
+    )
