@@ -184,7 +184,9 @@ class TestSetupPiScript:
         """
         text = SETUP_PI_PATH.read_text()
         assert "worktree prune" in text, "setup-pi.sh must run `git worktree prune` to clean stale metadata"
-        assert "stale worktree dir" in text, "setup-pi.sh must remove stale v-<sha>/ dirs before worktree add"
+        assert (
+            "stale/orphan worktree dir" in text or "stale worktree dir" in text
+        ), "setup-pi.sh must remove stale v-<sha>/ dirs before worktree add"
 
     def test_uses_canonical_bare_detector(self):
         """Bare-detector must be `git rev-parse --is-bare-repository`, not `[ -f .git ]`.
@@ -198,6 +200,49 @@ class TestSetupPiScript:
             "setup-pi.sh must use `git rev-parse --is-bare-repository` for "
             "bare detection — `[ -f .git ]` is wrong because bare repos "
             "are directories"
+        )
+
+    def test_already_bootstrapped_branch_uses_bare_check_too(self):
+        """The 'already bootstrapped' path requires the repo to actually be bare.
+
+        A `current -> v-<sha>` symlink on a non-bare repo is an orphan, not a
+        valid worktree — the loader would crash on its first `git rev-parse`
+        inside the (non-existent) worktree. The pre-flight loop must clear it
+        and the state machine must require IS_BARE before taking the skip path.
+
+        Symptom if missing: `git rev-parse v-<sha>` fataled with
+        'Needed a single revision' on the Pi after a wipe+reclone where
+        a stale symlink survived in the repo root.
+        """
+        text = SETUP_PI_PATH.read_text()
+        # Both the pre-flight orphan-clear and the skip-path bare gate
+        # must be present. Check the skip-path gate directly.
+        assert "IS_BARE" in text and '"true"' in text, "the bare-guard must survive the refactor"
+        # The skip-path branch should derive HEAD_SHA_SHORT from the
+        # basename instead of calling `git rev-parse v-<sha>` (which
+        # fataled on the Pi with non-bare orphan-state).
+        skip_branch_idx = text.find("repo already bootstrapped")
+        assert skip_branch_idx > 0
+        # The next 600 chars is the skip-path branch. Make sure
+        # HEAD_SHA_SHORT is derived from the basename there.
+        skip_branch = text[skip_branch_idx : skip_branch_idx + 600]
+        assert 'HEAD_SHA_SHORT="${CURRENT_TARGET#v-}"' in skip_branch, (
+            "skip-path must derive HEAD_SHA_SHORT from the symlink " "target basename, not `git rev-parse v-<sha>`"
+        )
+
+    def test_fetch_uses_explicit_refspec(self):
+        """The fetch block must use an explicit refspec, not enumerate via for-each-ref.
+
+        On a freshly-cloned bare repo `refs/remotes/origin/` is empty, so
+        `for-each-ref` produces no refspecs and `git fetch origin` (with
+        no argument) fataled with 'Needed a single revision'. An explicit
+        `+refs/heads/*:refs/remotes/origin/*` refspec is robust across
+        fresh clones and already-current repos.
+        """
+        text = SETUP_PI_PATH.read_text()
+        assert "+refs/heads/*:refs/remotes/origin/*" in text, (
+            "setup-pi.sh fetch must use the explicit heads-* refspec, "
+            "not the dynamically-discovered for-each-ref form"
         )
 
     def test_reloads_systemd_on_completion(self):

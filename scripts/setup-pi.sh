@@ -83,11 +83,12 @@ fi
 # Phase 3: Bare-repo + worktree layout — idempotent
 # ---------------------------------------------------------------------------
 
-# Three valid bootstrap states:
-#   (a) current symlink -> valid v-<sha>/ dir: fully bootstrapped, skip
-#   (b) bare repo present, no current symlink: partial bootstrap — finish
-#       without re-running the conversion (worktree-add itself is idempotent)
-#   (c) non-bare clone (default branch checkout): full conversion
+# Three valid bootstrap states (only valid when the repo IS BARE):
+#   (a) bare + current symlink -> valid v-<sha>/ worktree: fully bootstrapped, skip
+#   (b) bare + no current symlink: partial bootstrap — finish without
+#       re-running the conversion (worktree-add itself is idempotent)
+#   (c) non-bare clone (or non-bare with an orphan `current` left over
+#       from a previous attempt): full conversion
 #
 # Note: `git clone --bare` produces a *directory* (not a file) at the
 # target path — it just has no working tree. So `[ -f .git ]` is the wrong
@@ -111,38 +112,46 @@ fi
 # briefly offline during bootstrap isn't blocked.
 if [ "$IS_BARE" = "true" ]; then
     if git -C "$REPO_DIR" remote >/dev/null 2>&1; then
-        git -C "$REPO_DIR" fetch origin \
-            $(git -C "$REPO_DIR" for-each-ref --format='%(refname:short)' refs/remotes/origin/ 2>/dev/null \
-                | tr '\n' ' ') \
+        git -C "$REPO_DIR" fetch origin '+refs/heads/*:refs/remotes/origin/*' \
             >/dev/null 2>&1 || true
     fi
 fi
 
-# Pre-flight cleanup: prune stale worktree metadata and remove orphan
-# v-<sha>/ directories left over from prior failed runs. Without this,
-# `git worktree add` bails on the leftover dir even though no live
-# worktree references it. This was the issue #49 retry failure mode.
+# Pre-flight cleanup: prune stale worktree metadata (bare repo only) and
+# remove orphan v-<sha>/ directories that would block `git worktree add`
+# on retry. An "orphan" here means "either (1) `current` doesn't point
+# at it or (2) the repo is non-bare so it's not a real worktree at all."
+# A bare repo's `current` keeps its target dir; any other v-<sha>/ is
+# stripped. This was the issue #49 retry failure mode — without the
+# non-bare treatment, an orphan dir from a previous attempt would
+# survive into the conversion path and fight `worktree add`.
 if [ "$IS_BARE" = "true" ]; then
     git -C "$REPO_DIR" worktree prune 2>/dev/null || true
 fi
 for stale in "$REPO_DIR"/v-*/; do
     if [ -d "$stale" ]; then
-        # If `current` points at this dir, leave it alone.
-        if [ "$CURRENT_TARGET" = "$(basename "$stale")" ]; then
+        if [ "$CURRENT_TARGET" = "$(basename "$stale")" ] && [ "$IS_BARE" = "true" ]; then
             continue
         fi
-        echo "==> setup-pi: removing stale worktree dir $(basename "$stale")"
+        echo "==> setup-pi: removing stale/orphan worktree dir $(basename "$stale")"
         rm -rf "$stale"
+        # If `current` pointed at this dir on a non-bare repo, the symlink
+        # was lying — it's an orphan, not a worktree. Clear it too so the
+        # state machine below sees an honest (no current) repo.
+        if [ "$CURRENT_TARGET" = "$(basename "$stale")" ]; then
+            rm -f "$REPO_DIR/current"
+            CURRENT_TARGET=""
+        fi
     fi
 done
 
-if [ -n "$CURRENT_TARGET" ] && [ -d "$REPO_DIR/$CURRENT_TARGET" ]; then
+if [ -n "$CURRENT_TARGET" ] && [ -d "$REPO_DIR/$CURRENT_TARGET" ] && [ "$IS_BARE" = "true" ]; then
     echo "==> setup-pi: repo already bootstrapped (current -> $CURRENT_TARGET); skipping conversion"
-    HEAD_SHA=$(git -C "$REPO_DIR" rev-parse "$CURRENT_TARGET")
-    # Existing Pi may have a long-form v-<full_sha>/ from before the
-    # short-SHA convention landed — preserve its directory name but
-    # still use the short form when staging anything new.
-    HEAD_SHA_SHORT=$(git -C "$REPO_DIR" rev-parse --short=7 "$HEAD_SHA")
+    # The basename of `current`'s target IS the short SHA — derive it
+    # directly. The previous implementation called `git rev-parse
+    # v-<sha>` here but the result wasn't used downstream, and the
+    # call fataled on a non-bare repo with a stale `current` symlink.
+    HEAD_SHA_SHORT="${CURRENT_TARGET#v-}"
 elif [ "$IS_BARE" = "true" ]; then
     # Partial bootstrap — finish without re-converting.
     echo "==> setup-pi: bare repo detected, bootstrap incomplete; finishing"
@@ -156,7 +165,8 @@ elif [ "$IS_BARE" = "true" ]; then
     ln -sfn "v-$HEAD_SHA_SHORT" "$REPO_DIR/current"
     echo "==> setup-pi: current -> v-$HEAD_SHA_SHORT"
 else
-    # Non-bare clone — do the full conversion.
+    # Non-bare clone (with or without a stale `current` symlink; any
+    # orphans were cleared by the pre-flight loop above).
     echo "==> setup-pi: converting .git/ to bare .git/..."
     HEAD_SHA=$(git rev-parse HEAD)
     HEAD_SHA_SHORT=$(git rev-parse --short=7 HEAD)
