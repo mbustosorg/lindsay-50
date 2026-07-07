@@ -42,7 +42,7 @@ _ACTIVE_SHA = os.environ.get("LINDSAY50_ACTIVE_SHA", "")
 # LINDSAY50_REPO_DIR lets us know where the repo lives. Default
 # to the conventional Pi path so a manual `python3 main.py` run
 # works for development.
-_REPO_DIR = Path(os.environ.get("LINDSAY50_REPO_DIR", "/home/pi/projects/lindsay-50"))
+_REPO_DIR = Path(os.environ.get("LINDSAY50_REPO_DIR", "/srv/lindsay-50"))
 _STARTED_AT_MONOTONIC = time.monotonic()
 _STARTED_AT_ISO = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()) or ""
 

@@ -62,7 +62,7 @@ class TestResolveRepoDir:
         assert isinstance(result, Path)
         # The default points at the conventional Pi path; we don't
         # require the path to exist (test env may not have it).
-        assert str(result).endswith("/home/pi/projects/lindsay-50")
+        assert str(result).endswith("/srv/lindsay-50")
 
 
 class TestCheckForUpdate:

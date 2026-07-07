@@ -47,7 +47,7 @@ LOADER_PATH = Path("current") / "heart-matrix-controller" / "loader.py"
 
 def _resolve_repo_dir() -> Path:
     """Return the repo root from LINDSAY50_REPO_DIR, defaulting to the
-    conventional `/home/pi/projects/lindsay-50` path.
+    conventional `/srv/lindsay-50` path.
 
     The env var is always set by the loader (via `os.execvpe`); the
     default is a defensive fallback for tests or manual `python
@@ -56,7 +56,7 @@ def _resolve_repo_dir() -> Path:
     env = os.environ.get(ENV_REPO_DIR, "").strip()
     if env:
         return Path(env)
-    return Path("/home/pi/projects/lindsay-50")
+    return Path("/srv/lindsay-50")
 
 
 def _resolve_active_sha() -> Optional[str]:
@@ -107,7 +107,7 @@ def check_for_update(
         api_key: X-API-Key header value.
         repo_dir: Override for the repo root. Defaults to
             `LINDSAY50_REPO_DIR` env var, then the conventional
-            `/home/pi/projects/lindsay-50`. Tests inject a tmp dir.
+            `/srv/lindsay-50`. Tests inject a tmp dir.
 
     Returns None; either we no-op or we `os.execvpe` (which never
     returns).

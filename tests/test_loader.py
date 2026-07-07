@@ -16,7 +16,7 @@ v2 design:
 
 Hermetic: each test uses tmp_path for the repo layout (bare-style git
 repo with worktrees + symlink), so we don't touch the real
-`/home/pi/projects/lindsay-50` checkout.
+`/srv/lindsay-50` checkout.
 """
 
 from __future__ import annotations

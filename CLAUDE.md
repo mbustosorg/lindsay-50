@@ -170,7 +170,7 @@ sudo PYTHONPATH=.. LOG_LEVEL=INFO python3 main.py
 
 ### Run as a systemd service
 
-`scripts/lindsay_50.service` runs the controller at boot via `scripts/startup_matrix_server.sh` (which cds into `heart-matrix-controller/`, activates the repo-root `.venv`, sets `PYTHONPATH` to the repo root, and runs `main.py` as root). Both files assume the repo is cloned at `/home/pi/projects/lindsay-50` — edit `REPO_DIR` in the script and the paths in the unit file if yours differs.
+`scripts/lindsay_50.service` runs the controller at boot via `scripts/startup_matrix_server.sh` (which cds into `heart-matrix-controller/`, activates the repo-root `.venv`, sets `PYTHONPATH` to the repo root, and runs `main.py` as root). Both files assume the repo is cloned at `/srv/lindsay-50` — edit `REPO_DIR` in the script and the paths in the unit file if yours differs.
 
 ```bash
 sudo cp scripts/lindsay_50.service /etc/systemd/system/
