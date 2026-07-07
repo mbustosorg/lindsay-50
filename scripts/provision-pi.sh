@@ -102,13 +102,20 @@ echo "==> provisioning $PI_HOST (repo at $PI_REPO_DIR, ref $GIT_REF)"
 echo "==> ensuring clone at $PI_HOST:$PI_REPO_DIR"
 ssh "$PI_HOST" "test -d '$PI_REPO_DIR/.git' || git clone https://github.com/mbustosorg/lindsay-50.git '$PI_REPO_DIR'"
 
-# 2. Pin the Pi to the right ref. `fetch origin` brings in the
-#    remote refs the operator's local commit/branch needs.
-#    `checkout -f` is safe because /srv/lindsay-50 is gitignored
-#    for settings.toml anyway and the operator should not be
-#    editing files on the Pi (defense-in-depth).
-echo "==> checking out $GIT_REF on the Pi"
-ssh "$PI_HOST" "cd '$PI_REPO_DIR' && git fetch origin && git checkout -f '$GIT_REF'"
+# 2. Fetch the laptop's ref into the Pi's repo. We do NOT
+#    `git checkout -f` here because:
+#      - On a fresh non-bare clone (post step 1), checkout would
+#        work but the working tree gets overwritten by setup-pi.sh's
+#        bare conversion in Phase 3 anyway — wasted work.
+#      - On an already-bootstrapped bare repo (the common re-run
+#        case), bare repos reject checkout with "this operation must
+#        be run in a work tree" — fatal, breaking the re-run.
+#    The active version is controlled by the `current` symlink,
+#    which setup-pi.sh manages. All this step needs to do is bring
+#    in the laptop's commit so the bare repo's refdb has it before
+#    setup-pi.sh runs `git worktree add ... $GIT_REF`.
+echo "==> fetching refs from origin on the Pi"
+ssh "$PI_HOST" "cd '$PI_REPO_DIR' && git fetch origin '+refs/heads/*:refs/remotes/origin/*'"
 
 # 3. Ship the local settings.toml onto the Pi. scp to a .tmp path
 #    then `mv` into place: avoids a partial-file overwrite if the

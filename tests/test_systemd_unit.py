@@ -427,6 +427,39 @@ class TestProvisionPiScript:
             "scp of settings.toml must come before the final ssh-to-pi " "hand-off to setup-pi.sh"
         )
 
+    def test_does_not_checkout_in_bare_repo(self):
+        """provision-pi.sh must NOT `git checkout -f` against /srv/lindsay-50.
+
+        After setup-pi.sh's bare conversion, /srv/lindsay-50/.git is a
+        bare database — `git checkout` against a bare repo fataled with
+        "this operation must be run in a work tree". The checkout was
+        also redundant on a fresh non-bare clone (setup-pi.sh's bare
+        conversion overwrites the working tree anyway).
+
+        Fix: drop the checkout, keep only `git fetch origin` with an
+        explicit refspec. The active version is controlled by the
+        `current` symlink, which setup-pi.sh manages in Phase 3.
+        """
+        text = PROVISION_PI_PATH.read_text()
+        # Reject any actual `git checkout` invocation (comments about the
+        # old behavior are fine — they're a regression record). Look for
+        # the command pattern, not the substring.
+        import re
+
+        invocations = re.findall(r"^\s*git\s+checkout\b", text, re.MULTILINE)
+        assert not invocations, (
+            "provision-pi.sh must not invoke `git checkout` against "
+            "/srv/lindsay-50 — it's bare after setup-pi.sh and bare repos "
+            "reject checkout. Use `git fetch origin` instead. "
+            f"Found invocations: {invocations}"
+        )
+        # The fetch must use an explicit refspec (works on bare + non-bare,
+        # doesn't depend on a pre-existing refs/remotes/origin/).
+        assert "+refs/heads/*:refs/remotes/origin/*" in text, (
+            "provision-pi.sh must fetch with the explicit heads-* refspec "
+            "(same pattern as setup-pi.sh's bare-refresh fetch)"
+        )
+
 
 class TestStartupScript:
     def test_exec_loader_py(self):
