@@ -12,42 +12,64 @@ Runs on a Raspberry Pi with a 64×64 HUB75 LED panel (two stacked 64×32 panels,
 
 The Pi needs one operator-provided file: `settings.toml` (MQTT creds,
 panel geometry, log level, etc.). Everything else ships in the repo.
-Copy the file **once** from your laptop; subsequent version bumps are
-handled by the post-checkout hook.
+The `scripts/provision-pi.sh` flow ships it + bootstraps the Pi in one
+shot — no manual `scp` + re-run cycle.
 
-### One-time copy
+### One-time provisioning (from your laptop)
 
-The systemd service runs as root and reads `settings.toml` from the
-bare repo's parent dir on the Pi:
-
-```
-/srv/lindsay-50/heart-matrix-controller/settings.toml
-```
-
-From your laptop, scp it as root (sudo on the Pi side handles
-ownership; the file is in the bare repo's parent dir which is only
-writable as root):
+Run `scripts/provision-pi.sh` from the repo root on your laptop, with
+your filled-in `heart-matrix-controller/settings.toml` in place:
 
 ```bash
-sudo scp ~/secrets/lindsay-50/heart-matrix-controller/settings.toml \
-    root@lindsay-50:/srv/lindsay-50/heart-matrix-controller/settings.toml
+scripts/provision-pi.sh root@lindsay-50
 ```
 
-Replace `~/secrets/lindsay-50/...` with wherever you keep the
-canonical copy (the repo's `.gitignore` excludes
-`heart-matrix-controller/settings.toml`, so a sibling of a checked-out
-source tree is also fine).
+The script:
 
-### Bootstrap
+1. Detects the local repo (cwd has `.git` + `heart-matrix-controller/`).
+2. Verifies `<cwd>/heart-matrix-controller/settings.toml` exists
+   locally — fails fast with a clear message if not.
+3. Pre-flights SSH to the Pi (so a typo'd hostname fails before any
+   destructive work).
+4. SSHes in, clones the repo at `$LINDSAY50_PI_REPO_DIR` (default
+   `/srv/lindsay-50`), and checks out the current HEAD of your
+   laptop checkout.
+5. Scps the local `settings.toml` onto the Pi at the canonical
+   `<repo_dir>/heart-matrix-controller/settings.toml` (atomic
+   `scp-to-.tmp` then `mv`).
+6. SSHes in once more to run `setup-pi.sh`, which is the
+   authoritative on-Pi bootstrap (apt + pip → bare repo + per-version
+   worktree → systemd).
+
+Expected downtime: 5–10 min on a fresh Pi (rgbmatrix C build);
+under 5 seconds on an already-bootstrapped Pi.
+
+### Configuration via env vars
+
+If the defaults don't match your setup, override via env vars
+(positional arg `PI_HOST` takes precedence over `LINDSAY50_PI_HOST`):
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LINDSAY50_PI_HOST` | `root@lindsay-50` | SSH target |
+| `LINDSAY50_PI_REPO_DIR` | `/srv/lindsay-50` | Where the Pi keeps the repo |
+| `LINDSAY50_LOCAL_SETTINGS` | `<cwd>/heart-matrix-controller/settings.toml` | Where you keep the canonical copy |
+| `LINDSAY50_GIT_REF` | `HEAD` of cwd | Commit / branch the Pi should run |
+
+Example: pointing at a non-default settings path:
 
 ```bash
-sudo /srv/lindsay-50/scripts/setup-pi.sh
+LINDSAY50_LOCAL_SETTINGS=~/secrets/lindsay-50/settings.toml \
+    scripts/provision-pi.sh root@lindsay-50
 ```
 
-The script converts the clone into a bare repo + per-version
-worktrees, installs the systemd unit, and starts the `lindsay_50`
-service. If `settings.toml` is missing, the script hard-stops with
-recovery instructions — copy it in (see above) and re-run.
+### Running `setup-pi.sh` directly on the Pi
+
+You normally don't need to. But if you want to bootstrap the Pi
+without going through `provision-pi.sh` (e.g. headless, no laptop
+involved), `setup-pi.sh` still hard-stops with a clear message if
+`settings.toml` is missing at the canonical path — scp it in and
+re-run.
 
 ### Subsequent version bumps
 
@@ -56,16 +78,13 @@ After the first setup, every `git worktree add` (whether triggered by
 `hooks/post-checkout`, which calls `scripts/sync_settings.sh` to copy
 the canonical `settings.toml` into the new `v-<sha>/` worktree. You
 only need to drop a fresh `settings.toml` at the canonical Pi path
-when your settings **change**; you do **not** have to re-scp on every
-version bump.
+when your settings **change**; you do **not** have to re-provision on
+every version bump.
 
 To force-refresh an existing worktree (e.g. after a settings change
-didn't survive a worktree swap):
-
-```bash
-# On the Pi, inside any v-<sha>/heart-matrix-controller/ worktree:
-../../scripts/sync_settings.sh --force
-```
+that didn't survive a worktree swap), just re-run the laptop-side
+provisioner — it ships the file and re-runs `setup-pi.sh`, both
+idempotent.
 
 ## Architecture
 

@@ -24,6 +24,7 @@ import pytest
 PROJECT_ROOT = Path(__file__).parent.parent
 SERVICE_PATH = PROJECT_ROOT / "scripts" / "lindsay_50.service"
 SETUP_PI_PATH = PROJECT_ROOT / "scripts" / "setup-pi.sh"
+PROVISION_PI_PATH = PROJECT_ROOT / "scripts" / "provision-pi.sh"
 STARTUP_PATH = PROJECT_ROOT / "scripts" / "startup_matrix_server.sh"
 
 
@@ -256,6 +257,99 @@ class TestSetupPiScript:
             or 'systemctl restart "$SERVICE_NAME"' in text
             or "systemctl restart '$SERVICE_NAME'" in text
         ), "setup-pi.sh must restart the lindsay_50 service"
+
+
+class TestProvisionPiScript:
+    """Light-touch sanity tests for scripts/provision-pi.sh.
+
+    The script runs over SSH/SCP against a real Pi, so we don't
+    execute it here. Instead we check the contract: it's executable,
+    it documents the laptop-side flow, it detects local settings.toml
+    or fails, and it hands off to setup-pi.sh on the Pi.
+    """
+
+    def test_script_is_executable(self):
+        """provision-pi.sh must be executable — operator runs it directly."""
+        mode = PROVISION_PI_PATH.stat().st_mode
+        assert mode & 0o111, f"provision-pi.sh is not executable (mode={oct(mode)})"
+
+    def test_documents_laptop_invocation(self):
+        """Header explains the laptop-side, repo-root invocation."""
+        text = PROVISION_PI_PATH.read_text()
+        for needle in (
+            "Provision a Raspberry Pi",
+            "operator's laptop",
+            "repo root",
+            "settings.toml",
+        ):
+            assert needle in text, f"provision-pi.sh missing {needle!r}"
+
+    def test_has_escape_env_vars(self):
+        """Env-var escape hatches for host / repo dir / settings path / git ref."""
+        text = PROVISION_PI_PATH.read_text()
+        for needle in (
+            "LINDSAY50_PI_HOST",
+            "LINDSAY50_PI_REPO_DIR",
+            "LINDSAY50_LOCAL_SETTINGS",
+            "LINDSAY50_GIT_REF",
+        ):
+            assert needle in text, f"provision-pi.sh missing env var {needle!r}"
+
+    def test_fails_when_settings_toml_missing(self):
+        """When LOCAL_SETTINGS doesn't exist, the script must exit non-zero with a clear message."""
+        text = PROVISION_PI_PATH.read_text()
+        # The "file not found" path:
+        assert "settings.toml not found at" in text, (
+            "provision-pi.sh must check settings.toml existence and surface a clear error"
+        )
+        # And it must do so BEFORE doing any ssh/scp work — so the
+        # operator with a missing file gets a fast failure, not a
+        # half-bootstrapped Pi.
+        not_found_idx = text.find("settings.toml not found at")
+        first_ssh_idx = text.find("\nssh ", 0)  # first ssh call after the check
+        assert not_found_idx > 0, "missing-file error message not found"
+        assert first_ssh_idx > 0, "no ssh invocation in script — must fail fast before network calls"
+        assert not_found_idx < first_ssh_idx, (
+            "settings.toml check must come BEFORE any ssh/scp work so the "
+            "operator with a missing file fails fast"
+        )
+
+    def test_detects_repo_root_or_fails(self):
+        """Script must verify cwd is the lindsay-50 repo root (has .git + heart-matrix-controller/)."""
+        text = PROVISION_PI_PATH.read_text()
+        assert "has no .git" in text or "not the lindsay-50 repo root" in text, (
+            "provision-pi.sh must verify cwd is the repo root before proceeding"
+        )
+
+    def test_ssh_preflight_is_used(self):
+        """A BatchMode ssh pre-flight prevents the rest of the script running against an unreachable Pi."""
+        text = PROVISION_PI_PATH.read_text()
+        assert "BatchMode" in text or "ConnectTimeout" in text, (
+            "provision-pi.sh must preflight ssh before doing destructive work"
+        )
+
+    def test_ships_settings_via_scp(self):
+        """settings.toml is shipped via scp to the canonical Pi path."""
+        text = PROVISION_PI_PATH.read_text()
+        assert "scp" in text, "provision-pi.sh must use scp to ship settings.toml"
+        assert "heart-matrix-controller/settings.toml" in text, (
+            "provision-pi.sh must place settings.toml at the canonical "
+            "<repo_dir>/heart-matrix-controller/settings.toml path"
+        )
+
+    def test_hands_off_to_setup_pi_over_ssh(self):
+        """After scp, the script invokes setup-pi.sh on the Pi over ssh."""
+        text = PROVISION_PI_PATH.read_text()
+        # setup-pi.sh invocation via ssh must be present.
+        assert "setup-pi.sh" in text
+        # scp must come BEFORE the ssh-to-pi-setup-pi.sh step.
+        scp_idx = text.find("scp ")
+        handoff_idx = text.find("setup-pi.sh", scp_idx)
+        assert scp_idx > 0, "no scp call found"
+        assert handoff_idx > scp_idx, (
+            "scp of settings.toml must come before the final ssh-to-pi "
+            "hand-off to setup-pi.sh"
+        )
 
 
 class TestStartupScript:
