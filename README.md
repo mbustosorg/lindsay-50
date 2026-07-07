@@ -139,13 +139,13 @@ source .venv/bin/activate
 PYTHONPATH=. pytest tests/ -v
 ```
 
-## Raspberry Pi display device
+## Pi Setup
 
-The display runs on a Raspberry Pi driving a 64×64 HUB75 panel via the hzeller
-[rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library.
-Setup (one-time provisioning, SSH config, self-upgrading mechanism,
-manual rollback), patterns, and the rendering pipeline are all documented
-in [heart-matrix-controller/README.md](heart-matrix-controller/README.md).
+The display runs on a Raspberry Pi driving a 64×64 HUB75 panel via the
+[hzeller rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix)
+library. One-time provisioning, SSH config, the self-upgrading mechanism,
+patterns, and the rendering pipeline are all documented in
+[heart-matrix-controller/README.md](heart-matrix-controller/README.md).
 
 ## Project structure
 
