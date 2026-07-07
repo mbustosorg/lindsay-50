@@ -34,9 +34,10 @@ The script:
 4. SSHes in, clones the repo at `$LINDSAY50_PI_REPO_DIR` (default
    `/srv/lindsay-50`), and checks out the current HEAD of your
    laptop checkout.
-5. Scps the local `settings.toml` onto the Pi at the canonical
-   `<repo_dir>/heart-matrix-controller/settings.toml` (atomic
-   `scp-to-.tmp` then `mv`).
+5. Pipes the local `settings.toml` to the Pi via `ssh ... cat > FILE`
+   (atomic `.tmp` + `mv`). `sftp` and `scp` were tried first but both
+   ignore `SSH_ASKPASS_REQUIRE=force` on macOS OpenSSH, breaking the
+   password path — the pipe-over-ssh path is the one that works.
 6. SSHes in once more to run `setup-pi.sh`, which is the
    authoritative on-Pi bootstrap (apt + pip → bare repo + per-version
    worktree → systemd).
@@ -69,7 +70,7 @@ The Pi accepts root login via both **publickey** (the unattended
 default; what `provision-pi.sh` prefers) and **password** (used
 for ad-hoc / shared access, and as a `provision-pi.sh` fallback
 when run from a TTY — the script prompts once and routes the
-remaining ssh/sftp calls through an encrypted SSH_ASKPASS, with
+remaining ssh calls through an encrypted SSH_ASKPASS, with
 the plaintext password never touching disk). Enable both once with:
 
 ```bash

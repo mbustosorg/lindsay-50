@@ -405,42 +405,64 @@ class TestProvisionPiScript:
             "BatchMode" in text or "ConnectTimeout" in text
         ), "provision-pi.sh must preflight ssh before doing destructive work"
 
-    def test_ships_settings_via_sftp(self):
-        """settings.toml is shipped via sftp to the canonical Pi path.
+    def test_ships_settings_via_ssh_pipe(self):
+        """settings.toml is shipped via pipe-over-ssh (not sftp or scp).
 
-        We use sftp (not scp) so the SSH_ASKPASS password path works
-        reliably — scp doesn't honor SSH_ASKPASS consistently across
-        OpenSSH versions, and sftp is what OpenSSH itself recommends
-        for new code.
+        We use `cat LOCAL | ssh PI 'cat > FILE && mv ...'` because BOTH sftp
+        and scp fail to honor `SSH_ASKPASS_REQUIRE=force` reliably across
+        OpenSSH versions. On macOS (Apple OpenSSH + LibreSSL) in particular,
+        sftp silently refuses to engage the askpass even with
+        SSH_ASKPASS_REQUIRE=force set — discovered end-to-end during #49
+        testing (July 2026).
+
+        Pipe-over-ssh works because the `ssh` binary itself honors
+        SSH_ASKPASS_REQUIRE=force, and the askpass helper decrypts via stdin.
+        The .tmp + mv pattern preserves the original "no partial overwrite
+        on connection drop" guarantee.
         """
         text = PROVISION_PI_PATH.read_text()
-        assert "sftp" in text, "provision-pi.sh must use sftp to ship settings.toml"
-        # Regression guard: future contributors shouldn't re-introduce scp.
-        # Look for an actual `scp ` invocation (not the word in comments).
-        import re
-
-        scp_invocations = re.findall(r"^\s*scp\s+", text, re.MULTILINE)
-        assert not scp_invocations, (
-            "provision-pi.sh must not invoke scp — sftp honors SSH_ASKPASS "
-            "consistently and is what OpenSSH recommends. "
-            f"Found invocations: {scp_invocations}"
+        # The pipe pattern: pipe a file's content into `ssh ... cat > FILE.tmp`,
+        # then atomic `mv` into place. Find each piece — they're easier to
+        # verify separately than a single combined regex.
+        assert 'cat "$LOCAL_SETTINGS"' in text, (
+            "provision-pi.sh must pipe the local settings.toml through ssh "
+            "(cat $LOCAL_SETTINGS | ssh ... ) to honor SSH_ASKPASS for the "
+            "password path"
+        )
+        assert "settings.toml.tmp" in text, (
+            "provision-pi.sh must write to settings.toml.tmp on the Pi then "
+            "atomic-mv into place (no partial overwrite on connection drop)"
         )
         assert "heart-matrix-controller/settings.toml" in text, (
             "provision-pi.sh must place settings.toml at the canonical "
             "<repo_dir>/heart-matrix-controller/settings.toml path"
         )
+        # Regression guards: neither sftp nor scp should be used for the
+        # ship-settings step. Both fail SSH_ASKPASS on macOS OpenSSH.
+        import re
+
+        for forbidden in ("sftp ", "scp "):
+            invocations = re.findall(rf"^\s*{re.escape(forbidden)}", text, re.MULTILINE)
+            assert not invocations, (
+                f"provision-pi.sh must not invoke {forbidden.strip()} for "
+                f"the settings.toml ship step (regression — both ignore "
+                f"SSH_ASKPASS_REQUIRE on macOS OpenSSH). "
+                f"Found invocations: {invocations}"
+            )
 
     def test_hands_off_to_setup_pi_over_ssh(self):
-        """After sftp, the script invokes setup-pi.sh on the Pi over ssh."""
+        """After shipping settings.toml, the script invokes setup-pi.sh on the Pi over ssh."""
         text = PROVISION_PI_PATH.read_text()
         # setup-pi.sh invocation via ssh must be present.
         assert "setup-pi.sh" in text
-        # sftp must come BEFORE the ssh-to-pi-setup-pi.sh step.
-        sftp_idx = text.find("sftp ")
-        handoff_idx = text.find("setup-pi.sh", sftp_idx)
-        assert sftp_idx > 0, "no sftp call found"
-        assert handoff_idx > sftp_idx, (
-            "sftp of settings.toml must come before the final ssh-to-pi " "hand-off to setup-pi.sh"
+        # The settings-toml ship step (cat|ssh) must come BEFORE the
+        # final ssh-to-pi-setup-pi.sh handoff.
+        ship_idx = text.find('cat "$LOCAL_SETTINGS"')
+        handoff_idx = text.find("./scripts/setup-pi.sh")
+        assert ship_idx > 0, "no settings.toml ship step found (cat $LOCAL_SETTINGS | ssh ...)"
+        assert handoff_idx > ship_idx, (
+            "the ssh pipe-over-ssh settings.toml ship step must come before "
+            "the final ssh-to-pi hand-off to setup-pi.sh"
         )
 
     def test_does_not_checkout_in_bare_repo(self):
@@ -526,22 +548,24 @@ class TestProvisionPiScript:
         # Find trap ... EXIT INT TERM HUP — must include all four.
         trap_pattern = re.compile(r"trap\s+['\"].*?['\"]\s+EXIT\s+INT\s+TERM\s+HUP", re.DOTALL)
         assert trap_pattern.search(text), (
-            "provision-pi.sh must register a trap on EXIT/INT/TERM/HUP "
-            "to clean up the password temp dir and sftp batch file"
+            "provision-pi.sh must register a trap on EXIT/INT/TERM/HUP " "to clean up the password temp dir"
         )
-        # The trap must rm -rf the password temp dir, not just the sftp batch.
+        # The trap must rm -rf the password temp dir — without it a
+        # crashed mid-script would leave the encrypted password file
+        # on disk until manual cleanup.
         assert 'rm -rf "$PW_TMPDIR"' in text, "the trap must rm -rf $PW_TMPDIR (the password temp dir)"
 
     def test_uses_ssh_askpass_for_subsequent_calls(self):
         """After password auth is set up, the helper exports SSH_ASKPASS.
 
-        All subsequent ssh/sftp invocations inherit SSH_ASKPASS from
-        the script's env, so they need never prompt again.
+        All subsequent ssh invocations inherit SSH_ASKPASS from
+        the script's env, so they need never prompt again. Note: only
+        `ssh` honors SSH_ASKPASS_REQUIRE=force reliably — sftp and scp
+        silently ignore it on macOS OpenSSH, which is why we use a
+        pipe-over-ssh `cat` for the settings.toml ship step instead.
         """
         text = PROVISION_PI_PATH.read_text()
-        assert "SSH_ASKPASS=" in text, (
-            "setup_password_auth must export SSH_ASKPASS for subsequent " "ssh/sftp invocations"
-        )
+        assert "SSH_ASKPASS=" in text, "setup_password_auth must export SSH_ASKPASS for subsequent " "ssh invocations"
         assert "SSH_ASKPASS_REQUIRE" in text, (
             "setup_password_auth must set SSH_ASKPASS_REQUIRE=force so "
             "ssh uses the askpass binary even when it has a tty"

@@ -264,27 +264,24 @@ ssh "$PI_HOST" "test -d '$PI_REPO_DIR/.git' || git clone https://github.com/mbus
 echo "==> fetching refs from origin on the Pi"
 ssh "$PI_HOST" "cd '$PI_REPO_DIR' && git fetch origin '+refs/heads/*:refs/remotes/origin/*'"
 
-# 3. Ship the local settings.toml onto the Pi. We use sftp (not scp)
-#    because scp doesn't honor SSH_ASKPASS reliably across OpenSSH
-#    versions, and we need the password path to work consistently.
-#    Write a one-line batch file to /tmp, point sftp at it, and
-#    `mv` into place on the Pi side to avoid a partial-file overwrite
-#    if the connection drops mid-transfer.
+# 3. Ship the local settings.toml onto the Pi. We pipe through `ssh ... cat`
+#    rather than using sftp or scp because BOTH sftp and scp fail to honor
+#    `SSH_ASKPASS_REQUIRE=force` reliably across OpenSSH versions — on
+#    macOS in particular, Apple's OpenSSH/LibreSSL combo silently ignores
+#    the askpass and refuses to fall through to password auth. Discovered
+#    end-to-end during issue #49 testing (July 2026).
+#
+#    The pipe-over-ssh pattern (`cat LOCAL | ssh PI 'cat > FILE.tmp && mv
+#    FILE.tmp FILE'`) works because the `ssh` binary does honor
+#    SSH_ASKPASS_REQUIRE=force, and our askpass helper decrypts via stdin.
+#    The .tmp + mv pattern preserves the original "no partial overwrite on
+#    connection drop" guarantee.
 #
 #    On the publickey path, SSH_ASKPASS is unset, so this is just a
-#    sftp call. On the password path, SSH_ASKPASS is set by
-#    setup_password_auth and sftp picks it up automatically.
+#    ssh+pipe call. On the password path, SSH_ASKPASS is set by
+#    setup_password_auth and the embedded ssh inherits it automatically.
 echo "==> shipping settings.toml → $PI_HOST:$PI_REPO_DIR/heart-matrix-controller/"
-SFTP_BATCH="$(mktemp -t lindsay-50-sftp.XXXXXX)"
-# Augment the existing EXIT/INT/TERM/HUP trap (set up by
-# setup_password_auth, or a no-op if publickey is in use) to also
-# clean up the sftp batch file. Re-registering the trap with a
-# combined command avoids overwriting the password-cleanup trap.
-trap "rm -f '$SFTP_BATCH'; rm -rf '$PW_TMPDIR'" EXIT INT TERM HUP
-printf 'put %s %s/heart-matrix-controller/settings.toml.tmp\n' \
-    "$LOCAL_SETTINGS" "$PI_REPO_DIR" > "$SFTP_BATCH"
-sftp -b "$SFTP_BATCH" "$PI_HOST"
-ssh "$PI_HOST" "mv '$PI_REPO_DIR/heart-matrix-controller/settings.toml.tmp' '$PI_REPO_DIR/heart-matrix-controller/settings.toml'"
+cat "$LOCAL_SETTINGS" | ssh "$PI_HOST" "cat > '$PI_REPO_DIR/heart-matrix-controller/settings.toml.tmp' && mv '$PI_REPO_DIR/heart-matrix-controller/settings.toml.tmp' '$PI_REPO_DIR/heart-matrix-controller/settings.toml'"
 
 # 4. Hand off to setup-pi.sh on the Pi — that's the authoritative
 #    on-Pi bootstrap (Phase 1: apt, Phase 2: pip, Phase 3: bare +
