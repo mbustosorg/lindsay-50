@@ -1,0 +1,50 @@
+## 1. Shared status store
+
+- [ ] 1.1 Create `lib_shared/sign_status.py` with the `LatestSignStatus` class: `threading.RLock`-guarded in-memory store with `update(snapshot_dict)`, `snapshot() -> dict | None` (defensive copy), `age_seconds() -> float | None`, `is_stale(threshold_s=120.0) -> bool`, and `received_at_monotonic` tracking for the staleness clock.
+- [ ] 1.2 Add `tests/test_sign_status.py` with round-trip tests: `update()` stores the dict under the lock, `snapshot()` returns a defensive copy (mutating the returned dict does not affect the store), `age_seconds()` returns the right number with a fake monotonic clock, `is_stale()` flips at the threshold, and `snapshot()` on an empty store returns `None`. Cover the concurrent-update case (two threads call `update()` simultaneously — the lock prevents torn reads).
+
+## 2. Device-side status publish
+
+- [ ] 2.1 In `heart-matrix-controller/status.py`, add `StatusSnapshot.to_mqtt_dict()` that returns the wire shape (drops `pid`; keeps `schema_version`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`). The existing `to_dict()` is unchanged.
+- [ ] 2.2 In `lib_shared/paho_mqtt_client.py`, add `publish_status(payload: dict, topic: str) -> bool`: fresh `mqtt.Client` per call, `connect_event` + `loop_start` + `client.publish(topic, payload.encode(), qos=0)` (no `wait_for_publish` — QoS 0 is fire-and-forget), 5-second connect timeout, `loop_stop()` + `disconnect()` cleanup. Returns True on successful enqueue, False on any error. The existing `publish_envelope` is unchanged.
+- [ ] 2.3 Extend `PahoMqttClient.__init__` with optional `status_dispatch_callback` + `status_topic` parameters. The existing `dispatch_callback` + `topic` are unchanged. In the subscriber loop, `on_connect` calls `client.subscribe([(topic, 1), (status_topic, 1)])` when both are set; `on_message` dispatches by `msg.topic` to the right callback.
+- [ ] 2.4 In `heart-matrix-controller/main.py`, add a `_status_publisher` block that schedules a `threading.Timer` for 30s cadence. The timer callback reads `_build_status_snapshot(_LAST_TICK_MONOTONIC)`, calls `.to_mqtt_dict()`, and passes it to `_mqtt_client.publish_status(...)`. The first publish happens 30s after boot (so the boot snapshot reflects a settled render loop, not the initial boot state). Add a `STATUS_PUBLISH_INTERVAL_S = 30.0` constant near the existing `DEFAULT_TICK_INTERVAL_S`.
+- [ ] 2.5 Add `MQTT_STATUS_TOPIC` to `REQUIRED_KEYS` in `heart-matrix-controller/main.py`. The config reader's env-override path already takes precedence over `settings.toml`, so no new logic is needed — just declare the key.
+
+## 3. Flask-side status subscribe + endpoint
+
+- [ ] 3.1 In `heart-message-manager/main.py`, instantiate `latest_status = LatestSignStatus()` at module level. Build a `status_dispatch_callback` that JSON-parses the payload, validates required keys (`schema_version`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`), and calls `latest_status.update(parsed)`. Pass both `dispatch_callback` and `status_dispatch_callback` to `PahoMqttClient` with the resolved `MQTT_TOPIC` and `MQTT_STATUS_TOPIC` topics. Add `MQTT_STATUS_TOPIC` to the Flask-side required-config-keys list.
+- [ ] 3.2 Add `GET /api/sign-status` endpoint in `heart-message-manager/main.py`. Returns 204 if `latest_status.snapshot() is None or latest_status.is_stale(threshold_s=120.0)`. Otherwise returns 200 with the snapshot JSON plus a `received_at_flask` key (the wall-clock ISO timestamp when Flask stored it).
+- [ ] 3.3 Add the `MQTT_STATUS_TOPIC` resolution helper (`MQTT_STATUS_TOPIC or f"{MQTT_TOPIC}-status"`) in `heart-message-manager/main.py` alongside the existing `_cfg_required_keys` block. Wire the resolved value into the Flask `window.APP_CONFIG` JS injection so the dashboard pill can show the topic it's listening on (mirroring the existing `mqttTopic` field).
+
+## 4. Dashboard "Live" pill
+
+- [ ] 4.1 In `heart-message-manager/templates/dashboard.html`, replace the hardcoded green "Live" pill with `<span id="sign-live-pill" data-state="unknown" class="px-4 py-2 rounded-full bg-slate-100 text-slate-600 text-sm font-semibold flex items-center gap-2"><span class="w-2 h-2 bg-slate-400 rounded-full"></span>Unknown</span>`. The new placeholder uses `data-state` so the JS can toggle the color and animation classes.
+- [ ] 4.2 In `heart-message-manager/static/sign_status.js` (new file), write a small module that polls `GET /api/sign-status` every 10 seconds and updates the pill. States: `live` (green with pulse, "Live"), `amber` (amber without pulse, "Live"), `unknown` (grey, "Unknown"). Use Tailwind classes directly on the pill and on its inner dot.
+- [ ] 4.3 Include `<script src="{{ url_for('static', filename='sign_status.js') }}" defer></script>` in `heart-message-manager/templates/base.html` so the script loads on every authenticated page (not just dashboard — keeps the logic DRY and matches the existing `mqtt_ws_client.js` inclusion pattern).
+
+## 5. Settings page Sign Health section
+
+- [ ] 5.1 In `heart-message-manager/templates/settings.html`, add a new **Sign Health** section at the top (above "Sign Name") with read-only spans for `active_sha`, `started_at`, `uptime_seconds` (formatted via a JS helper), `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`, and `received_at_flask`. Use `data-sign-status-field="<name>"` attributes so `sign_status.js` can populate the slots in place.
+- [ ] 5.2 Extend `sign_status.js` to populate the Settings-page slots when the script runs on the settings route. The same poll (every 10s) feeds both the dashboard pill and the settings slots — one fetch, two consumers.
+- [ ] 5.3 Format `uptime_seconds` as `Xd Yh Zm` in the JS (e.g., `90061` → `1d 1h 1m`). Use a single helper function; the snapshot value is an integer number of seconds.
+
+## 6. Settings.toml + env config
+
+- [ ] 6.1 In `heart-matrix-controller/settings.toml.example`, add `MQTT_STATUS_TOPIC = ""` (empty = derive from `MQTT_TOPIC`) and the standard env-override note (`MQTT_STATUS_TOPIC` env var takes precedence).
+- [ ] 6.2 In `heart-message-manager/settings.toml.example`, add the same line + env-override note.
+- [ ] 6.3 Add the standard `cp settings.toml.example settings.toml` step to the README quick-start (if there is one for this repo) — the new key is required for the feature but the operator may not know to add it.
+
+## 7. Tests
+
+- [ ] 7.1 `tests/test_sign_status.py` (added in 1.2) — covers lock semantics, defensive-copy semantics, age/is_stale with fake clocks, empty-store behavior, and concurrent-update.
+- [ ] 7.2 `tests/test_paho_status_publish.py` — covers `PahoMqttClient.publish_status` with a mock `mqtt.Client` (assert that `publish` is called with `qos=0`, that `wait_for_publish` is NOT called, that `loop_start` + `loop_stop` are paired, and that errors return False without raising).
+- [ ] 7.3 `tests/test_sign_status_endpoint.py` — covers the new Flask endpoint: 200 with snapshot on fresh data, 204 on no-data-yet, 204 on stale data, 204 when the store returns `None`. Use the Flask test client + a synthetic `LatestSignStatus` injected via monkeypatch.
+- [ ] 7.4 `tests/test_status_to_mqtt_dict.py` — covers the `StatusSnapshot.to_mqtt_dict` serializer: drops `pid`, keeps all other fields, produces a JSON-roundtrip-safe dict.
+
+## 8. Documentation + manual verification
+
+- [ ] 8.1 Update `CLAUDE.md` "Architecture" section to include the new status flow in the diagram (Pi → MQTT_STATUS_TOPIC → Flask subscriber → in-memory store → `/api/sign-status` → Dashboard pill + Settings page).
+- [ ] 8.2 Document the Adafruit IO feed creation step in `README.md` (or the relevant deployment doc): the operator must create the new `lindsay-50-status` feed in the AIO dashboard before the first publish lands, otherwise the broker will silently reject the publish.
+- [ ] 8.3 Run `PYTHONPATH=. pytest tests/ -v` (per the project config) and confirm all new + existing tests pass before opening the PR.
+- [ ] 8.4 Manual smoke test on the Pi: SSH to the Pi, `systemctl restart lindsay_50`, watch `journalctl -u lindsay_50 -f` for "publish_status" log lines every 30s, then load the admin dashboard in a browser and confirm the pill flips from grey ("Unknown") to green ("Live") within ~30s of the first publish.
