@@ -222,10 +222,37 @@ signal.signal(signal.SIGTERM, _on_sigterm)
 
 
 try:
+    _LOOP_COUNT = 0
     while True:
+        _LOOP_COUNT += 1
+        # DEBUG: PRE-tick print. If this prints but POST-tick doesn't,
+        # coordinator.tick() is hanging. Throttled to once per 60
+        # iterations (~1s at the observed loop rate) so we don't drown
+        # the journal, but use os.write to fd 1 directly to bypass any
+        # Python print() buffering weirdness.
+        if _LOOP_COUNT % 60 == 0:
+            try:
+                os.write(1, f"DEBUG main.loop PRE-tick count={_LOOP_COUNT}\n".encode())
+            except OSError:
+                pass
         coordinator.tick()
+        if _LOOP_COUNT % 60 == 0:
+            try:
+                os.write(1, f"DEBUG main.loop POST-tick count={_LOOP_COUNT}\n".encode())
+            except OSError:
+                pass
         _LAST_TICK_MONOTONIC = time.monotonic()
+        if _LOOP_COUNT % 60 == 0:
+            try:
+                os.write(1, f"DEBUG main.loop PRE-status count={_LOOP_COUNT}\n".encode())
+            except OSError:
+                pass
         status_writer.tick()
+        if _LOOP_COUNT % 60 == 0:
+            try:
+                os.write(1, f"DEBUG main.loop POST-status count={_LOOP_COUNT}\n".encode())
+            except OSError:
+                pass
 except (KeyboardInterrupt, SystemExit):
     log.info("interrupted, shutting down")
 finally:

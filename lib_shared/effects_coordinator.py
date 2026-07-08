@@ -34,6 +34,7 @@ the historic per-kwarg defaults).
 """
 
 import logging
+import os
 import random
 import time
 
@@ -920,9 +921,28 @@ class EffectsCoordinator:
 
         current = self.current
         assert current is not None
+        # DEBUG: surround display.render() with prints to localize the
+        # hang. If PRE-render prints but POST-render doesn't, SwapOnVSync
+        # is blocking forever. Throttled to 1Hz to avoid drowning the
+        # journal; uses os.write to fd 1 to bypass any Python print()
+        # buffering issue.
+        _now_render = time.monotonic()
+        if _now_render - self._diag_last_print >= 1.0:
+            try:
+                os.write(
+                    1,
+                    f"DEBUG coordinator PRE-render: mode={self.mode} call={self._diag_call_count}\n".encode(),
+                )
+            except OSError:
+                pass
         current.tick()
         scroller.tick(display.width)
-        # Composite the active effect + scroller onto the panel. The display
-        # owns the clear/draw/swap sequence (and, on the Pi, the SwapOnVSync
-        # pacing).
         display.render(current, scroller)
+        if _now_render - self._diag_last_print >= 1.0:
+            try:
+                os.write(
+                    1,
+                    f"DEBUG coordinator POST-render: mode={self.mode} call={self._diag_call_count}\n".encode(),
+                )
+            except OSError:
+                pass
