@@ -21,15 +21,22 @@ def _db_path() -> Path:
     read-only view of that extraction). Writing the SQLite file to
     `/app/heart-message-manager/db.sqlite` therefore fails with
     "attempt to write a readonly database" / "disk I/O error" when
-    `init_db()` runs on boot. Heroku sets the `DYNO` env var on every
-    dyno; when it's set, write to `/tmp` instead. The DB is rebuilt
-    from S3 on every boot, so /tmp's ephemeral nature is fine — the
-    dyno restart that wipes /tmp also rebuilds the DB on next boot.
+    `init_db()` runs on boot.
+
+    Heroku-24 (the current stack — see Heroku-20 release notes)
+    no longer sets the legacy `DYNO` env var. It DOES set
+    `HEROKU_APP_NAME` on every dyno, so we use that as the
+    detection signal. Fall back to DYNO too in case a future
+    stack brings it back or an older dyno is still around.
+
+    The DB is rebuilt from S3 on every boot, so /tmp's ephemeral
+    nature is fine — the dyno restart that wipes /tmp also
+    rebuilds the DB on next boot.
 
     On laptop / Pi, the DB lives next to the source under
     `heart-message-manager/db.sqlite` as before.
     """
-    if os.environ.get("DYNO"):
+    if os.environ.get("HEROKU_APP_NAME") or os.environ.get("DYNO"):
         return Path("/tmp/lindsay50.db.sqlite")
     return Path(__file__).parent.parent / "heart-message-manager" / "db.sqlite"
 
