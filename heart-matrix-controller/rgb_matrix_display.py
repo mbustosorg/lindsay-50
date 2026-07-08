@@ -88,17 +88,6 @@ class MatrixDisplay(DisplayBase):
             else options.cols * options.chain_length
         )
         self.height = options.rows * 2 if is_u_mapper else options.rows * options.parallel
-        # DEBUG: print the decoded value, comparison result, and the
-        # computed geometry to the journal so the next boot confirms
-        # the fix lands (computed should match actual_canvas = 64x64).
-        print(
-            f"DEBUG rgb_matrix_display: rows={options.rows} cols={options.cols} "
-            f"chain={options.chain_length} raw_mapper={options.pixel_mapper_config!r} "
-            f"decoded_mapper={mapper!r} is_u_mapper={is_u_mapper} "
-            f"actual_canvas={self.canvas.width}x{self.canvas.height} "
-            f"computed={self.width}x{self.height}",
-            flush=True,
-        )
         logger.info("MatrixDisplay initialized: %dx%d", self.width, self.height)
 
     def clear(self):

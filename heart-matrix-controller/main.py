@@ -125,17 +125,7 @@ heartbeat = Heartbeat(display)
 # shared `build_effects` falls back to the first canonical effect if
 # the rotation ends up empty, so the sign never goes dark.
 _boot_settings = EffectsSettings()
-print(
-    f"DEBUG main.py: about to call build_effects() with "
-    f"display={type(display).__name__}",
-    flush=True,
-)
 effects = build_effects(_boot_settings, display=display)
-print(
-    f"DEBUG main.py: build_effects() returned {len(effects)} effects: "
-    f"{[type(e).__name__ for e in effects]}",
-    flush=True,
-)
 
 coordinator = EffectsCoordinator(
     message_manager=manager,
@@ -148,13 +138,7 @@ coordinator = EffectsCoordinator(
 # Kick off the boot splash. The coordinator's first pull (every 250 ms)
 # produces the most recent message in the manager's buffer; no
 # separate "show this body after the heart" hook is needed.
-print(
-    f"DEBUG main.py: about to call coordinator.start(); "
-    f"coordinator.is_bound()={coordinator.is_bound()}",
-    flush=True,
-)
 coordinator.start()
-print("DEBUG main.py: coordinator.start() returned", flush=True)
 
 
 # Status writer — the loader probes us by reading this file (see
@@ -222,37 +206,10 @@ signal.signal(signal.SIGTERM, _on_sigterm)
 
 
 try:
-    _LOOP_COUNT = 0
     while True:
-        _LOOP_COUNT += 1
-        # DEBUG: PRE-tick print. If this prints but POST-tick doesn't,
-        # coordinator.tick() is hanging. Throttled to once per 60
-        # iterations (~1s at the observed loop rate) so we don't drown
-        # the journal, but use os.write to fd 1 directly to bypass any
-        # Python print() buffering weirdness.
-        if _LOOP_COUNT % 60 == 0:
-            try:
-                os.write(1, f"DEBUG main.loop PRE-tick count={_LOOP_COUNT}\n".encode())
-            except OSError:
-                pass
         coordinator.tick()
-        if _LOOP_COUNT % 60 == 0:
-            try:
-                os.write(1, f"DEBUG main.loop POST-tick count={_LOOP_COUNT}\n".encode())
-            except OSError:
-                pass
         _LAST_TICK_MONOTONIC = time.monotonic()
-        if _LOOP_COUNT % 60 == 0:
-            try:
-                os.write(1, f"DEBUG main.loop PRE-status count={_LOOP_COUNT}\n".encode())
-            except OSError:
-                pass
         status_writer.tick()
-        if _LOOP_COUNT % 60 == 0:
-            try:
-                os.write(1, f"DEBUG main.loop POST-status count={_LOOP_COUNT}\n".encode())
-            except OSError:
-                pass
 except (KeyboardInterrupt, SystemExit):
     log.info("interrupted, shutting down")
 finally:

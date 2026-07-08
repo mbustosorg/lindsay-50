@@ -34,30 +34,8 @@ the historic per-kwarg defaults).
 """
 
 import logging
-import os
 import random
 import time
-
-# Module-load fingerprint. The user observed `main.py` debug prints in
-# the journal but zero `tick()` debug prints (no `TICK_ENTRY`, no
-# `DEBUG coordinator IS_BOUND`, no `/srv/lindsay-50/.coordinator-tick.log`
-# lines) — despite the worktree being staged to the same commit that
-# contains those prints. The cause: PYTHONPATH pointed at the repo root
-# ($REPO_DIR), and on a bare-repo+worktree layout, the bare .git/ has no
-# working tree. Even on a non-bare clone, $REPO_DIR/lib_shared/ is the
-# main branch's working tree, not the just-staged worktree's. So Python
-# loaded a STALE lib_shared/effects_coordinator.py that didn't have the
-# latest tick() writes. The startup script now sets PYTHONPATH to
-# $REPO_DIR/current so the worktree's lib_shared/ is loaded. This print
-# makes the loaded file path visible in the journal so the operator can
-# confirm the fix lands.
-import sys as _sys
-print(
-    f"DEBUG effects_coordinator loaded: __file__={__file__} "
-    f"PYTHONPATH={os.environ.get('PYTHONPATH', '<unset>')!r} "
-    f"argv[0]={_sys.argv[0]!r}",
-    flush=True,
-)
 
 from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Effect
@@ -69,7 +47,7 @@ log = logging.getLogger("heart")
 
 
 def build_effects(
-    effects_settings: EffectsSettings,
+    effects_settings: EffectsSettings | None,
     effect_class_factory=None,
     *,
     display=None,
@@ -112,7 +90,6 @@ def build_effects(
         fallback is also unresolvable.
     """
     if effects_settings is None:
-        print(f"DEBUG build_effects: settings is None, returning []", flush=True)
         return []
     if effect_class_factory is None:
         from lib_shared.effects_factory import make_effect_class
@@ -121,23 +98,15 @@ def build_effects(
     if display is None:
         raise ValueError("build_effects requires `display` to instantiate effects")
     out = []
-    print(
-        f"DEBUG build_effects: rotation has {len(effects_settings.effects)} entries: "
-        f"{[(e.get('name'), e.get('enabled')) for e in effects_settings.effects]}",
-        flush=True,
-    )
     for entry in effects_settings.effects:
         name = entry.get("name", "")
         enabled = entry.get("enabled")
         if not enabled:
-            print(f"DEBUG build_effects: skipping {name!r} (disabled)", flush=True)
             continue
         cls = effect_class_factory(name)
         if cls is None:
-            print(f"DEBUG build_effects: skipping {name!r} (factory returned None)", flush=True)
             continue
         out.append(cls(display))
-        print(f"DEBUG build_effects: added {name!r} -> {cls.__name__}", flush=True)
     if not out:
         # Fallback: the first canonical effect (the head of the
         # declared rotation order). Resolved through the same
@@ -247,33 +216,6 @@ class EffectsCoordinator:
         # recency of the *last* consumed id is not enough when there
         # are N ≥ 2 messages in the recent pool.
         self._consumed_message_ids: set[str] = set()
-        # 1Hz heartbeat for the hold/background diagnostic prints. Throttled
-        # so the journal gets ~1 line/s even though `tick()` runs at the
-        # hzeller swap rate. `0.0` means "no diagnostic has fired yet" —
-        # the first call prints immediately so we don't wait 1s just to
-        # learn the mode is wrong.
-        self._diag_last_print: float = 0.0
-        # Separate 1Hz gate for the intro-mode progress print. The
-        # top-of-tick print and the PRE/POST-render prints all share
-        # `_diag_last_print`, which means only one of them fires per
-        # second. The intro print has its own gate so it always
-        # shows once per second and tells us whether intro_seconds
-        # is elapsing as expected.
-        self._intro_last_print: float = 0.0
-        # File-based diagnostic side-channel. The journal on the Pi goes
-        # silent exactly when the main loop starts (after MatrixDisplay
-        # init at 02:55:57.488 and MQTT subscribe at 02:55:57.707), but
-        # the process stays alive (status.json updates, last_tick_age_ms=0).
-        # We don't yet know whether the journal silence is a stdout
-        # buffering issue, a journald flushing issue, or something in
-        # the rgbmatrix C extension closing fd 1/2. Writing to a file
-        # gives us a side-channel that doesn't go through fd 1/2 at all
-        # — if the file gets data, the Python code is reaching the
-        # diagnostic; if not, it isn't. The handle is opened lazily on
-        # the first `tick()` so a coordinator constructed during tests
-        # (no /tmp access, or write-protected) doesn't crash at __init__.
-        self._diag_file = None
-        self._diag_call_count: int = 0
         # Render-layer diff state: structural fingerprints of the
         # rotation list and text settings, used to gate the
         # rotation rebuild and scroller setter calls in `tick()`.
@@ -295,19 +237,6 @@ class EffectsCoordinator:
         self._last_rotation: tuple | None = tuple((e.get("name"), e.get("enabled")) for e in EffectsSettings().effects)
         self._last_text_color: int | None = TextSettings().color
         self._last_text_speed: int | None = TextSettings().speed
-        # DEBUG: confirm the render-layer args landed. The journal silence
-        # mystery: boot logs work up to 02:55:57.707 (MQTT subscribe ACK),
-        # then silence, but the process is alive (status.json updates).
-        # If any of display/scroller/effects/heart is None, `is_bound()`
-        # returns False and tick() returns immediately — explaining the
-        # silence with a render loop that's still alive.
-        print(
-            f"DEBUG EffectsCoordinator.__init__: display={type(display).__name__ if display is not None else 'None'} "
-            f"scroller={type(scroller).__name__ if scroller is not None else 'None'} "
-            f"effects={len(effects) if effects else 0} "
-            f"heart={type(heart).__name__ if heart is not None else 'None'}",
-            flush=True,
-        )
 
     def is_bound(self) -> bool:
         """True when the coordinator has a render layer (display + scroller + effects + heart).
@@ -323,15 +252,6 @@ class EffectsCoordinator:
         s = self.scroller is not None
         e = bool(self.effects)
         h = self.heart is not None
-        # DEBUG: dump each component flag when False — tells us *which*
-        # part is missing. Without this, an unbound coordinator silently
-        # no-ops and leaves us guessing.
-        if not (d and s and e and h):
-            print(
-                f"DEBUG EffectsCoordinator.is_bound: display={d} scroller={s} "
-                f"effects={e} (len={len(self.effects)}) heart={h} -> False",
-                flush=True,
-            )
         return d and s and e and h
 
     def bind(
@@ -391,8 +311,6 @@ class EffectsCoordinator:
         from — there is no separate "show this body after the
         heart" hook (the push path is gone).
         """
-        # DEBUG: confirm start() is being called.
-        print(f"DEBUG EffectsCoordinator.start: is_bound={self.is_bound()}", flush=True)
         if not self.is_bound():
             return
         assert self.heart is not None
@@ -400,11 +318,6 @@ class EffectsCoordinator:
         self.heart.set_brightness(1.0)
         self.mode = "intro"
         self.phase_start = time.monotonic()
-        print(
-            f"DEBUG EffectsCoordinator.start: mode=intro phase_start=now "
-            f"heart={type(self.heart).__name__}",
-            flush=True,
-        )
 
     @property
     def current_messages(self) -> list[MessageView]:
@@ -498,12 +411,6 @@ class EffectsCoordinator:
             "Coordinator._begin_out: from mode=%s effect=%s scroller_text=%r",
             self.mode, self.current_effect_name, scroller_text,
         )
-        # DEBUG: stdout mirror.
-        print(
-            f"DEBUG coordinator._begin_out: from mode={self.mode} "
-            f"effect={self.current_effect_name} scroller_text={scroller_text!r}",
-            flush=True,
-        )
         self.mode = "out"
         self.fade_start = now
         self.last_step = 0.0
@@ -542,97 +449,14 @@ class EffectsCoordinator:
         explicit `apply_settings` call needed. Config updates land
         at most one frame later.
         """
-        # AGGRESSIVE DEBUG: write to multiple paths and mechanisms
-        # on EVERY tick. If ANY of these work, we have a signal.
-        try:
-            with open("/srv/lindsay-50/.coordinator-tick.log", "a", buffering=1) as _f:
-                _f.write(f"tick called {time.monotonic()}\n")
-        except OSError:
-            pass
-        try:
-            os.write(1, f"TICK_ENTRY {time.monotonic()}\n".encode())
-        except OSError:
-            pass
-
         try:
             self._tick_inner()
-        except BaseException as _exc:
-            import traceback as _tb
-            _tb_text = _tb.format_exc()
-            try:
-                with open("/srv/lindsay-50/.coordinator-exception.log", "a", buffering=1) as _ef:
-                    _ef.write(f"EXCEPTION at tick {time.monotonic()}:\n")
-                    _ef.write(_tb_text)
-                    _ef.write("\n")
-            except OSError:
-                pass
-            try:
-                os.write(1, f"EXCEPTION: {_exc!r}\n{_tb_text}\n".encode())
-            except OSError:
-                pass
+        except BaseException:
             raise
 
     def _tick_inner(self):
-        # DEBUG: unconditional heartbeat. Throttled to 1Hz.
-        _now_hb = time.monotonic()
-        if _now_hb - self._diag_last_print >= 1.0:
-            try:
-                os.write(
-                    1,
-                    f"DEBUG coordinator tick() body entered: call_count={self._diag_call_count} mode={self.mode}\n".encode(),
-                )
-            except OSError:
-                pass
-            try:
-                with open("/srv/lindsay-50/.coordinator-state.log", "a", buffering=1) as _hf:
-                    _hf.write(
-                        f"tick body call={self._diag_call_count} mode={self.mode} bound={self.is_bound()}\n"
-                    )
-            except OSError:
-                pass
-        self._diag_call_count += 1
         if not self.is_bound():
             return
-        # DEBUG: we are bound. Print every 1s.
-        if _now_hb - self._diag_last_print >= 1.0:
-            try:
-                os.write(
-                    1,
-                    f"DEBUG coordinator IS_BOUND: call_count={self._diag_call_count} mode={self.mode}\n".encode(),
-                )
-            except OSError:
-                pass
-        # 1Hz top-of-tick diagnostic: prints once per second regardless of
-        # mode. Tells us (a) whether `tick()` is being called at all and
-        # (b) what mode the state machine is in. Critical for the case
-        # where the state is stuck in `intro` (intro_seconds never
-        # elapses, so no transition prints ever fire) or stuck in a
-        # different mode that doesn't log a transition. Fires on the
-        # first tick after the 1Hz gate expires, so we don't have to
-        # wait a full second just to learn the state.
-        now_top = time.monotonic()
-        if now_top - self._diag_last_print >= 1.0:
-            effects_settings_top = self.effects_settings
-            diag_line = (
-                f"DEBUG coordinator TICK: mode={self.mode} "
-                f"elapsed={(now_top - self.phase_start):.2f}s "
-                f"intro={effects_settings_top.intro_seconds} "
-                f"fade={effects_settings_top.fade_seconds} "
-                f"hold={effects_settings_top.hold_seconds} "
-                f"idle={effects_settings_top.idle_seconds} "
-                f"call_count={self._diag_call_count}"
-            )
-            print(diag_line, flush=True)
-            # Mirror to the file side-channel so we can read it even if
-            # the journal is silent (the symptom the user is seeing on
-            # the Pi — the journal goes quiet at 02:55:57.707, but the
-            # process is alive and status.json updates).
-            if self._diag_file is not None:
-                try:
-                    self._diag_file.write(diag_line + "\n")
-                except OSError:
-                    pass
-            self._diag_last_print = now_top
         # Local aliases for the bound layer — Pyright doesn't narrow
         # `self.display` etc. through `is_bound()`, but the guard above
         # makes these accesses safe.
@@ -691,43 +515,11 @@ class EffectsCoordinator:
                     "Coordinator pull changed: prev=%r new=%r last_shown_id=%s",
                     self._last_display_message, new_text, self._last_shown_message_id,
                 )
-                # DEBUG: same event, printed to stdout to bypass any
-                # logger-side filtering that is hiding the log.info calls.
-                print(
-                    f"DEBUG coordinator pull changed: prev={self._last_display_message!r} "
-                    f"new={new_text!r} last_shown_id={self._last_shown_message_id}",
-                    flush=True,
-                )
             self._last_display_message = new_text
             self._last_message_pull = now
         text = self._last_display_message
 
         if mode == "intro":
-            # AGGRESSIVE DEBUG: print every time we enter the intro branch
-            try:
-                os.write(
-                    1,
-                    f"DEBUG coordinator INTRO_BRANCH: elapsed={(time.monotonic() - self.phase_start):.2f}s intro_seconds={effects_settings.intro_seconds}\n".encode(),
-                )
-            except OSError:
-                pass
-            # DEBUG: 1Hz intro progress print (separate gate from the
-            # top-of-tick print, so it ALWAYS fires once per second).
-            # Confirms whether intro_seconds is elapsing as expected
-            # or stuck (which would explain "no state changes").
-            _intro_now = time.monotonic()
-            if _intro_now - self._intro_last_print >= 1.0:
-                _elapsed = _intro_now - self.phase_start
-                _ready = _elapsed >= effects_settings.intro_seconds
-                try:
-                    os.write(
-                        1,
-                        f"DEBUG coordinator intro: elapsed={_elapsed:.2f}s "
-                        f"intro_seconds={effects_settings.intro_seconds} ready={_ready}\n".encode(),
-                    )
-                except OSError:
-                    pass
-                self._intro_last_print = _intro_now
             if now - self.phase_start >= effects_settings.intro_seconds:
                 self._begin_out(now)
 
@@ -762,30 +554,11 @@ class EffectsCoordinator:
                     # `idle_seconds`. Symptom: "each background only
                     # shows for ~4s, just the fade-in + fade-out."
                     consumed_at_pick = self._consumed_message_id_at_pick(text)
-                    # DEBUG: capture the BEFORE state so the journal
-                    # tells us whether the head id actually lands in
-                    # the consumed set at runtime (vs e.g. running
-                    # pre-fix on the Pi, where the head id would NOT
-                    # be added and the set would only ever hold the
-                    # random pick).
-                    entries_ooi = self.current_messages
-                    head_id_before = entries_ooi[0].message.id if entries_ooi else None
-                    head_in_before = head_id_before in self._consumed_message_ids if head_id_before else None
                     if consumed_at_pick is not None:
                         self._consumed_message_ids.add(consumed_at_pick)
                     if self.current_messages:
                         head_id = self.current_messages[0].message.id
                         self._consumed_message_ids.add(head_id)
-                        # DEBUG: stdout mirror — show the consumed
-                        # set size and the head id so the journal
-                        # confirms the fix lands.
-                        print(
-                            f"DEBUG coordinator out->in CONSUMED: head_id={head_id} "
-                            f"head_in_consumed_BEFORE={head_in_before} "
-                            f"head_in_consumed_AFTER={head_id in self._consumed_message_ids} "
-                            f"pick_id={consumed_at_pick} consumed_size={len(self._consumed_message_ids)}",
-                            flush=True,
-                        )
                 else:
                     scroller.set_text("", display.width)
                     self.showing_text = False
@@ -793,12 +566,6 @@ class EffectsCoordinator:
                     "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s",
                     self.idx, self.current_effect_name,
                     text if text else "", self.showing_text,
-                )
-                # DEBUG: stdout mirror — bypass logger filter if "heart" is silenced.
-                print(
-                    f"DEBUG coordinator out->in: idx={self.idx} effect={self.current_effect_name} "
-                    f"text={text if text else ''!r} showing_text={self.showing_text}",
-                    flush=True,
                 )
                 self.mode = "in"
                 self.fade_start = now
@@ -816,21 +583,9 @@ class EffectsCoordinator:
                     next_mode, self.current_effect_name,
                     self.last_shown_text or "",
                 )
-                # DEBUG: stdout mirror.
-                print(
-                    f"DEBUG coordinator in->{next_mode}: effect={self.current_effect_name} "
-                    f"text={self.last_shown_text or ''!r} phase_start=now",
-                    flush=True,
-                )
                 self.mode = next_mode
 
         elif mode == "hold":
-            # 1Hz diagnostic: dump fresh_id_landed + consumed membership so
-            # the journal tells us WHY hold is exiting. Without this print,
-            # the absence of the "hold interrupt" log gives zero info —
-            # we just know "hold didn't last long," not whether the fresh-id
-            # check tripped or the hold timer expired.
-            #
             # Hold semantics (v2):
             #   - Stay on the current message until `hold_seconds` elapses,
             #     UNLESS a genuinely *new* SMS arrives — i.e. the head of the
@@ -850,30 +605,11 @@ class EffectsCoordinator:
                 self.current_messages
                 and self.current_messages[0].message.id not in self._consumed_message_ids
             )
-            if now - self._diag_last_print >= 1.0:
-                entries = self.current_messages
-                head_id = entries[0].message.id if entries else None
-                print(
-                    f"DEBUG coordinator hold TICK: head_id={head_id} "
-                    f"head_in_consumed={head_id in self._consumed_message_ids if head_id else None} "
-                    f"fresh_id_landed={fresh_id_landed} "
-                    f"held_for={(now - self.phase_start):.2f}s "
-                    f"hold_seconds={effects_settings.hold_seconds} "
-                    f"consumed_size={len(self._consumed_message_ids)}",
-                    flush=True,
-                )
-                self._diag_last_print = now
             if fresh_id_landed:
                 log.info(
                     "Coordinator hold interrupt (new id): pending_text=%r last_shown=%r new_id=%s",
                     text, self.last_shown_text,
                     self.current_messages[0].message.id,
-                )
-                # DEBUG: stdout mirror.
-                print(
-                    f"DEBUG coordinator hold interrupt (new id): pending_text={text!r} "
-                    f"last_shown={self.last_shown_text!r} new_id={self.current_messages[0].message.id}",
-                    flush=True,
                 )
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= effects_settings.hold_seconds:
@@ -881,13 +617,6 @@ class EffectsCoordinator:
                     "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
                     self.current_effect_name, self.last_shown_text,
                     now - self.phase_start, effects_settings.hold_seconds,
-                )
-                # DEBUG: stdout mirror.
-                print(
-                    f"DEBUG coordinator hold->text_out: effect={self.current_effect_name} "
-                    f"held_text={self.last_shown_text!r} held_for={now - self.phase_start:.1f}s "
-                    f"hold_seconds={effects_settings.hold_seconds}",
-                    flush=True,
                 )
                 self.mode = "text_out"
                 self.fade_start = now
@@ -904,41 +633,9 @@ class EffectsCoordinator:
                     "Coordinator text_out→background: effect=%s",
                     self.current_effect_name,
                 )
-                # DEBUG: stdout mirror.
-                print(
-                    f"DEBUG coordinator text_out->background: effect={self.current_effect_name}",
-                    flush=True,
-                )
                 self.mode = "background"
 
         elif mode == "background":
-            # 1Hz diagnostic: dump fresh_id_landed + random_pick_changed +
-            # idle_timed_out so the journal tells us which trigger fired the
-            # background→out transition. Same shape as the hold diagnostic:
-            # without this print, an absent "background exit" log gives no
-            # info on the trigger — we just know the cycle restarted.
-            entries_bg = self.current_messages
-            head_id_bg = entries_bg[0].message.id if entries_bg else None
-            fresh_id_bg = bool(
-                entries_bg and entries_bg[0].message.id not in self._consumed_message_ids
-            )
-            random_pick_changed_bg = bool(text) and text != self.last_shown_text
-            idle_timed_out_bg = (
-                now - self.phase_start >= effects_settings.idle_seconds
-            )
-            if now - self._diag_last_print >= 1.0:
-                print(
-                    f"DEBUG coordinator background TICK: head_id={head_id_bg} "
-                    f"fresh_id_landed={fresh_id_bg} "
-                    f"random_pick_changed={random_pick_changed_bg} "
-                    f"text={text!r} last_shown_text={self.last_shown_text!r} "
-                    f"idle_timed_out={idle_timed_out_bg} "
-                    f"waited={(now - self.phase_start):.2f}s "
-                    f"idle_seconds={effects_settings.idle_seconds} "
-                    f"consumed_size={len(self._consumed_message_ids)}",
-                    flush=True,
-                )
-                self._diag_last_print = now
             # Background semantics (v2):
             #   - A genuinely new SMS (head.id differs from last-shown) kicks
             #     a fade immediately — the operator just texted, show it now.
@@ -953,9 +650,14 @@ class EffectsCoordinator:
             #     even with idle_seconds=10. Now: background kicks a re-roll
             #     on whichever of (fresh_id, new_random_pick, idle_timeout)
             #     fires first.
-            fresh_id_landed = fresh_id_bg
-            random_pick_changed = random_pick_changed_bg
-            idle_timed_out = idle_timed_out_bg
+            entries_bg = self.current_messages
+            fresh_id_landed = bool(
+                entries_bg and entries_bg[0].message.id not in self._consumed_message_ids
+            )
+            random_pick_changed = bool(text) and text != self.last_shown_text
+            idle_timed_out = (
+                now - self.phase_start >= effects_settings.idle_seconds
+            )
             if fresh_id_landed or random_pick_changed or idle_timed_out:
                 trigger = (
                     "new_id" if fresh_id_landed
@@ -967,60 +669,19 @@ class EffectsCoordinator:
                     trigger, now - self.phase_start,
                     effects_settings.idle_seconds, text or "",
                 )
-                # DEBUG: stdout mirror.
-                print(
-                    f"DEBUG coordinator background->out ({trigger}): waited={now - self.phase_start:.1f}s "
-                    f"idle_seconds={effects_settings.idle_seconds} next_text={text or ''!r}",
-                    flush=True,
-                )
                 self._begin_out(now)  # show the queued message
 
         current = self.current
         assert current is not None
-        # DEBUG: surround display.render() with prints to localize the
-        # hang. If PRE-render prints but POST-render doesn't, SwapOnVSync
-        # is blocking forever. Throttled to 1Hz to avoid drowning the
-        # journal; uses os.write to fd 1 to bypass any Python print()
-        # buffering issue.
-        _now_render = time.monotonic()
-        if _now_render - self._diag_last_print >= 1.0:
-            try:
-                os.write(
-                    1,
-                    f"DEBUG coordinator PRE-render: mode={self.mode} call={self._diag_call_count}\n".encode(),
-                )
-            except OSError:
-                pass
-        # Wrap the render block in try/except so any exception
-        # surfaces to the journal via os.write() rather than being
-        # swallowed by Python's default exception printer (which may
-        # itself be silenced if stdout is hijacked). Also writes the
-        # traceback to /tmp/coordinator-exception.log for forensics.
+        # Defensive try/except: an exception inside the render
+        # block (e.g. a freshly-staged Effect with a missing
+        # attribute) would otherwise dump a traceback to the
+        # journal once and then crash the loop on the next frame.
+        # Re-raise so systemd's Restart=always still catches it
+        # and the loader's exception path can record context.
         try:
             current.tick()
             scroller.tick(display.width)
             display.render(current, scroller)
-        except BaseException as _exc:
-            import traceback as _tb
-            _tb_text = _tb.format_exc()
-            try:
-                os.write(1, f"EXCEPTION in render block: {_exc!r}\n".encode())
-                os.write(1, _tb_text.encode())
-            except OSError:
-                pass
-            try:
-                with open("/tmp/coordinator-exception.log", "a", buffering=1) as _ef:
-                    _ef.write(f"EXCEPTION call={self._diag_call_count} mode={self.mode}\n")
-                    _ef.write(_tb_text)
-                    _ef.write("\n")
-            except OSError:
-                pass
+        except BaseException:
             raise
-        if _now_render - self._diag_last_print >= 1.0:
-            try:
-                os.write(
-                    1,
-                    f"DEBUG coordinator POST-render: mode={self.mode} call={self._diag_call_count}\n".encode(),
-                )
-            except OSError:
-                pass
