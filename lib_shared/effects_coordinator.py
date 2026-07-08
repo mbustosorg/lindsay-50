@@ -523,6 +523,27 @@ class EffectsCoordinator:
         # call regardless of bound state. The counter increments on
         # every tick (not throttled) so we can confirm tick() is
         # being called and at what rate.
+        # DEBUG: unconditional heartbeat at the very top of tick().
+        # Prints to stdout AND writes to /tmp/coordinator-tick-entry.log
+        # via a fresh handle every second (no persistent handle —
+        # avoids the same OSError-silent-failure pattern). If this
+        # print doesn't show in the journal AND the file doesn't
+        # exist, tick() isn't being called at all. If the file
+        # exists but the print doesn't show, something is silencing
+        # stdout after the rgbmatrix library init.
+        _now_hb = time.monotonic()
+        if _now_hb - self._diag_last_print >= 1.0:
+            try:
+                with open("/tmp/coordinator-tick-entry.log", "a", buffering=1) as _hb:
+                    _hb.write(
+                        f"tick_entered call_count={self._diag_call_count} ts={_now_hb}\n"
+                    )
+            except OSError:
+                pass
+            print(
+                f"DEBUG coordinator tick() entered: call_count={self._diag_call_count}",
+                flush=True,
+            )
         if self._diag_file is None:
             try:
                 self._diag_file = open(
