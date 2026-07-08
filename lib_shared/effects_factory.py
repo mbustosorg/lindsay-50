@@ -41,6 +41,10 @@ def make_effect_class(name: str) -> type | None:
         from lib_shared.patterns.windfire import WindFire
 
         return WindFire
+    if name == "CoronalMassEjection":
+        from lib_shared.patterns.coronal_mass_ejection import CoronalMassEjection
+
+        return CoronalMassEjection
     if name == "Flame":
         from lib_shared.patterns.flame import Flame
 

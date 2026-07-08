@@ -171,6 +171,7 @@ _DEFAULT_EFFECTS_LIST_FULL: List[dict] = [
     {"name": "PngDisplay", "enabled": False},
     {"name": "Honeycomb", "enabled": True},
     {"name": "WindFire", "enabled": True},
+    {"name": "CoronalMassEjection", "enabled": True},
     {"name": "Flame", "enabled": True},
     {"name": "Fireworks", "enabled": True},
     {"name": "NightSky", "enabled": True},
