@@ -72,6 +72,19 @@ class MatrixDisplay(DisplayBase):
 
         self._matrix = RGBMatrix(options=options)
         self.canvas = self._matrix.CreateFrameCanvas()
+        # DEBUG: bypass the logger to stdout so the runtime geometry
+        # is visible in the journal regardless of whether the "heart"
+        # logger is being filtered. Reports both the value we passed
+        # the hzeller library and the canvas it actually built — these
+        # diverge when the library silently ignores `pixel_mapper_config`
+        # (observed symptom: settings.toml has MATRIX_PIXEL_MAPPER =
+        # "U-mapper" but the canvas comes back 128x32).
+        print(
+            f"DEBUG rgb_matrix_display: rows={options.rows} cols={options.cols} "
+            f"chain={options.chain_length} mapper={options.pixel_mapper_config!r} "
+            f"actual_canvas={self.canvas.width}x{self.canvas.height}",
+            flush=True,
+        )
         self.width = (
             options.cols * options.chain_length // 2
             if options.pixel_mapper_config == "U-mapper"

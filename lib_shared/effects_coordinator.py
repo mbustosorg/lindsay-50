@@ -405,6 +405,12 @@ class EffectsCoordinator:
             "Coordinator._begin_out: from mode=%s effect=%s scroller_text=%r",
             self.mode, self.current_effect_name, scroller_text,
         )
+        # DEBUG: stdout mirror.
+        print(
+            f"DEBUG coordinator._begin_out: from mode={self.mode} "
+            f"effect={self.current_effect_name} scroller_text={scroller_text!r}",
+            flush=True,
+        )
         self.mode = "out"
         self.fade_start = now
         self.last_step = 0.0
@@ -494,6 +500,20 @@ class EffectsCoordinator:
         now = time.monotonic()
         mode = self.mode
 
+        # DEBUG: bypass the "heart" logger silence with a direct stdout
+        # print so we can confirm tick() is being called and at what
+        # rate. Throttled to one print per second to keep the journal
+        # readable. Uses `getattr` so the first-tick increment happens
+        # without an __init__ change.
+        self._tick_count = getattr(self, "_tick_count", 0) + 1
+        if self._tick_count % 60 == 0:
+            print(
+                f"DEBUG coordinator.tick: count={self._tick_count} mode={self.mode} "
+                f"effect={self.current_effect_name} showing_text={self.showing_text} "
+                f"last_shown={self.last_shown_text!r}",
+                flush=True,
+            )
+
         # Throttled pull: only fetch a fresh body every _PULL_INTERVAL.
         # The cached value drives the state-machine transitions.
         if now - self._last_message_pull >= self._PULL_INTERVAL:
@@ -502,6 +522,13 @@ class EffectsCoordinator:
                 log.info(
                     "Coordinator pull changed: prev=%r new=%r last_shown_id=%s",
                     self._last_display_message, new_text, self._last_shown_message_id,
+                )
+                # DEBUG: same event, printed to stdout to bypass any
+                # logger-side filtering that is hiding the log.info calls.
+                print(
+                    f"DEBUG coordinator pull changed: prev={self._last_display_message!r} "
+                    f"new={new_text!r} last_shown_id={self._last_shown_message_id}",
+                    flush=True,
                 )
             self._last_display_message = new_text
             self._last_message_pull = now
@@ -539,6 +566,12 @@ class EffectsCoordinator:
                     self.idx, self.current_effect_name,
                     text if text else "", self.showing_text,
                 )
+                # DEBUG: stdout mirror — bypass logger filter if "heart" is silenced.
+                print(
+                    f"DEBUG coordinator out->in: idx={self.idx} effect={self.current_effect_name} "
+                    f"text={text if text else ''!r} showing_text={self.showing_text}",
+                    flush=True,
+                )
                 self.mode = "in"
                 self.fade_start = now
                 self.last_step = 0.0
@@ -554,6 +587,12 @@ class EffectsCoordinator:
                     "Coordinator in→%s: effect=%s text=%r",
                     next_mode, self.current_effect_name,
                     self.last_shown_text or "",
+                )
+                # DEBUG: stdout mirror.
+                print(
+                    f"DEBUG coordinator in->{next_mode}: effect={self.current_effect_name} "
+                    f"text={self.last_shown_text or ''!r} phase_start=now",
+                    flush=True,
                 )
                 self.mode = next_mode
 
@@ -583,12 +622,25 @@ class EffectsCoordinator:
                     text, self.last_shown_text,
                     self.current_messages[0].message.id,
                 )
+                # DEBUG: stdout mirror.
+                print(
+                    f"DEBUG coordinator hold interrupt (new id): pending_text={text!r} "
+                    f"last_shown={self.last_shown_text!r} new_id={self.current_messages[0].message.id}",
+                    flush=True,
+                )
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= effects_settings.hold_seconds:
                 log.info(
                     "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
                     self.current_effect_name, self.last_shown_text,
                     now - self.phase_start, effects_settings.hold_seconds,
+                )
+                # DEBUG: stdout mirror.
+                print(
+                    f"DEBUG coordinator hold->text_out: effect={self.current_effect_name} "
+                    f"held_text={self.last_shown_text!r} held_for={now - self.phase_start:.1f}s "
+                    f"hold_seconds={effects_settings.hold_seconds}",
+                    flush=True,
                 )
                 self.mode = "text_out"
                 self.fade_start = now
@@ -604,6 +656,11 @@ class EffectsCoordinator:
                 log.info(
                     "Coordinator text_out→background: effect=%s",
                     self.current_effect_name,
+                )
+                # DEBUG: stdout mirror.
+                print(
+                    f"DEBUG coordinator text_out->background: effect={self.current_effect_name}",
+                    flush=True,
                 )
                 self.mode = "background"
 
@@ -640,6 +697,12 @@ class EffectsCoordinator:
                     "Coordinator background→out (%s): waited=%.1fs idle_seconds=%.1f next_text=%r",
                     trigger, now - self.phase_start,
                     effects_settings.idle_seconds, text or "",
+                )
+                # DEBUG: stdout mirror.
+                print(
+                    f"DEBUG coordinator background->out ({trigger}): waited={now - self.phase_start:.1f}s "
+                    f"idle_seconds={effects_settings.idle_seconds} next_text={text or ''!r}",
+                    flush=True,
                 )
                 self._begin_out(now)  # show the queued message
 
