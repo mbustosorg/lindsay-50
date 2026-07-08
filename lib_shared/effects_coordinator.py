@@ -530,7 +530,7 @@ class EffectsCoordinator:
         # Re-raise so the main loop's existing (KeyboardInterrupt,
         # SystemExit) handler still runs.
         try:
-            _tick_inner()
+            self._tick_inner()
         except BaseException as _exc:
             import traceback as _tb
             _tb_text = _tb.format_exc()
