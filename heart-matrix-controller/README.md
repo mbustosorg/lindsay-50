@@ -273,6 +273,7 @@ Each effect subclass of `Effect` (rgb_display.py) maintains its own `bitmap` and
 | `Flame` | Cell automaton: each cell averages neighbors and drifts upward |
 | `NightSky` | Twinkling stars with occasional meteor streaks |
 | `Honeycomb` | Hexagonal tiling with shifting neighbor-averaged colors |
+| `WindFire` | Perlin-turbulence fire bent sideways by a drifting wind (numpy + SetImage) |
 | `PngDisplay` | Static or animated PNG rendered from flash |
 | `VideoDisplay` | Frame sequence from flash, same blitting approach |
 

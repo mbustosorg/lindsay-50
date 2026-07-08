@@ -37,6 +37,10 @@ def make_effect_class(name: str) -> type | None:
         from lib_shared.patterns.honeycomb import Honeycomb
 
         return Honeycomb
+    if name == "WindFire":
+        from lib_shared.patterns.windfire import WindFire
+
+        return WindFire
     if name == "Flame":
         from lib_shared.patterns.flame import Flame
 

@@ -36,6 +36,7 @@ class _StubDisplay:
         ("lib_shared.patterns.flame", "Flame"),
         ("lib_shared.patterns.nightsky", "NightSky"),
         ("lib_shared.patterns.honeycomb", "Honeycomb"),
+        ("lib_shared.patterns.windfire", "WindFire"),
         ("lib_shared.patterns.hyperspace", "Hyperspace"),
         ("lib_shared.patterns.heartbeat", "Heartbeat"),
         ("lib_shared.patterns.png_display", "PngDisplay"),
@@ -73,9 +74,10 @@ def test_patterns_dont_import_rgb_display():
         nightsky,
         png_display,
         video_display,
+        windfire,
     )
 
-    for mod in (fireworks, flame, heartbeat, honeycomb, hyperspace, nightsky, png_display, video_display):
+    for mod in (fireworks, flame, heartbeat, honeycomb, hyperspace, nightsky, png_display, video_display, windfire):
         assert not hasattr(
             mod, "rgb_display"
         ), f"{mod.__name__} still references rgb_display — should be lib_shared.effect_base"
