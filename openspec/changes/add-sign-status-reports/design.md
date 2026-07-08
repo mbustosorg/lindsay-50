@@ -19,15 +19,16 @@ The new `sign-status-reports` capability sits between these: the Pi publishes a 
 
 **Goals:**
 
-- The Pi publishes its existing `StatusSnapshot` over MQTT on a dedicated status topic, throttled to a 5-second cadence — **unified** with the existing `.status.json` file write, both done in the same `StatusWriter.tick()` method. One throttle constant, one code path, one place to change cadence. The 5s value is well within the loader's 8s probe headroom and well under Adafruit IO's free-tier 30-publishes/minute limit.
+- The Pi publishes its existing `StatusSnapshot` over MQTT on a dedicated status topic, throttled to a 5-second cadence — **unified** with the existing `.status.json` file write, both done in the same `StatusWriter.tick()` method. One throttle constant, one code path, one place to change cadence. The 5s value aligns the loader's hold window (17s, raised from 8s to allow 3 missed writes = 3×5s = 15s of silence + 2s of slack) and the dashboard pill's `live` window (15s = 3 missed publishes) — same scale, same signal.
 - The Pi uses a **long-lived paho publisher** (new `StatusPublisher` class) for the MQTT path. paho's `loop_start()` runs a background thread; `client.publish()` is thread-safe and just enqueues into the outgoing buffer. At 5s cadence, a fresh-client-per-publish approach would burn 17,280 TCP+TLS handshakes per day per sign — long-lived is the right pattern for a regular heartbeat.
 - The **Flask server** subscribes to that status topic and keeps the latest received snapshot in a `threading.RLock`-guarded in-memory store (`LatestSignStatus`).
 - Flask exposes `GET /api/sign-status` returning the latest snapshot (or `{snapshot: null}` if none has been received since Flask started). The endpoint always returns 200.
 - The **browser** does a single `fetch('/api/sign-status')` on page load (load-time hydration) and subscribes to `MQTT_STATUS_TOPIC` via a second `createMqttWsClient` instance for live updates going forward. The load-time fetch is hydration, NOT polling — the browser does not call `fetch` on a timer.
-- The browser computes the sign's state (`live` / `unknown` / `offline`) from the snapshot's age, with thresholds defined as constants in `sign_status.js` (default: `live` < 15s, `unknown` 15-30s, `offline` > 30s or never). The 15/30s thresholds match the 5s publish cadence: 15s catches three consecutive missed publishes (the right "something is wrong" signal); 30s catches six (the right "definitively unreachable" signal).
-- The browser re-evaluates state every 5 seconds via a local `setInterval` so the pill transitions `live → unknown → offline` even when no new message arrives. The 5s cadence is a UI cadence, not a network cadence — it does not poll the server.
-- The Dashboard's static "Live" pill becomes real: green+pulse ("Live") when the snapshot is <15s old, amber+no-pulse ("Unknown") when 15-30s, grey ("Offline") when >30s or never. Each state has a distinct text label so the operator can read the pill at a glance.
-- The Settings page gets a new read-only **Sign Health** section at the top (above "Sign Name") with the snapshot fields and the timestamp the browser received the snapshot. The fields render only when a snapshot is in memory; the section shows "No status received yet" otherwise.
+- The browser computes the sign's **state** (`live` / `unknown` / `offline`) from the snapshot's age, with thresholds defined as constants in `sign_status.js` (default: `live` < 15s, `unknown` 15-30s, `offline` > 30s or never). The 15/30s thresholds match the 5s publish cadence: 15s catches three consecutive missed publishes (the right "something is wrong" signal); 30s catches six (the right "definitively unreachable" signal).
+- The browser also computes the sign's **health** (`healthy` / `degraded`) from the snapshot's contents: `healthy` requires `mqtt_connected === true` AND `last_error` is null/empty AND `last_tick_age_ms < HEALTH_TICK_AGE_MAX_MS` (5s); any one failure flips health to `degraded`. Health is computed from the snapshot, not from the message presence — a fresh message that says "I'm broken" is degraded, not live.
+- The Dashboard pill renders the **combined** state and health: `state=live AND health=healthy` → green pulse "Live"; `state=live AND health=degraded` → amber "Degraded"; `state=unknown` → amber "Unknown"; `state=offline` → grey "Offline". The four-way rendering means the operator can tell at a glance: is the sign running, and is the sign OK?
+- The browser re-evaluates state and health every 5 seconds via a local `setInterval` so the pill transitions `live → unknown → offline` and `healthy → degraded → healthy` even when no new message arrives. The 5s cadence is a UI cadence, not a network cadence — it does not poll the server.
+- The Settings page gets a new read-only **Sign Health** section at the top (above "Sign Name") with the snapshot fields and the timestamp the browser received the snapshot. The fields render only when a snapshot is in memory; the section shows "No status received yet" otherwise. When `health=degraded`, the section surfaces the failing health check (e.g., "MQTT disconnected" or "Last error: <message>") above the field table.
 
 **Non-Goals:**
 
@@ -35,7 +36,7 @@ The new `sign-status-reports` capability sits between these: the Pi publishes a 
 - No broker-side persistence — Flask keeps only the latest snapshot in memory. Historical snapshots ("show me the last 24 hours") are out of scope.
 - **No HTTP polling.** The browser does not call `fetch` on a timer. The only `setInterval` is local, driven by the last received snapshot's age, and produces only DOM updates.
 - No changes to the existing `MessageEnvelope` wire shape or the existing `MQTT_TOPIC` subscribe path.
-- The `.status.json` write cadence moves from 3s to 5s — unified with the MQTT publish cadence. The loader's 8s probe still has 3s of file-mtime headroom. The dataclass is unchanged; the new `to_mqtt_dict()` serializer is added for the wire format.
+- The `.status.json` write cadence moves from 3s to 5s — unified with the MQTT publish cadence. The loader's `BOOT_HOLD_S` moves from 8s to 17s to match the new cadence (3×5s = 15s of writes, plus 2s of slack). The dataclass is unchanged; the new `to_mqtt_dict()` serializer is added for the wire format.
 - No change to the existing `#mqtt-status` browser-WS pill. That signal stays as it is (it tracks the envelope-flow WS, not the status-flow WS).
 - **No events/logs topic.** A discrete-event topic (`rebooted`, `upgrading`, `new message received`, etc.) is parked as a separate follow-up change. Reasons: different shape and cadence (discrete appends vs periodic snapshots), different retrieval model (pull-on-demand via AIO REST API vs real-time subscribe — the dashboard pill needs sub-minute freshness; an event log doesn't), and different wire shape (small event dict vs the full snapshot). Adding it to this change would force a third `type` value into the `MessageEnvelope` contract and require every existing envelope consumer to learn to ignore it. The follow-up change adds a third topic (`{MQTT_TOPIC}-events`, default `MQTT_EVENTS_TOPIC`) and a debug-page surface that fetches history from the AIO REST API.
 - No new dependencies. `threading.Timer` and `threading.RLock` are stdlib. The browser uses the existing `createMqttWsClient` shim — no new JS libraries.
@@ -48,7 +49,7 @@ The Pi's existing `StatusWriter` already throttles its `.status.json` file write
 
 - **One throttle constant.** `STATUS_WRITE_INTERVAL_S = 5.0` controls both the file write and the MQTT publish. To change cadence, one edit.
 - **One code path.** `StatusWriter.tick()` writes the file (existing) and publishes the MQTT envelope (new) in the same call. The existing throttling logic (last-write timestamp + conditional update) is reused as-is.
-- **Headroom for the loader.** The loader probes `.status.json` mtime every ~8s; at a 5s write cadence, the file mtime is at most 5s old when probed, leaving 3s of headroom.
+- **Aligned with the loader's hold window.** The loader's `BOOT_HOLD_S` moves to 17s, which gives 3 missed 5s writes (15s) plus 2s of slack before failing. The 5s write cadence is what makes "3 missed writes" the right threshold: at 5s, 3 missed writes = 15s of silence, which matches the dashboard pill's `live` window. The loader, the file mtime, and the UI all read the same signal at the same scale.
 - **Headroom for the broker.** Adafruit IO's free tier is 30 publishes/minute (1 every 2s). At 5s, we're at 1/6 of the limit.
 - **Tighter UI feedback.** With a 5s heartbeat, the operator sees state changes within 5s, not 30s. The dashboard pill's `live` window can be 15s (3 missed publishes — the "something is wrong" signal) and the `unknown` window 15s more (3 more — the "definitively unreachable" signal), all under the 30s total detection budget.
 
@@ -84,19 +85,21 @@ This is a **one-shot fetch on load** — the browser does NOT call `fetch` on a 
 
 **Alternative considered:** Flask republishes enriched status to a derived topic, browser subscribes to derived. Rejected — doubles the topics, doubles the broker writes, and adds a Flask-side component that has no other purpose.
 
-### 5. Browser-side state computation, not server-side
+### 5. Browser-side state AND health computation, not server-side
 
-The threshold policy ("when is missing status a concern?") lives in the browser, not the server. The browser can compute `(now - updated_at)` from the snapshot's `updated_at` field — it doesn't need a server round-trip to know the snapshot's age. The thresholds (15s, 30s) are constants in `sign_status.js`; tuning them is a one-file edit.
+The browser computes two orthogonal signals about the sign: **state** (the freshness of the most recent message) and **health** (whether the snapshot's contents say the sign is OK). Both live in the browser, not the server — the browser already has the full snapshot and can compute both from the data it has, with no server round-trip.
 
-**Why not server-side state:** the server's job in this design is to keep a copy of the latest snapshot (so the load-time fetch can return it). The thresholds are UI policy, not security policy — duplicating them in the browser is acceptable, and avoiding a derived topic keeps the architecture clean.
+**State (freshness):** `stateFromAge(ageSeconds) -> "live" | "unknown" | "offline"` from `(now - updated_at)`. Thresholds: `live` < 15s, `unknown` 15-30s, `offline` > 30s or never. The 15/30s split matches the 5s publish cadence: 15s = 3 missed publishes ("something is wrong"), 30s = 6 missed publishes ("definitively unreachable").
 
-**Threshold defaults:** `live` < 15s, `unknown` 15-30s, `offline` > 30s or never. The 15/30s split matches the 5s publish cadence: 15s = 3 missed publishes ("something is wrong"), 30s = 6 missed publishes ("definitively unreachable"). Hardcoded constants in `sign_status.js` for v1, named so future work can lift them into a config without renaming.
+**Health (snapshot contents):** `healthFromSnapshot(snapshot) -> "healthy" | "degraded"`. `degraded` if ANY of: `mqtt_connected === false`, `last_error` is a non-empty string, `last_tick_age_ms >= HEALTH_TICK_AGE_MAX_MS` (5s — the render loop ticks at ~60Hz, so a 5s last-tick-age is a real "stuck" signal). `healthy` otherwise. The render loop's own 5s tolerance here matches the publish cadence: a fresh publish means the render loop ticked recently.
 
-**Why these specific values:** with a 5s heartbeat, the operator's "is it alive" confidence interval is bounded by the larger of (publish cadence, threshold). A 15s `live` window gives the operator a 3-publish buffer before the pill flips — enough to absorb a transient broker blip (one or two missed publishes are normal during a reconnect) but tight enough to detect a real problem within ~15s.
+**Combined render state:** `{state, health} -> renderKey` where renderKey is one of `live-healthy | live-degraded | unknown | offline`. The pill renders each as a distinct text and color (see Decision 11).
+
+**Why browser-side, not server-side:** the server's job in this design is to keep a copy of the latest snapshot (so the load-time fetch can return it). State and health are UI policy, not security policy — duplicating them in the browser is acceptable, and avoiding a derived "computed status" topic keeps the architecture clean. The server exposes the raw snapshot; the browser interprets it.
 
 ### 6. Browser-side state machine via local `setInterval` (5s)
 
-A pure event-driven browser (no local timer) can't transition `live → unknown → offline` on its own — the only signal is "a new message arrived" or "a load-time fetch returned." A 5s local `setInterval` re-evaluates state from `(now - lastSnapshot.updated_at)` and re-renders the pill. This is **not** network polling — the interval fires regardless of network state and produces only DOM updates. The cost is one `setInterval` callback per page tab, every 5 seconds — negligible.
+A pure event-driven browser (no local timer) can't transition `live → unknown → offline` or `healthy → degraded → healthy` on its own — the only signal is "a new message arrived" or "a load-time fetch returned." A 5s local `setInterval` re-evaluates state and health from the in-memory snapshot and re-renders the pill. This is **not** network polling — the interval fires regardless of network state and produces only DOM updates. The cost is one `setInterval` callback per page tab, every 5 seconds — negligible.
 
 **Why 5s:** the `unknown`/`offline` boundary is 30s, so 5s granularity means a transition is visible within 5s of crossing the threshold. The interval matches the publish cadence — at 5s heartbeat + 5s re-render, the pill is essentially event-driven in normal operation (one re-render per message arrival) and the setInterval is the safety net for when the publish stream dies. Anything faster is wasteful; anything slower means a stale-looking pill.
 
@@ -131,9 +134,35 @@ The dataclass keeps `pid` (the OS-level PID of the running app). The Flask UI an
 
 **Alternative considered:** send everything over the wire and let Flask/browser ignore `pid`. Rejected — explicit drop is the documentation; future readers of the wire shape don't wonder "what's this pid field for?"
 
+### 11. Health-aware pill: state × health, four render states
+
+The pill's render state is the product of two independent signals: `state` (freshness) and `health` (snapshot contents). The four-cell matrix:
+
+| state \ health | healthy                          | degraded                                    |
+| -------------- | -------------------------------- | ------------------------------------------- |
+| **live**       | green pulse, "Live"              | amber, "Degraded" (with ⚠ in Settings)      |
+| **unknown**    | amber, "Unknown"                 | amber, "Unknown — Degraded"                 |
+| **offline**    | grey, "Offline"                  | grey, "Offline" (state dominates; health shown in Settings) |
+
+**Why four render states, not three:** the user's feedback pointed out that "we shouldn't just key off the presence of a message, but whether the contents say the sign is healthy." A sign that says "I'm running, but `mqtt_connected: false` and `last_error: 'broker disconnected'`" is NOT "Live" in the operator's sense — it's running but broken. Collapsing that to a green pulse would make the pill a liar, exactly the failure mode the original 60/120s design was open to.
+
+**Why the `unknown` × `degraded` row is rendered as just "Unknown — Degraded" instead of a separate color:** in practice, an unknown message is already a degraded state (the message stream is unhealthy). The pill doesn't need a third color; the Settings page's Sign Health section surfaces the failing health check below the field table. The pill is a glance; the Settings page is the investigation surface.
+
+**Why `offline` × `degraded` is just "Offline":** when the message stream is dead, the snapshot's health fields are stale (they reflect the moment the last message was sent). Surfacing "offline" with a stale health field is misleading; the operator's next action is the same regardless of the stale health. The Settings page still shows the snapshot's last-known health fields for post-mortem.
+
+**Why `health` lives in `sign_status.js`, not in the Flask endpoint:** the snapshot is the source of truth, and the browser already has the full snapshot. Putting health in the server would require either (a) a derived computed-status topic or (b) a derived computed-status field in the `/api/sign-status` response. Both add surface area. The browser's interpretation is one function call away from the snapshot, with named constants that are easy to find and tune.
+
+**Alternative considered:** collapse `live-degraded` to a green "Live" pill with a small ⚠ icon next to the text. Rejected — a green "Live" pill that means "I'm broken" is a worse failure mode than a clearly-amber "Degraded" pill. The visual signal should match the semantic.
+
+**Alternative considered:** add a separate "Health" pill in the header, distinct from the "Live" pill. Rejected — two pills next to each other is more visual noise than the operator needs. One pill, four states, clear color/text per state.
+
+**Threshold constant:** `HEALTH_TICK_AGE_MAX_MS = 5000` (5s). At 5s publish cadence, a render loop whose last tick was 5s ago has been silent for an entire publish cycle — that's a "stuck render loop" signal. A lower threshold (e.g., 1s) would flag normal jitter as degraded; a higher threshold (e.g., 30s) would mask real problems. 5s matches the publish cadence exactly.
+
 ## Risks / Trade-offs
 
-- **Stale-snapshot UI lies** — the dashboard pill says "Live" if the snapshot is <15s old. If the Pi freezes but keeps the render loop alive enough to publish (improbable but possible), the UI says green when the sign is actually frozen. → Mitigation: the loader's separate `.status.json` probe still detects a stuck render loop (no fresh file mtime = no swap); the dashboard's "Live" pill is a UI signal, not a health check. If the operator sees green but suspects a problem, the `.status.json` mtime on the Pi is the authoritative signal.
+- **Stale-snapshot UI lies (mitigated by health-aware pill)** — the previous design said the pill was a "freshness signal, not a health check," and pointed operators at the loader's `.status.json` probe for health. That separation was wrong: the snapshot already contains health signals (`mqtt_connected`, `last_error`, `last_tick_age_ms`), and the operator's mental model is "is the sign OK," not "is the message stream fresh." → Mitigation: the new health-aware pill (Decision 11) checks the snapshot's contents. A fresh message that says `mqtt_connected: false` or `last_error: "broker disconnected"` renders the pill as "Degraded" (amber), not "Live" (green). The Settings page's Sign Health section surfaces the failing check below the field table so the operator can drill in. The loader's `.status.json` probe is still there for staged-worktree swaps, but it's no longer the source of truth for the operator's health-check question — the pill is.
+
+- **Fresh-but-unhealthy sign** — the operator may see "Degraded" for an extended period (e.g., a transient broker outage that takes a few minutes to recover). → Mitigation: the "Degraded" text and amber color are distinct from "Unknown" (also amber, different text), so the operator can tell at a glance that the sign is *running but broken* vs *unreachable*. The Settings page surfaces the specific failing check (e.g., "MQTT disconnected: <last_error>") so the operator can act.
 
 - **Browser-WS outage masks Pi outage** — if the operator's browser loses its WS connection to the broker, the status-WS client stops receiving messages and the pill eventually transitions to `offline` based on the snapshot's age. The operator can't tell whether the sign or their own network is at fault. → Mitigation: the existing `#mqtt-status` pill (browser → broker WS for the envelope flow) is still visible in the header; if BOTH pills go grey simultaneously, the operator's network is the suspect. The status-WS client also surfaces its own connection state to a small status indicator next to the pill, parallel to the existing `#mqtt-status` pattern. Document this in the Sign Health section.
 
@@ -151,11 +180,11 @@ The dataclass keeps `pid` (the OS-level PID of the running app). The Flask UI an
 
 ## Migration Plan
 
-This is a purely additive change — no existing wire shapes, no existing UI elements, no existing files are removed. The only behavior change for existing code paths is the `StatusWriter` cadence moving from 3s to 5s; this affects the loader's `.status.json` probe (8s check interval, 5s mtime) but stays well within its 3s headroom.
+This is a mostly additive change — no existing wire shapes, no existing UI elements, no existing files are removed. The behavior changes for existing code paths are: (a) `StatusWriter` cadence moves from 3s to 5s (unified with the new MQTT publish); (b) the loader's `BOOT_HOLD_S` moves from 8s to 17s to match the new cadence (3×5s = 15s of writes, plus 2s of slack). Both are config-level changes with no wire or UI impact.
 
-1. **Deploy order:** Ship the Flask + browser side first (templates, `sign_status.js`, `APP_CONFIG.mqttStatusTopic` injection, Flask subscriber + endpoint + store), then ship the Pi side (StatusPublisher + StatusWriter change). With the Flask + browser side deployed first, the new pill shows grey ("Offline") and the new Settings-page section shows "No status received yet" — operators see the new UI in its "waiting" state. When the Pi side ships, the UI flips to live.
+1. **Deploy order:** Ship the Flask + browser side first (templates, `sign_status.js`, `APP_CONFIG.mqttStatusTopic` injection, Flask subscriber + endpoint + store), then ship the Pi side (StatusPublisher + StatusWriter change + loader BOOT_HOLD_S change). With the Flask + browser side deployed first, the new pill shows grey ("Offline") and the new Settings-page section shows "No status received yet" — operators see the new UI in its "waiting" state. When the Pi side ships, the UI flips to live.
 2. **Adafruit IO feed creation:** the operator must create the new `lindsay-50-status` feed in the AIO dashboard before the Pi's first publish lands. Documented in the `settings.toml.example` for both server and device.
-3. **Rollback:** disable the MQTT publish call in `StatusWriter.tick()` (one-line guard), or revert the browser-side `sign_status.js` change. The `.status.json` path stays at its new 5s cadence (the loader still has 3s of headroom); the WS envelope flow is untouched.
+3. **Rollback:** disable the MQTT publish call in `StatusWriter.tick()` (one-line guard), or revert the browser-side `sign_status.js` change. The `.status.json` path stays at its new 5s cadence and the loader's `BOOT_HOLD_S` stays at its new 17s — both are still consistent (17s hold + 5s writes = 3 missed writes = 15s of silence + 2s of slack). The WS envelope flow is untouched.
 4. **No data migration:** no SQLite rows, no S3 keys, no env-var format changes.
 
 ## Open Questions
@@ -164,4 +193,4 @@ This is a purely additive change — no existing wire shapes, no existing UI ele
 
 - **Should `messages_rendered` be a rolling counter or a snapshot?** Current `StatusSnapshot` snapshots it (read of `len(_msgs._msgs)` at write time). The Settings page will display it as "X messages currently in the buffer." If the operator wants "total messages rendered since boot," that's a different metric that requires a monotonic counter in `main.py`. Not blocking — the snapshot value is the right starting point.
 
-- **Should the dashboard pill state live in `data-state` or in a class?** The design uses `data-state="live|unknown|offline"` plus Tailwind classes toggled by JS. The alternative is to put all CSS in classes (`.sign-pill--live`, `.sign-pill--unknown`, `.sign-pill--offline`) and have JS just toggle the class. The latter is more idiomatic Tailwind; the former is more grep-able. The implementation will pick one — not blocking for this spec.
+- **Should the dashboard pill state live in `data-state` or in a class?** The design uses `data-state="live-healthy|live-degraded|unknown|offline"` plus Tailwind classes toggled by JS. The alternative is to put all CSS in classes (`.sign-pill--live-healthy`, `.sign-pill--live-degraded`, `.sign-pill--unknown`, `.sign-pill--offline`) and have JS just toggle the class. The latter is more idiomatic Tailwind; the former is more grep-able. The implementation will pick one — not blocking for this spec.

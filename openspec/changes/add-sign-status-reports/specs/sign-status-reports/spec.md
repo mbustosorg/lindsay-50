@@ -154,6 +154,34 @@ The browser MUST compute the sign's state as one of `"live"`, `"unknown"`, or `"
 - **WHEN** the page has loaded and no snapshot has arrived
 - **THEN** the computed state is `"offline"`
 
+### Requirement: Browser computes sign health from snapshot contents
+The browser MUST compute the sign's health as one of `"healthy"` or `"degraded"` from the snapshot's contents. Health MUST be `"degraded"` if ANY of the following is true:
+- `snapshot.mqtt_connected === false`
+- `snapshot.last_error` is a non-empty string
+- `snapshot.last_tick_age_ms >= HEALTH_TICK_AGE_MAX_MS` (5000ms; a render loop whose last tick was 5s ago has been silent for an entire publish cycle)
+
+Health MUST be `"healthy"` otherwise. The health threshold constant `HEALTH_TICK_AGE_MAX_MS` MUST be named and exported in `sign_status.js`. The server MUST NOT be involved in computing health — there is no server-side health field and no HTTP endpoint that returns a computed health value. The browser computes health from the same in-memory snapshot used for state computation.
+
+#### Scenario: Healthy snapshot yields healthy health
+- **WHEN** the snapshot has `mqtt_connected: true`, `last_error: null` (or absent), and `last_tick_age_ms: 500`
+- **THEN** the computed health is `"healthy"`
+
+#### Scenario: MQTT-disconnected snapshot yields degraded health
+- **WHEN** the snapshot has `mqtt_connected: false` (regardless of age or other fields)
+- **THEN** the computed health is `"degraded"`
+
+#### Scenario: Last-error-set snapshot yields degraded health
+- **WHEN** the snapshot has `last_error: "broker disconnected"` (regardless of age or other fields)
+- **THEN** the computed health is `"degraded"`
+
+#### Scenario: Stuck-render-loop snapshot yields degraded health
+- **WHEN** the snapshot has `last_tick_age_ms: 7500` (greater than or equal to `HEALTH_TICK_AGE_MAX_MS`)
+- **THEN** the computed health is `"degraded"`
+
+#### Scenario: Empty last_error is treated as null
+- **WHEN** the snapshot has `last_error: ""` (empty string)
+- **THEN** the computed health is `"healthy"` (empty string is treated as no error)
+
 ### Requirement: Browser re-evaluates state on a local timer
 The browser MUST run a local `setInterval` (5-second cadence) that re-evaluates the sign state from the in-memory snapshot's age and re-renders the Dashboard pill. The interval MUST produce only DOM updates; it MUST NOT make any network requests (no `fetch`, no new WebSocket connections). The interval MUST be cleared when the page is unloaded. The interval is purely a UI re-render cadence — it does not poll the server.
 
@@ -180,24 +208,30 @@ The browser MUST run a local `setInterval` (5-second cadence) that re-evaluates 
 - **THEN** the interval is cleared
 - **AND** no further re-renders occur after navigation
 
-### Requirement: Dashboard "Live" pill reflects the computed state
-The Dashboard page MUST render a "Live" pill whose color, animation, and text reflect the browser-computed state (derived from the snapshot's age — see "Browser computes sign state from snapshot age"). The pill MUST apply the green color and pulse animation and the text "Live" when `state="live"`. The pill MUST apply the amber color and no animation and the text "Unknown" when `state="unknown"`. The pill MUST apply the grey color and no animation and the text "Offline" when `state="offline"`. The threshold values for the state transitions are browser-side policy (defined in `sign_status.js`); there is no HTTP endpoint or server round-trip involved in computing or rendering the state.
+### Requirement: Dashboard "Live" pill reflects the combined state and health
+The Dashboard page MUST render a pill whose color, animation, and text reflect the **combined** browser-computed state and health. The pill MUST apply the green color and pulse animation and the text "Live" when `state="live"` AND `health="healthy"`. The pill MUST apply the amber color and no animation and the text "Degraded" when `state="live"` AND `health="degraded"`. The pill MUST apply the amber color and no animation and the text "Unknown" when `state="unknown"` (regardless of health). The pill MUST apply the grey color and no animation and the text "Offline" when `state="offline"` (regardless of health). The four render states correspond to the four meaningful combinations the operator can act on. The state and health thresholds are browser-side policy (defined in `sign_status.js`); there is no HTTP endpoint or server round-trip involved in computing or rendering.
 
-#### Scenario: Live state shows green pill with pulse
-- **WHEN** the computed state is `"live"`
-- **THEN** the Dashboard "Live" pill has the green color class applied
+#### Scenario: Live and healthy shows green pill with pulse
+- **WHEN** the computed state is `"live"` and the computed health is `"healthy"`
+- **THEN** the Dashboard pill has the green color class applied
 - **AND** the pill has the pulse animation class applied
 - **AND** the pill text reads "Live"
 
-#### Scenario: Unknown state shows amber pill without pulse
+#### Scenario: Live but degraded shows amber "Degraded" pill
+- **WHEN** the computed state is `"live"` and the computed health is `"degraded"`
+- **THEN** the Dashboard pill has the amber color class applied
+- **AND** the pill does NOT have the pulse animation class applied
+- **AND** the pill text reads "Degraded"
+
+#### Scenario: Unknown state shows amber "Unknown" pill
 - **WHEN** the computed state is `"unknown"`
-- **THEN** the Dashboard "Live" pill has the amber color class applied
+- **THEN** the Dashboard pill has the amber color class applied
 - **AND** the pill does NOT have the pulse animation class applied
 - **AND** the pill text reads "Unknown"
 
 #### Scenario: Offline state shows grey "Offline" pill
 - **WHEN** the computed state is `"offline"`
-- **THEN** the Dashboard "Live" pill has the grey color class applied
+- **THEN** the Dashboard pill has the grey color class applied
 - **AND** the pill text reads "Offline"
 
 #### Scenario: Pill updates on each new snapshot
@@ -211,12 +245,18 @@ The Dashboard page MUST render a "Live" pill whose color, animation, and text re
 - **AND** no network requests are issued
 
 ### Requirement: Settings page exposes a read-only Sign Health section
-The Settings page MUST render a new read-only "Sign Health" section at the top of the page that displays the snapshot fields: `active_sha`, `started_at`, `uptime_seconds` (formatted as `Xd Yh Zm`), `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`, and the timestamp the browser received the snapshot. The values MUST update in place when a new snapshot arrives (via the WS subscription) or when the load-time fetch populates the in-memory snapshot. The section MUST show a "No status received yet" placeholder when no snapshot has been received. The section MUST NOT include any form controls — it is read-only. The visibility of the snapshot fields MUST be driven by the computed state: when `state="offline"`, the field slots are hidden and only the placeholder is shown.
+The Settings page MUST render a new read-only "Sign Health" section at the top of the page that displays the snapshot fields: `active_sha`, `started_at`, `uptime_seconds` (formatted as `Xd Yh Zm`), `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`, and the timestamp the browser received the snapshot. The values MUST update in place when a new snapshot arrives (via the WS subscription) or when the load-time fetch populates the in-memory snapshot. The section MUST show a "No status received yet" placeholder when no snapshot has been received. The section MUST NOT include any form controls — it is read-only. The visibility of the snapshot fields MUST be driven by the computed state: when `state="offline"`, the field slots are hidden and only the placeholder is shown. When `health="degraded"`, the section MUST surface a small warning banner at the top of the field table naming the failing health check (e.g., "MQTT disconnected", "Last error: <message>", "Stuck render loop (<last_tick_age_ms>ms)") so the operator can drill in below.
 
-#### Scenario: Snapshot fields render on Settings page when state is live
-- **WHEN** the computed state is `"live"` and a snapshot is in memory
+#### Scenario: Snapshot fields render on Settings page when state is live and healthy
+- **WHEN** the computed state is `"live"` and the computed health is `"healthy"` and a snapshot is in memory
 - **THEN** the Settings page shows the running SHA, started_at timestamp, uptime (formatted), MQTT-connected flag, last-tick age, messages-rendered count, and last-error value
 - **AND** the section shows the browser-side timestamp of when the snapshot was received
+- **AND** no degraded warning banner is shown
+
+#### Scenario: Snapshot fields render on Settings page when state is live but degraded
+- **WHEN** the computed state is `"live"` and the computed health is `"degraded"` (e.g., `mqtt_connected: false`) and a snapshot is in memory
+- **THEN** the Settings page shows the snapshot fields
+- **AND** the section shows a degraded warning banner naming the failing health check (e.g., "MQTT disconnected")
 
 #### Scenario: Snapshot fields render when state is unknown
 - **WHEN** the computed state is `"unknown"` and a snapshot is in memory
@@ -230,6 +270,7 @@ The Settings page MUST render a new read-only "Sign Health" section at the top o
 #### Scenario: Snapshot updates in place without page reload
 - **WHEN** a new snapshot is received on `MQTT_STATUS_TOPIC`
 - **THEN** the Sign Health section's field values are replaced in place
+- **AND** the degraded warning banner (if previously shown) is replaced in place based on the new health value
 - **AND** the page does not navigate or reload
 
 ### Requirement: MQTT_STATUS_TOPIC is configurable via settings.toml and env
@@ -252,6 +293,24 @@ The status topic MUST be configurable via `MQTT_STATUS_TOPIC` in both `heart-mes
 - **WHEN** the Flask app serves any page with the `window.APP_CONFIG` block
 - **THEN** `window.APP_CONFIG.mqttStatusTopic` contains the resolved status topic
 - **AND** `sign_status.js` reads it from `window.APP_CONFIG.mqttStatusTopic` (not from a hardcoded value)
+
+### Requirement: Loader BOOT_HOLD_S matches the new 5-second cadence
+The loader's `BOOT_HOLD_S` constant MUST be updated from `8.0` to `17.0` to match the new 5-second `.status.json` write cadence. The new value allows 3 missed writes (3×5s = 15s of silence) plus 2s of slack before failing. The 17s hold gives the loader the same "3 consecutive writes" confidence that the dashboard pill's 15s `live` window reflects (3 missed publishes = 15s). The loader MUST continue to use `.status.json` mtime as its sole health-check signal; this change does NOT add MQTT-based loader logic. The atomic `os.replace` semantics of the file write MUST be unchanged.
+
+#### Scenario: Loader accepts 3 missed writes at new cadence
+- **WHEN** `.status.json` is written at second 0, second 5, and second 10, then nothing for 17 seconds
+- **THEN** the loader's hold timer does not fail (3 fresh writes were observed within the 17s window)
+- **AND** the next read at second 17 finds the file mtime is 7s old (within the 15s live window)
+
+#### Scenario: Loader fails after 3 consecutive missed writes
+- **WHEN** the last 3 expected `.status.json` writes (15s, 20s, 25s) do not land
+- **THEN** the loader's hold timer fails at second 27 (17s after the last successful write)
+- **AND** the loader's existing swap logic proceeds as if the app were dead
+
+#### Scenario: Loader BOOT_HOLD_S value is exactly 17.0
+- **WHEN** the loader is initialized
+- **THEN** the constant `BOOT_HOLD_S` in `heart-matrix-controller/loader.py` is `17.0`
+- **AND** the value is documented in a comment as "3× status.json writes (5s each) + 2s slack"
 
 ### Requirement: Status publish does not regress .status.json or envelope publish
 The existing `.status.json` write cadence moves from 3 seconds to 5 seconds (unified with the new MQTT status publish cadence). The atomic `os.replace` semantics MUST remain unchanged. The existing `MessageEnvelope` publish path on `MQTT_TOPIC` MUST remain unchanged. A status publish failure MUST NOT prevent subsequent envelope publishes or `.status.json` writes. The status publish MUST be on a separate MQTT client invocation from the envelope path (a long-lived paho publisher held open by the render-loop process), and MUST NOT share a long-lived publisher with the envelope path.
