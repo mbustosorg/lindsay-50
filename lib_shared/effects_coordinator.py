@@ -514,6 +514,34 @@ class EffectsCoordinator:
         explicit `apply_settings` call needed. Config updates land
         at most one frame later.
         """
+        # DEBUG: outer try/except. The inner render-block try/except
+        # at the bottom of tick() catches render-time exceptions, but
+        # the state-machine body above can also throw (e.g. config is
+        # None mid-flight, current_messages empty, etc.). Wrap the
+        # whole body so any exception reaches the journal via os.write
+        # to fd 1 (bypassing print/logger) AND /tmp/coordinator-exception.log.
+        # Re-raise so the main loop's existing (KeyboardInterrupt,
+        # SystemExit) handler still runs.
+        try:
+            _tick_inner()
+        except BaseException as _exc:
+            import traceback as _tb
+            _tb_text = _tb.format_exc()
+            try:
+                os.write(1, f"EXCEPTION in tick body: {_exc!r}\n".encode())
+                os.write(1, _tb_text.encode())
+            except OSError:
+                pass
+            try:
+                with open("/tmp/coordinator-exception.log", "a", buffering=1) as _ef:
+                    _ef.write(f"EXCEPTION call={self._diag_call_count} mode={self.mode}\n")
+                    _ef.write(_tb_text)
+                    _ef.write("\n")
+            except OSError:
+                pass
+            raise
+
+    def _tick_inner(self):
         # File-based diagnostic side-channel (see `_diag_file` in __init__).
         # CRITICAL: this is BEFORE the `is_bound()` check on purpose.
         # 5d9f099 had it inside the guard, and the file was never
@@ -935,9 +963,31 @@ class EffectsCoordinator:
                 )
             except OSError:
                 pass
-        current.tick()
-        scroller.tick(display.width)
-        display.render(current, scroller)
+        # Wrap the render block in try/except so any exception
+        # surfaces to the journal via os.write() rather than being
+        # swallowed by Python's default exception printer (which may
+        # itself be silenced if stdout is hijacked). Also writes the
+        # traceback to /tmp/coordinator-exception.log for forensics.
+        try:
+            current.tick()
+            scroller.tick(display.width)
+            display.render(current, scroller)
+        except BaseException as _exc:
+            import traceback as _tb
+            _tb_text = _tb.format_exc()
+            try:
+                os.write(1, f"EXCEPTION in render block: {_exc!r}\n".encode())
+                os.write(1, _tb_text.encode())
+            except OSError:
+                pass
+            try:
+                with open("/tmp/coordinator-exception.log", "a", buffering=1) as _ef:
+                    _ef.write(f"EXCEPTION call={self._diag_call_count} mode={self.mode}\n")
+                    _ef.write(_tb_text)
+                    _ef.write("\n")
+            except OSError:
+                pass
+            raise
         if _now_render - self._diag_last_print >= 1.0:
             try:
                 os.write(
