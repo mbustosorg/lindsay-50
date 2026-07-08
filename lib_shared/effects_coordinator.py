@@ -510,7 +510,17 @@ class EffectsCoordinator:
         # The cached value drives the state-machine transitions.
         if now - self._last_message_pull >= self._PULL_INTERVAL:
             new_text = self.get_display_message()
-            if new_text != self._last_display_message:
+            # Only log when the new pick would actually change the sign —
+            # both differs-from-last-shown (so a transition is about to
+            # happen) and differs-from-last-pull (so the line carries new
+            # info). A bare `new_text != _last_display_message` fires on
+            # essentially every pull because random.choice over a 10-entry
+            # pool returns a different body 90% of the time, even when
+            # nothing about the sign's behavior will change.
+            if (
+                new_text != self._last_display_message
+                and new_text != self.last_shown_text
+            ):
                 log.info(
                     "Coordinator pull changed: prev=%r new=%r last_shown_id=%s",
                     self._last_display_message, new_text, self._last_shown_message_id,
@@ -654,10 +664,25 @@ class EffectsCoordinator:
             fresh_id_landed = bool(
                 entries_bg and entries_bg[0].message.id not in self._consumed_message_ids
             )
-            random_pick_changed = bool(text) and text != self.last_shown_text
-            idle_timed_out = (
+            # `random_pick_changed` is gated on having idled for at least
+            # `idle_seconds`. Without this gate, the naive
+            # `text != last_shown_text` check fires on essentially every
+            # pull because random.choice over the recent pool returns a
+            # different body than `last_shown_text` ~90% of the time —
+            # making background→out trigger ~250ms after entering
+            # background instead of after the configured idle window.
+            # The new-id interrupt (above) is unaffected — an SMS the
+            # operator just sent kicks a fade immediately regardless of
+            # how long background has been running.
+            idle_elapsed = (
                 now - self.phase_start >= effects_settings.idle_seconds
             )
+            random_pick_changed = (
+                idle_elapsed
+                and bool(text)
+                and text != self.last_shown_text
+            )
+            idle_timed_out = idle_elapsed
             if fresh_id_landed or random_pick_changed or idle_timed_out:
                 trigger = (
                     "new_id" if fresh_id_landed

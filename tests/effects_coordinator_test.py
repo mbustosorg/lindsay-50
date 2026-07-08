@@ -864,3 +864,73 @@ def test_background_re_rolls_on_fresh_id(caplog):
         "After background→out (new_id), out→in should follow and set scroller text."
     )
     monkey.undo()
+
+
+def test_background_does_not_repick_before_idle_seconds(caplog):
+    """Regression: random_pick_changed must NOT trigger a fade-out
+    before idle_seconds has elapsed.
+
+    Pre-fix bug (2026-07-08): `random_pick_changed = bool(text) and
+    text != self.last_shown_text` fired on essentially every pull
+    because random.choice over a 10-entry recent pool returns a
+    different body than last_shown_text ~90% of the time. Result
+    was that background→out fired within 250 ms of entering
+    background, making idle_seconds a meaningless knob (the sign
+    cycled every ~16 s instead of every ~idle_seconds).
+
+    This test seeds the buffer with two messages so random.choice
+    has different bodies to pick from, drains to background, then
+    verifies NO background→out log fires during a sub-idle
+    duration. The 1-second idle window is intentionally well
+    larger than the sub-idle advance (0.5 s) so a regression
+    that drops the idle gate would fire here while the fixed
+    version does not.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="first", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="second", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1, msg2])
+    coord, *_ = _build(
+        intro_seconds=0.0,
+        fade_seconds=0.05,
+        hold_seconds=0.05,
+        idle_seconds=1.0,
+        message_manager=mgr,
+    )
+    coord.start()
+
+    caplog.set_level(logging.INFO)
+    _drive(clock, coord, 0.3)
+    assert coord.mode == "background", (
+        f"Setup should land in background; got {coord.mode!r}"
+    )
+
+    # Sub-idle advance: 0.5 s of ticks, well under idle_seconds=1.0.
+    # random.choice over [msg1, msg2] will pick different bodies each
+    # pull (50% chance of difference; with N pulls the probability of
+    # at least one different pick approaches 1 — and the previous
+    # last_shown_text was set during the out→in that brought us here
+    # so almost every pull picks a different body than that).
+    _drive(clock, coord, 0.5)
+    assert coord.mode == "background", (
+        f"After 0.5 s in background with idle_seconds=1.0, must still "
+        f"be in background; got {coord.mode!r}. random_pick_changed "
+        f"is firing before idle_seconds elapses."
+    )
+
+    repick_matches = _info_records(caplog, "background→out", "random_repick")
+    assert not repick_matches, (
+        "random_repick must not fire inside the idle window. "
+        "If this fires, the idle_elapsed gate on random_pick_changed was removed."
+    )
+    monkey.undo()
