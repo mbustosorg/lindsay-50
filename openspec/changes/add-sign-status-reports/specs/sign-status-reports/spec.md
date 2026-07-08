@@ -1,13 +1,16 @@
 ## ADDED Requirements
 
 ### Requirement: Pi publishes StatusSnapshot over MQTT on a dedicated status topic
-The Pi MUST publish a serialized `StatusSnapshot` to a dedicated MQTT status topic at a wall-clock cadence of 5 seconds (±1 second). The publish MUST use QoS 0 (fire-and-forget) so a slow broker cannot stall the render loop. The publish MUST run on a long-lived paho publisher (single `mqtt.Client` held open by the render-loop process via `loop_start()`); `client.publish()` is thread-safe and enqueues into the outgoing buffer without blocking the caller. The wire payload MUST be a JSON object with the following keys: `schema_version`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`. The `pid` field MUST NOT appear in the wire payload. The publish cadence MUST be unified with the existing `.status.json` file write cadence: both writes happen in the same `StatusWriter.tick()` method.
+The Pi MUST publish a serialized `StatusSnapshot` to a dedicated MQTT status topic at a wall-clock cadence of 5 seconds (±1 second). The publish MUST use QoS 0 (fire-and-forget) so a slow broker cannot stall the render loop. The publish MUST run on a long-lived paho publisher (single `mqtt.Client` held open by the render-loop process via `loop_start()`); `client.publish()` is thread-safe and enqueues into the outgoing buffer without blocking the caller. The wire payload MUST be a JSON object with the following keys: `schema_version`, `active_sha`, `short_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_error`. The `pid`, `messages_rendered`, and `last_tick_age_ms` fields MUST NOT appear in the wire payload (they have no consumer and are dropped across the whole system). The `short_sha` field MUST be the first 7 characters of `active_sha` (or an empty string when `active_sha` is empty); the derivation lives in `lib_shared.boot_config.short_sha` and is called at write time, never recomputed by consumers. The `uptime_seconds` field MUST be an integer number of seconds (truncated, not rounded — fractional seconds are noise in a 5s heartbeat). The publish cadence MUST be unified with the existing `.status.json` file write cadence: both writes happen in the same `StatusWriter.tick()` method. The wire payload shape is the same as the `.status.json` file shape — there is no separate MQTT serializer.
 
 #### Scenario: Pi publishes on the 5-second cadence
 - **WHEN** 5 seconds have elapsed since the previous status publish
 - **THEN** the Pi publishes a fresh `StatusSnapshot` JSON payload to the configured `MQTT_STATUS_TOPIC` at QoS 0
-- **AND** the payload contains the keys `schema_version`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`
+- **AND** the payload contains the keys `schema_version`, `active_sha`, `short_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_error`
 - **AND** the payload does NOT contain a `pid` key
+- **AND** the payload does NOT contain a `messages_rendered` key
+- **AND** the payload does NOT contain a `last_tick_age_ms` key
+- **AND** `uptime_seconds` is an integer (e.g., `90061`, not `90061.42`)
 
 #### Scenario: Publish continues when broker is unreachable
 - **WHEN** the broker is unreachable and a status publish attempt fails
@@ -20,7 +23,7 @@ The Pi MUST publish a serialized `StatusSnapshot` to a dedicated MQTT status top
 - **THEN** the next render-loop tick fires on its normal cadence (no perceptible delay)
 
 ### Requirement: Flask server subscribes to the status topic and keeps the latest snapshot
-The Flask server MUST subscribe to `MQTT_STATUS_TOPIC` (in addition to its existing `MQTT_TOPIC` subscription). For each payload received on the status topic, Flask MUST JSON-parse the payload, validate that the required keys are present (`schema_version`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`), and store the decoded payload in an in-memory `LatestSignStatus` store guarded by `threading.RLock`. A malformed payload or a payload missing required keys MUST be logged at WARN level and MUST NOT replace the in-memory snapshot. Flask MUST keep only the most recent snapshot; historical snapshots are not retained. The Flask subscription to `MQTT_STATUS_TOPIC` is independent of the envelope subscription — a status-subscribe failure MUST NOT affect the envelope subscription and vice versa.
+The Flask server MUST subscribe to `MQTT_STATUS_TOPIC` (in addition to its existing `MQTT_TOPIC` subscription). For each payload received on the status topic, Flask MUST JSON-parse the payload, validate that the required keys are present (`schema_version`, `active_sha`, `short_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_error`), and store the decoded payload in an in-memory `LatestSignStatus` store guarded by `threading.RLock`. A malformed payload or a payload missing required keys MUST be logged at WARN level and MUST NOT replace the in-memory snapshot. Flask MUST keep only the most recent snapshot; historical snapshots are not retained. The Flask subscription to `MQTT_STATUS_TOPIC` is independent of the envelope subscription — a status-subscribe failure MUST NOT affect the envelope subscription and vice versa.
 
 #### Scenario: Flask receives and stores a valid snapshot
 - **WHEN** a JSON payload with the required keys arrives on `MQTT_STATUS_TOPIC`
@@ -113,7 +116,7 @@ The browser MUST subscribe to `MQTT_STATUS_TOPIC` via a second `createMqttWsClie
 - **AND** the status-WS connection continues to receive `MQTT_STATUS_TOPIC` messages without interruption
 
 ### Requirement: Browser decodes each status message into a snapshot
-For each payload received on `MQTT_STATUS_TOPIC`, the browser MUST decode the payload as a UTF-8 JSON object and store it as the latest snapshot. The browser MUST validate that the payload contains the required keys (`schema_version`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`); a payload missing required keys or not valid JSON MUST be logged at WARN level and MUST NOT replace the in-memory snapshot. The browser MUST keep only the most recent snapshot; historical snapshots are not retained.
+For each payload received on `MQTT_STATUS_TOPIC`, the browser MUST decode the payload as a UTF-8 JSON object and store it as the latest snapshot. The browser MUST validate that the payload contains the required keys (`schema_version`, `active_sha`, `short_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_error`); a payload missing required keys or not valid JSON MUST be logged at WARN level and MUST NOT replace the in-memory snapshot. The browser MUST keep only the most recent snapshot; historical snapshots are not retained.
 
 #### Scenario: Browser receives and stores a valid snapshot
 - **WHEN** a JSON payload with the required keys arrives on `MQTT_STATUS_TOPIC`
@@ -158,12 +161,11 @@ The browser MUST compute the sign's state as one of `"live"`, `"unknown"`, or `"
 The browser MUST compute the sign's health as one of `"healthy"` or `"degraded"` from the snapshot's contents. Health MUST be `"degraded"` if ANY of the following is true:
 - `snapshot.mqtt_connected === false`
 - `snapshot.last_error` is a non-empty string
-- `snapshot.last_tick_age_ms >= HEALTH_TICK_AGE_MAX_MS` (5000ms; a render loop whose last tick was 5s ago has been silent for an entire publish cycle)
 
-Health MUST be `"healthy"` otherwise. The health threshold constant `HEALTH_TICK_AGE_MAX_MS` MUST be named and exported in `sign_status.js`. The server MUST NOT be involved in computing health — there is no server-side health field and no HTTP endpoint that returns a computed health value. The browser computes health from the same in-memory snapshot used for state computation.
+Health MUST be `"healthy"` otherwise. The server MUST NOT be involved in computing health — there is no server-side health field and no HTTP endpoint that returns a computed health value. The browser computes health from the same in-memory snapshot used for state computation. (The `last_tick_age_ms` signal was dropped from the snapshot — the bookkeeping that would have produced a real value was never wired up, so the field always read 0 and acted as a false-negative health check. The remaining two signals — MQTT-connected flag and last-error string — are sufficient: a stuck render loop is visible through `last_error` propagation, and an offline broker is visible through `mqtt_connected`.)
 
 #### Scenario: Healthy snapshot yields healthy health
-- **WHEN** the snapshot has `mqtt_connected: true`, `last_error: null` (or absent), and `last_tick_age_ms: 500`
+- **WHEN** the snapshot has `mqtt_connected: true` and `last_error: null` (or absent)
 - **THEN** the computed health is `"healthy"`
 
 #### Scenario: MQTT-disconnected snapshot yields degraded health
@@ -172,10 +174,6 @@ Health MUST be `"healthy"` otherwise. The health threshold constant `HEALTH_TICK
 
 #### Scenario: Last-error-set snapshot yields degraded health
 - **WHEN** the snapshot has `last_error: "broker disconnected"` (regardless of age or other fields)
-- **THEN** the computed health is `"degraded"`
-
-#### Scenario: Stuck-render-loop snapshot yields degraded health
-- **WHEN** the snapshot has `last_tick_age_ms: 7500` (greater than or equal to `HEALTH_TICK_AGE_MAX_MS`)
 - **THEN** the computed health is `"degraded"`
 
 #### Scenario: Empty last_error is treated as null
@@ -245,11 +243,11 @@ The Dashboard page MUST render a pill whose color, animation, and text reflect t
 - **AND** no network requests are issued
 
 ### Requirement: Settings page exposes a read-only Sign Health section
-The Settings page MUST render a new read-only "Sign Health" section at the top of the page that displays the snapshot fields: `active_sha`, `started_at`, `uptime_seconds` (formatted as `Xd Yh Zm`), `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`, and the timestamp the browser received the snapshot. The values MUST update in place when a new snapshot arrives (via the WS subscription) or when the load-time fetch populates the in-memory snapshot. The section MUST show a "No status received yet" placeholder when no snapshot has been received. The section MUST NOT include any form controls — it is read-only. The visibility of the snapshot fields MUST be driven by the computed state: when `state="offline"`, the field slots are hidden and only the placeholder is shown. When `health="degraded"`, the section MUST surface a small warning banner at the top of the field table naming the failing health check (e.g., "MQTT disconnected", "Last error: <message>", "Stuck render loop (<last_tick_age_ms>ms)") so the operator can drill in below.
+The Settings page MUST render a new read-only "Sign Health" section at the top of the page that displays the snapshot fields: `active_sha`, `short_sha`, `started_at`, `uptime_seconds` (formatted as `Xd Yh Zm`), `mqtt_connected`, `last_error`, and the timestamp the browser received the snapshot. The values MUST update in place when a new snapshot arrives (via the WS subscription) or when the load-time fetch populates the in-memory snapshot. The section MUST show a "No status received yet" placeholder when no snapshot has been received. The section MUST NOT include any form controls — it is read-only. The visibility of the snapshot fields MUST be driven by the computed state: when `state="offline"`, the field slots are hidden and only the placeholder is shown. When `health="degraded"`, the section MUST surface a small warning banner at the top of the field table naming the failing health check (e.g., "MQTT disconnected", "Last error: <message>") so the operator can drill in below.
 
 #### Scenario: Snapshot fields render on Settings page when state is live and healthy
 - **WHEN** the computed state is `"live"` and the computed health is `"healthy"` and a snapshot is in memory
-- **THEN** the Settings page shows the running SHA, started_at timestamp, uptime (formatted), MQTT-connected flag, last-tick age, messages-rendered count, and last-error value
+- **THEN** the Settings page shows the running SHA (full + short), started_at timestamp, uptime (formatted), MQTT-connected flag, and last-error value
 - **AND** the section shows the browser-side timestamp of when the snapshot was received
 - **AND** no degraded warning banner is shown
 
