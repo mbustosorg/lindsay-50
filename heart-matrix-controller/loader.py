@@ -83,6 +83,17 @@ FETCH_REFSPEC = "+refs/heads/*:refs/remotes/origin/*"
 # boot sequence for more than ~30s.
 DEFAULT_FETCH_TIMEOUT_S = 30.0
 
+# Worktree pruning — cap on the number of historical `v-<sha>` dirs
+# the loader keeps on disk. `current` is always preserved (so a
+# rollback or in-flight deploy never loses its target); the rest are
+# removed by mtime, newest-first. The default of 3 leaves current +
+# previous + one spare for offline inspection. Without this, the
+# bare repo's worktree metadata accumulates entries forever — on a
+# 15 GB Pi SD card, ~28 deploys × 203 MB/worktree filled the rootfs
+# and journald started logging `[Errno 28] No space left on device`
+# (2026-07-08).
+DEFAULT_KEEP_WORKTREES = 3
+
 
 # ---------------------------------------------------------------------------
 # Custom exceptions (typed so callers can catch specific failures)
@@ -159,6 +170,25 @@ def stage_version(repo_dir: Path, expected_sha: str) -> Path:
     be editing files on the Pi). On any other failure (network
     down, missing commit), raises `StageError` with stderr.
     """
+    # Clear stale worktree registrations before adding. Without this,
+    # `git worktree add <new-sha>` fails with "missing but already
+    # registered worktree" if a prior version's dir was rm'd
+    # externally (e.g., the 2026-07-08 disk-fill recovery rm'd
+    # `v-b258aa2/` but left `.git/worktrees/v-b258aa2/gitdir`
+    # pointing at the now-missing path). `prune` is a no-op when
+    # there's nothing to clean, so it's safe to call every stage.
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "worktree", "prune"],
+            check=False,  # prune returns 1 when nothing to prune; that's fine
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except Exception as exc:
+        # Hygiene, not a deploy gate — log and continue.
+        logger.warning("loader: git worktree prune before stage failed: %s", exc)
+
     target = worktree_dir(repo_dir, expected_sha)
     if target.exists():
         logger.info("loader: worktree %s already exists, skipping stage", target)
@@ -274,6 +304,108 @@ def refresh_bare_repo(
     ) as exc:
         logger.warning("loader: fetch from %s failed: %s", remote, exc)
         return False
+
+
+def prune_worktrees(
+    repo_dir: Path,
+    *,
+    keep: int = DEFAULT_KEEP_WORKTREES,
+) -> None:
+    """Cap on-disk worktree count so the bare repo can't fill the SD card.
+
+    Two operations, in order:
+
+      1. `git worktree prune` — clears `.git/worktrees/` entries for
+         directories that no longer exist on disk. The metadata-only
+         step (no-op when nothing is stale). `stage_version` already
+         runs this inline before `worktree add`; running it here too
+         covers callers that invoke this function standalone (tests,
+         recovery scripts).
+
+      2. `git worktree remove --force` for each `v-<sha>/` directory
+         beyond the last `keep` (by mtime, newest-first), always
+         preserving whatever `current` points at. The bare repo's
+         refdb keeps every commit we've ever fetched, but the
+         worktree dirs themselves are working copies and not needed
+         once the SHA they're pinned to is no longer `current`.
+
+    Failures (git missing, permission errors, a worktree that's
+    locked for some other reason) are logged but never raised —
+    pruning is hygiene, not a deploy gate. A failed prune means
+    we'll try again on the next deploy, which is the right
+    posture: the deploy should never be blocked by cleanup that
+    doesn't affect correctness.
+    """
+    # Step 1: clear stale worktree metadata.
+    try:
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "worktree", "prune"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except Exception as exc:
+        logger.warning("loader: git worktree prune failed: %s", exc)
+        return
+
+    # Step 2: remove v-<sha>/ dirs beyond the last `keep`.
+    try:
+        cur_link = repo_dir / "current"
+        current_name: Optional[str] = None
+        if cur_link.is_symlink() or cur_link.exists():
+            try:
+                current_name = cur_link.resolve().name
+            except OSError:
+                # Broken symlink — leave the keep-set empty of `current`;
+                # the sort by mtime still gives a deterministic pick.
+                pass
+
+        v_dirs = [
+            p for p in repo_dir.iterdir()
+            if p.is_dir() and p.name.startswith("v-")
+        ]
+        # Newest first by mtime; on Linux ext4 mtime resolution is
+        # good enough to distinguish sequential deploys.
+        v_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+
+        keep_set: set[str] = set()
+        if current_name:
+            keep_set.add(current_name)
+        # Pad with the (keep - len(keep_set)) newest by mtime so we
+        # always preserve `current` even if its mtime isn't among the
+        # very newest.
+        headroom = max(0, keep - len(keep_set))
+        for p in v_dirs[:headroom]:
+            keep_set.add(p.name)
+
+        for v in v_dirs:
+            if v.name in keep_set:
+                continue
+            try:
+                subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(repo_dir),
+                        "worktree",
+                        "remove",
+                        "--force",
+                        str(v),
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                )
+                logger.info("loader: pruned old worktree %s", v.name)
+            except subprocess.CalledProcessError as exc:
+                stderr_text = exc.stderr.decode(errors="replace") if exc.stderr else ""
+                logger.warning(
+                    "loader: failed to prune %s: %s", v.name, stderr_text,
+                )
+    except Exception as exc:
+        logger.warning("loader: prune_worktrees raised: %s", exc)
 
 
 def atomic_swap(repo_dir: Path, expected_sha: str) -> None:
@@ -565,6 +697,7 @@ def run_upgrade_flow(
     probe_fn: Callable[..., bool] = probe,
     swap_fn: Callable[[Path, str], None] = atomic_swap,
     exec_fn: Callable[..., None] = exec_active,
+    prune_fn: Callable[[Path], None] = prune_worktrees,
 ) -> None:
     """Decide whether to stage + probe + swap + exec, or fall through.
 
@@ -622,6 +755,11 @@ def run_upgrade_flow(
         return
 
     swap_fn(repo_dir, expected)
+    # Cap the on-disk worktree count to `keep` after a successful
+    # swap — every successful deploy is the natural cadence for
+    # cleanup, and we always keep `current` (just swapped) so the
+    # prune can never undo the deploy that just happened.
+    prune_fn(repo_dir)
     logger.info("loader: swapped to %s; exec'ing", short_sha(expected))
     exec_fn(repo_dir, expected)
 

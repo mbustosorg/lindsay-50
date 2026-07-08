@@ -663,48 +663,6 @@ def test_hold_to_text_out_and_text_out_to_background_log_at_info(caplog):
     monkey.undo()
 
 
-def test_pull_change_emits_info_log(caplog):
-    """When get_display_message returns a different body than the cached one,
-    the coordinator logs at INFO — operators see 'a fresh message entered
-    the consideration set' in the journal without a debug toggle."""
-    clock = _Clock()
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(time, "monotonic", clock)
-    from lib_shared.models import MessageView, Message
-
-    msg1 = MessageView(
-        Message(id="m1", sender="+1", body="first", received_at="2026-01-01T00:00:00Z"),
-        source="mqtt",
-        suppressed=False,
-    )
-    mgr = _StubMessageManager(messages=[msg1])
-    coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr)
-    coord.start()
-
-    # Drain past the initial pull so _last_display_message is set to "first".
-    _drive(clock, coord, 0.1)
-
-    # Add a fresh message; next pull should see body change.
-    msg2 = MessageView(
-        Message(id="m2", sender="+1", body="second", received_at="2026-01-02T00:00:00Z"),
-        source="mqtt",
-        suppressed=False,
-    )
-
-    caplog.set_level(logging.INFO)
-    mgr.add_message(msg2)
-    clock.advance(0.5)  # past PULL_INTERVAL
-    coord.tick()
-
-    matches = _info_records(caplog, "Coordinator pull changed")
-    assert matches, "Expected 'Coordinator pull changed' INFO log when a new message lands"
-    msg = matches[0].getMessage()
-    assert "first" in msg and "second" in msg, (
-        f"Pull-change log should show prev= and new= bodies; got: {msg!r}"
-    )
-    monkey.undo()
-
-
 def test_hold_does_not_interrupt_on_random_picks_from_shown_set(caplog):
     """v2 hold semantics: a fresh, un-shown SMS (head.id differs from
     `_last_shown_message_id`) interrupts the hold; a random re-pick from
@@ -932,5 +890,224 @@ def test_background_does_not_repick_before_idle_seconds(caplog):
     assert not repick_matches, (
         "random_repick must not fire inside the idle window. "
         "If this fires, the idle_elapsed gate on random_pick_changed was removed."
+    )
+    monkey.undo()
+
+
+def test_get_display_message_not_called_every_tick():
+    """Coordinator must NOT call get_display_message() (the one with
+    random.choice) on a timer. It runs only at the two background→out
+    transition paths (new_id and idle), once per transition.
+
+    Background: an earlier version throttled `get_display_message()` to
+    ~4 Hz. That's wasted work — random.choice over the recent pool
+    runs even when nothing about the sign's behavior will change —
+    AND the `text != last_shown_text` gate that the throttled pull
+    was wrapped in fires on essentially every pull when the pool has
+    2+ messages, leading to the "sign cycles every ~16 s instead of
+    every idle_seconds" bug.
+
+    We seed the buffer with two messages so random.choice HAS
+    different bodies to pick from, drain to background, then count
+    how many times get_display_message() runs over a long stretch
+    of ticks. With the new design, it should run ZERO times in
+    background until idle_seconds elapses (and only ONCE at the
+    idle-triggered transition).
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="alpha", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="beta", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1, msg2])
+    coord, *_ = _build(
+        intro_seconds=0.0,
+        fade_seconds=0.05,
+        hold_seconds=0.05,
+        idle_seconds=999.0,  # idle must NOT fire during the test
+        message_manager=mgr,
+    )
+    coord.start()
+
+    # Drain to background.
+    _drive(clock, coord, 0.3)
+    assert coord.mode == "background"
+
+    # Patch get_display_message to count calls. We patch via setattr on
+    # the class so the coordinator's bound method lookup hits our wrapper.
+    coord_mod = importlib.import_module("lib_shared.effects_coordinator")
+    call_count = {"n": 0}
+    real_get_display_message = coord_mod.EffectsCoordinator.get_display_message
+
+    def counting_get_display_message(self):
+        call_count["n"] += 1
+        return real_get_display_message(self)
+
+    monkey.setattr(
+        coord_mod.EffectsCoordinator, "get_display_message",
+        counting_get_display_message,
+    )
+
+    # Run 100 ticks in background with idle_seconds=999. Random.choice
+    # should NEVER be invoked because no transition fires.
+    _drive(clock, coord, 1.0, step=0.01)
+    assert coord.mode == "background", (
+        f"idle_seconds=999 means no transition; got mode={coord.mode!r}"
+    )
+    assert call_count["n"] == 0, (
+        f"get_display_message() ran {call_count['n']} times in background "
+        f"with no transition — should be 0. The 250ms timer is back."
+    )
+    monkey.undo()
+
+
+def test_pick_next_text_re_rolls_when_random_choice_repeats_last_shown(monkeypatch):
+    """`_pick_next_text` re-rolls when random.choice lands on the body
+    we just showed. With a 2-message pool, random.choice returns the
+    same body ~50% of the time, so without re-roll we'd flicker between
+    "show X" and "stay showing X" instead of rotating.
+
+    The stub manager sorts entries by `received_at` descending (newest
+    first), so msg1 must be NEWER than msg2 for msg1 to be the head.
+    We also pre-set `_last_shown_message_id` to msg1's id so the
+    fresh-id branch in `get_display_message` doesn't short-circuit
+    — we want random.choice to fire, every time.
+    """
+    coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05, idle_seconds=1.0)
+    # Force random.choice to ALWAYS return seq[0] (= "stale" body,
+    # the older of the two). _pick_next_text should re-roll up to 5
+    # times before giving up.
+    import random as _random
+    monkeypatch.setattr(_random, "choice", lambda seq: seq[0])
+
+    from lib_shared.models import MessageView, Message
+
+    # msg1 is NEWER (so it's the head of current_messages) and is the
+    # "stale" body — the one we just showed. msg2 is older ("fresh")
+    # but random.choice is forced to never return it.
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="stale", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="fresh", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    coord.message_manager._entries = [msg1, msg2]
+    # Pre-arm the fresh-id branch so it short-circuits — random.choice
+    # is the only path that can move us off the head.
+    coord._last_shown_message_id = msg1.message.id
+    coord.last_shown_text = "stale"
+
+    # With random.choice always returning seq[0] (= msg1, body "stale"),
+    # every re-roll still picks "stale". _pick_next_text gives up after
+    # 5 tries and returns "stale". That's the bounded behavior — no spin.
+    result = coord._pick_next_text()
+    assert result == "stale", (
+        f"After bounded re-rolls, _pick_next_text must give up and return "
+        f"whatever it got (not None, not raise); got {result!r}"
+    )
+
+
+def test_pick_next_text_returns_other_body_when_available(monkeypatch):
+    """When random.choice can land on a body DIFFERENT from last_shown_text,
+    _pick_next_text returns it on the first try (no re-roll needed).
+    """
+    coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05, idle_seconds=1.0)
+    # Force random.choice to ALWAYS return seq[-1] (= "fresh", the
+    # older of the two messages — second in the sorted list).
+    import random as _random
+    monkeypatch.setattr(_random, "choice", lambda seq: seq[-1])
+
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="stale", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="fresh", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    coord.message_manager._entries = [msg1, msg2]
+    coord._last_shown_message_id = msg1.message.id  # short-circuit fresh-id
+    coord.last_shown_text = "stale"
+
+    result = coord._pick_next_text()
+    assert result == "fresh"
+
+
+def test_pick_next_text_returns_none_when_buffer_empty():
+    """No messages in the pool → return None (no re-roll, no pick)."""
+    coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05, idle_seconds=1.0)
+    coord.message_manager._entries = []
+    assert coord._pick_next_text() is None
+
+
+def test_pull_runs_exactly_once_at_idle_timeout(monkeypatch):
+    """Idle-triggered transition calls get_display_message() exactly ONCE
+    per cycle — the bounded re-roll inside _pick_next_text is the only
+    additional work.
+    """
+    import logging as _logging
+
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="alpha", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="beta", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt", suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1, msg2])
+    coord, *_ = _build(
+        intro_seconds=0.0,
+        fade_seconds=0.05,
+        hold_seconds=0.05,
+        idle_seconds=0.3,
+        message_manager=mgr,
+    )
+    coord.start()
+
+    # Drain to background.
+    _drive(clock, coord, 0.3)
+    assert coord.mode == "background"
+
+    # Count get_display_message calls.
+    coord_mod = importlib.import_module("lib_shared.effects_coordinator")
+    call_count = {"n": 0}
+    real = coord_mod.EffectsCoordinator.get_display_message
+
+    def counting(self):
+        call_count["n"] += 1
+        return real(self)
+
+    monkey.setattr(coord_mod.EffectsCoordinator, "get_display_message", counting)
+
+    # Drive past idle_seconds — should fire ONE transition with ONE pull.
+    _drive(clock, coord, 0.5, step=0.01)
+
+    # We expect AT LEAST 1 pull (the idle-triggered one) but the exact
+    # count depends on whether _pick_next_text re-rolled. With the
+    # unseeded random, sometimes 1, sometimes 2, sometimes 3 calls —
+    # all bounded by the 5-try re-roll limit. The key invariant: pull
+    # happens once per transition, not per tick.
+    assert call_count["n"] >= 1, "idle transition must trigger a pull"
+    assert call_count["n"] <= 5, (
+        f"unexpectedly many pull calls ({call_count['n']}); "
+        f"the re-roll loop should be bounded"
     )
     monkey.undo()

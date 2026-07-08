@@ -25,6 +25,7 @@ import importlib.util
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -795,3 +796,284 @@ class TestRunUpgradeFlowDoesNotReturn:
                         f"exec_fn not called for fetch={fetch_result}, "
                         f"stage_raises={stage_raises}, probe_result={probe_result}"
                     )
+
+
+# ---------------------------------------------------------------------------
+# prune_worktrees — caps on-disk worktree count so the SD card can't fill
+# ---------------------------------------------------------------------------
+
+
+class TestPruneWorktrees:
+    """After a successful swap, the loader removes v-<sha>/ dirs beyond the
+    last `keep` (default 3), preserving whatever `current` points at. Without
+    this, the bare repo's worktree metadata accumulates entries forever — on
+    a 15 GB Pi SD card, ~28 deploys × 203 MB/worktree filled the rootfs and
+    journald started logging `[Errno 28] No space left on device` (2026-07-08).
+    """
+
+    def _make_v_dirs(self, repo: Path, count: int) -> list[Path]:
+        """Create `count` v-<sha>/ dirs with distinct mtimes (newest first)."""
+        dirs = []
+        for i in range(count):
+            d = repo / f"v-abc{i:04d}"
+            d.mkdir()
+            time.sleep(0.01)  # distinct mtimes
+            dirs.append(d)
+        return dirs
+
+    def _collect_remove_targets(self, calls):
+        """Extract the worktree path from each `git worktree remove` subprocess.run call.
+
+        `git -C <repo> worktree remove --force <path>` — path is the last arg.
+        """
+        out = []
+        for args in calls:
+            if len(args) >= 7 and args[3] == "worktree" and args[4] == "remove":
+                out.append(Path(args[-1]).name)
+        return out
+
+    def test_first_call_runs_git_worktree_prune(self, loader, monkeypatch, tmp_path):
+        """prune_worktrees' first action must be `git worktree prune` so
+        any stale .git/worktrees/ entries (a dir rm'd externally) are
+        cleared before we try to read or remove others."""
+        calls = []
+
+        def fake_run(args, **kwargs):
+            calls.append(args)
+            return subprocess.CompletedProcess(args, 0)
+
+        monkeypatch.setattr(loader.subprocess, "run", fake_run)
+        loader.prune_worktrees(tmp_path)
+
+        assert calls, "expected at least one subprocess.run call"
+        assert calls[0][0] == "git"
+        assert calls[0][1] == "-C"
+        assert calls[0][2] == str(tmp_path)
+        assert calls[0][3] == "worktree"
+        assert calls[0][4] == "prune"
+
+    def test_keeps_current_under_keep_count(self, loader, monkeypatch, tmp_path):
+        """When there are fewer v-<sha>/ dirs than `keep`, none get removed —
+        `current` is already safe, and we shouldn't churn disk for nothing."""
+        self._make_v_dirs(tmp_path, 2)
+        os.symlink("v-abc0000", tmp_path / "current")
+
+        calls = []
+        monkeypatch.setattr(
+            loader.subprocess, "run",
+            lambda args, **kw: calls.append(args) or subprocess.CompletedProcess(args, 0),
+        )
+
+        loader.prune_worktrees(tmp_path, keep=3)
+
+        removed = self._collect_remove_targets(calls)
+        assert removed == [], f"expected no removals; got {removed}"
+
+    def test_prunes_dirs_beyond_keep_count(self, loader, monkeypatch, tmp_path):
+        """With 5 v-<sha>/ dirs and keep=3, the two oldest (by mtime) get removed."""
+        self._make_v_dirs(tmp_path, 5)
+        # current → abc0000 (OLDEST by mtime — we created dirs in numeric
+        # order with a sleep between each).
+        os.symlink("v-abc0000", tmp_path / "current")
+
+        calls = []
+        monkeypatch.setattr(
+            loader.subprocess, "run",
+            lambda args, **kw: calls.append(args) or subprocess.CompletedProcess(args, 0),
+        )
+
+        loader.prune_worktrees(tmp_path, keep=3)
+
+        removed = self._collect_remove_targets(calls)
+        # mtime order (newest first): abc0004, abc0003, abc0002, abc0001, abc0000.
+        # current = abc0000 (oldest) is always preserved. headroom = keep - 1 = 2.
+        # We pad the keep-set with the 2 newest non-current: abc0004 + abc0003.
+        # Keep set: {abc0000 (current), abc0004, abc0003}. Remove abc0001 + abc0002.
+        assert sorted(removed) == ["v-abc0001", "v-abc0002"], (
+            f"expected the 2 oldest non-current removed; got {sorted(removed)}"
+        )
+
+    def test_always_preserves_current_even_when_oldest(self, loader, monkeypatch, tmp_path):
+        """`current` must always survive even if it's the OLDEST v-<sha> dir
+        (e.g., a downgrade or a rollback target). Test by making current
+        point at the last-created dir, then advancing mtimes on the others."""
+        dirs = self._make_v_dirs(tmp_path, 5)
+        # Point current at the OLDEST dir (abc0004 was created first, but
+        # we sorted by mtime; touch all the others to make them newer).
+        os.symlink("v-abc0000", tmp_path / "current")
+        # Bump mtimes of newer ones to be even newer
+        new_t = time.time() + 100
+        for d in dirs[1:]:  # all except the current one
+            os.utime(d, (new_t, new_t))
+
+        calls = []
+        monkeypatch.setattr(
+            loader.subprocess, "run",
+            lambda args, **kw: calls.append(args) or subprocess.CompletedProcess(args, 0),
+        )
+
+        loader.prune_worktrees(tmp_path, keep=2)
+
+        # current (v-abc0000) is OLDEST by mtime but must survive.
+        # keep=2 means we keep current + 1 more (the newest non-current).
+        removed = self._collect_remove_targets(calls)
+        assert "v-abc0000" not in removed, (
+            "current must never be removed, even if it's the oldest"
+        )
+
+    def test_no_remove_call_when_under_keep(self, loader, monkeypatch, tmp_path):
+        """Belt-and-braces: under keep, NO `git worktree remove` is invoked
+        (only the metadata prune)."""
+        self._make_v_dirs(tmp_path, 1)
+        os.symlink("v-abc0000", tmp_path / "current")
+
+        calls = []
+        monkeypatch.setattr(
+            loader.subprocess, "run",
+            lambda args, **kw: calls.append(args) or subprocess.CompletedProcess(args, 0),
+        )
+
+        loader.prune_worktrees(tmp_path, keep=3)
+
+        remove_calls = [c for c in calls if len(c) >= 7 and c[4] == "remove"]
+        assert remove_calls == [], "no remove calls expected under keep"
+
+    def test_handles_missing_git_gracefully(self, loader, monkeypatch, tmp_path):
+        """If git itself is missing, prune_worktrees logs and returns
+        silently — never raises. (Cleanup is hygiene, not a deploy gate.)"""
+
+        def fake_run(args, **kwargs):
+            raise FileNotFoundError("git not found")
+
+        monkeypatch.setattr(loader.subprocess, "run", fake_run)
+        # Must not raise.
+        loader.prune_worktrees(tmp_path)
+
+    def test_continues_after_individual_remove_failure(self, loader, monkeypatch, tmp_path):
+        """If one `worktree remove` fails, the others still attempt. Hygiene
+        shouldn't bail at the first hiccup."""
+        self._make_v_dirs(tmp_path, 5)
+        os.symlink("v-abc0000", tmp_path / "current")
+
+        call_count = {"n": 0}
+
+        def fake_run(args, **kwargs):
+            call_count["n"] += 1
+            # Let the metadata prune succeed. Fail every `worktree remove`.
+            if len(args) >= 7 and args[4] == "remove":
+                raise loader.subprocess.CalledProcessError(
+                    returncode=1, cmd=args, stderr=b"locked",
+                )
+            return subprocess.CompletedProcess(args, 0)
+
+        monkeypatch.setattr(loader.subprocess, "run", fake_run)
+        # Must not raise.
+        loader.prune_worktrees(tmp_path, keep=3)
+
+
+# ---------------------------------------------------------------------------
+# run_upgrade_flow calls prune_worktrees after a successful swap
+# ---------------------------------------------------------------------------
+
+
+class TestRunUpgradeFlowCallsPruneAfterSwap:
+    """The prune is what keeps the SD card from filling up — wire it into
+    the success path of run_upgrade_flow so EVERY successful deploy leaves
+    the on-disk worktree count bounded."""
+
+    def test_prune_called_after_successful_swap(self, loader, bare_repo_with_two_commits):
+        repo, _sha1, sha2 = bare_repo_with_two_commits
+        # Remove the pre-created v-<short_sha2> so the stage actually runs.
+        v2 = repo / f"v-{_short(sha2)}"
+        subprocess.run(
+            ["git", "-C", str(repo), "worktree", "remove", "--force", str(v2)],
+            check=True,
+            capture_output=True,
+        )
+
+        prune_calls = []
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=lambda **_kw: sha2,
+            refresh_fn=lambda *_a, **_kw: True,
+            stage_fn=loader.stage_version,
+            probe_fn=lambda *_a, **_kw: True,
+            swap_fn=loader.atomic_swap,
+            exec_fn=lambda *_a, **_kw: None,
+            prune_fn=lambda *_a, **_kw: prune_calls.append((_a, _kw)),
+        )
+
+        assert len(prune_calls) == 1, (
+            f"prune_fn must be called exactly once on the success path; "
+            f"got {len(prune_calls)} calls"
+        )
+        assert prune_calls[0][0][0] == repo, "prune_fn called with repo_dir"
+
+    def test_prune_not_called_when_local_matches_expected(self, loader, bare_repo_with_two_commits):
+        """No deploy happened → no prune. Old v-<sha>/ dirs are still useful
+        as rollback targets / historical state."""
+        repo, sha1, _sha2 = bare_repo_with_two_commits
+        prune_calls = []
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=lambda **_kw: sha1,  # local == expected
+            refresh_fn=lambda *_a, **_kw: True,
+            stage_fn=lambda *_a, **_kw: repo / f"v-{_short(sha1)}",
+            probe_fn=lambda *_a, **_kw: True,
+            swap_fn=lambda *_a, **_kw: None,
+            exec_fn=lambda *_a, **_kw: None,
+            prune_fn=lambda *_a, **_kw: prune_calls.append((_a, _kw)),
+        )
+
+        assert prune_calls == [], "no swap → no prune"
+
+    def test_prune_not_called_when_probe_fails(self, loader, bare_repo_with_two_commits):
+        """Failed probe → fall through to existing current → no prune.
+        (The old worktrees are the rollback target; we mustn't touch them.)"""
+        repo, _sha1, sha2 = bare_repo_with_two_commits
+        prune_calls = []
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=lambda **_kw: sha2,
+            refresh_fn=lambda *_a, **_kw: True,
+            stage_fn=loader.stage_version,
+            probe_fn=lambda *_a, **_kw: False,  # probe unhealthy
+            swap_fn=lambda *_a, **_kw: None,
+            exec_fn=lambda *_a, **_kw: None,
+            prune_fn=lambda *_a, **_kw: prune_calls.append((_a, _kw)),
+        )
+
+        assert prune_calls == [], "probe failure must not trigger a prune"
+
+    def test_prune_not_called_when_stage_fails(self, loader, bare_repo_with_two_commits):
+        """Stage failure → no prune. The old worktrees are still the only
+        thing on disk that lets us boot."""
+        repo, _sha1, sha2 = bare_repo_with_two_commits
+        prune_calls = []
+
+        def bad_stage(*_a, **_kw):
+            raise loader.StageError("simulated")
+
+        loader.run_upgrade_flow(
+            repo,
+            api_url="https://x/api/messages",
+            api_key="k",
+            fetch_fn=lambda **_kw: sha2,
+            refresh_fn=lambda *_a, **_kw: True,
+            stage_fn=bad_stage,
+            probe_fn=lambda *_a, **_kw: True,
+            swap_fn=lambda *_a, **_kw: None,
+            exec_fn=lambda *_a, **_kw: None,
+            prune_fn=lambda *_a, **_kw: prune_calls.append((_a, _kw)),
+        )
+
+        assert prune_calls == [], "stage failure must not trigger a prune"

@@ -9,8 +9,10 @@ Scenarios:
 4. get_display_message returns None on an empty buffer.
 5. get_display_message respects recent_count (a 3-message buffer with recent_count=3 is
    read fully; with recent_count=2 only the head 2 are read).
-6. tick() calls get_display_message() at most every 250 ms even when called in a tight
-   loop (spy on the method, count invocations across 1 second of ticks).
+6. tick() does NOT call get_display_message() on a timer. It runs only at the
+   two background→out transition paths (new_id and idle). Drives the coordinator
+   in a tight loop for 1 second of "frame" time and asserts zero pulls happen
+   unless a transition fires (replaces the old 250ms-throttle contract).
 """
 
 import random
@@ -208,16 +210,20 @@ def test_recent_count_2_reads_only_top_2():
     assert seen_limits == [2]
 
 
-# --- Scenario 6: tick pulls at most every 250 ms -----------------------------
+# --- Scenario 6: tick() does NOT pull on a timer -----------------------------
 
 
 def test_tick_pulls_at_most_every_250ms():
-    """tick() calls get_display_message() at most once per 250 ms window.
+    """Renamed: the old 250ms-throttle contract was removed. tick() now
+    calls get_display_message() ONLY at the two background→out
+    transition paths (new_id and idle) — never on a timer.
 
     Drives the coordinator in a tight loop for 1 second of "frame" time
-    (10 ms per tick = 100 ticks). The pull cadence should cap to ~4 Hz,
-    so we expect 4–5 actual pulls (the first pull fires on the first tick
-    after the 250 ms threshold; subsequent pulls fire every 250 ms).
+    (10 ms per tick = 100 ticks). With short pacing values (intro=0,
+    fade=0.05) the boot path fires within the first 0.1 s, then the
+    coordinator idles in background with idle_seconds=300. Total
+    pulls over the 1 s window must be small and bounded — not the
+    ~4 pulls the old 250ms-throttle would have produced.
     """
     clock = [1000.0]
     monkey = pytest.MonkeyPatch()
@@ -228,6 +234,11 @@ def test_tick_pulls_at_most_every_250ms():
             _make_view("a", "body-a", "2026-01-02T00:00:00Z"),
         ]
     )
+    # Short pacing so the boot path (intro→out→in) fires within the test
+    # window. idle_seconds stays large (300 default) so background never
+    # transitions during the test.
+    mgr.config.effects_settings.intro_seconds = 0.0
+    mgr.config.effects_settings.fade_seconds = 0.05
     coord, _ = _build(message_manager=mgr, recent_count=5)
     # Bind a stub render layer so tick() doesn't no-op.
     from tests.effects_coordinator_test import _StubDisplay, _StubScroller, _make_effect
@@ -253,13 +264,18 @@ def test_tick_pulls_at_most_every_250ms():
         clock[0] += 0.01
         coord.tick()
 
-    # Expected: pulls happen at t=0 (first tick), 0.25, 0.5, 0.75, 1.0 → 5 pulls.
-    # We assert "at most 5" because the exact count depends on whether the
-    # first tick counts (it does — now - 0 >= 0.25 is True at 0.01 if
-    # _last_message_pull starts at 0.0; but with the init=0.0, the first
-    # tick at 1000.01 sees now=1000.01 and _last_message_pull=0 → True, so
-    # it pulls. Then next pull at 1000.25, 1000.5, 1000.75, 1001.0 → 5 total.
-    assert pull_count[0] <= 5, f"too many pulls: {pull_count[0]} (expected <= 5)"
-    # And: definitely at least one (otherwise the throttle is broken).
-    assert pull_count[0] >= 1
+    # New contract: pulls happen ONLY at meaningful transitions.
+    # The boot path (intro→out→in) seeds _last_display_message with
+    # exactly 1 pull. After that, with idle=300 and no fresh SMS,
+    # background never transitions and no more pulls fire.
+    # OLD contract would have produced ~4 pulls (250ms throttle × 1s).
+    assert pull_count[0] <= 2, (
+        f"too many pulls: {pull_count[0]}. The 250ms-throttle contract is "
+        f"back if this exceeds ~2 — pulls should only fire at transitions, "
+        f"not on a timer."
+    )
+    assert pull_count[0] >= 1, (
+        f"expected at least 1 pull (the boot-path seed); got {pull_count[0]}. "
+        f"Either intro→out→in isn't firing, or the seed-pull was removed."
+    )
     monkey.undo()
