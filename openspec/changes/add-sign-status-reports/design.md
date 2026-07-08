@@ -16,9 +16,9 @@ The new `sign-status-reports` capability sits between these: the Pi publishes a 
 
 - The Pi publishes its existing `StatusSnapshot` over MQTT on a dedicated status topic, throttled to a 30s cadence (separate from the 3s `.status.json` write — the loader's file write cadence is unchanged).
 - Flask subscribes to that status topic and keeps the latest snapshot in a `threading.RLock`-guarded in-memory store.
-- `GET /api/sign-status` returns the latest snapshot (or 204 when stale or never received) and is consumed by both the Dashboard pill and the new Settings-page section.
-- The Dashboard's static "Live" pill becomes real: green when the snapshot is <60s old, amber when 60-120s, grey (with `data-state="unknown"`) when >120s or never received. The pulse animation is preserved for the green state.
-- The Settings page gets a new read-only **Sign Health** section at the top (above "Sign Name") with the snapshot fields and the timestamp Flask received the snapshot.
+- `GET /api/sign-status` returns a **server-determined state enum** plus the latest snapshot in a stable response shape: `{state: "live" | "unsure" | "offline", snapshot: {...} | null, received_at: <iso> | null}`. The thresholds (live: <60s old, unsure: 60-120s, offline: >120s or never) are server-side policy. The endpoint always returns HTTP 200 — the state field carries the meaning that a previous 204 would have.
+- The Dashboard's static "Live" pill becomes real: it reads the server-returned `state` and renders green+pulse ("Live"), amber+no-pulse ("Live"), or grey ("Unknown") accordingly.
+- The Settings page gets a new read-only **Sign Health** section at the top (above "Sign Name") with the snapshot fields and the timestamp Flask received the snapshot. The fields render only when `state != "offline"`.
 
 **Non-Goals:**
 
@@ -29,6 +29,7 @@ The new `sign-status-reports` capability sits between these: the Pi publishes a 
 - No `.status.json` change — the loader's 3s-throttled file write is unchanged; the MQTT publish is a second consumer of the same dataclass.
 - No change to the existing `#mqtt-status` browser-WS pill. That signal stays as it is.
 - No new dependencies. `threading.Timer` and `threading.RLock` are stdlib.
+- **No events/logs topic.** A discrete-event topic (`rebooted`, `upgrading`, `new message received`, etc.) is parked as a separate follow-up change. Reasons: different shape and cadence (discrete appends vs periodic snapshots), different retrieval model (pull-on-demand via AIO REST API vs real-time subscribe — the dashboard pill needs sub-minute freshness; an event log doesn't), and different wire shape (small event dict vs the full snapshot). Adding it to this change would force a third `type` value into the `MessageEnvelope` contract and require every existing envelope consumer to learn to ignore it. The follow-up change adds a third topic (`{MQTT_TOPIC}-events`, default `MQTT_EVENTS_TOPIC`) and a debug-page surface that fetches history from the AIO REST API.
 
 ## Decisions
 
@@ -77,6 +78,16 @@ The browser polls `GET /api/sign-status` every 10s. The cadence is **faster** th
 The dataclass keeps `pid` (the OS-level PID of the running app). The Flask UI doesn't care which OS PID is rendering — it cares about `active_sha`, `started_at`, `uptime_seconds`, `mqtt_connected`, `last_error`. `pid` is host-local and is consumed by the loader for diagnostics, not by Flask. `StatusSnapshot.to_mqtt_dict()` drops it; `StatusSnapshot.to_dict()` (used for `.status.json`) keeps it.
 
 **Alternative considered:** send everything over the wire and let Flask ignore `pid`. Rejected — explicit drop is the documentation; future readers of the wire shape don't wonder "what's this pid field for?"
+
+### 8. Server-determined state enum, not client-computed thresholds
+
+The threshold policy ("when is missing status a concern?") belongs on the server, not the browser. The endpoint returns a `state` enum (`live` / `unsure` / `offline`) computed from `latest_status.age_seconds()` against the live/unsure boundary at 60s and the unsure/offline boundary at 120s. The browser renders the response by mapping the state to a CSS class — it does not compute its own threshold, does not know what "60s" means, and does not have a copy of the threshold constants to keep in sync. If the operator wants to tune the thresholds later (e.g., raise the offline boundary to 5 minutes on a sign with a known flaky broker), the change is one constant in `LatestSignStatus.state()` — no JS rebuild, no browser cache to bust.
+
+**Alternative considered:** return the snapshot + `received_at` and let the JS compute the state on every poll. Rejected — that bakes the threshold into the browser (or into a shared constant that needs redeploying in two places). It also makes the API contract less self-describing: a future caller reading the API docs has to reimplement the threshold logic to interpret the response. The state enum is the documented contract.
+
+**Alternative considered:** return an HTTP status code instead of an enum (200 = live, 200 with stale data = unsure, 204 = offline). Rejected — 204 means "no content," which is technically what "no snapshot" is, but the JS would have to branch on status code (1xx/2xx/3xx/4xx/5xx) instead of reading a typed field. The enum is more explicit, easier to extend (a future `state="degraded"` for "broker connected but mqtt_connected=False" doesn't change the HTTP semantics), and stable across response bodies.
+
+**Threshold defaults:** `live` < 60s, `unsure` 60-120s, `offline` > 120s or never. Hardcoded constants in `LatestSignStatus.state()` for v1, named so future work can lift them into `settings.toml` without renaming.
 
 ## Risks / Trade-offs
 

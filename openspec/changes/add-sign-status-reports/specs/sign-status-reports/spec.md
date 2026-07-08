@@ -37,39 +37,61 @@ Flask MUST subscribe to the status topic and keep the most recently received `St
 - **AND** a reader sees only the third snapshot, never the first or second
 
 ### Requirement: Flask exposes GET /api/sign-status
-Flask MUST expose a `GET /api/sign-status` endpoint that returns the most recent snapshot received within the last 120 seconds. If no snapshot has been received within 120 seconds (or no snapshot has ever been received), the endpoint MUST return HTTP 204 No Content. If a fresh snapshot is available, the endpoint MUST return HTTP 200 OK with the snapshot as a JSON object matching the wire shape.
+Flask MUST expose a `GET /api/sign-status` endpoint that returns a server-determined state enum plus the latest snapshot in a stable response shape: `{state: "live" | "unsure" | "offline", snapshot: {...} | null, received_at: <iso8601> | null}`. The endpoint MUST always return HTTP 200 OK. The state value MUST be computed server-side from the snapshot's age: `state="live"` when the snapshot was received less than 60 seconds ago, `state="unsure"` when 60-120 seconds ago, `state="offline"` when more than 120 seconds ago or no snapshot has ever been received. When `state` is `"offline"`, the `snapshot` field MUST be `null` and the `received_at` field MUST be `null`. When `state` is `"live"` or `"unsure"`, the `snapshot` field MUST contain the deserialized snapshot and the `received_at` field MUST contain the ISO 8601 timestamp Flask received it.
 
-#### Scenario: Fresh snapshot is available
+#### Scenario: Fresh snapshot returns live state
 - **WHEN** a snapshot was received 30 seconds ago
 - **THEN** `GET /api/sign-status` returns HTTP 200
-- **AND** the response body is a JSON object containing the keys `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`, `received_at_flask`
+- **AND** the response body's `state` field is `"live"`
+- **AND** the response body's `snapshot` field is the deserialized snapshot
+- **AND** the response body's `received_at` field is a valid ISO 8601 timestamp
+
+#### Scenario: Stale-but-recent snapshot returns unsure state
+- **WHEN** a snapshot was received 90 seconds ago
+- **THEN** `GET /api/sign-status` returns HTTP 200
+- **AND** the response body's `state` field is `"unsure"`
+- **AND** the response body's `snapshot` field is the deserialized snapshot
 
 #### Scenario: No snapshot has ever been received
 - **WHEN** Flask has just started and no snapshot has arrived
-- **THEN** `GET /api/sign-status` returns HTTP 204
-- **AND** the response body is empty
+- **THEN** `GET /api/sign-status` returns HTTP 200
+- **AND** the response body's `state` field is `"offline"`
+- **AND** the response body's `snapshot` field is `null`
+- **AND** the response body's `received_at` field is `null`
 
 #### Scenario: Snapshot is older than 120 seconds
 - **WHEN** the last snapshot was received 180 seconds ago
-- **THEN** `GET /api/sign-status` returns HTTP 204
-- **AND** the response body is empty
+- **THEN** `GET /api/sign-status` returns HTTP 200
+- **AND** the response body's `state` field is `"offline"`
+- **AND** the response body's `snapshot` field is `null`
+- **AND** the response body's `received_at` field is `null`
+
+#### Scenario: State transitions as snapshot ages
+- **WHEN** the most recent snapshot was received 30 seconds ago
+- **THEN** `GET /api/sign-status` returns `state="live"`
+- **AND WHEN** 60 seconds pass without a new snapshot
+- **THEN** `GET /api/sign-status` returns `state="unsure"`
+- **AND WHEN** a further 60 seconds pass without a new snapshot
+- **THEN** `GET /api/sign-status` returns `state="offline"`
 
 ### Requirement: Dashboard "Live" pill reflects sign health
-The Dashboard page MUST render a "Live" pill whose color and pulse animation reflect the age of the latest snapshot. The pill MUST be green with a pulse animation when the snapshot is less than 60 seconds old. The pill MUST be amber (no pulse) when the snapshot is between 60 and 120 seconds old. The pill MUST be grey with the text "Unknown" when no snapshot has been received within 120 seconds or no snapshot has ever been received.
+The Dashboard page MUST render a "Live" pill whose color, animation, and text are determined by the `state` field returned by `GET /api/sign-status`. The pill MUST apply the green color and pulse animation and the text "Live" when `state="live"`. The pill MUST apply the amber color and no animation and the text "Live" when `state="unsure"`. The pill MUST apply the grey color and no animation and the text "Unknown" when `state="offline"`. The threshold values for the state transitions are server-side policy; the browser MUST NOT compute thresholds locally.
 
-#### Scenario: Fresh snapshot shows green pill
-- **WHEN** a snapshot was received 30 seconds ago
-- **THEN** the Dashboard "Live" pill is rendered with a green background and a pulse animation
+#### Scenario: Live state shows green pill with pulse
+- **WHEN** `GET /api/sign-status` returns `state="live"`
+- **THEN** the Dashboard "Live" pill has the green color class applied
+- **AND** the pill has the pulse animation class applied
 - **AND** the pill text reads "Live"
 
-#### Scenario: Stale snapshot shows amber pill
-- **WHEN** a snapshot was received 90 seconds ago
-- **THEN** the Dashboard "Live" pill is rendered with an amber background and no pulse animation
+#### Scenario: Unsure state shows amber pill without pulse
+- **WHEN** `GET /api/sign-status` returns `state="unsure"`
+- **THEN** the Dashboard "Live" pill has the amber color class applied
+- **AND** the pill does NOT have the pulse animation class applied
 - **AND** the pill text reads "Live"
 
-#### Scenario: No recent snapshot shows grey "Unknown" pill
-- **WHEN** no snapshot has been received within the last 120 seconds
-- **THEN** the Dashboard "Live" pill is rendered with a grey background
+#### Scenario: Offline state shows grey "Unknown" pill
+- **WHEN** `GET /api/sign-status` returns `state="offline"`
+- **THEN** the Dashboard "Live" pill has the grey color class applied
 - **AND** the pill text reads "Unknown"
 
 #### Scenario: Browser polls the endpoint every 10 seconds
@@ -78,18 +100,27 @@ The Dashboard page MUST render a "Live" pill whose color and pulse animation ref
 - **AND** the browser calls `GET /api/sign-status` every 10 seconds thereafter
 - **AND** each response updates the pill's color, animation, and text within 100ms of receiving the response
 
-### Requirement: Settings page exposes a read-only Sign Health section
-The Settings page MUST render a new read-only "Sign Health" section at the top of the page that displays the snapshot fields: `active_sha`, `started_at`, `uptime_seconds` (formatted as `Xd Yh Zm`), `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`, and the timestamp Flask received the snapshot. The values MUST update in place when the browser polls `GET /api/sign-status`. The section MUST show a "No status received yet" placeholder when no snapshot has arrived. The section MUST NOT include any form controls — it is read-only.
+#### Scenario: Browser does not compute thresholds locally
+- **WHEN** the browser receives a response with `state="unsure"`
+- **THEN** the browser renders the amber pill based on the `state` value alone
+- **AND** the browser does NOT compute its own age threshold from `received_at` to decide the pill's color
 
-#### Scenario: Snapshot fields render on Settings page
-- **WHEN** a fresh snapshot is available
+### Requirement: Settings page exposes a read-only Sign Health section
+The Settings page MUST render a new read-only "Sign Health" section at the top of the page that displays the snapshot fields: `active_sha`, `started_at`, `uptime_seconds` (formatted as `Xd Yh Zm`), `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`, and the timestamp Flask received the snapshot. The values MUST update in place when the browser polls `GET /api/sign-status`. The section MUST show a "No status received yet" placeholder when `state="offline"`. The section MUST NOT include any form controls — it is read-only. The visibility of the snapshot fields MUST be driven by the server-returned `state`: when `state="offline"`, the field slots are hidden and only the placeholder is shown.
+
+#### Scenario: Snapshot fields render on Settings page when state is live
+- **WHEN** `GET /api/sign-status` returns `state="live"` with a non-null snapshot
 - **THEN** the Settings page shows the running SHA, started_at timestamp, uptime (formatted), MQTT-connected flag, last-tick age, messages-rendered count, and last-error value
 - **AND** the section shows the Flask-side timestamp of when the snapshot was received
 
+#### Scenario: Snapshot fields render when state is unsure
+- **WHEN** `GET /api/sign-status` returns `state="unsure"` with a non-null snapshot
+- **THEN** the Settings page shows the snapshot fields and a small "stale" indicator next to the Flask-side timestamp
+
 #### Scenario: No snapshot yet shows placeholder
-- **WHEN** no snapshot has been received since Flask started
+- **WHEN** `GET /api/sign-status` returns `state="offline"` with `snapshot=null`
 - **THEN** the Settings page Sign Health section shows the text "No status received yet"
-- **AND** the field slots remain empty
+- **AND** the field slots are hidden
 
 #### Scenario: Snapshot updates in place without page reload
 - **WHEN** a new snapshot is received by the browser poll
