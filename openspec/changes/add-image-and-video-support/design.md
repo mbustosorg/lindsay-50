@@ -94,6 +94,13 @@ Both are disabled by default in `lib_shared/models.py:_DEFAULT_EFFECTS_LIST_FULL
 - **Rationale:** Most PNGs shipped in design/pngs/ are black-on-transparent line art. Dropping the alpha support entirely would degrade the existing design content. Conditional mask (alpha when present, ignore when absent) preserves the old look while adding JPEG/GIF/WebP.
 - **Alternative:** Always white-on-black (drop alpha support entirely). Rejected because it changes how the curated `design/pngs/` content renders.
 
+### D10 — Empty body with media is accepted; empty body with no media still returns 204
+
+- **Decision:** The existing `_process_inbound_message` 204 gate fires when `Body` is empty. Change it: accept the message iff `body` is non-empty OR `NumMedia > 0`. A media-only MMS persists (text="", full media list), publishes over MQTT, and the coordinator routes it to the `MediaCycler` with an empty scroller. An empty body + `NumMedia=0` (or absent) still returns 204 — there is nothing to display, the same as today.
+- **Rationale:** MMS supports a media-only payload (e.g., a photo with no caption). The operator expects it to render the photo on the sign. Dropping the message at the webhook gate is a regression relative to the SMS-only path's "empty body → no-op" because the MMS has a non-empty media list — there *is* something to display. The existing `EffectsCoordinator` already has the `text=""` branch in the `out → in` transition (`scroller.set_text("", display.width)`, `showing_text=False`, mode is `background` after the fade-in instead of `hold`), so the state machine needs no change.
+- **Alternative:** Reject the message and return a 4xx to Twilio. Rejected because it would require Twilio to retry (and it won't — failed deliveries are lost) and it gives the operator no recovery path.
+- **Alternative:** Always accept and render. Rejected because an SMS with `Body=""` and no media (a stray empty form post, e.g. from Twilio's webhooks during transient carrier issues) would publish a no-op Message over MQTT and waste a rotation slot.
+
 ## Risks / Trade-offs
 
 - **[R1] Twilio Basic Auth lifetime:** if `TWILIO_AUTH_TOKEN` rotates, the in-flight `MediaUrl*` downloads will 401 mid-cycle. → Mitigation: wrap `log_media` in try/except for `boto3`/HTTP errors; log WARNING and continue with empty media list. The text never depends on media succeeding.

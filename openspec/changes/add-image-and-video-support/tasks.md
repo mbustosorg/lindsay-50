@@ -19,6 +19,7 @@
 - [ ] 3.3 Pass the resulting `media: list[{type, url}]` list to the `Message(...)` constructor.
 - [ ] 3.4 Add the new `GET /api/media/<path:s3_key>` route in `heart-message-manager/main.py` (auth via `api_login_required`, calls `s3.proxy_media(s3_key)`, returns bytes with the original `Content-Type`).
 - [ ] 3.5 Add path-traversal guard (`..` rejected with 400) on the proxy route.
+- [ ] 3.6 Change the `if not body: return 204` gate to `if not body and not media: return 204` (or equivalent): empty body with non-empty `media` is accepted, persists, and publishes; empty body with no media still 204s.
 
 ## 4. Tests for MMS ingestion + media proxy
 
@@ -54,6 +55,7 @@
 - [ ] 7.3 If media is non-empty, construct a `MediaCycler(media_list)` and assign to `self.current` in place of `self.effects[self.idx]`. The coordinator's existing `set_brightness` calls continue to drive the cycler.
 - [ ] 7.4 When the cycler's cycle ends OR `hold_seconds` elapses, fall back to `self.effects[self.idx]` on the next fade (existing `text_out → background → rotation` path).
 - [ ] 7.5 When the message has no media, behavior is unchanged — coordinator uses `self.effects[self.idx]`.
+- [ ] 7.6 Empty-text branch: when the displayed message has `body == ""` AND non-empty `media`, the existing `scroller.set_text("", display.width)` path in the `out → in` transition handles the blank-text case (`showing_text=False`, mode is `background` after fade-in instead of `hold`). Verify the coordinator does NOT enter the `hold` mode with an empty text.
 
 ## 8. Tests for the EffectsCoordinator media override
 

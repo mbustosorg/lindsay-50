@@ -214,6 +214,12 @@ class EffectsCoordinator:
         # recency of the *last* consumed id is not enough when there
         # are N ≥ 2 messages in the recent pool.
         self._consumed_message_ids: set[str] = set()
+        # 1Hz heartbeat for the hold/background diagnostic prints. Throttled
+        # so the journal gets ~1 line/s even though `tick()` runs at the
+        # hzeller swap rate. `0.0` means "no diagnostic has fired yet" —
+        # the first call prints immediately so we don't wait 1s just to
+        # learn the mode is wrong.
+        self._diag_last_print: float = 0.0
         # Render-layer diff state: structural fingerprints of the
         # rotation list and text settings, used to gate the
         # rotation rebuild and scroller setter calls in `tick()`.
@@ -555,6 +561,15 @@ class EffectsCoordinator:
                     # `idle_seconds`. Symptom: "each background only
                     # shows for ~4s, just the fade-in + fade-out."
                     consumed_at_pick = self._consumed_message_id_at_pick(text)
+                    # DEBUG: capture the BEFORE state so the journal
+                    # tells us whether the head id actually lands in
+                    # the consumed set at runtime (vs e.g. running
+                    # pre-fix on the Pi, where the head id would NOT
+                    # be added and the set would only ever hold the
+                    # random pick).
+                    entries_ooi = self.current_messages
+                    head_id_before = entries_ooi[0].message.id if entries_ooi else None
+                    head_in_before = head_id_before in self._consumed_message_ids if head_id_before else None
                     if consumed_at_pick is not None:
                         self._consumed_message_ids.add(consumed_at_pick)
                     if self.current_messages:
@@ -565,6 +580,8 @@ class EffectsCoordinator:
                         # confirms the fix lands.
                         print(
                             f"DEBUG coordinator out->in CONSUMED: head_id={head_id} "
+                            f"head_in_consumed_BEFORE={head_in_before} "
+                            f"head_in_consumed_AFTER={head_id in self._consumed_message_ids} "
                             f"pick_id={consumed_at_pick} consumed_size={len(self._consumed_message_ids)}",
                             flush=True,
                         )
@@ -607,6 +624,12 @@ class EffectsCoordinator:
                 self.mode = next_mode
 
         elif mode == "hold":
+            # 1Hz diagnostic: dump fresh_id_landed + consumed membership so
+            # the journal tells us WHY hold is exiting. Without this print,
+            # the absence of the "hold interrupt" log gives zero info —
+            # we just know "hold didn't last long," not whether the fresh-id
+            # check tripped or the hold timer expired.
+            #
             # Hold semantics (v2):
             #   - Stay on the current message until `hold_seconds` elapses,
             #     UNLESS a genuinely *new* SMS arrives — i.e. the head of the
@@ -626,6 +649,19 @@ class EffectsCoordinator:
                 self.current_messages
                 and self.current_messages[0].message.id not in self._consumed_message_ids
             )
+            if now - self._diag_last_print >= 1.0:
+                entries = self.current_messages
+                head_id = entries[0].message.id if entries else None
+                print(
+                    f"DEBUG coordinator hold TICK: head_id={head_id} "
+                    f"head_in_consumed={head_id in self._consumed_message_ids if head_id else None} "
+                    f"fresh_id_landed={fresh_id_landed} "
+                    f"held_for={(now - self.phase_start):.2f}s "
+                    f"hold_seconds={effects_settings.hold_seconds} "
+                    f"consumed_size={len(self._consumed_message_ids)}",
+                    flush=True,
+                )
+                self._diag_last_print = now
             if fresh_id_landed:
                 log.info(
                     "Coordinator hold interrupt (new id): pending_text=%r last_shown=%r new_id=%s",
@@ -675,6 +711,33 @@ class EffectsCoordinator:
                 self.mode = "background"
 
         elif mode == "background":
+            # 1Hz diagnostic: dump fresh_id_landed + random_pick_changed +
+            # idle_timed_out so the journal tells us which trigger fired the
+            # background→out transition. Same shape as the hold diagnostic:
+            # without this print, an absent "background exit" log gives no
+            # info on the trigger — we just know the cycle restarted.
+            entries_bg = self.current_messages
+            head_id_bg = entries_bg[0].message.id if entries_bg else None
+            fresh_id_bg = bool(
+                entries_bg and entries_bg[0].message.id not in self._consumed_message_ids
+            )
+            random_pick_changed_bg = bool(text) and text != self.last_shown_text
+            idle_timed_out_bg = (
+                now - self.phase_start >= effects_settings.idle_seconds
+            )
+            if now - self._diag_last_print >= 1.0:
+                print(
+                    f"DEBUG coordinator background TICK: head_id={head_id_bg} "
+                    f"fresh_id_landed={fresh_id_bg} "
+                    f"random_pick_changed={random_pick_changed_bg} "
+                    f"text={text!r} last_shown_text={self.last_shown_text!r} "
+                    f"idle_timed_out={idle_timed_out_bg} "
+                    f"waited={(now - self.phase_start):.2f}s "
+                    f"idle_seconds={effects_settings.idle_seconds} "
+                    f"consumed_size={len(self._consumed_message_ids)}",
+                    flush=True,
+                )
+                self._diag_last_print = now
             # Background semantics (v2):
             #   - A genuinely new SMS (head.id differs from last-shown) kicks
             #     a fade immediately — the operator just texted, show it now.
@@ -689,14 +752,9 @@ class EffectsCoordinator:
             #     even with idle_seconds=10. Now: background kicks a re-roll
             #     on whichever of (fresh_id, new_random_pick, idle_timeout)
             #     fires first.
-            fresh_id_landed = (
-                self.current_messages
-                and self.current_messages[0].message.id not in self._consumed_message_ids
-            )
-            random_pick_changed = bool(text) and text != self.last_shown_text
-            idle_timed_out = (
-                now - self.phase_start >= effects_settings.idle_seconds
-            )
+            fresh_id_landed = fresh_id_bg
+            random_pick_changed = random_pick_changed_bg
+            idle_timed_out = idle_timed_out_bg
             if fresh_id_landed or random_pick_changed or idle_timed_out:
                 trigger = (
                     "new_id" if fresh_id_landed

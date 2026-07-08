@@ -23,6 +23,14 @@ The Flask `/api/messages` POST handler MUST detect `NumMedia > 0` in the inbound
 - **WHEN** the bytes downloaded successfully but `boto3.put_object` raises (network, IAM, throttle)
 - **THEN** Flask logs a WARNING and the message persists with the affected media item dropped from the `media` list. Other media items in the same webhook still land. The webhook response is still 200 + TwiML.
 
+#### Scenario: Inbound MMS with no body, only media
+- **WHEN** Twilio POSTs to `/api/messages` with `Body=""` (or absent) and `NumMedia=1`
+- **THEN** Flask accepts the message, persists a `Message` with `body=""` and a populated `media` list, publishes the `MessageEnvelope` over MQTT, and returns 200 + TwiML. The 204 gate fires only when both `body` is empty AND `NumMedia == 0` (or absent).
+
+#### Scenario: Empty body, no media still returns 204
+- **WHEN** Twilio POSTs to `/api/messages` with `Body=""` and no `NumMedia` field
+- **THEN** Flask returns 204 with no body, no S3 writes, no MQTT publish — the same as today's behavior.
+
 ### Requirement: Message wire carries a media list
 The `Message` class in `lib_shared/models.py` MUST round-trip a `media: list[{type, url}]` field through `from_dict` / `to_dict`; existing 4-field messages MUST continue to round-trip unchanged.
 
@@ -98,6 +106,10 @@ The `EffectsCoordinator.tick()` MUST construct a per-message `MediaCycler` Effec
 #### Scenario: Message with no media (existing path)
 - **WHEN** `get_display_message()` returns the body of a message with `media == []`
 - **THEN** the coordinator's `out → in` transition uses `self.effects[self.idx]` (no MediaCycler). Behavior is identical to today.
+
+#### Scenario: Message with no body, only media
+- **WHEN** `get_display_message()` returns the body of a message whose `body == ""` and `media` is non-empty
+- **THEN** the coordinator's `out → in` transition constructs the `MediaCycler` (media is non-empty) AND calls `scroller.set_text("", display.width)` with `showing_text=False`. After the fade-in, the mode is `background` (not `hold`) — the cycler renders the media; the panel shows no text. The next transition (text_out is skipped because there's no text to fade) drops straight from `background` when `hold_seconds` elapses or the cycler's cycle ends, then advances to `self.effects[self.idx]` on the next fade.
 
 #### Scenario: Cycle cutoff respects hold_seconds
 - **WHEN** a `MediaCycler` is in active rendering mode and `hold_seconds` (configured to 15 s by default) elapses
