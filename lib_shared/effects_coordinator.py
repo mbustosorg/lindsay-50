@@ -232,6 +232,13 @@ class EffectsCoordinator:
         # the first call prints immediately so we don't wait 1s just to
         # learn the mode is wrong.
         self._diag_last_print: float = 0.0
+        # Separate 1Hz gate for the intro-mode progress print. The
+        # top-of-tick print and the PRE/POST-render prints all share
+        # `_diag_last_print`, which means only one of them fires per
+        # second. The intro print has its own gate so it always
+        # shows once per second and tells us whether intro_seconds
+        # is elapsing as expected.
+        self._intro_last_print: float = 0.0
         # File-based diagnostic side-channel. The journal on the Pi goes
         # silent exactly when the main loop starts (after MatrixDisplay
         # init at 02:55:57.488 and MQTT subscribe at 02:55:57.707), but
@@ -700,6 +707,23 @@ class EffectsCoordinator:
         text = self._last_display_message
 
         if mode == "intro":
+            # DEBUG: 1Hz intro progress print (separate gate from the
+            # top-of-tick print, so it ALWAYS fires once per second).
+            # Confirms whether intro_seconds is elapsing as expected
+            # or stuck (which would explain "no state changes").
+            _intro_now = time.monotonic()
+            if _intro_now - self._intro_last_print >= 1.0:
+                _elapsed = _intro_now - self.phase_start
+                _ready = _elapsed >= effects_settings.intro_seconds
+                try:
+                    os.write(
+                        1,
+                        f"DEBUG coordinator intro: elapsed={_elapsed:.2f}s "
+                        f"intro_seconds={effects_settings.intro_seconds} ready={_ready}\n".encode(),
+                    )
+                except OSError:
+                    pass
+                self._intro_last_print = _intro_now
             if now - self.phase_start >= effects_settings.intro_seconds:
                 self._begin_out(now)
 
