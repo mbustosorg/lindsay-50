@@ -38,6 +38,7 @@ class _StubDisplay:
         ("lib_shared.patterns.honeycomb", "Honeycomb"),
         ("lib_shared.patterns.windfire", "WindFire"),
         ("lib_shared.patterns.coronal_mass_ejection", "CoronalMassEjection"),
+        ("lib_shared.patterns.eyeball", "Eyeball"),
         ("lib_shared.patterns.hyperspace", "Hyperspace"),
         ("lib_shared.patterns.heartbeat", "Heartbeat"),
         ("lib_shared.patterns.png_display", "PngDisplay"),
@@ -68,6 +69,7 @@ def test_patterns_dont_import_rgb_display():
     """None of the moved pattern modules imports from rgb_display anymore."""
     from lib_shared.patterns import (
         coronal_mass_ejection,
+        eyeball,
         fireworks,
         flame,
         heartbeat,
@@ -81,6 +83,7 @@ def test_patterns_dont_import_rgb_display():
 
     for mod in (
         coronal_mass_ejection,
+        eyeball,
         fireworks,
         flame,
         heartbeat,
