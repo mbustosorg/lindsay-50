@@ -90,6 +90,7 @@ def build_effects(
         fallback is also unresolvable.
     """
     if effects_settings is None:
+        print(f"DEBUG build_effects: settings is None, returning []", flush=True)
         return []
     if effect_class_factory is None:
         from lib_shared.effects_factory import make_effect_class
@@ -98,13 +99,23 @@ def build_effects(
     if display is None:
         raise ValueError("build_effects requires `display` to instantiate effects")
     out = []
+    print(
+        f"DEBUG build_effects: rotation has {len(effects_settings.effects)} entries: "
+        f"{[(e.get('name'), e.get('enabled')) for e in effects_settings.effects]}",
+        flush=True,
+    )
     for entry in effects_settings.effects:
-        if not entry.get("enabled"):
+        name = entry.get("name", "")
+        enabled = entry.get("enabled")
+        if not enabled:
+            print(f"DEBUG build_effects: skipping {name!r} (disabled)", flush=True)
             continue
-        cls = effect_class_factory(entry.get("name", ""))
+        cls = effect_class_factory(name)
         if cls is None:
+            print(f"DEBUG build_effects: skipping {name!r} (factory returned None)", flush=True)
             continue
         out.append(cls(display))
+        print(f"DEBUG build_effects: added {name!r} -> {cls.__name__}", flush=True)
     if not out:
         # Fallback: the first canonical effect (the head of the
         # declared rotation order). Resolved through the same
@@ -255,6 +266,19 @@ class EffectsCoordinator:
         self._last_rotation: tuple | None = tuple((e.get("name"), e.get("enabled")) for e in EffectsSettings().effects)
         self._last_text_color: int | None = TextSettings().color
         self._last_text_speed: int | None = TextSettings().speed
+        # DEBUG: confirm the render-layer args landed. The journal silence
+        # mystery: boot logs work up to 02:55:57.707 (MQTT subscribe ACK),
+        # then silence, but the process is alive (status.json updates).
+        # If any of display/scroller/effects/heart is None, `is_bound()`
+        # returns False and tick() returns immediately — explaining the
+        # silence with a render loop that's still alive.
+        print(
+            f"DEBUG EffectsCoordinator.__init__: display={type(display).__name__ if display is not None else 'None'} "
+            f"scroller={type(scroller).__name__ if scroller is not None else 'None'} "
+            f"effects={len(effects) if effects else 0} "
+            f"heart={type(heart).__name__ if heart is not None else 'None'}",
+            flush=True,
+        )
 
     def is_bound(self) -> bool:
         """True when the coordinator has a render layer (display + scroller + effects + heart).
@@ -266,7 +290,20 @@ class EffectsCoordinator:
         instantiates the coordinator unbound; the preview page
         binds once the canvas is in scope.
         """
-        return self.display is not None and self.scroller is not None and bool(self.effects) and self.heart is not None
+        d = self.display is not None
+        s = self.scroller is not None
+        e = bool(self.effects)
+        h = self.heart is not None
+        # DEBUG: dump each component flag when False — tells us *which*
+        # part is missing. Without this, an unbound coordinator silently
+        # no-ops and leaves us guessing.
+        if not (d and s and e and h):
+            print(
+                f"DEBUG EffectsCoordinator.is_bound: display={d} scroller={s} "
+                f"effects={e} (len={len(self.effects)}) heart={h} -> False",
+                flush=True,
+            )
+        return d and s and e and h
 
     def bind(
         self,
@@ -325,6 +362,8 @@ class EffectsCoordinator:
         from — there is no separate "show this body after the
         heart" hook (the push path is gone).
         """
+        # DEBUG: confirm start() is being called.
+        print(f"DEBUG EffectsCoordinator.start: is_bound={self.is_bound()}", flush=True)
         if not self.is_bound():
             return
         assert self.heart is not None
@@ -332,6 +371,11 @@ class EffectsCoordinator:
         self.heart.set_brightness(1.0)
         self.mode = "intro"
         self.phase_start = time.monotonic()
+        print(
+            f"DEBUG EffectsCoordinator.start: mode=intro phase_start=now "
+            f"heart={type(self.heart).__name__}",
+            flush=True,
+        )
 
     @property
     def current_messages(self) -> list[MessageView]:

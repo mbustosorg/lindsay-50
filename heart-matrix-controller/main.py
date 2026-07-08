@@ -125,7 +125,17 @@ heartbeat = Heartbeat(display)
 # shared `build_effects` falls back to the first canonical effect if
 # the rotation ends up empty, so the sign never goes dark.
 _boot_settings = EffectsSettings()
+print(
+    f"DEBUG main.py: about to call build_effects() with "
+    f"display={type(display).__name__}",
+    flush=True,
+)
 effects = build_effects(_boot_settings, display=display)
+print(
+    f"DEBUG main.py: build_effects() returned {len(effects)} effects: "
+    f"{[type(e).__name__ for e in effects]}",
+    flush=True,
+)
 
 coordinator = EffectsCoordinator(
     message_manager=manager,
@@ -138,7 +148,13 @@ coordinator = EffectsCoordinator(
 # Kick off the boot splash. The coordinator's first pull (every 250 ms)
 # produces the most recent message in the manager's buffer; no
 # separate "show this body after the heart" hook is needed.
+print(
+    f"DEBUG main.py: about to call coordinator.start(); "
+    f"coordinator.is_bound()={coordinator.is_bound()}",
+    flush=True,
+)
 coordinator.start()
+print("DEBUG main.py: coordinator.start() returned", flush=True)
 
 
 # Status writer — the loader probes us by reading this file (see
