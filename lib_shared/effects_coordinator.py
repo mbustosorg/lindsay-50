@@ -457,6 +457,27 @@ class EffectsCoordinator:
         """
         if not self.is_bound():
             return
+        # 1Hz top-of-tick diagnostic: prints once per second regardless of
+        # mode. Tells us (a) whether `tick()` is being called at all and
+        # (b) what mode the state machine is in. Critical for the case
+        # where the state is stuck in `intro` (intro_seconds never
+        # elapses, so no transition prints ever fire) or stuck in a
+        # different mode that doesn't log a transition. Fires on the
+        # first tick after the 1Hz gate expires, so we don't have to
+        # wait a full second just to learn the state.
+        now_top = time.monotonic()
+        if now_top - self._diag_last_print >= 1.0:
+            effects_settings_top = self.effects_settings
+            print(
+                f"DEBUG coordinator TICK: mode={self.mode} "
+                f"elapsed={(now_top - self.phase_start):.2f}s "
+                f"intro={effects_settings_top.intro_seconds} "
+                f"fade={effects_settings_top.fade_seconds} "
+                f"hold={effects_settings_top.hold_seconds} "
+                f"idle={effects_settings_top.idle_seconds}",
+                flush=True,
+            )
+            self._diag_last_print = now_top
         # Local aliases for the bound layer — Pyright doesn't narrow
         # `self.display` etc. through `is_bound()`, but the guard above
         # makes these accesses safe.
