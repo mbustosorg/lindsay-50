@@ -807,6 +807,23 @@ def main() -> int:
         exec_active(repo_dir, current_sha(repo_dir) or "")
         return 0
 
+    # AUTO_UPDATE off — local-dev / pinned-version posture. Skip the
+    # upgrade flow entirely and just exec the existing `current/.../main.py`.
+    # Production installs opt in via `AUTO_UPDATE = true` in the canonical
+    # settings.toml or `Environment=AUTO_UPDATE=true` on the systemd unit.
+    # env var wins per the config_reader's env-precedence rule, so a one-off
+    # `AUTO_UPDATE=true python3 loader.py` from a shell re-enables it.
+    auto_update_raw = (cfg.if_exists("AUTO_UPDATE") or "").strip().lower()
+    auto_update_enabled = auto_update_raw in ("1", "true", "yes", "on")
+    if not auto_update_enabled:
+        logger.info(
+            "loader: AUTO_UPDATE is not enabled (AUTO_UPDATE=%r); "
+            "skipping upgrade flow, exec'ing existing current",
+            cfg.if_exists("AUTO_UPDATE"),
+        )
+        exec_active(repo_dir, current_sha(repo_dir) or "")
+        return 0
+
     run_upgrade_flow(
         repo_dir,
         api_url=api_url,

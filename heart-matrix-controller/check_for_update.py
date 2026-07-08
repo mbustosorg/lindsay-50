@@ -45,6 +45,28 @@ ENV_REPO_DIR = "LINDSAY50_REPO_DIR"
 LOADER_PATH = Path("current") / "heart-matrix-controller" / "loader.py"
 
 
+# AUTO_UPDATE quick-disable — same flag the loader reads. Local-dev runs
+# want the MQTT `check-for-update` envelope to be a no-op so a Flask
+# deploy doesn't clobber an in-progress local checkout. Production
+# installs set `AUTO_UPDATE = true` in the canonical settings.toml (or
+# via the AUTO_UPDATE env var) to preserve pre-existing behavior.
+_TRUTHY = {"1", "true", "yes", "on"}
+
+
+def _auto_update_enabled() -> bool:
+    """Return True iff AUTO_UPDATE is set to a truthy value.
+
+    Reads a fresh `ConfigReader` (no required_keys) instead of the
+    `get_config()` singleton — this function is reachable from tests
+    that import `check_for_update` without first running `main.py`,
+    and we don't want a missing singleton to flip behavior.
+    """
+    from lib_shared.config_reader import ConfigReader
+
+    raw = (ConfigReader().if_exists("AUTO_UPDATE") or "").strip().lower()
+    return raw in _TRUTHY
+
+
 def _resolve_repo_dir() -> Path:
     """Return the repo root from LINDSAY50_REPO_DIR, defaulting to the
     conventional `/srv/lindsay-50` path.
@@ -112,6 +134,12 @@ def check_for_update(
     Returns None; either we no-op or we `os.execvpe` (which never
     returns).
     """
+    if not _auto_update_enabled():
+        logger.info(
+            "app: check-for-update ignored: AUTO_UPDATE is not enabled",
+        )
+        return
+
     resolved_repo = repo_dir if repo_dir is not None else _resolve_repo_dir()
     active = _resolve_active_sha()
     if active is None:

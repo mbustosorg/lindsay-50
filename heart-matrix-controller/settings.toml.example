@@ -48,3 +48,16 @@ MATRIX_GPIO_SLOWDOWN = 4                    # 4 is a good starting point for a P
 
 # DEBUG | INFO | WARNING | ERROR | CRITICAL
 LOG_LEVEL = "INFO"
+
+# AUTO_UPDATE controls whether the Pi upgrades itself automatically.
+# When true: the loader swaps to the Flask-expected SHA at boot, and
+# the MQTT `check-for-update` envelope can trigger an upgrade
+# mid-flight (production behavior).
+# When false (default): the loader boots the existing version and
+# the app ignores `check-for-update` envelopes. Safe default for
+# local dev runs from a home-dir clone — a Flask deploy won't
+# clobber your in-progress code. Production Pi installs should
+# set this to true in the canonical settings.toml (or via the
+# AUTO_UPDATE env var on the systemd unit) to preserve the
+# pre-existing auto-upgrade behavior. Env var overrides this.
+AUTO_UPDATE = false
