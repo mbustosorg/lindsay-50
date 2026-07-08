@@ -561,14 +561,38 @@ class EffectsCoordinator:
                     scroller.set_brightness(0.0)
                     self.showing_text = True
                     self.last_shown_text = text
-                    # Mark this message id as "consumed" — a
-                    # follow-on hold or background should not treat
-                    # the same id as fresh. A genuine fresh-id
-                    # interrupt requires an id that has never been
-                    # consumed (i.e. an SMS we haven't shown yet).
-                    consumed = self._consumed_message_id_at_pick(text)
-                    if consumed is not None:
-                        self._consumed_message_ids.add(consumed)
+                    # Mark BOTH the picked body's id AND the head's id
+                    # as "consumed" — a follow-on hold or background
+                    # should not treat either as fresh. A genuine
+                    # fresh-id interrupt requires an id that has never
+                    # been consumed (i.e. an SMS we haven't seen yet).
+                    #
+                    # The head's id matters more than the picked body's
+                    # here, because `get_display_message` does
+                    # `random.choice(entries)` and the head (newest) is
+                    # almost never the pick when `recent_count` is much
+                    # larger than 1. Without this second add, the
+                    # `fresh_id_landed` check in the `hold` and
+                    # `background` branches would compare the head
+                    # against an empty set and trip every cycle,
+                    # cycling the state machine at the fade rate
+                    # instead of honoring `hold_seconds` /
+                    # `idle_seconds`. Symptom: "each background only
+                    # shows for ~4s, just the fade-in + fade-out."
+                    consumed_at_pick = self._consumed_message_id_at_pick(text)
+                    if consumed_at_pick is not None:
+                        self._consumed_message_ids.add(consumed_at_pick)
+                    if self.current_messages:
+                        head_id = self.current_messages[0].message.id
+                        self._consumed_message_ids.add(head_id)
+                        # DEBUG: stdout mirror — show the consumed
+                        # set size and the head id so the journal
+                        # confirms the fix lands.
+                        print(
+                            f"DEBUG coordinator out->in CONSUMED: head_id={head_id} "
+                            f"pick_id={consumed_at_pick} consumed_size={len(self._consumed_message_ids)}",
+                            flush=True,
+                        )
                 else:
                     scroller.set_text("", display.width)
                     self.showing_text = False
