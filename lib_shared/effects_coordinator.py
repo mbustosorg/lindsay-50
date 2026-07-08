@@ -449,6 +449,17 @@ class EffectsCoordinator:
         explicit `apply_settings` call needed. Config updates land
         at most one frame later.
         """
+        # DEBUG: checkpoint BEFORE the is_bound() guard. If this fires
+        # but the post-guard print below doesn't, the guard is the
+        # suspect. Throttled to once every 200 calls (≈1.5s at the
+        # observed ~200Hz loop rate) and offset from the post-guard
+        # print so the two never collide on the same line.
+        self._tick_count = getattr(self, "_tick_count", 0) + 1
+        if self._tick_count % 200 == 0:
+            print(
+                f"DEBUG coordinator.tick ENTRY: count={self._tick_count} is_bound={self.is_bound()}",
+                flush=True,
+            )
         if not self.is_bound():
             return
         # Local aliases for the bound layer — Pyright doesn't narrow
@@ -714,3 +725,13 @@ class EffectsCoordinator:
         # owns the clear/draw/swap sequence (and, on the Pi, the SwapOnVSync
         # pacing).
         display.render(current, scroller)
+        # DEBUG: checkpoint AFTER render. Offset 100 from the entry
+        # print so the two never collide on the same tick. If this
+        # fires but the entry print doesn't, the throttle window is
+        # off; if neither fires, tick() is not being called (which
+        # would contradict the visible animations).
+        if self._tick_count % 200 == 100:
+            print(
+                f"DEBUG coordinator.tick COMPLETE: count={self._tick_count} mode={self.mode}",
+                flush=True,
+            )
