@@ -315,13 +315,37 @@ def _build_exec_env(
 ) -> dict[str, str]:
     """Build the env dict we pass to `os.execvpe`.
 
-    Inherits the loader's own env (so PYTHONPATH, LOG_LEVEL, and
-    the user's PATH carry through), then sets/refreshes the two
-    `LINDSAY50_*` vars the app reads at module load.
+    Inherits the loader's own env (so LOG_LEVEL, the user's PATH,
+    and anything else systemd/the startup script set, carry
+    through), then sets/refreshes the two `LINDSAY50_*` vars the
+    app reads at module load, and — critically — overrides
+    PYTHONPATH to point at the active worktree.
+
+    PYTHONPATH override (the load-bearing part): the systemd unit's
+    ExecStart uses the absolute path
+    `/srv/lindsay-50/scripts/startup_matrix_server.sh`, which
+    bypasses the `current` symlink — it always runs the main
+    clone's `scripts/startup_matrix_server.sh`, which is whatever
+    commit `origin/main` happens to be on (often stale). The
+    main-clone script sets `PYTHONPATH=$REPO_DIR` (i.e.
+    `/srv/lindsay-50`), so `import lib_shared` resolves to the
+    main clone's `lib_shared/` — not the worktree the loader just
+    staged and probed. Result: main.py runs the worktree's
+    `main.py` but the OLD `lib_shared/effects_coordinator.py`,
+    which is why every commit's debug prints and state-machine
+    fixes have appeared to land but never actually run.
+
+    The loader knows exactly which worktree is active (it just
+    swapped the `current` symlink, or verified it was already
+    pointing at `v-<short_sha>`), so it sets PYTHONPATH to
+    `<repo_dir>/current` here. The exec'd main.py is then
+    guaranteed to import from the worktree's `lib_shared/`
+    regardless of what the systemd unit or startup script did.
     """
     env = dict(base_env if base_env is not None else os.environ)
     env[ENV_ACTIVE_SHA] = active_sha
     env[ENV_REPO_DIR] = str(repo_dir)
+    env["PYTHONPATH"] = str(repo_dir / "current")
     return env
 
 

@@ -263,6 +263,40 @@ class TestBuildExecEnv:
         assert env["CUSTOM_VAR"] == "v"
         assert env[loader.ENV_REPO_DIR] == "/r"  # the new repo_dir overrides
 
+    def test_sets_pythonpath_to_repo_current(self, loader):
+        """PYTHONPATH must point at <repo>/current so main.py imports
+        the worktree's lib_shared/, not the main clone's stale copy.
+
+        Background: the systemd unit's ExecStart uses the absolute
+        path /srv/lindsay-50/scripts/startup_matrix_server.sh, which
+        bypasses the `current` symlink. That script exports
+        PYTHONPATH=$REPO_DIR (= the main clone), so without the
+        loader's override the exec'd main.py would import the stale
+        lib_shared/ from the main clone — not the worktree the
+        loader just staged. This is the load-bearing reason the
+        override lives here.
+        """
+        env = loader._build_exec_env(Path("/repo"), "newsha")
+        assert env["PYTHONPATH"] == "/repo/current"
+
+    def test_pythonpath_overrides_inherited_value(self, loader, monkeypatch):
+        """A stale PYTHONPATH from the systemd-launched startup
+        script (which exports $REPO_DIR, not $REPO_DIR/current)
+        must be overridden — never carried through."""
+        monkeypatch.setenv("PYTHONPATH", "/srv/lindsay-50")
+        env = loader._build_exec_env(Path("/srv/lindsay-50"), "newsha")
+        assert env["PYTHONPATH"] == "/srv/lindsay-50/current"
+
+    def test_pythonpath_overrides_injected_base_env(self, loader):
+        """Same override behavior when base_env is injected directly
+        (not inherited from os.environ)."""
+        env = loader._build_exec_env(
+            Path("/r"),
+            "newsha",
+            base_env={"PYTHONPATH": "/stale/wrong/path"},
+        )
+        assert env["PYTHONPATH"] == "/r/current"
+
 
 # ---------------------------------------------------------------------------
 # exec_active — uses os.execvpe (not subprocess)
