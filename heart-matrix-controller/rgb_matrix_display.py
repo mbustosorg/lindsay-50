@@ -72,25 +72,33 @@ class MatrixDisplay(DisplayBase):
 
         self._matrix = RGBMatrix(options=options)
         self.canvas = self._matrix.CreateFrameCanvas()
-        # DEBUG: bypass the logger to stdout so the runtime geometry
-        # is visible in the journal regardless of whether the "heart"
-        # logger is being filtered. Reports both the value we passed
-        # the hzeller library and the canvas it actually built — these
-        # diverge when the library silently ignores `pixel_mapper_config`
-        # (observed symptom: settings.toml has MATRIX_PIXEL_MAPPER =
-        # "U-mapper" but the canvas comes back 128x32).
-        print(
-            f"DEBUG rgb_matrix_display: rows={options.rows} cols={options.cols} "
-            f"chain={options.chain_length} mapper={options.pixel_mapper_config!r} "
-            f"actual_canvas={self.canvas.width}x{self.canvas.height}",
-            flush=True,
-        )
+        # Decode the hzeller library's bytes-typed pixel_mapper_config to
+        # a str before comparing. The library stores the value as
+        # `b'U-mapper'` (a bytes literal), and the prior str-vs-bytes
+        # comparison always returned False in Python 3, sending every
+        # boot down the else-branch (128x32) regardless of config —
+        # the root cause of "text not on the panel" with a 64x64 stack.
+        mapper = options.pixel_mapper_config
+        if isinstance(mapper, bytes):
+            mapper = mapper.decode()
+        is_u_mapper = mapper == "U-mapper"
         self.width = (
             options.cols * options.chain_length // 2
-            if options.pixel_mapper_config == "U-mapper"
+            if is_u_mapper
             else options.cols * options.chain_length
         )
-        self.height = options.rows * 2 if options.pixel_mapper_config == "U-mapper" else options.rows * options.parallel
+        self.height = options.rows * 2 if is_u_mapper else options.rows * options.parallel
+        # DEBUG: print the decoded value, comparison result, and the
+        # computed geometry to the journal so the next boot confirms
+        # the fix lands (computed should match actual_canvas = 64x64).
+        print(
+            f"DEBUG rgb_matrix_display: rows={options.rows} cols={options.cols} "
+            f"chain={options.chain_length} raw_mapper={options.pixel_mapper_config!r} "
+            f"decoded_mapper={mapper!r} is_u_mapper={is_u_mapper} "
+            f"actual_canvas={self.canvas.width}x{self.canvas.height} "
+            f"computed={self.width}x{self.height}",
+            flush=True,
+        )
         logger.info("MatrixDisplay initialized: %dx%d", self.width, self.height)
 
     def clear(self):
