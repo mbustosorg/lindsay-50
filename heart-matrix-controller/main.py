@@ -20,6 +20,10 @@ REQUIRED_KEYS: set[str] = {
     "MESSAGES_API_URL",
     "API_SECRET_KEY",
 }
+# `MQTT_STATUS_TOPIC` is intentionally NOT in REQUIRED_KEYS: it has a
+# derived default of `f"{MQTT_TOPIC}-status"` (see `_status_topic_resolved`
+# below) and operators shouldn't have to set an empty string just to get
+# the default. Set it explicitly only if you want a different topic name.
 cfg = get_config(REQUIRED_KEYS)
 
 from lib_shared.log_setup import configure_logging
@@ -31,10 +35,12 @@ from rgb_matrix_display import MatrixDisplay
 from scroller import MatrixScroller
 from lib_shared.patterns.heartbeat import Heartbeat
 from lib_shared.message_manager import MessageManager
+from lib_shared.boot_config import short_sha
 from lib_shared.paho_mqtt_client import PahoMqttClient
 from lib_shared.effects_coordinator import EffectsCoordinator, build_effects
 from lib_shared.models import EffectsSettings, TextSettings
 from status import StatusSnapshot, make_status_writer
+from status_publisher import StatusPublisher
 
 # LINDSAY50_ACTIVE_SHA is the SHA the loader started us with.
 # `check_for_update` reads it; we also include it in status.json.
@@ -161,37 +167,67 @@ def _is_mqtt_connected() -> bool:
     return bool(thread is not None and thread.is_alive())
 
 
-def _build_status_snapshot(last_tick_monotonic: float) -> StatusSnapshot:
-    """Build a fresh snapshot of the app's runtime state."""
+def _build_status_snapshot() -> StatusSnapshot:
+    """Build a fresh snapshot of the app's runtime state.
+
+    Final shape (Decision 10): 8 keys — schema_version, active_sha,
+    short_sha, started_at, updated_at, uptime_seconds (int),
+    mqtt_connected, last_error. The previous pid, messages_rendered,
+    and last_tick_age_ms fields had no consumer and were dropped;
+    the `_LAST_TICK_MONOTONIC` global and the `_msgs` deque read were
+    dropped too. `short_sha` is derived once at write time from
+    `lib_shared.boot_config.short_sha` (the single source of truth
+    for the 7-char truncation).
+    """
     now_monotonic = time.monotonic()
-    last_tick_ms = int((now_monotonic - last_tick_monotonic) * 1000) if last_tick_monotonic else 0
-    # `_msgs` is the deque used by `InMemoryMessages` for O(1)
-    # `len()` access. The class itself doesn't expose `__len__`,
-    # so we read the deque directly. This is a diagnostic field
-    # for status.json; the loader doesn't act on it.
-    messages_rendered = 0
-    msgs = getattr(manager, "_messages", None)
-    deque = getattr(msgs, "_msgs", None)
-    if deque is not None:
-        messages_rendered = len(deque)
     return StatusSnapshot(
         schema_version=1,
-        pid=os.getpid(),
         active_sha=_ACTIVE_SHA,
+        short_sha=short_sha(_ACTIVE_SHA),
         started_at=_STARTED_AT_ISO,
         updated_at=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()) or "",
-        uptime_seconds=now_monotonic - _STARTED_AT_MONOTONIC,
+        uptime_seconds=int(now_monotonic - _STARTED_AT_MONOTONIC),
         mqtt_connected=_is_mqtt_connected(),
-        last_tick_age_ms=last_tick_ms,
-        messages_rendered=messages_rendered,
         last_error=None,
     )
 
 
-_LAST_TICK_MONOTONIC = 0.0
+# Derive the MQTT status topic from MQTT_TOPIC if not set explicitly.
+# Default rule (Decision 2 in openspec/changes/add-sign-status-reports/
+# design.md): "{MQTT_TOPIC}-status". Operators can override either via
+# settings.toml or the `MQTT_STATUS_TOPIC` env var (env wins via
+# config_reader.get_raw). Adafruit IO requires an explicit feed
+# creation — the operator must create the derived feed in the AIO
+# dashboard before the first publish lands.
+_status_topic_resolved = cfg.MQTT_STATUS_TOPIC or f"{cfg.MQTT_TOPIC}-status"
+
+_status_publisher = StatusPublisher(
+    host=cfg.MQTT_HOST,
+    port=cfg.MQTT_PORT,
+    username=cfg.MQTT_USERNAME,
+    password=cfg.MQTT_PASSWORD,
+    topic=_status_topic_resolved,
+)
+log.info(
+    "StatusPublisher publishing to topic=%r at 5s cadence (unified with .status.json writes)",
+    _status_topic_resolved,
+)
+
+
+def _publish_status_envelope(payload: dict) -> None:
+    """Hand the serialized payload to the long-lived StatusPublisher.
+
+    Defined as a thin wrapper so `make_status_writer` can be called
+    with a single dispatch argument; the wrapper swallows return
+    values (StatusPublisher.publish already logs failures).
+    """
+    _status_publisher.publish(payload)
+
+
 status_writer = make_status_writer(
     repo_dir=_REPO_DIR,
-    snapshot_builder=lambda: _build_status_snapshot(_LAST_TICK_MONOTONIC),
+    snapshot_builder=_build_status_snapshot,
+    status_publisher=_publish_status_envelope,
 )
 
 
@@ -208,7 +244,6 @@ signal.signal(signal.SIGTERM, _on_sigterm)
 try:
     while True:
         coordinator.tick()
-        _LAST_TICK_MONOTONIC = time.monotonic()
         status_writer.tick()
 except (KeyboardInterrupt, SystemExit):
     log.info("interrupted, shutting down")
@@ -221,3 +256,8 @@ finally:
         log.info("display cleared")
     except Exception:
         log.exception("failed to clear display on shutdown")
+    try:
+        _status_publisher.close()
+        log.info("status publisher closed")
+    except Exception:
+        log.exception("failed to close status publisher on shutdown")
