@@ -162,9 +162,9 @@ class SignSettings:
 # EffectsSettings + TextSettings — v2 config blocks
 # ---------------------------------------------------------------------------
 
-# Canonical full 7-effect list. The 5 historically-defaulted effects are
-# enabled; the 2 asset-dependent effects (VideoDisplay, PngDisplay) are
-# disabled by default because they need operator-supplied asset files.
+# Canonical full 9-effect list. The 7 render-anywhere effects are enabled;
+# the 2 asset-dependent effects (VideoDisplay, PngDisplay) are disabled by
+# default because they need operator-supplied asset files.
 _DEFAULT_EFFECTS_LIST_FULL: List[dict] = [
     {"name": "Hyperspace", "enabled": True},
     {"name": "VideoDisplay", "enabled": False},
@@ -173,7 +173,6 @@ _DEFAULT_EFFECTS_LIST_FULL: List[dict] = [
     {"name": "WindFire", "enabled": True},
     {"name": "CoronalMassEjection", "enabled": True},
     {"name": "Eyeball", "enabled": True},
-    {"name": "Flame", "enabled": True},
     {"name": "Fireworks", "enabled": True},
     {"name": "NightSky", "enabled": True},
 ]

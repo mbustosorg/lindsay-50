@@ -33,7 +33,6 @@ class _StubDisplay:
     "module_name,class_name",
     [
         ("lib_shared.patterns.fireworks", "Fireworks"),
-        ("lib_shared.patterns.flame", "Flame"),
         ("lib_shared.patterns.nightsky", "NightSky"),
         ("lib_shared.patterns.honeycomb", "Honeycomb"),
         ("lib_shared.patterns.windfire", "WindFire"),
@@ -71,7 +70,6 @@ def test_patterns_dont_import_rgb_display():
         coronal_mass_ejection,
         eyeball,
         fireworks,
-        flame,
         heartbeat,
         honeycomb,
         hyperspace,
@@ -85,7 +83,6 @@ def test_patterns_dont_import_rgb_display():
         coronal_mass_ejection,
         eyeball,
         fireworks,
-        flame,
         heartbeat,
         honeycomb,
         hyperspace,

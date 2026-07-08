@@ -269,10 +269,10 @@ def test_tick_refreshes_rotation_when_manager_rotation_changes():
 
     # Update the manager's rotation to a different effect.
     mgr.config.effects_settings = EffectsSettings(
-        effects=[{"name": "Flame", "enabled": True}],
+        effects=[{"name": "NightSky", "enabled": True}],
     )
     coord.tick()
-    assert type(coord.effects[0]).__name__ == "Flame"
+    assert type(coord.effects[0]).__name__ == "NightSky"
     assert id(coord.effects[0]) != first_id
     # idx is reset to -1 so the next fade picks the head of the new list.
     assert coord.idx == -1

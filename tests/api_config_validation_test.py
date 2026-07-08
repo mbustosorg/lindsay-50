@@ -284,7 +284,9 @@ def test_effects_settings_known_effect_names_accepted(client, esp32_headers):
         "VideoDisplay",
         "PngDisplay",
         "Honeycomb",
-        "Flame",
+        "WindFire",
+        "CoronalMassEjection",
+        "Eyeball",
         "Fireworks",
         "NightSky",
     ]:

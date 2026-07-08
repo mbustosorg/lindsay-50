@@ -191,7 +191,6 @@ lindsay-50/
 │   ├── scroller.py              # Scrolling text via rgbmatrix graphics + BDF font
 │   ├── patterns/                # Background patterns (Effect subclasses)
 │   │   ├── fireworks.py
-│   │   ├── flame.py
 │   │   ├── nightsky.py
 │   │   ├── png_display.py       # PNG slideshow from design/pngs (crossfade)
 │   │   ├── video_display.py     # Looping video (OpenCV) from design/videos

@@ -514,7 +514,9 @@ _KNOWN_EFFECT_NAMES = frozenset(
         "VideoDisplay",
         "PngDisplay",
         "Honeycomb",
-        "Flame",
+        "WindFire",
+        "CoronalMassEjection",
+        "Eyeball",
         "Fireworks",
         "NightSky",
     ]

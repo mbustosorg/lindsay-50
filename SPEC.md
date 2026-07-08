@@ -352,7 +352,6 @@ lindsay-50/
 │   ├── mqtt_client.py             # CircuitPython MQTT client
 │   ├── scroller.py
 │   ├── fireworks.py
-│   ├── flame.py
 │   └── settings.toml.example
 └── lib_shared/
     ├── models.py                  # Shared data models

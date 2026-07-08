@@ -20,9 +20,9 @@ from lib_shared.effects_factory import make_effect_class
 
 
 def test_factory_resolves_browser_safe_effects():
-    """Fireworks, Flame, Hyperspace, NightSky have no heavy top-level
+    """Fireworks, Hyperspace, NightSky have no heavy top-level
     deps and resolve cleanly without numpy / cv2 / PIL installed."""
-    for name in ("Fireworks", "Flame", "Hyperspace", "NightSky"):
+    for name in ("Fireworks", "Hyperspace", "NightSky"):
         cls = make_effect_class(name)
         assert cls is not None, f"{name!r} did not resolve"
         # The class is importable, has a class name matching the input,
