@@ -38,6 +38,27 @@ import os
 import random
 import time
 
+# Module-load fingerprint. The user observed `main.py` debug prints in
+# the journal but zero `tick()` debug prints (no `TICK_ENTRY`, no
+# `DEBUG coordinator IS_BOUND`, no `/srv/lindsay-50/.coordinator-tick.log`
+# lines) — despite the worktree being staged to the same commit that
+# contains those prints. The cause: PYTHONPATH pointed at the repo root
+# ($REPO_DIR), and on a bare-repo+worktree layout, the bare .git/ has no
+# working tree. Even on a non-bare clone, $REPO_DIR/lib_shared/ is the
+# main branch's working tree, not the just-staged worktree's. So Python
+# loaded a STALE lib_shared/effects_coordinator.py that didn't have the
+# latest tick() writes. The startup script now sets PYTHONPATH to
+# $REPO_DIR/current so the worktree's lib_shared/ is loaded. This print
+# makes the loaded file path visible in the journal so the operator can
+# confirm the fix lands.
+import sys as _sys
+print(
+    f"DEBUG effects_coordinator loaded: __file__={__file__} "
+    f"PYTHONPATH={os.environ.get('PYTHONPATH', '<unset>')!r} "
+    f"argv[0]={_sys.argv[0]!r}",
+    flush=True,
+)
+
 from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Effect
 from lib_shared.message_manager import MessageManager

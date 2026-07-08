@@ -18,8 +18,19 @@ REPO_DIR="${REPO_DIR:-/srv/lindsay-50}"
 # The `current` symlink may point at any v-<sha>/ worktree after an upgrade.
 cd "$REPO_DIR/current/heart-matrix-controller"
 
-# lib_shared lives at the repo root; LOG_LEVEL is read by both loader.py and main.py.
-export PYTHONPATH="$REPO_DIR"
+# lib_shared lives at the worktree root (current/ symlink target). Setting
+# PYTHONPATH to $REPO_DIR/current — not $REPO_DIR — is critical: on the
+# bare-repo+worktree layout, $REPO_DIR itself is the bare .git/ with no
+# working tree, so $REPO_DIR/lib_shared/ does not exist and `import
+# lib_shared` would fail. Even on a non-bare clone where $REPO_DIR/lib_shared
+# DOES exist, that copy is whatever the main branch's working tree contains
+# — typically an older commit than the worktree just staged. Loading the
+# stale lib_shared/ silently runs the wrong code: debug prints in tick()
+# never fire, state-machine transitions don't apply, etc. PYTHONPATH must
+# point at the worktree so the loader and the exec'd main.py load the SAME
+# version of lib_shared/effects_coordinator.py the worktree was staged at.
+# LOG_LEVEL is read by both loader.py and main.py.
+export PYTHONPATH="$REPO_DIR/current"
 export LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
 # System Python with rgbmatrix installed via setup-pi.sh. (No venv on this
