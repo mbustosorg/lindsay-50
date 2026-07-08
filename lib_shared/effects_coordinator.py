@@ -469,17 +469,16 @@ class EffectsCoordinator:
         explicit `apply_settings` call needed. Config updates land
         at most one frame later.
         """
-        if not self.is_bound():
-            return
         # File-based diagnostic side-channel (see `_diag_file` in __init__).
-        # Opens the handle on the first tick so import-time failures
-        # (read-only /, etc.) don't break construction. The handle is
-        # line-buffered so `tail -f /tmp/coordinator-diag.log` sees
-        # output immediately. Throttled to ~1Hz via `_diag_last_print`
-        # so we don't burn the SD card; the counter is incremented on
-        # every tick (also throttled to once per second) so we can
-        # confirm ticks are happening at all even when the 1Hz gate
-        # hasn't expired.
+        # CRITICAL: this is BEFORE the `is_bound()` check on purpose.
+        # 5d9f099 had it inside the guard, and the file was never
+        # created on the Pi — meaning `is_bound()` is False (which is
+        # the real bug), but the lack of a file proved it from the
+        # outside because nothing wrote to disk. Opening the handle
+        # here means the file is created on the very first `tick()`
+        # call regardless of bound state. The counter increments on
+        # every tick (not throttled) so we can confirm tick() is
+        # being called and at what rate.
         if self._diag_file is None:
             try:
                 self._diag_file = open(
@@ -488,6 +487,24 @@ class EffectsCoordinator:
             except OSError:
                 self._diag_file = None
         self._diag_call_count += 1
+        # Throttled file write that runs REGARDLESS of `is_bound()` —
+        # proves the tick reached this point and shows the call rate.
+        # Without this, if `is_bound()` returns False the file is
+        # created (good) but stays empty (useless). Reuses the
+        # existing 1Hz `_diag_last_print` gate so we don't burn the
+        # SD card with 60Hz writes.
+        if self._diag_file is not None:
+            now_file = time.monotonic()
+            if now_file - self._diag_last_print >= 1.0:
+                try:
+                    self._diag_file.write(
+                        f"tick_call_count={self._diag_call_count} "
+                        f"is_bound={self.is_bound()}\n"
+                    )
+                except OSError:
+                    pass
+        if not self.is_bound():
+            return
         # 1Hz top-of-tick diagnostic: prints once per second regardless of
         # mode. Tells us (a) whether `tick()` is being called at all and
         # (b) what mode the state machine is in. Critical for the case
