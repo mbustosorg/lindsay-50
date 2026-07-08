@@ -84,12 +84,60 @@ Spawn an Agent Orchestrator worker for a change.
    - Mark each task complete in tasks.md
    - Commit when done
 
+   **Anti-pattern — do not include the phrase "the orchestrator handles that" (or any variant like "the orchestrator will open the PR") in the worker prompt.** The orchestrator session is explicitly forbidden from owning a PR by its own non-negotiable rules (`orchestrator-prompt-*.md` line 11: "The orchestrator session must never own a PR"). If the task wants a commit-only flow with no PR, say so explicitly ("commit on the worktree branch, do not push or open a PR"); do not punt to "the orchestrator." Workers are the PR-owning agents.
+
 7. **Run ao spawn with prompt** (must run from `~/.agent-orchestrator`)
    ```bash
    cd ~/.agent-orchestrator
-   # Use "issue-{num}" format — agent derives branch name from issue number alone
-   ao spawn "issue-${ISSUE_NUM}" --prompt "<full prompt from step 6>"
+   # Use "issue-{num}" format — agent derives branch name from issue number alone.
+   # Capture SESSION=<id> from the last line for step 8 to resolve the worktree path.
+   SESSION_ID=$(ao spawn "issue-${ISSUE_NUM}" --prompt "<full prompt from step 6}" \
+     | tee /dev/stderr \
+     | sed -n 's/^SESSION=//p' \
+     | tail -n 1)
+
+   if [ -z "$SESSION_ID" ]; then
+     echo "ERROR: ao spawn did not emit a SESSION= line — spawn likely failed."
+     echo "Check that 'ao start' is running for this project and that the issue is reachable."
+     exit 1
+   fi
    ```
+
+8. **Open the worker's worktree in VSCode and launch the integrated browser**
+   Discover the worktree path from the session JSON (it lives at `~/.agent-orchestrator/projects/*/sessions/<id>.json`; the glob sidesteps the project hash suffix). Confirm with the operator — their existing VSCode window is precious — then open a new VSCode window on the worktree and trigger the integrated-browser command.
+
+   ```bash
+   # Resolve the worktree path. The session JSON is the source of truth —
+   # it carries the absolute path explicitly, immune to project-hash drift.
+   WORKTREE=$(jq -r .worktree ~/.agent-orchestrator/projects/*/sessions/"$SESSION_ID".json 2>/dev/null | head -n 1)
+
+   if [ -z "$WORKTREE" ] || [ "$WORKTREE" = "null" ]; then
+     echo "ERROR: could not resolve worktree path for session $SESSION_ID"
+     echo "Expected: ~/.agent-orchestrator/projects/*/sessions/$SESSION_ID.json"
+     exit 1
+   fi
+   ```
+
+   Use **AskUserQuestion**:
+   > "Open VSCode on the new worker's worktree at `$WORKTREE` and launch the integrated browser?"
+
+   If yes:
+   ```bash
+   # New VSCode window on the worktree
+   code "$WORKTREE"
+
+   # Give VSCode a moment to mount the window, then trigger the browser command.
+   # `code --command` routes to the most recently focused VSCode instance, so
+   # the small sleep ensures the freshly-opened worktree window is the target.
+   # Adjust the command id below to match the extension you have installed:
+   #   - "browser.openIntegrated"     (Browser Preview extension)
+   #   - "workbench.action.openBrowser" (built-in simple preview, if available)
+   #   - "browser-preview.openPreview"  (older extension spelling)
+   sleep 2
+   code --command "browser.openIntegrated" || true
+   ```
+
+   The trailing `|| true` is intentional: if the browser extension isn't installed, the command will exit non-zero and we don't want that to look like a spawn failure.
 
 **Output**
 
@@ -100,6 +148,8 @@ Spawn an Agent Orchestrator worker for a change.
 **Status:** in-progress
 
 AO agent is now working on this change.
+**Session:** {session_id}
+**Worktree:** {worktree_path}
 ```
 
 **Error: No ao-ready issues found**
@@ -118,6 +168,9 @@ To override and spawn anyway, re-run with --no-spec-check.
 **Prerequisites**
 - `gh` CLI must be authenticated
 - `ao` CLI must be installed and configured
+- `ao start` must be running for the target project (run `ao status` to check; `ao start` if not). `ao spawn` will fail-fast with a clear error if it isn't.
+- `jq` must be on `$PATH` (used in step 8 to resolve the worktree path from the session JSON)
+- `code` (VSCode) CLI must be on `$PATH` (used in step 8). A browser-preview extension should be installed for the `browser.openIntegrated` command to land.
 - At least one issue with `status:ao-ready` label exists
 - For spec-driven issues: the referenced openspec change directory must exist on local `main` (use `--no-spec-check` to override)
 - Local `main` is preferred to be in sync with `origin/main` (warned if ahead; not blocked)
