@@ -220,6 +220,20 @@ class EffectsCoordinator:
         # the first call prints immediately so we don't wait 1s just to
         # learn the mode is wrong.
         self._diag_last_print: float = 0.0
+        # File-based diagnostic side-channel. The journal on the Pi goes
+        # silent exactly when the main loop starts (after MatrixDisplay
+        # init at 02:55:57.488 and MQTT subscribe at 02:55:57.707), but
+        # the process stays alive (status.json updates, last_tick_age_ms=0).
+        # We don't yet know whether the journal silence is a stdout
+        # buffering issue, a journald flushing issue, or something in
+        # the rgbmatrix C extension closing fd 1/2. Writing to a file
+        # gives us a side-channel that doesn't go through fd 1/2 at all
+        # — if the file gets data, the Python code is reaching the
+        # diagnostic; if not, it isn't. The handle is opened lazily on
+        # the first `tick()` so a coordinator constructed during tests
+        # (no /tmp access, or write-protected) doesn't crash at __init__.
+        self._diag_file = None
+        self._diag_call_count: int = 0
         # Render-layer diff state: structural fingerprints of the
         # rotation list and text settings, used to gate the
         # rotation rebuild and scroller setter calls in `tick()`.
@@ -457,6 +471,23 @@ class EffectsCoordinator:
         """
         if not self.is_bound():
             return
+        # File-based diagnostic side-channel (see `_diag_file` in __init__).
+        # Opens the handle on the first tick so import-time failures
+        # (read-only /, etc.) don't break construction. The handle is
+        # line-buffered so `tail -f /tmp/coordinator-diag.log` sees
+        # output immediately. Throttled to ~1Hz via `_diag_last_print`
+        # so we don't burn the SD card; the counter is incremented on
+        # every tick (also throttled to once per second) so we can
+        # confirm ticks are happening at all even when the 1Hz gate
+        # hasn't expired.
+        if self._diag_file is None:
+            try:
+                self._diag_file = open(
+                    "/tmp/coordinator-diag.log", "a", buffering=1
+                )
+            except OSError:
+                self._diag_file = None
+        self._diag_call_count += 1
         # 1Hz top-of-tick diagnostic: prints once per second regardless of
         # mode. Tells us (a) whether `tick()` is being called at all and
         # (b) what mode the state machine is in. Critical for the case
@@ -468,15 +499,25 @@ class EffectsCoordinator:
         now_top = time.monotonic()
         if now_top - self._diag_last_print >= 1.0:
             effects_settings_top = self.effects_settings
-            print(
+            diag_line = (
                 f"DEBUG coordinator TICK: mode={self.mode} "
                 f"elapsed={(now_top - self.phase_start):.2f}s "
                 f"intro={effects_settings_top.intro_seconds} "
                 f"fade={effects_settings_top.fade_seconds} "
                 f"hold={effects_settings_top.hold_seconds} "
-                f"idle={effects_settings_top.idle_seconds}",
-                flush=True,
+                f"idle={effects_settings_top.idle_seconds} "
+                f"call_count={self._diag_call_count}"
             )
+            print(diag_line, flush=True)
+            # Mirror to the file side-channel so we can read it even if
+            # the journal is silent (the symptom the user is seeing on
+            # the Pi — the journal goes quiet at 02:55:57.707, but the
+            # process is alive and status.json updates).
+            if self._diag_file is not None:
+                try:
+                    self._diag_file.write(diag_line + "\n")
+                except OSError:
+                    pass
             self._diag_last_print = now_top
         # Local aliases for the bound layer — Pyright doesn't narrow
         # `self.display` etc. through `is_bound()`, but the guard above
