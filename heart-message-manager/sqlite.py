@@ -5,6 +5,7 @@ rebuilding SQLite from S3 on startup.
 """
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
@@ -13,7 +14,23 @@ from lib_shared.models import SignConfig, Message
 
 
 def _db_path() -> Path:
-    """Return the path to the SQLite database file."""
+    """Return the path to the SQLite database file.
+
+    On Heroku, the runtime filesystem under `/app` is read-only at
+    runtime (the build extracts code to /app; the dyno gets a
+    read-only view of that extraction). Writing the SQLite file to
+    `/app/heart-message-manager/db.sqlite` therefore fails with
+    "attempt to write a readonly database" / "disk I/O error" when
+    `init_db()` runs on boot. Heroku sets the `DYNO` env var on every
+    dyno; when it's set, write to `/tmp` instead. The DB is rebuilt
+    from S3 on every boot, so /tmp's ephemeral nature is fine — the
+    dyno restart that wipes /tmp also rebuilds the DB on next boot.
+
+    On laptop / Pi, the DB lives next to the source under
+    `heart-message-manager/db.sqlite` as before.
+    """
+    if os.environ.get("DYNO"):
+        return Path("/tmp/lindsay50.db.sqlite")
     return Path(__file__).parent.parent / "heart-message-manager" / "db.sqlite"
 
 
