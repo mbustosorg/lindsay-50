@@ -194,14 +194,6 @@ status_writer = make_status_writer(
     snapshot_builder=lambda: _build_status_snapshot(_LAST_TICK_MONOTONIC),
 )
 
-# DEBUG: main-loop control print. If this fires but the per-second
-# coordinator tick print doesn't, the issue is inside the
-# coordinator's tick() (e.g. is_bound() returning False, an
-# exception being swallowed). If neither fires, the main loop
-# itself is broken — but background animations would also stop in
-# that case, so this print mostly rules the loop out.
-_LOOP_COUNT = 0
-
 
 # SIGTERM (systemd stop / `kill`) doesn't raise an exception by default, so the
 # `finally` below would never run. Turn it into SystemExit so cleanup happens on
@@ -217,15 +209,6 @@ try:
     while True:
         coordinator.tick()
         _LAST_TICK_MONOTONIC = time.monotonic()
-        # DEBUG: control print — confirms the main loop is reaching
-        # this line and runs at the expected rate. Throttled to one
-        # line per second to keep the journal readable.
-        _LOOP_COUNT += 1
-        if _LOOP_COUNT % 60 == 0:
-            print(
-                f"DEBUG main.loop: count={_LOOP_COUNT} t={_LAST_TICK_MONOTONIC:.2f}",
-                flush=True,
-            )
         status_writer.tick()
 except (KeyboardInterrupt, SystemExit):
     log.info("interrupted, shutting down")
