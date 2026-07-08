@@ -521,91 +521,66 @@ class EffectsCoordinator:
         explicit `apply_settings` call needed. Config updates land
         at most one frame later.
         """
-        # DEBUG: outer try/except. The inner render-block try/except
-        # at the bottom of tick() catches render-time exceptions, but
-        # the state-machine body above can also throw (e.g. config is
-        # None mid-flight, current_messages empty, etc.). Wrap the
-        # whole body so any exception reaches the journal via os.write
-        # to fd 1 (bypassing print/logger) AND /tmp/coordinator-exception.log.
-        # Re-raise so the main loop's existing (KeyboardInterrupt,
-        # SystemExit) handler still runs.
+        # AGGRESSIVE DEBUG: write to multiple paths and mechanisms
+        # on EVERY tick. If ANY of these work, we have a signal.
+        try:
+            with open("/srv/lindsay-50/.coordinator-tick.log", "a", buffering=1) as _f:
+                _f.write(f"tick called {time.monotonic()}\n")
+        except OSError:
+            pass
+        try:
+            os.write(1, f"TICK_ENTRY {time.monotonic()}\n".encode())
+        except OSError:
+            pass
+
         try:
             self._tick_inner()
         except BaseException as _exc:
             import traceback as _tb
             _tb_text = _tb.format_exc()
             try:
-                os.write(1, f"EXCEPTION in tick body: {_exc!r}\n".encode())
-                os.write(1, _tb_text.encode())
+                with open("/srv/lindsay-50/.coordinator-exception.log", "a", buffering=1) as _ef:
+                    _ef.write(f"EXCEPTION at tick {time.monotonic()}:\n")
+                    _ef.write(_tb_text)
+                    _ef.write("\n")
             except OSError:
                 pass
             try:
-                with open("/tmp/coordinator-exception.log", "a", buffering=1) as _ef:
-                    _ef.write(f"EXCEPTION call={self._diag_call_count} mode={self.mode}\n")
-                    _ef.write(_tb_text)
-                    _ef.write("\n")
+                os.write(1, f"EXCEPTION: {_exc!r}\n{_tb_text}\n".encode())
             except OSError:
                 pass
             raise
 
     def _tick_inner(self):
-        # File-based diagnostic side-channel (see `_diag_file` in __init__).
-        # CRITICAL: this is BEFORE the `is_bound()` check on purpose.
-        # 5d9f099 had it inside the guard, and the file was never
-        # created on the Pi — meaning `is_bound()` is False (which is
-        # the real bug), but the lack of a file proved it from the
-        # outside because nothing wrote to disk. Opening the handle
-        # here means the file is created on the very first `tick()`
-        # call regardless of bound state. The counter increments on
-        # every tick (not throttled) so we can confirm tick() is
-        # being called and at what rate.
-        # DEBUG: unconditional heartbeat at the very top of tick().
-        # Prints to stdout AND writes to /tmp/coordinator-tick-entry.log
-        # via a fresh handle every second (no persistent handle —
-        # avoids the same OSError-silent-failure pattern). If this
-        # print doesn't show in the journal AND the file doesn't
-        # exist, tick() isn't being called at all. If the file
-        # exists but the print doesn't show, something is silencing
-        # stdout after the rgbmatrix library init.
+        # DEBUG: unconditional heartbeat. Throttled to 1Hz.
         _now_hb = time.monotonic()
         if _now_hb - self._diag_last_print >= 1.0:
             try:
-                with open("/tmp/coordinator-tick-entry.log", "a", buffering=1) as _hb:
-                    _hb.write(
-                        f"tick_entered call_count={self._diag_call_count} ts={_now_hb}\n"
+                os.write(
+                    1,
+                    f"DEBUG coordinator tick() body entered: call_count={self._diag_call_count} mode={self.mode}\n".encode(),
+                )
+            except OSError:
+                pass
+            try:
+                with open("/srv/lindsay-50/.coordinator-state.log", "a", buffering=1) as _hf:
+                    _hf.write(
+                        f"tick body call={self._diag_call_count} mode={self.mode} bound={self.is_bound()}\n"
                     )
             except OSError:
                 pass
-            print(
-                f"DEBUG coordinator tick() entered: call_count={self._diag_call_count}",
-                flush=True,
-            )
-        if self._diag_file is None:
-            try:
-                self._diag_file = open(
-                    "/tmp/coordinator-diag.log", "a", buffering=1
-                )
-            except OSError:
-                self._diag_file = None
         self._diag_call_count += 1
-        # Throttled file write that runs REGARDLESS of `is_bound()` —
-        # proves the tick reached this point and shows the call rate.
-        # Without this, if `is_bound()` returns False the file is
-        # created (good) but stays empty (useless). Reuses the
-        # existing 1Hz `_diag_last_print` gate so we don't burn the
-        # SD card with 60Hz writes.
-        if self._diag_file is not None:
-            now_file = time.monotonic()
-            if now_file - self._diag_last_print >= 1.0:
-                try:
-                    self._diag_file.write(
-                        f"tick_call_count={self._diag_call_count} "
-                        f"is_bound={self.is_bound()}\n"
-                    )
-                except OSError:
-                    pass
         if not self.is_bound():
             return
+        # DEBUG: we are bound. Print every 1s.
+        if _now_hb - self._diag_last_print >= 1.0:
+            try:
+                os.write(
+                    1,
+                    f"DEBUG coordinator IS_BOUND: call_count={self._diag_call_count} mode={self.mode}\n".encode(),
+                )
+            except OSError:
+                pass
         # 1Hz top-of-tick diagnostic: prints once per second regardless of
         # mode. Tells us (a) whether `tick()` is being called at all and
         # (b) what mode the state machine is in. Critical for the case
@@ -707,6 +682,14 @@ class EffectsCoordinator:
         text = self._last_display_message
 
         if mode == "intro":
+            # AGGRESSIVE DEBUG: print every time we enter the intro branch
+            try:
+                os.write(
+                    1,
+                    f"DEBUG coordinator INTRO_BRANCH: elapsed={(time.monotonic() - self.phase_start):.2f}s intro_seconds={effects_settings.intro_seconds}\n".encode(),
+                )
+            except OSError:
+                pass
             # DEBUG: 1Hz intro progress print (separate gate from the
             # top-of-tick print, so it ALWAYS fires once per second).
             # Confirms whether intro_seconds is elapsing as expected
