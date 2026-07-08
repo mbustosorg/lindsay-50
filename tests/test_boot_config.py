@@ -326,9 +326,7 @@ class TestFromHerokuOrGit:
         # argument via the function's __defaults__ keeps the call site
         # unchanged for the rest of the suite.
         dyno_file = tmp_path / "dyno"
-        dyno_file.write_text(
-            json.dumps({"release": {"commit": "dynocafe1234567890abcdef"}})
-        )
+        dyno_file.write_text(json.dumps({"release": {"commit": "dynocafe1234567890abcdef"}}))
         original_default = _from_dyno_metadata.__defaults__
         try:
             _from_dyno_metadata.__defaults__ = (dyno_file,)
@@ -353,9 +351,7 @@ class TestFromHerokuOrGit:
         # When the env var is set, we should never even read the file.
         os.environ["HEROKU_SLUG_COMMIT"] = "slugabc"
         dyno_file = tmp_path / "dyno"
-        dyno_file.write_text(
-            json.dumps({"release": {"commit": "dynocafe1234567890abcdef"}})
-        )
+        dyno_file.write_text(json.dumps({"release": {"commit": "dynocafe1234567890abcdef"}}))
         original_default = _from_dyno_metadata.__defaults__
         try:
             _from_dyno_metadata.__defaults__ = (dyno_file,)

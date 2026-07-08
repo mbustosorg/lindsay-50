@@ -126,13 +126,41 @@ SMS → Twilio → POST /api/messages → Flask
                         (display updates)                      (live ring buffer)
 ```
 
-- `heart-message-manager/main.py` — Flask app, publishes envelopes via MQTT client, serves admin UI.
+```
+Pi 4 → StatusWriter.tick() ─┬─→ .status.json (loader probe signal)
+                            └─→ StatusPublisher.publish() → MQTT_STATUS_TOPIC
+                                                              │
+                                                              ▼
+                                                     Flask subscribes
+                                                              │
+                                                              ▼
+                                                    LatestSignStatus
+                                                    (in-memory, RLock)
+                                                              │
+                                                              ▼
+                                                GET /api/sign-status (one-shot
+                                                  load-time fetch by browser)
+                                                              │
+                                                              ▼
+                                                Browser WS subscription on
+                                                MQTT_STATUS_TOPIC → live updates
+                                                              │
+                                                              ▼
+                                                Dashboard pill + Settings page
+```
+
+- `heart-message-manager/main.py` — Flask app, publishes envelopes via MQTT client, serves admin UI. Subscribes to both `MQTT_TOPIC` (envelope flow) and `MQTT_STATUS_TOPIC` (status flow) via the dual-topic `PahoMqttClient` extension. Exposes `GET /api/sign-status` for browser load-time hydration.
 - `lib_shared/mqtt_factory.py` — `make_mqtt_client()` picks the client from `MQTT_CLIENT` (defaults to paho); both entrypoints call it.
 - `lib_shared/adafruit_mqtt_client.py` — wraps `Adafruit_IO.MQTTClient` (Heroku, `MQTT_CLIENT="adafruit"`).
-- `lib_shared/paho_mqtt_client.py` — wraps `paho-mqtt`; subscribe loop in a daemon thread (auto-reconnect), plus `publish_envelope()` for Flask. Used by local dev and the Pi.
+- `lib_shared/paho_mqtt_client.py` — wraps `paho-mqtt`; subscribe loop in a daemon thread (auto-reconnect), plus `publish_envelope()` for Flask. Used by local dev and the Pi. Two-topic extension: optional `status_topic` + `status_dispatch_callback` for the status flow.
+- `lib_shared/sign_status.py` — `LatestSignStatus` — Flask-side in-memory holder for the most recent `StatusSnapshot` (RLock-guarded, defensive-copy semantics, `received_at_wallclock()` ISO-8601 timestamp).
+- `heart-matrix-controller/status.py` — `StatusSnapshot` (8-key shape: `schema_version`, `active_sha`, `short_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_error`) + `StatusWriter` (atomic file write + MQTT publish in the same `tick()` call, 5s cadence).
+- `heart-matrix-controller/status_publisher.py` — `StatusPublisher` — long-lived paho publisher for the status flow (single client + `connect_async` + `loop_start`, non-blocking thread-safe `publish()` at QoS 0).
+- `heart-matrix-controller/loader.py` — `BOOT_HOLD_S = 17.0` (3× status.json writes × 5s + 2s slack) — pre-swap probe hold. `_is_status_healthy` is the two-signal contract (`mqtt_connected === true` AND `last_error is None`); the legacy `last_tick_age_ms` check was removed when the field was dropped from the snapshot.
+- `heart-matrix-controller/main.py` — Pi entrypoint; seeds, starts MQTT, runs `EffectCoordinator.tick()` which advances + composites each frame. Also instantiates `StatusPublisher` and passes it to `StatusWriter`.
 - `heart-matrix-controller/rgb_display.py` — Pi: wraps hzeller `RGBMatrix`; provides `Bitmap`/`Palette`/`arrayblit` (the displayio subset the effects use), the `Effect` base, and the per-frame composite (`Display.render`).
-- `heart-matrix-controller/main.py` — Pi entrypoint; seeds, starts MQTT, runs `EffectCoordinator.tick()` which advances + composites each frame.
 - `lib_shared/message_manager.py` — Shared `MessageManager`; Flask seeds from REST API, the Pi seeds from Flask's REST API.
+- `heart-message-manager/static/sign_status.js` — Browser-side module: load-time `fetch('/api/sign-status')` (one-shot) + a second `createMqttWsClient` for the status topic + 5s `setInterval` re-render. Renders the Dashboard pill (4 states: live-healthy | live-degraded | unknown | offline) and the Settings-page Sign Health section. No-op on pages with neither `#sign-live-pill` nor `[data-sign-status-field]`.
 
 ## Browser runtime: PyScript, not a separate JS app
 

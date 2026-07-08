@@ -372,8 +372,7 @@ class EffectsCoordinator:
         self.mode = "intro"
         self.phase_start = time.monotonic()
         print(
-            f"DEBUG EffectsCoordinator.start: mode=intro phase_start=now "
-            f"heart={type(self.heart).__name__}",
+            f"DEBUG EffectsCoordinator.start: mode=intro phase_start=now " f"heart={type(self.heart).__name__}",
             flush=True,
         )
 
@@ -467,7 +466,9 @@ class EffectsCoordinator:
             scroller_text = self.scroller.text or ""
         log.info(
             "Coordinator._begin_out: from mode=%s effect=%s scroller_text=%r",
-            self.mode, self.current_effect_name, scroller_text,
+            self.mode,
+            self.current_effect_name,
+            scroller_text,
         )
         # DEBUG: stdout mirror.
         print(
@@ -535,9 +536,7 @@ class EffectsCoordinator:
         if _now_hb - self._diag_last_print >= 1.0:
             try:
                 with open("/tmp/coordinator-tick-entry.log", "a", buffering=1) as _hb:
-                    _hb.write(
-                        f"tick_entered call_count={self._diag_call_count} ts={_now_hb}\n"
-                    )
+                    _hb.write(f"tick_entered call_count={self._diag_call_count} ts={_now_hb}\n")
             except OSError:
                 pass
             print(
@@ -546,9 +545,7 @@ class EffectsCoordinator:
             )
         if self._diag_file is None:
             try:
-                self._diag_file = open(
-                    "/tmp/coordinator-diag.log", "a", buffering=1
-                )
+                self._diag_file = open("/tmp/coordinator-diag.log", "a", buffering=1)
             except OSError:
                 self._diag_file = None
         self._diag_call_count += 1
@@ -562,10 +559,7 @@ class EffectsCoordinator:
             now_file = time.monotonic()
             if now_file - self._diag_last_print >= 1.0:
                 try:
-                    self._diag_file.write(
-                        f"tick_call_count={self._diag_call_count} "
-                        f"is_bound={self.is_bound()}\n"
-                    )
+                    self._diag_file.write(f"tick_call_count={self._diag_call_count} " f"is_bound={self.is_bound()}\n")
                 except OSError:
                     pass
         if not self.is_bound():
@@ -626,7 +620,8 @@ class EffectsCoordinator:
         if rotation != self._last_rotation:
             log.info(
                 "Coordinator rotation rebuild: prev=%s new=%s",
-                self._last_rotation, rotation,
+                self._last_rotation,
+                rotation,
             )
             self.effects = build_effects(effects_settings, display=display)
             self.idx = -1  # next fade picks the head of the new list
@@ -635,14 +630,16 @@ class EffectsCoordinator:
         if text_settings.color != self._last_text_color:
             log.info(
                 "Coordinator scroller color change: prev=%s new=%s",
-                self._last_text_color, text_settings.color,
+                self._last_text_color,
+                text_settings.color,
             )
             scroller.set_color(text_settings.color)
             self._last_text_color = text_settings.color
         if text_settings.speed != self._last_text_speed:
             log.info(
                 "Coordinator scroller speed change: prev=%s new=%s",
-                self._last_text_speed, text_settings.speed,
+                self._last_text_speed,
+                text_settings.speed,
             )
             scroller.set_speed(text_settings.speed)
             self._last_text_speed = text_settings.speed
@@ -657,7 +654,9 @@ class EffectsCoordinator:
             if new_text != self._last_display_message:
                 log.info(
                     "Coordinator pull changed: prev=%r new=%r last_shown_id=%s",
-                    self._last_display_message, new_text, self._last_shown_message_id,
+                    self._last_display_message,
+                    new_text,
+                    self._last_shown_message_id,
                 )
                 # DEBUG: same event, printed to stdout to bypass any
                 # logger-side filtering that is hiding the log.info calls.
@@ -734,8 +733,10 @@ class EffectsCoordinator:
                     self.showing_text = False
                 log.info(
                     "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s",
-                    self.idx, self.current_effect_name,
-                    text if text else "", self.showing_text,
+                    self.idx,
+                    self.current_effect_name,
+                    text if text else "",
+                    self.showing_text,
                 )
                 # DEBUG: stdout mirror — bypass logger filter if "heart" is silenced.
                 print(
@@ -756,7 +757,8 @@ class EffectsCoordinator:
                 next_mode = "hold" if self.showing_text else "background"
                 log.info(
                     "Coordinator in→%s: effect=%s text=%r",
-                    next_mode, self.current_effect_name,
+                    next_mode,
+                    self.current_effect_name,
                     self.last_shown_text or "",
                 )
                 # DEBUG: stdout mirror.
@@ -790,8 +792,7 @@ class EffectsCoordinator:
             #     instantly. The fix: gate the interrupt on the ID, not the
             #     body, and idle `hold_seconds` otherwise.
             fresh_id_landed = (
-                self.current_messages
-                and self.current_messages[0].message.id not in self._consumed_message_ids
+                self.current_messages and self.current_messages[0].message.id not in self._consumed_message_ids
             )
             if now - self._diag_last_print >= 1.0:
                 entries = self.current_messages
@@ -809,7 +810,8 @@ class EffectsCoordinator:
             if fresh_id_landed:
                 log.info(
                     "Coordinator hold interrupt (new id): pending_text=%r last_shown=%r new_id=%s",
-                    text, self.last_shown_text,
+                    text,
+                    self.last_shown_text,
                     self.current_messages[0].message.id,
                 )
                 # DEBUG: stdout mirror.
@@ -822,8 +824,10 @@ class EffectsCoordinator:
             elif now - self.phase_start >= effects_settings.hold_seconds:
                 log.info(
                     "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
-                    self.current_effect_name, self.last_shown_text,
-                    now - self.phase_start, effects_settings.hold_seconds,
+                    self.current_effect_name,
+                    self.last_shown_text,
+                    now - self.phase_start,
+                    effects_settings.hold_seconds,
                 )
                 # DEBUG: stdout mirror.
                 print(
@@ -862,13 +866,9 @@ class EffectsCoordinator:
             # info on the trigger — we just know the cycle restarted.
             entries_bg = self.current_messages
             head_id_bg = entries_bg[0].message.id if entries_bg else None
-            fresh_id_bg = bool(
-                entries_bg and entries_bg[0].message.id not in self._consumed_message_ids
-            )
+            fresh_id_bg = bool(entries_bg and entries_bg[0].message.id not in self._consumed_message_ids)
             random_pick_changed_bg = bool(text) and text != self.last_shown_text
-            idle_timed_out_bg = (
-                now - self.phase_start >= effects_settings.idle_seconds
-            )
+            idle_timed_out_bg = now - self.phase_start >= effects_settings.idle_seconds
             if now - self._diag_last_print >= 1.0:
                 print(
                     f"DEBUG coordinator background TICK: head_id={head_id_bg} "
@@ -900,15 +900,13 @@ class EffectsCoordinator:
             random_pick_changed = random_pick_changed_bg
             idle_timed_out = idle_timed_out_bg
             if fresh_id_landed or random_pick_changed or idle_timed_out:
-                trigger = (
-                    "new_id" if fresh_id_landed
-                    else "random_repick" if random_pick_changed
-                    else "idle"
-                )
+                trigger = "new_id" if fresh_id_landed else "random_repick" if random_pick_changed else "idle"
                 log.info(
                     "Coordinator background→out (%s): waited=%.1fs idle_seconds=%.1f next_text=%r",
-                    trigger, now - self.phase_start,
-                    effects_settings.idle_seconds, text or "",
+                    trigger,
+                    now - self.phase_start,
+                    effects_settings.idle_seconds,
+                    text or "",
                 )
                 # DEBUG: stdout mirror.
                 print(

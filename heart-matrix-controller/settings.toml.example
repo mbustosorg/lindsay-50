@@ -17,6 +17,19 @@ MQTT_USERNAME = "YOUR_AIO_USERNAME"
 MQTT_PASSWORD = "YOUR_AIO_KEY"
 MQTT_TOPIC = "YOUR_AIO_USERNAME/feeds/YOUR_AIO_FEED_NAME"
 
+# Status topic — the Pi publishes its health snapshot (schema_version,
+# active_sha, short_sha, started_at, updated_at, uptime_seconds,
+# mqtt_connected, last_error) to this topic every 5s. The Flask
+# server subscribes to it and forwards updates to the browser.
+# Empty = derive as "{MQTT_TOPIC}-status" (e.g.
+# "mbustosorg/feeds/lindsay50-status"). On Adafruit IO the
+# corresponding feed must be created in the AIO dashboard
+# before the first publish — the broker silently rejects
+# publishes to a non-existent feed. The env var
+# `MQTT_STATUS_TOPIC` (if set) takes precedence over this
+# value at process start.
+MQTT_STATUS_TOPIC = ""
+
 # Flask server REST API URLs for seeding config and messages on boot.
 # The ESP32 boots without persistent storage, so it seeds from the Flask server.
 MESSAGES_API_URL = "http://YOUR_FLASK_HOST/api/messages"

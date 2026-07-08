@@ -122,7 +122,9 @@ class ScrollerBase:
         # toggling LOG_LEVEL.
         log.info(
             "Scroller.set_text: text=%r text_width=%d canvas_width=%d",
-            self.text, self.text_width, canvas_width,
+            self.text,
+            self.text_width,
+            canvas_width,
         )
 
     def tick(self, canvas_width):

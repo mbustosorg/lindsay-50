@@ -612,9 +612,9 @@ class TestSettingsSaveFormFieldMerge:
             "effects_settings_fade_seconds",
             "effects_settings_recent_count",
         ):
-            assert key in raw_records[0].getMessage(), (
-                f"raw-form log missing {key!r}; got: {raw_records[0].getMessage()[:500]}"
-            )
+            assert (
+                key in raw_records[0].getMessage()
+            ), f"raw-form log missing {key!r}; got: {raw_records[0].getMessage()[:500]}"
 
         # Pacing merge summary must report fade_seconds as POST='5' saved=5.0.
         merge_records = [r for r in caplog.records if "[settings] effect pacing merge" in r.getMessage()]
