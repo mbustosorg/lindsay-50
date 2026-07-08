@@ -363,7 +363,17 @@ def exec_active(
     """
     main_py = main_py_for(repo_dir)
     env = _build_exec_env(repo_dir, active_sha)
-    logger.info("loader: execvpe python3 %s", main_py)
+    # Belt-and-braces: log the EXACT PYTHONPATH we're about to hand the
+    # kernel via os.execvpe. If this matches /proc/<pid>/environ, the
+    # override is working. If they differ, something between
+    # _build_exec_env and the kernel is rewriting PYTHONPATH (likely
+    # the systemd unit, the bash script, or a stale `.pyc`).
+    logger.info(
+        "loader: execvpe python3 %s with PYTHONPATH=%r LINDSAY50_REPO_DIR=%r",
+        main_py,
+        env.get("PYTHONPATH"),
+        env.get(ENV_REPO_DIR),
+    )
     os.execvpe(sys.executable, [sys.executable, main_py], env)
 
 
