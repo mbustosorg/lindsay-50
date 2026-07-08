@@ -758,20 +758,39 @@ class TestSetupPiRequirements:
             "fail to build on the laptop anyway)"
         )
 
-    def test_no_root_requirements_txt(self):
-        """The old root requirements.txt has been split — it must not exist.
+    def test_root_requirements_txt_is_heroku_shim(self):
+        """The root requirements.txt must exist ONLY as a Heroku buildpack shim
+        that defers to `requirements-flask.txt`.
 
-        A lingering root requirements.txt would silently get picked up by
-        Heroku (which defaults to that path) — masking the new file layout
-        and re-introducing the split bug.
+        Heroku's python buildpack only recognizes `requirements.txt` at the
+        repo root — `PIP_REQUIREMENTS_PATH` is not honored at the initial
+        detection step. So the root file must be a one-line shim containing
+        `-r requirements-flask.txt`, not a copy of the deps (which would
+        silently diverge from the source-of-truth file).
+
+        The earlier test that asserted the file must not exist predates the
+        discovery of the buildpack quirk; the shim is the correct shape.
         """
         path = PROJECT_ROOT / "requirements.txt"
-        assert not path.exists(), (
-            "requirements.txt must NOT exist at the repo root after the "
-            "split — Heroku's default lookup would silently re-export the "
-            "old combined deps. Use requirements-flask.txt via the "
-            "PIP_REQUIREMENTS_PATH heroku config var instead."
+        assert path.exists(), (
+            f"{path} must exist as a Heroku buildpack shim — the buildpack "
+            "ignores PIP_REQUIREMENTS_PATH at detection time."
         )
+        text = path.read_text()
+        assert "-r requirements-flask.txt" in text, (
+            f"{path} must defer to requirements-flask.txt via `-r` include, "
+            f"not duplicate the deps inline. Got:\n{text}"
+        )
+        # Belt-and-braces: the shim must not list a dep of its own (which
+        # would silently shadow requirements-flask.txt).
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#") or stripped.startswith("-r"):
+                continue
+            raise AssertionError(
+                f"{path} must be a pure shim; only `-r` includes allowed. "
+                f"Offending line: {stripped!r}"
+            )
 
 
 class TestStartupScript:

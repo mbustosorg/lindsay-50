@@ -20,3 +20,9 @@ twilio>=8.0       # inbound SMS webhook signature validation
 
 # HTTP (MessageManager seed)
 requests>=2.31
+
+# lib_shared/patterns/honeycomb.py imports numpy unconditionally
+# (Pixelblaze HSV pattern port). lib_shared is imported by both the
+# Flask server and the Pi, so the dep must live here too — not just
+# in requirements-pi.txt.
+numpy>=2.0

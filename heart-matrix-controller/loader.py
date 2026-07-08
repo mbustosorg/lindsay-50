@@ -526,6 +526,7 @@ def run_upgrade_flow(
     api_url: str,
     api_key: str,
     fetch_fn: Callable[..., Optional[str]] = fetch_expected_sha,
+    refresh_fn: Callable[[Path], bool] = refresh_bare_repo,
     stage_fn: Callable[[Path, str], Path] = stage_version,
     probe_fn: Callable[..., bool] = probe,
     swap_fn: Callable[[Path, str], None] = atomic_swap,
@@ -562,7 +563,7 @@ def run_upgrade_flow(
     # until we fetch. Refreshing before staging is the fix.
     # On failure, fall through to existing current — same posture as a
     # failed boot-config fetch above.
-    if not refresh_bare_repo(repo_dir):
+    if not refresh_fn(repo_dir):
         exec_fn(repo_dir, local or "")
         return
 

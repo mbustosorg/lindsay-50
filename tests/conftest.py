@@ -11,6 +11,13 @@ import pytest
 # Ensure project root is on the path so lib_shared is importable
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+# The Pi-side modules (`check_for_update`, `status`) live in
+# `heart-matrix-controller/` and aren't a real package (no __init__.py
+# that exposes them). Add the directory to sys.path so tests can do
+# `from check_for_update import …` / `from status import …` directly.
+_HMC_DIR = Path(__file__).parent.parent / "heart-matrix-controller"
+sys.path.insert(0, str(_HMC_DIR))
+
 # Expose the hyphenated heart-message-manager/ directory under the
 # package name `heart_message_manager` so tests can do
 # `from heart_message_manager.preview_scroller import PreviewScroller`.

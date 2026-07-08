@@ -39,11 +39,20 @@ def _short(sha: str) -> str:
 
 
 def _load_loader():
-    """Load loader.py fresh from disk by path."""
+    """Load loader.py fresh from disk by path.
+
+    Registers the module under the name `loader` (NOT just
+    `hmc_loader_under_test`) so tests can use `with patch("loader.os.execvpe")`
+    — `unittest.mock.patch` resolves its first argument by looking
+    the name up in `sys.modules`, and the long form fails with
+    `ModuleNotFoundError: No module named 'loader'` if we only register
+    the private name.
+    """
     spec = importlib.util.spec_from_file_location("hmc_loader_under_test", str(LOADER_PATH))
     assert spec is not None and spec.loader is not None
     mod = importlib.util.module_from_spec(spec)
     sys.modules["hmc_loader_under_test"] = mod
+    sys.modules["loader"] = mod
     spec.loader.exec_module(mod)
     return mod
 
@@ -674,6 +683,7 @@ class TestRunUpgradeFlowHappyPath:
             api_url="https://x/api/messages",
             api_key="k",
             fetch_fn=lambda **_kw: sha2,
+            refresh_fn=lambda *_a, **_kw: True,
             stage_fn=loader.stage_version,
             probe_fn=lambda *_a, **_kw: True,
             swap_fn=loader.atomic_swap,
@@ -698,6 +708,7 @@ class TestRunUpgradeFlowHappyPath:
             api_url="https://x/api/messages",
             api_key="k",
             fetch_fn=lambda **_kw: sha2,
+            refresh_fn=lambda *_a, **_kw: True,
             stage_fn=loader.stage_version,
             probe_fn=lambda *_a, **_kw: True,
             swap_fn=loader.atomic_swap,
@@ -740,6 +751,7 @@ class TestRunUpgradeFlowDoesNotReturn:
                         api_url="https://x/api/messages",
                         api_key="k",
                         fetch_fn=lambda **_kw: fetch_result,
+                        refresh_fn=lambda *_a, **_kw: True,
                         stage_fn=fake_stage,
                         probe_fn=lambda *_a, **_kw: probe_result,
                         swap_fn=lambda *_a, **_kw: None,
