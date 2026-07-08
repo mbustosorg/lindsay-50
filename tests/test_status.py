@@ -4,6 +4,12 @@ The status writer is the runtime health surface — the loader
 probes staged worktrees by reading the `.status.json` the app
 writes. Covers atomic write semantics, throttling, and
 defensive read handling.
+
+The snapshot's final field set is the 8-key spec shape:
+schema_version, active_sha, short_sha, started_at, updated_at,
+uptime_seconds (int), mqtt_connected, last_error. The previous
+fields pid / messages_rendered / last_tick_age_ms have no
+consumer and were dropped across the whole system.
 """
 
 from __future__ import annotations
@@ -26,53 +32,84 @@ class TestStatusSnapshot:
     def test_defaults(self):
         snap = StatusSnapshot()
         assert snap.schema_version == SCHEMA_VERSION
-        assert snap.pid == 0
         assert snap.active_sha == ""
+        assert snap.short_sha == ""
         assert snap.started_at == ""
         assert snap.updated_at == ""
-        assert snap.uptime_seconds == 0.0
+        assert snap.uptime_seconds == 0
+        assert isinstance(snap.uptime_seconds, int)
         assert snap.mqtt_connected is False
-        assert snap.last_tick_age_ms == 0
-        assert snap.messages_rendered == 0
         assert snap.last_error is None
 
     def test_to_dict_round_trip(self):
         snap = StatusSnapshot(
-            pid=1234,
-            active_sha="abc",
+            active_sha="abc1234",
+            short_sha="abc1234",
             started_at="2026-07-02T00:00:00+00:00",
             updated_at="2026-07-02T00:01:00+00:00",
-            uptime_seconds=60.0,
+            uptime_seconds=60,
             mqtt_connected=True,
-            last_tick_age_ms=42,
-            messages_rendered=10,
             last_error=None,
         )
         d = snap.to_dict()
-        assert d["pid"] == 1234
-        assert d["active_sha"] == "abc"
+        # The 8 spec keys are present.
+        expected_keys = {
+            "schema_version",
+            "active_sha",
+            "short_sha",
+            "started_at",
+            "updated_at",
+            "uptime_seconds",
+            "mqtt_connected",
+            "last_error",
+        }
+        assert set(d.keys()) == expected_keys
+        assert d["active_sha"] == "abc1234"
+        assert d["short_sha"] == "abc1234"
+        assert d["uptime_seconds"] == 60
+        assert isinstance(d["uptime_seconds"], int)
         assert d["mqtt_connected"] is True
         # Round-trip via JSON to confirm no non-serializable values.
         json.dumps(d)
+
+    def test_to_dict_drops_pid_messages_rendered_last_tick_age_ms(self):
+        """Round-trip safety: the dropped fields must NOT reappear.
+
+        The new 8-key shape replaces pid/messages_rendered/
+        last_tick_age_ms. A future regression that re-adds one of
+        them would re-introduce dead signal — assert they are
+        absent.
+        """
+        d = StatusSnapshot(active_sha="x").to_dict()
+        assert "pid" not in d
+        assert "messages_rendered" not in d
+        assert "last_tick_age_ms" not in d
+
+    def test_uptime_seconds_is_int_not_float(self):
+        """Spec: uptime_seconds is `int` (truncated to whole seconds)."""
+        snap = StatusSnapshot(uptime_seconds=90061)
+        d = snap.to_dict()
+        assert d["uptime_seconds"] == 90061
+        assert isinstance(d["uptime_seconds"], int)
+        assert not isinstance(d["uptime_seconds"], float)
 
 
 class TestStatusWriterAtomicWrites:
     def test_writes_atomically(self, tmp_path):
         path = tmp_path / ".status.json"
-        builder = MagicMock(return_value=StatusSnapshot(pid=1234, active_sha="abc"))
+        builder = MagicMock(return_value=StatusSnapshot(active_sha="abc"))
         writer = StatusWriter(path, builder, tick_interval_s=0.0)
         writer.tick()
         assert path.exists()
         # No leftover .tmp file.
         assert not (tmp_path / ".status.json.tmp").exists()
         payload = json.loads(path.read_text())
-        assert payload["pid"] == 1234
         assert payload["active_sha"] == "abc"
         assert payload["schema_version"] == SCHEMA_VERSION
 
     def test_swallowed_write_error_does_not_raise(self, tmp_path):
         path = tmp_path / ".status.json"
-        builder = MagicMock(return_value=StatusSnapshot(pid=1))
+        builder = MagicMock(return_value=StatusSnapshot(active_sha="x"))
         writer = StatusWriter(path, builder, tick_interval_s=0.0)
         # Replace the writer's path with something unwritable.
         writer._path = tmp_path / "no" / "such" / "dir" / ".status.json"
@@ -102,7 +139,7 @@ class TestStatusWriterThrottling:
 
         def builder():
             call_count[0] += 1
-            return StatusSnapshot(pid=call_count[0])
+            return StatusSnapshot(active_sha=str(call_count[0]))
 
         writer = StatusWriter(path, builder, tick_interval_s=10.0)
         writer.tick()
@@ -113,12 +150,12 @@ class TestStatusWriterThrottling:
         assert call_count[0] == first_count
 
     def test_uses_default_interval(self):
-        # The constant exists; the writer's default matches.
-        assert DEFAULT_TICK_INTERVAL_S == 3.0
+        # Unified cadence: 5s for both file and MQTT publish.
+        assert DEFAULT_TICK_INTERVAL_S == 5.0
 
     def test_tick_after_interval_flushes(self, tmp_path):
         path = tmp_path / ".status.json"
-        builder = MagicMock(return_value=StatusSnapshot(pid=1))
+        builder = MagicMock(return_value=StatusSnapshot(active_sha="x"))
         writer = StatusWriter(path, builder, tick_interval_s=0.05)
         writer.tick()
         time.sleep(0.06)
@@ -130,11 +167,21 @@ class TestStatusWriterThrottling:
 class TestReadStatus:
     def test_returns_dict_on_healthy_snapshot(self, tmp_path):
         path = tmp_path / ".status.json"
-        snap = StatusSnapshot(pid=42, mqtt_connected=True, last_tick_age_ms=10)
+        snap = StatusSnapshot(active_sha="x", mqtt_connected=True)
         path.write_text(json.dumps(snap.to_dict()))
         payload = read_status(path, now_monotonic=time.monotonic())
         assert payload is not None
-        assert payload["pid"] == 42
+        assert payload["active_sha"] == "x"
+        assert payload["mqtt_connected"] is True
+
+    def test_accepts_payload_without_pid(self, tmp_path):
+        """`pid` is dropped from the snapshot — read_status must not require it."""
+        path = tmp_path / ".status.json"
+        snap = StatusSnapshot(active_sha="x")
+        snap_dict = snap.to_dict()
+        assert "pid" not in snap_dict
+        path.write_text(json.dumps(snap_dict))
+        assert read_status(path, now_monotonic=time.monotonic()) is not None
 
     def test_returns_none_when_file_missing(self, tmp_path):
         assert read_status(tmp_path / "missing.json") is None
@@ -146,7 +193,7 @@ class TestReadStatus:
 
     def test_returns_none_on_schema_version_mismatch(self, tmp_path):
         path = tmp_path / ".status.json"
-        snap = StatusSnapshot(pid=1)
+        snap = StatusSnapshot(active_sha="x")
         snap_dict = snap.to_dict()
         snap_dict["schema_version"] = 999
         path.write_text(json.dumps(snap_dict))
@@ -159,12 +206,13 @@ class TestReadStatus:
 
     def test_returns_none_when_required_key_missing(self, tmp_path):
         path = tmp_path / ".status.json"
-        path.write_text(json.dumps({"schema_version": SCHEMA_VERSION, "pid": 1}))
+        path.write_text(json.dumps({"schema_version": SCHEMA_VERSION, "active_sha": "x"}))
+        # missing started_at, updated_at, mqtt_connected
         assert read_status(path) is None
 
     def test_returns_none_when_stale(self, tmp_path):
         path = tmp_path / ".status.json"
-        snap = StatusSnapshot(pid=1)
+        snap = StatusSnapshot(active_sha="x")
         path.write_text(json.dumps(snap.to_dict()))
         # Set mtime to 30s ago — older than the default 10s threshold.
         old_mtime = time.time() - 30
@@ -173,14 +221,14 @@ class TestReadStatus:
 
     def test_freshness_threshold_is_respected(self, tmp_path):
         path = tmp_path / ".status.json"
-        snap = StatusSnapshot(pid=1)
+        snap = StatusSnapshot(active_sha="x")
         path.write_text(json.dumps(snap.to_dict()))
         # mtime is "now"; with a 10s threshold we should read fine.
         assert read_status(path, now_monotonic=time.monotonic()) is not None
 
     def test_uses_injected_now_monotonic(self, tmp_path):
         path = tmp_path / ".status.json"
-        snap = StatusSnapshot(pid=1)
+        snap = StatusSnapshot(active_sha="x")
         path.write_text(json.dumps(snap.to_dict()))
         # Inject a `now_monotonic` 100s past mtime — should be stale.
         now = path.stat().st_mtime + 100

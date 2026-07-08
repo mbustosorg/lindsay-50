@@ -9,12 +9,20 @@ dispatch_callback(raw_payload) for each incoming message. The Flask
 server also uses publish_envelope() to push envelopes to the broker;
 the Pi is subscribe-only and simply never calls it. TLS is enabled
 automatically on port 8883 (e.g. io.adafruit.com).
+
+Two-topic support (status-flow extension): the constructor takes
+optional `status_topic` + `status_dispatch_callback` parameters. When
+both are set, the subscriber also subscribes to the status topic and
+dispatches incoming messages to `status_dispatch_callback` based on
+`msg.topic`. The two callbacks' exception paths are isolated — a
+raise in one does not affect the other. The envelope publish path is
+unchanged.
 """
 
 import logging
 import threading
 import time
-from typing import Callable
+from typing import Callable, Optional
 
 import paho.mqtt.client as mqtt
 
@@ -24,7 +32,11 @@ logger = logging.getLogger(__name__)
 class PahoMqttClient:
     """Owns the paho-mqtt client lifecycle.
 
-    Calls dispatch_callback(raw_payload) for each incoming message.
+    Calls dispatch_callback(raw_payload) for each incoming message on
+    the envelope topic. When `status_topic` + `status_dispatch_callback`
+    are both configured, also dispatches incoming messages on the
+    status topic to `status_dispatch_callback`. The two callbacks'
+    exception paths are isolated.
     """
 
     def __init__(
@@ -36,6 +48,8 @@ class PahoMqttClient:
         username: str,
         password: str,
         topic: str,
+        status_topic: Optional[str] = None,
+        status_dispatch_callback: Optional[Callable[[str], None]] = None,
     ) -> None:
         """Initialize the client.
 
@@ -45,11 +59,24 @@ class PahoMqttClient:
             port: MQTT broker port (int or numeric string — coerced to int).
             username: MQTT broker username.
             password: MQTT broker password.
-            topic: Wire-format topic to subscribe to and publish on. The
-                client does no broker-specific translation; for Adafruit
-                IO this must be the full "{username}/feeds/{feedname}" path.
+            topic: Wire-format topic for the envelope flow. The client
+                does no broker-specific translation; for Adafruit IO
+                this must be the full "{username}/feeds/{feedname}" path.
+            status_topic: Optional wire-format topic for the status flow.
+                When set, the client also subscribes to it and dispatches
+                incoming messages to `status_dispatch_callback`. Pass
+                exactly the same string you'd pass as `topic`; resolved
+                by `mqtt-status-topic-resolve` helper at the call site.
+            status_dispatch_callback: Optional callable for the status
+                flow. Required when `status_topic` is set.
         """
+        if status_topic is not None and status_dispatch_callback is None:
+            raise ValueError("PahoMqttClient: status_topic set without status_dispatch_callback")
+        if status_dispatch_callback is not None and status_topic is None:
+            raise ValueError("PahoMqttClient: status_dispatch_callback set without status_topic")
+
         self._dispatch = dispatch_callback
+        self._status_dispatch = status_dispatch_callback
         self._thread: threading.Thread | None = None
         self._stop: threading.Event | None = None
 
@@ -58,30 +85,40 @@ class PahoMqttClient:
         self._username = username
         self._password = password
         self._topic = topic
+        self._status_topic = status_topic
 
     def start(self) -> None:
         """Connect to the broker and run the subscriber loop in a daemon thread."""
         topic = self._topic
+        status_topic = self._status_topic
         logger.info(
-            "PahoMqttClient will subscribe to topic=%r username=%r",
+            "PahoMqttClient will subscribe to topic=%r status_topic=%r username=%r",
             topic,
+            status_topic,
             self._username,
         )
 
         def on_connect(_client, _userdata, _flags, rc):
             if rc == 0:
-                # Subscribe returns (result, mid) where result is an MQTT
-                # error code (0 = success) and mid is the message id the
-                # broker will use for the SUBACK. Log both so we can tell
-                # if the broker silently refused the subscription.
-                result, mid = _client.subscribe(topic)
-                logger.info(
-                    "PahoMqttClient connected, subscribed to %s "
-                    "(subscribe_result=%s mid=%s)",
-                    topic,
-                    result,
-                    mid,
-                )
+                # Subscribe to the envelope topic first (existing
+                # behavior). When status_topic is set, also subscribe
+                # to it — the same broker connection, the same
+                # SUBSCRIBE flow.
+                subscriptions = [(topic, 1)]
+                if status_topic is not None:
+                    subscriptions.append((status_topic, 1))
+                results = []
+                # `subscribe()` accepts a list; paho fires SUBACK
+                # asynchronously via `on_subscribe` for each.
+                for t, qos in subscriptions:
+                    r, mid = _client.subscribe(t, qos)
+                    logger.info(
+                        "PahoMqttClient subscribe attempt: topic=%s " "subscribe_result=%s mid=%s",
+                        t,
+                        r,
+                        mid,
+                    )
+                    results.append((t, r, mid))
             else:
                 logger.warning("PahoMqttClient connection failed: rc=%s", rc)
 
@@ -99,17 +136,49 @@ class PahoMqttClient:
             )
 
         def on_message(_client, _userdata, msg):
-            logger.info("PahoMqttClient received: topic=%s payload=%r", msg.topic, msg.payload)
-            try:
-                self._dispatch(msg.payload.decode(errors="replace"))
-                logger.debug("PahoMqttClient dispatch callback returned cleanly")
-            except Exception as e:
-                # A throwing dispatch handler should NOT kill the paho
-                # network loop, but if it does, we want the cause in the
-                # journal — not just a hung subscription with no clue why.
-                logger.warning(
-                    "PahoMqttClient dispatch callback raised: %s", e, exc_info=True
-                )
+            """Dispatch by msg.topic to the right callback.
+
+            Two callbacks' exception paths MUST be isolated — a raise in
+            `status_dispatch_callback` does not affect `dispatch_callback`
+            and vice versa (Decision 8 in openspec/changes/
+            add-sign-status-reports/design.md). We achieve isolation by
+            wrapping each callback invocation in its own try/except so
+            an exception in one does not propagate to the other.
+            """
+            logger.info(
+                "PahoMqttClient received: topic=%s payload=%r",
+                msg.topic,
+                msg.payload,
+            )
+            payload = msg.payload.decode(errors="replace")
+            if msg.topic == topic:
+                try:
+                    self._dispatch(payload)
+                    logger.debug("PahoMqttClient dispatch callback returned cleanly")
+                except Exception as e:
+                    logger.warning(
+                        "PahoMqttClient dispatch callback raised: %s",
+                        e,
+                        exc_info=True,
+                    )
+                return
+            if msg.topic == status_topic and self._status_dispatch is not None:
+                try:
+                    self._status_dispatch(payload)
+                    logger.debug("PahoMqttClient status dispatch returned cleanly")
+                except Exception as e:
+                    logger.warning(
+                        "PahoMqttClient status dispatch raised: %s",
+                        e,
+                        exc_info=True,
+                    )
+                return
+            # Some other topic — log at DEBUG and drop. This shouldn't
+            # happen if the broker is configured correctly.
+            logger.debug(
+                "PahoMqttClient ignoring message on unhandled topic=%s",
+                msg.topic,
+            )
 
         def on_disconnect(_client, _userdata, rc):
             if rc != 0:

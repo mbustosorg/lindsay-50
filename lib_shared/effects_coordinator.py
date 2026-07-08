@@ -432,7 +432,9 @@ class EffectsCoordinator:
             scroller_text = self.scroller.text or ""
         log.info(
             "Coordinator._begin_out: from mode=%s effect=%s scroller_text=%r",
-            self.mode, self.current_effect_name, scroller_text,
+            self.mode,
+            self.current_effect_name,
+            scroller_text,
         )
         self.mode = "out"
         self.fade_start = now
@@ -505,7 +507,8 @@ class EffectsCoordinator:
         if rotation != self._last_rotation:
             log.info(
                 "Coordinator rotation rebuild: prev=%s new=%s",
-                self._last_rotation, rotation,
+                self._last_rotation,
+                rotation,
             )
             self.effects = build_effects(effects_settings, display=display)
             self.idx = -1  # next fade picks the head of the new list
@@ -514,14 +517,16 @@ class EffectsCoordinator:
         if text_settings.color != self._last_text_color:
             log.info(
                 "Coordinator scroller color change: prev=%s new=%s",
-                self._last_text_color, text_settings.color,
+                self._last_text_color,
+                text_settings.color,
             )
             scroller.set_color(text_settings.color)
             self._last_text_color = text_settings.color
         if text_settings.speed != self._last_text_speed:
             log.info(
                 "Coordinator scroller speed change: prev=%s new=%s",
-                self._last_text_speed, text_settings.speed,
+                self._last_text_speed,
+                text_settings.speed,
             )
             scroller.set_speed(text_settings.speed)
             self._last_text_speed = text_settings.speed
@@ -597,8 +602,10 @@ class EffectsCoordinator:
                     self.showing_text = False
                 log.info(
                     "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s",
-                    self.idx, self.current_effect_name,
-                    text if text else "", self.showing_text,
+                    self.idx,
+                    self.current_effect_name,
+                    text if text else "",
+                    self.showing_text,
                 )
                 self.mode = "in"
                 self.fade_start = now
@@ -613,7 +620,8 @@ class EffectsCoordinator:
                 next_mode = "hold" if self.showing_text else "background"
                 log.info(
                     "Coordinator in→%s: effect=%s text=%r",
-                    next_mode, self.current_effect_name,
+                    next_mode,
+                    self.current_effect_name,
                     self.last_shown_text or "",
                 )
                 self.mode = next_mode
@@ -635,21 +643,23 @@ class EffectsCoordinator:
             #     instantly. The fix: gate the interrupt on the ID, not the
             #     body, and idle `hold_seconds` otherwise.
             fresh_id_landed = (
-                self.current_messages
-                and self.current_messages[0].message.id not in self._consumed_message_ids
+                self.current_messages and self.current_messages[0].message.id not in self._consumed_message_ids
             )
             if fresh_id_landed:
                 log.info(
                     "Coordinator hold interrupt (new id): pending_text=%r last_shown=%r new_id=%s",
-                    text, self.last_shown_text,
+                    text,
+                    self.last_shown_text,
                     self.current_messages[0].message.id,
                 )
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= effects_settings.hold_seconds:
                 log.info(
                     "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
-                    self.current_effect_name, self.last_shown_text,
-                    now - self.phase_start, effects_settings.hold_seconds,
+                    self.current_effect_name,
+                    self.last_shown_text,
+                    now - self.phase_start,
+                    effects_settings.hold_seconds,
                 )
                 self.mode = "text_out"
                 self.fade_start = now
@@ -688,12 +698,8 @@ class EffectsCoordinator:
             # `get_display_message()` here, when we actually have a
             # reason to.
             entries_bg = self.current_messages
-            fresh_id_landed = bool(
-                entries_bg and entries_bg[0].message.id not in self._consumed_message_ids
-            )
-            idle_elapsed = (
-                now - self.phase_start >= effects_settings.idle_seconds
-            )
+            fresh_id_landed = bool(entries_bg and entries_bg[0].message.id not in self._consumed_message_ids)
+            idle_elapsed = now - self.phase_start >= effects_settings.idle_seconds
 
             trigger: str | None = None
             if fresh_id_landed:
@@ -711,8 +717,10 @@ class EffectsCoordinator:
                     self._last_display_message = new_text
                 log.info(
                     "Coordinator background→out (%s): waited=%.1fs idle_seconds=%.1f next_text=%r",
-                    trigger, now - self.phase_start,
-                    effects_settings.idle_seconds, new_text or "",
+                    trigger,
+                    now - self.phase_start,
+                    effects_settings.idle_seconds,
+                    new_text or "",
                 )
                 self._begin_out(now)  # show the queued message
 

@@ -63,6 +63,15 @@ DEFAULT_PROBE_TOTAL_S = 12.0  # wall-clock budget for the whole probe
 DEFAULT_PROBE_KILL_GRACE_S = 2.0  # after SIGTERM before SIGKILL
 DEFAULT_STATUS_PATH = ".status.json"
 
+# Pre-swap boot hold. The hold lets the staged main.py write a few
+# healthy `.status.json` files before we trust it as a swap target.
+# Derivation (Decision 1 + 4 in openspec/changes/add-sign-status-reports/
+# design.md): 3× status.json writes (5s each) + 2s slack = 17s. Aligned
+# with the dashboard pill's 15s `live` window so the loader and the UI
+# read the same "3 missed writes" signal at the same scale. The 5s
+# cadence is shared with the MQTT publish path on the device.
+BOOT_HOLD_S = 17.0
+
 # `git worktree add` timeout. The checkout step on a Raspberry Pi SD
 # card can easily take 30-90s for a repo of this size (the bare repo
 # has hundreds of objects; checkout under SD-card IO pressure is the
@@ -361,10 +370,7 @@ def prune_worktrees(
                 # the sort by mtime still gives a deterministic pick.
                 pass
 
-        v_dirs = [
-            p for p in repo_dir.iterdir()
-            if p.is_dir() and p.name.startswith("v-")
-        ]
+        v_dirs = [p for p in repo_dir.iterdir() if p.is_dir() and p.name.startswith("v-")]
         # Newest first by mtime; on Linux ext4 mtime resolution is
         # good enough to distinguish sequential deploys.
         v_dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -402,7 +408,9 @@ def prune_worktrees(
             except subprocess.CalledProcessError as exc:
                 stderr_text = exc.stderr.decode(errors="replace") if exc.stderr else ""
                 logger.warning(
-                    "loader: failed to prune %s: %s", v.name, stderr_text,
+                    "loader: failed to prune %s: %s",
+                    v.name,
+                    stderr_text,
                 )
     except Exception as exc:
         logger.warning("loader: prune_worktrees raised: %s", exc)
@@ -554,14 +562,13 @@ def probe(
     then terminates the child and returns whether the snapshot
     was fresh + healthy. A healthy snapshot is one whose:
       - `mqtt_connected` is True
-      - `last_tick_age_ms` is < 2000 (recent render activity)
       - `last_error` is None
 
     Failure cases (any of these returns False):
       - child exits non-zero before the timeout (e.g. ImportError)
       - status.json is missing or stale at the timeout
-      - status.json reports unhealthy (mqtt disconnected, stale
-        ticks, last_error set)
+      - status.json reports unhealthy (mqtt disconnected or
+        last_error set)
 
     The status_path defaults to `<repo_dir>/.status.json` — the
     same path the running production app writes to. Tests inject
@@ -627,17 +634,27 @@ def probe(
 def _is_status_healthy(
     status: Optional[dict],
     *,
-    max_tick_age_ms: int = 2000,
+    max_tick_age_ms: int = 2000,  # noqa: ARG001 — kept for backward-compat with old callers; no longer read
 ) -> bool:
-    """Decide whether a status.json snapshot indicates a healthy app."""
+    """Decide whether a status.json snapshot indicates a healthy app.
+
+    Two-signal contract (Decision 10):
+      - `mqtt_connected is True`
+      - `last_error is None`
+
+    The third check (the `last_tick_age_ms` upper bound) was dropped
+    when `last_tick_age_ms` was removed from the snapshot: the
+    `_LAST_TICK_MONOTONIC` global in `main.py` was initialized to 0.0
+    and never reassigned, so the field always read 0 and the
+    threshold was vacuous. The `max_tick_age_ms` parameter is kept
+    (as a no-op) for backward-compat with any tests that still pass
+    it; it does not gate the health decision anymore.
+    """
     if not isinstance(status, dict):
         return False
     if status.get("mqtt_connected") is not True:
         return False
     if status.get("last_error") is not None:
-        return False
-    age_ms = status.get("last_tick_age_ms")
-    if not isinstance(age_ms, int) or age_ms < 0 or age_ms > max_tick_age_ms:
         return False
     return True
 
@@ -817,8 +834,7 @@ def main() -> int:
     auto_update_enabled = auto_update_raw in ("1", "true", "yes", "on")
     if not auto_update_enabled:
         logger.info(
-            "loader: AUTO_UPDATE is not enabled (AUTO_UPDATE=%r); "
-            "skipping upgrade flow, exec'ing existing current",
+            "loader: AUTO_UPDATE is not enabled (AUTO_UPDATE=%r); " "skipping upgrade flow, exec'ing existing current",
             cfg.if_exists("AUTO_UPDATE"),
         )
         exec_active(repo_dir, current_sha(repo_dir) or "")

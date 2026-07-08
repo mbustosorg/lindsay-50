@@ -82,11 +82,7 @@ class MatrixDisplay(DisplayBase):
         if isinstance(mapper, bytes):
             mapper = mapper.decode()
         is_u_mapper = mapper == "U-mapper"
-        self.width = (
-            options.cols * options.chain_length // 2
-            if is_u_mapper
-            else options.cols * options.chain_length
-        )
+        self.width = options.cols * options.chain_length // 2 if is_u_mapper else options.cols * options.chain_length
         self.height = options.rows * 2 if is_u_mapper else options.rows * options.parallel
         logger.info("MatrixDisplay initialized: %dx%d", self.width, self.height)
 

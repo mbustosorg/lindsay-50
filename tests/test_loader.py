@@ -340,23 +340,24 @@ from unittest.mock import patch  # noqa: E402
 
 class TestIsStatusHealthy:
     def test_healthy_when_all_signs_good(self, loader):
+        """Two-signal contract: mqtt_connected AND last_error is None."""
         status = {
             "mqtt_connected": True,
-            "last_tick_age_ms": 100,
             "last_error": None,
         }
         assert loader._is_status_healthy(status) is True
 
     def test_unhealthy_when_mqtt_disconnected(self, loader):
-        assert loader._is_status_healthy({"mqtt_connected": False, "last_tick_age_ms": 0, "last_error": None}) is False
+        assert loader._is_status_healthy({"mqtt_connected": False, "last_error": None}) is False
 
     def test_unhealthy_when_last_error_set(self, loader):
-        assert loader._is_status_healthy({"mqtt_connected": True, "last_tick_age_ms": 0, "last_error": "boom"}) is False
+        assert loader._is_status_healthy({"mqtt_connected": True, "last_error": "boom"}) is False
 
-    def test_unhealthy_when_tick_stale(self, loader):
-        assert (
-            loader._is_status_healthy({"mqtt_connected": True, "last_tick_age_ms": 9999, "last_error": None}) is False
-        )
+    def test_healthy_ignores_extraneous_keys(self, loader):
+        """`last_tick_age_ms` is no longer in the snapshot — the loader must
+        not gate on it. Passing it in an old-style payload must not flip
+        the result to unhealthy."""
+        assert loader._is_status_healthy({"mqtt_connected": True, "last_error": None, "last_tick_age_ms": 9999}) is True
 
     def test_unhealthy_when_status_none(self, loader):
         assert loader._is_status_healthy(None) is False  # type: ignore[arg-type]
@@ -381,14 +382,12 @@ class TestProbe:
 
         healthy = {
             "schema_version": 1,
-            "pid": 1,
             "active_sha": "x",
+            "short_sha": "x",
             "started_at": "2026-01-01T00:00:00Z",
             "updated_at": "2026-01-01T00:00:01Z",
-            "uptime_seconds": 1.0,
+            "uptime_seconds": 1,
             "mqtt_connected": True,
-            "last_tick_age_ms": 10,
-            "messages_rendered": 0,
             "last_error": None,
         }
         status_path.write_text(_json.dumps(healthy))
@@ -491,9 +490,7 @@ class TestRefreshBareRepo:
 
     def test_returns_false_on_calledprocesserror(self, loader, monkeypatch, tmp_path):
         def fake_check_call(args, **kwargs):
-            raise loader.subprocess.CalledProcessError(
-                128, args, stderr=b"fatal: could not resolve host"
-            )
+            raise loader.subprocess.CalledProcessError(128, args, stderr=b"fatal: could not resolve host")
 
         monkeypatch.setattr(loader.subprocess, "check_call", fake_check_call)
         result = loader.refresh_bare_repo(tmp_path)
@@ -539,9 +536,7 @@ class TestStageVersionExceptionCapturesStderr:
     (e.g. "fatal: invalid reference: f960136..."), not a Python
     AttributeError. These tests pin that contract."""
 
-    def test_stage_error_carries_subprocess_stderr_not_attributeerror(
-        self, loader, monkeypatch, tmp_path
-    ):
+    def test_stage_error_carries_subprocess_stderr_not_attributeerror(self, loader, monkeypatch, tmp_path):
         """When `git worktree add` fails with a real error, the StageError
         message must contain the stderr text — NOT the misleading
         "'NoneType' object has no attribute 'decode'."""
@@ -567,17 +562,13 @@ class TestStageVersionExceptionCapturesStderr:
         # we never crash on `e.stderr.decode(...)`.
         assert "'NoneType' object" not in str(excinfo.value)
 
-    def test_stage_error_handles_none_stderr_gracefully(
-        self, loader, monkeypatch, tmp_path
-    ):
+    def test_stage_error_handles_none_stderr_gracefully(self, loader, monkeypatch, tmp_path):
         """Defensive: if a future `subprocess.run` somehow produces a
         CalledProcessError with `stderr=None`, the StageError message
         stays informative (no spurious AttributeError)."""
 
         def fake_run(args, **kwargs):
-            raise loader.subprocess.CalledProcessError(
-                returncode=128, cmd=args, stderr=None
-            )
+            raise loader.subprocess.CalledProcessError(returncode=128, cmd=args, stderr=None)
 
         monkeypatch.setattr(loader.subprocess, "run", fake_run)
 
@@ -860,7 +851,8 @@ class TestPruneWorktrees:
 
         calls = []
         monkeypatch.setattr(
-            loader.subprocess, "run",
+            loader.subprocess,
+            "run",
             lambda args, **kw: calls.append(args) or subprocess.CompletedProcess(args, 0),
         )
 
@@ -878,7 +870,8 @@ class TestPruneWorktrees:
 
         calls = []
         monkeypatch.setattr(
-            loader.subprocess, "run",
+            loader.subprocess,
+            "run",
             lambda args, **kw: calls.append(args) or subprocess.CompletedProcess(args, 0),
         )
 
@@ -889,9 +882,10 @@ class TestPruneWorktrees:
         # current = abc0000 (oldest) is always preserved. headroom = keep - 1 = 2.
         # We pad the keep-set with the 2 newest non-current: abc0004 + abc0003.
         # Keep set: {abc0000 (current), abc0004, abc0003}. Remove abc0001 + abc0002.
-        assert sorted(removed) == ["v-abc0001", "v-abc0002"], (
-            f"expected the 2 oldest non-current removed; got {sorted(removed)}"
-        )
+        assert sorted(removed) == [
+            "v-abc0001",
+            "v-abc0002",
+        ], f"expected the 2 oldest non-current removed; got {sorted(removed)}"
 
     def test_always_preserves_current_even_when_oldest(self, loader, monkeypatch, tmp_path):
         """`current` must always survive even if it's the OLDEST v-<sha> dir
@@ -908,7 +902,8 @@ class TestPruneWorktrees:
 
         calls = []
         monkeypatch.setattr(
-            loader.subprocess, "run",
+            loader.subprocess,
+            "run",
             lambda args, **kw: calls.append(args) or subprocess.CompletedProcess(args, 0),
         )
 
@@ -917,9 +912,7 @@ class TestPruneWorktrees:
         # current (v-abc0000) is OLDEST by mtime but must survive.
         # keep=2 means we keep current + 1 more (the newest non-current).
         removed = self._collect_remove_targets(calls)
-        assert "v-abc0000" not in removed, (
-            "current must never be removed, even if it's the oldest"
-        )
+        assert "v-abc0000" not in removed, "current must never be removed, even if it's the oldest"
 
     def test_no_remove_call_when_under_keep(self, loader, monkeypatch, tmp_path):
         """Belt-and-braces: under keep, NO `git worktree remove` is invoked
@@ -929,7 +922,8 @@ class TestPruneWorktrees:
 
         calls = []
         monkeypatch.setattr(
-            loader.subprocess, "run",
+            loader.subprocess,
+            "run",
             lambda args, **kw: calls.append(args) or subprocess.CompletedProcess(args, 0),
         )
 
@@ -962,7 +956,9 @@ class TestPruneWorktrees:
             # Let the metadata prune succeed. Fail every `worktree remove`.
             if len(args) >= 7 and args[4] == "remove":
                 raise loader.subprocess.CalledProcessError(
-                    returncode=1, cmd=args, stderr=b"locked",
+                    returncode=1,
+                    cmd=args,
+                    stderr=b"locked",
                 )
             return subprocess.CompletedProcess(args, 0)
 
@@ -1007,8 +1003,7 @@ class TestRunUpgradeFlowCallsPruneAfterSwap:
         )
 
         assert len(prune_calls) == 1, (
-            f"prune_fn must be called exactly once on the success path; "
-            f"got {len(prune_calls)} calls"
+            f"prune_fn must be called exactly once on the success path; " f"got {len(prune_calls)} calls"
         )
         assert prune_calls[0][0][0] == repo, "prune_fn called with repo_dir"
 

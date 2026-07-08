@@ -788,8 +788,7 @@ class TestSetupPiRequirements:
             if not stripped or stripped.startswith("#") or stripped.startswith("-r"):
                 continue
             raise AssertionError(
-                f"{path} must be a pure shim; only `-r` includes allowed. "
-                f"Offending line: {stripped!r}"
+                f"{path} must be a pure shim; only `-r` includes allowed. " f"Offending line: {stripped!r}"
             )
 
 

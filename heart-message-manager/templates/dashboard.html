@@ -7,9 +7,26 @@
     <p class="text-slate-500 mt-1">Here's what's happening with Lindsay's Heart</p>
   </div>
   <div class="flex items-center gap-3">
-    <span class="px-4 py-2 rounded-full bg-green-100 text-green-700 text-sm font-semibold flex items-center gap-2">
-      <span class="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
-      Live
+    {# Sign-status pill: rendered as the initial "Offline" placeholder
+       and toggled by `sign_status.js` between four states
+       (offline | live-healthy | live-degraded | unknown). The
+       `data-state` attribute is the SSOT for the current state —
+       every JS update sets it before re-rendering color/text.
+       See lib_shared/sign-status.py + openspec/changes/
+       add-sign-status-reports/design.md Decision 11. #}
+    <span id="sign-live-pill"
+          data-state="offline"
+          class="px-4 py-2 rounded-full bg-slate-100 text-slate-600 text-sm font-semibold flex items-center gap-2">
+      <span class="w-2 h-2 bg-slate-400 rounded-full"></span>
+      Offline
+    </span>
+    {# Secondary indicator: status-WS connection state, parallel to the
+       existing #mqtt-status pattern in base.html. sign_status.js writes
+       the current state here (connected | reconnecting | paused | error). #}
+    <span id="sign-status-ws-state"
+          class="hidden text-xs text-slate-500 font-medium"
+          title="Status MQTT-WS connection state">
+      status-ws: <span data-state>connecting…</span>
     </span>
   </div>
 </div>

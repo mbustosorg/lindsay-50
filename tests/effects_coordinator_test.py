@@ -565,12 +565,7 @@ def test_bind_swaps_render_layer_mid_life():
 
 def _info_records(caplog, *substrings):
     """Return caplog INFO records whose message contains every substring."""
-    return [
-        r
-        for r in caplog.records
-        if r.levelno == logging.INFO
-        and all(sub in r.getMessage() for sub in substrings)
-    ]
+    return [r for r in caplog.records if r.levelno == logging.INFO and all(sub in r.getMessage() for sub in substrings)]
 
 
 import logging  # noqa: E402 — kept at module level for the helpers below
@@ -591,9 +586,8 @@ def test_begin_out_emits_info_log(caplog):
     coord.tick()  # intro → out via _begin_out
 
     matches = _info_records(caplog, "Coordinator._begin_out")
-    assert matches, (
-        "Expected INFO log line 'Coordinator._begin_out'; got: "
-        + "; ".join(r.getMessage() for r in caplog.records)
+    assert matches, "Expected INFO log line 'Coordinator._begin_out'; got: " + "; ".join(
+        r.getMessage() for r in caplog.records
     )
     # The log line carries the from-mode and the active effect for context.
     assert "from mode=intro" in matches[0].getMessage()
@@ -614,9 +608,7 @@ def test_out_to_in_and_in_to_hold_emit_info_logs(caplog):
         suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg])
-    coord, display, scroller, fx_a, fx_b, heart = _build(
-        intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr
-    )
+    coord, display, scroller, fx_a, fx_b, heart = _build(intro_seconds=0.0, fade_seconds=0.05, message_manager=mgr)
     coord.start()
 
     caplog.set_level(logging.INFO)
@@ -684,11 +676,13 @@ def test_hold_does_not_interrupt_on_random_picks_from_shown_set(caplog):
     # survive `hold_seconds` of repeated random re-picks.
     msg1 = MessageView(
         Message(id="m1", sender="+1", body="alpha", received_at="2026-01-01T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     msg2 = MessageView(
         Message(id="m2", sender="+1", body="beta", received_at="2026-01-02T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1, msg2])
     # hold_seconds = 0.5 so we can measure whether it elapses; idle_seconds irrelevant here.
@@ -715,9 +709,9 @@ def test_hold_does_not_interrupt_on_random_picks_from_shown_set(caplog):
     # And: no 'Coordinator hold interrupt' should have fired — that
     # log line only fires when a FRESH id arrives.
     interrupts = _info_records(caplog, "Coordinator hold interrupt")
-    assert not interrupts, (
-        f"Expected zero hold interrupts from random re-picks; got: {[r.getMessage() for r in interrupts]}"
-    )
+    assert (
+        not interrupts
+    ), f"Expected zero hold interrupts from random re-picks; got: {[r.getMessage() for r in interrupts]}"
     monkey.undo()
 
 
@@ -738,7 +732,8 @@ def test_background_re_rolls_on_idle_timeout(caplog):
 
     msg = MessageView(
         Message(id="m1", sender="+1", body="hi", received_at="2026-01-01T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg])
     coord, *_ = _build(
@@ -753,9 +748,7 @@ def test_background_re_rolls_on_idle_timeout(caplog):
     caplog.set_level(logging.INFO)
     # Drain past intro → out → in → hold → text_out → background.
     _drive(clock, coord, 0.3)
-    assert coord.mode == "background", (
-        f"Setup expected to land in background mode; got {coord.mode!r}"
-    )
+    assert coord.mode == "background", f"Setup expected to land in background mode; got {coord.mode!r}"
 
     # Now sit idle for longer than idle_seconds without sending a new SMS.
     # Each tick advances by ~0.01s; advance 1s total to comfortably exceed 0.3s.
@@ -769,9 +762,7 @@ def test_background_re_rolls_on_idle_timeout(caplog):
         "idle_seconds. If missing, the fix isn't wired up."
     )
     msg_log = matches[0].getMessage()
-    assert "0.3" in msg_log, (
-        f"Expected idle_seconds=0.3 in the log; got: {msg_log!r}"
-    )
+    assert "0.3" in msg_log, f"Expected idle_seconds=0.3 in the log; got: {msg_log!r}"
     monkey.undo()
 
 
@@ -788,11 +779,13 @@ def test_background_re_rolls_on_fresh_id(caplog):
 
     msg1 = MessageView(
         Message(id="m1", sender="+1", body="first", received_at="2026-01-01T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     msg2 = MessageView(
         Message(id="m2", sender="+1", body="second", received_at="2026-01-02T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1])
     coord, *_ = _build(
@@ -814,13 +807,11 @@ def test_background_re_rolls_on_fresh_id(caplog):
     coord.tick()
 
     matches = _info_records(caplog, "Coordinator background→out", "(new_id)")
-    assert matches, (
-        "Expected background→out with (new_id) trigger when an un-shown SMS lands."
-    )
+    assert matches, "Expected background→out with (new_id) trigger when an un-shown SMS lands."
     # And the actual fade-in path should also fire.
-    assert _info_records(caplog, "Coordinator out→in"), (
-        "After background→out (new_id), out→in should follow and set scroller text."
-    )
+    assert _info_records(
+        caplog, "Coordinator out→in"
+    ), "After background→out (new_id), out→in should follow and set scroller text."
     monkey.undo()
 
 
@@ -851,11 +842,13 @@ def test_background_does_not_repick_before_idle_seconds(caplog):
 
     msg1 = MessageView(
         Message(id="m1", sender="+1", body="first", received_at="2026-01-01T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     msg2 = MessageView(
         Message(id="m2", sender="+1", body="second", received_at="2026-01-02T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1, msg2])
     coord, *_ = _build(
@@ -869,9 +862,7 @@ def test_background_does_not_repick_before_idle_seconds(caplog):
 
     caplog.set_level(logging.INFO)
     _drive(clock, coord, 0.3)
-    assert coord.mode == "background", (
-        f"Setup should land in background; got {coord.mode!r}"
-    )
+    assert coord.mode == "background", f"Setup should land in background; got {coord.mode!r}"
 
     # Sub-idle advance: 0.5 s of ticks, well under idle_seconds=1.0.
     # random.choice over [msg1, msg2] will pick different bodies each
@@ -921,11 +912,13 @@ def test_get_display_message_not_called_every_tick():
 
     msg1 = MessageView(
         Message(id="m1", sender="+1", body="alpha", received_at="2026-01-01T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     msg2 = MessageView(
         Message(id="m2", sender="+1", body="beta", received_at="2026-01-02T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1, msg2])
     coord, *_ = _build(
@@ -952,16 +945,15 @@ def test_get_display_message_not_called_every_tick():
         return real_get_display_message(self)
 
     monkey.setattr(
-        coord_mod.EffectsCoordinator, "get_display_message",
+        coord_mod.EffectsCoordinator,
+        "get_display_message",
         counting_get_display_message,
     )
 
     # Run 100 ticks in background with idle_seconds=999. Random.choice
     # should NEVER be invoked because no transition fires.
     _drive(clock, coord, 1.0, step=0.01)
-    assert coord.mode == "background", (
-        f"idle_seconds=999 means no transition; got mode={coord.mode!r}"
-    )
+    assert coord.mode == "background", f"idle_seconds=999 means no transition; got mode={coord.mode!r}"
     assert call_count["n"] == 0, (
         f"get_display_message() ran {call_count['n']} times in background "
         f"with no transition — should be 0. The 250ms timer is back."
@@ -986,6 +978,7 @@ def test_pick_next_text_re_rolls_when_random_choice_repeats_last_shown(monkeypat
     # the older of the two). _pick_next_text should re-roll up to 5
     # times before giving up.
     import random as _random
+
     monkeypatch.setattr(_random, "choice", lambda seq: seq[0])
 
     from lib_shared.models import MessageView, Message
@@ -995,11 +988,13 @@ def test_pick_next_text_re_rolls_when_random_choice_repeats_last_shown(monkeypat
     # but random.choice is forced to never return it.
     msg1 = MessageView(
         Message(id="m1", sender="+1", body="stale", received_at="2026-01-02T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     msg2 = MessageView(
         Message(id="m2", sender="+1", body="fresh", received_at="2026-01-01T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     coord.message_manager._entries = [msg1, msg2]
     # Pre-arm the fresh-id branch so it short-circuits — random.choice
@@ -1025,17 +1020,20 @@ def test_pick_next_text_returns_other_body_when_available(monkeypatch):
     # Force random.choice to ALWAYS return seq[-1] (= "fresh", the
     # older of the two messages — second in the sorted list).
     import random as _random
+
     monkeypatch.setattr(_random, "choice", lambda seq: seq[-1])
 
     from lib_shared.models import MessageView, Message
 
     msg1 = MessageView(
         Message(id="m1", sender="+1", body="stale", received_at="2026-01-02T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     msg2 = MessageView(
         Message(id="m2", sender="+1", body="fresh", received_at="2026-01-01T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     coord.message_manager._entries = [msg1, msg2]
     coord._last_shown_message_id = msg1.message.id  # short-circuit fresh-id
@@ -1066,11 +1064,13 @@ def test_pull_runs_exactly_once_at_idle_timeout(monkeypatch):
 
     msg1 = MessageView(
         Message(id="m1", sender="+1", body="alpha", received_at="2026-01-01T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     msg2 = MessageView(
         Message(id="m2", sender="+1", body="beta", received_at="2026-01-02T00:00:00Z"),
-        source="mqtt", suppressed=False,
+        source="mqtt",
+        suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1, msg2])
     coord, *_ = _build(
@@ -1107,7 +1107,6 @@ def test_pull_runs_exactly_once_at_idle_timeout(monkeypatch):
     # happens once per transition, not per tick.
     assert call_count["n"] >= 1, "idle transition must trigger a pull"
     assert call_count["n"] <= 5, (
-        f"unexpectedly many pull calls ({call_count['n']}); "
-        f"the re-roll loop should be bounded"
+        f"unexpectedly many pull calls ({call_count['n']}); " f"the re-roll loop should be bounded"
     )
     monkey.undo()

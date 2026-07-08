@@ -3,17 +3,25 @@
 The loader validates a staged worktree by spawning `main.py`
 briefly, then reading `$REPO_DIR/.status.json`. If the staged
 version reports itself healthy (status.json fresh, mqtt connected,
-no last_error, recent render ticks), the swap goes through.
+no last_error), the swap goes through.
 
 This module owns the writer side and the snapshot schema. It is
 called once per render-loop iteration; the `StatusWriter.tick()`
-method is self-throttling (default 3 seconds) so we don't burn
-SD-card writes at 60 Hz.
+method is self-throttling (default 5 seconds — unified with the
+MQTT publish cadence so a single throttle constant drives both
+the file write and the MQTT publish; see Decision 1 in
+openspec/changes/add-sign-status-reports/design.md).
 
 The file uses atomic rename (`os.replace` over a `.tmp` sibling)
 so a reader (the loader) never sees a half-written file. The
 schema is versioned (`schema_version=1`) so a future breaking
 change can be detected.
+
+The same `StatusSnapshot.to_dict()` serializer is the single
+serializer for both the `.status.json` file write and the MQTT
+wire payload — there is no separate `to_mqtt_dict()` asymmetry
+(see Decision 10 in openspec/changes/add-sign-status-reports/
+design.md).
 
 The defensive `read_status()` helper is the loader's read side —
 it accepts the same path and returns either a dict-shaped status
@@ -40,9 +48,11 @@ logger = logging.getLogger(__name__)
 SCHEMA_VERSION = 1
 
 # Default throttle interval. SD-card write amplification at 60 Hz
-# would wear the card; 3s is fine-grained enough that the loader's
-# ~8s probe sees fresh data every time.
-DEFAULT_TICK_INTERVAL_S = 3.0
+# would wear the card; 5s is the unified cadence for both the
+# `.status.json` file write and the MQTT status publish. The
+# loader's `BOOT_HOLD_S` was raised from 8s to 17s to match
+# (3×5s + 2s slack; see loader.py).
+DEFAULT_TICK_INTERVAL_S = 5.0
 
 # Staleness threshold for read_status(): a status.json older than
 # this is treated as "the app didn't write it in time" → loader
@@ -57,21 +67,32 @@ class StatusSnapshot:
     Fields are intentionally simple scalars (no nested dicts, no
     datetime objects) so JSON round-tripping is straightforward
     and the loader can read any field with a single `dict.get`.
+
+    Final shape (Decision 10): schema_version, active_sha, short_sha,
+    started_at, updated_at, uptime_seconds (int), mqtt_connected,
+    last_error. Three previously-published fields (pid,
+    messages_rendered, last_tick_age_ms) have no consumer and were
+    dropped across the whole system — both the `.status.json` file
+    write and the MQTT wire payload use this same field set.
     """
 
     schema_version: int = SCHEMA_VERSION
-    pid: int = 0
     active_sha: str = ""
+    short_sha: str = ""
     started_at: str = ""
     updated_at: str = ""
-    uptime_seconds: float = 0.0
+    uptime_seconds: int = 0
     mqtt_connected: bool = False
-    last_tick_age_ms: int = 0
-    messages_rendered: int = 0
     last_error: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
-        """Convert to a plain dict for JSON serialization."""
+        """Convert to a plain dict for JSON serialization.
+
+        This is the SINGLE serializer for both the `.status.json`
+        file write and the MQTT wire payload. There is no
+        `to_mqtt_dict()` asymmetry — adding it back would force
+        per-field keep/drop lists to stay in sync (Decision 10).
+        """
         return asdict(self)
 
 
@@ -87,6 +108,15 @@ class StatusWriter:
     callable that returns the live values (so it can read them
     without coupling to the main module). Tests inject a no-op
     builder to drive specific scenarios.
+
+    The `tick()` method also publishes the same snapshot to MQTT
+    when an optional `status_publisher` callback is provided.
+    The MQTT publish is a second consumer of the same snapshot;
+    both happen in the same `tick()` call, at the same throttle
+    cadence (Decision 1). `status_publisher` is a callable that
+    accepts the dict payload and returns None (it raises on error);
+    None means "file only, no MQTT publish" (the default — keeps
+    unit tests hermetic without spinning up paho).
     """
 
     def __init__(
@@ -95,6 +125,7 @@ class StatusWriter:
         snapshot_builder: Callable[[], StatusSnapshot],
         *,
         tick_interval_s: float = DEFAULT_TICK_INTERVAL_S,
+        status_publisher: Optional[Callable[[dict[str, Any]], None]] = None,
     ) -> None:
         """Create the writer.
 
@@ -106,11 +137,18 @@ class StatusWriter:
                 writer calls this every `tick_interval_s` seconds,
                 not every `tick()` call (so it's cheap to call
                 `tick()` on the hot path).
-            tick_interval_s: How often to flush. Default 3s.
+            tick_interval_s: How often to flush. Default 5s
+                (unified with the MQTT publish cadence).
+            status_publisher: Optional callable that publishes the
+                serialized payload to MQTT_STATUS_TOPIC. Called
+                with the same dict the file write receives. A
+                failure must NOT prevent the file write — it is
+                logged at WARN and the writer continues.
         """
         self._path = path
         self._snapshot_builder = snapshot_builder
         self._tick_interval_s = tick_interval_s
+        self._status_publisher = status_publisher
         self._last_write_monotonic: float = 0.0
 
     def tick(self) -> None:
@@ -118,7 +156,9 @@ class StatusWriter:
 
         No-op until `tick_interval_s` has elapsed since the last
         write, at which point it serializes a fresh snapshot and
-        renames it into place atomically.
+        renames it into place atomically. When `status_publisher`
+        is configured, the same payload is published to MQTT in
+        the same call (Decision 1).
         """
         now = time.monotonic()
         if now - self._last_write_monotonic < self._tick_interval_s:
@@ -130,11 +170,21 @@ class StatusWriter:
             return
         if snapshot is None:
             return
-        if self._write_atomic(snapshot):
-            self._last_write_monotonic = now
+        payload = snapshot.to_dict()
+        if not self._write_atomic(payload):
+            return
+        # File write succeeded. Publish to MQTT as a side effect; a
+        # publish failure must not stop the next throttle cycle (the
+        # render loop survives a broker outage).
+        if self._status_publisher is not None:
+            try:
+                self._status_publisher(payload)
+            except Exception as exc:
+                logger.warning("status: mqtt publish raised: %s", exc)
+        self._last_write_monotonic = now
 
-    def _write_atomic(self, snapshot: StatusSnapshot) -> bool:
-        """Write `snapshot` to `path` atomically.
+    def _write_atomic(self, payload: dict[str, Any]) -> bool:
+        """Write `payload` to `path` atomically.
 
         Writes to `<path>.tmp`, then `os.replace`s it into place.
         `os.replace` is atomic on POSIX same-filesystem — readers
@@ -146,9 +196,8 @@ class StatusWriter:
         path = self._path
         tmp = path.with_suffix(path.suffix + ".tmp")
         try:
-            payload = json.dumps(snapshot.to_dict(), separators=(",", ":"))
             with open(tmp, "w", encoding="utf-8") as fh:
-                fh.write(payload)
+                json.dump(payload, fh, separators=(",", ":"))
             os.replace(tmp, path)
         except Exception as exc:
             logger.warning("status: write failed: %s", exc)
@@ -168,6 +217,7 @@ def make_status_writer(
     snapshot_builder: Callable[[], StatusSnapshot],
     relative_path: str = ".status.json",
     tick_interval_s: float = DEFAULT_TICK_INTERVAL_S,
+    status_publisher: Optional[Callable[[dict[str, Any]], None]] = None,
 ) -> StatusWriter:
     """Create a writer pointed at `<repo_dir>/<relative_path>`.
 
@@ -179,6 +229,7 @@ def make_status_writer(
         path=repo_dir / relative_path,
         snapshot_builder=snapshot_builder,
         tick_interval_s=tick_interval_s,
+        status_publisher=status_publisher,
     )
 
 
@@ -202,6 +253,12 @@ def read_status(
 
     The loader is the only intended caller. It treats None as
     "status.json was not healthy" → don't swap.
+
+    Required keys (post reshape): active_sha (pid was removed — it
+    had no consumer). All other keys are present in the dataclass
+    default, so the only way a key goes missing is if a future
+    snapshot drops it (schema_version mismatch would catch
+    that, but the keys tuple is the runtime validator).
     """
     if not path.exists():
         return None
@@ -217,7 +274,7 @@ def read_status(
     if payload.get("schema_version") != SCHEMA_VERSION:
         logger.warning("status: schema_version mismatch: %r", payload.get("schema_version"))
         return None
-    for required in ("pid", "active_sha", "started_at", "updated_at", "mqtt_connected"):
+    for required in ("active_sha", "started_at", "updated_at", "mqtt_connected"):
         if required not in payload:
             logger.warning("status: missing required key %r: %r", required, payload)
             return None

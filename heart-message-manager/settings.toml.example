@@ -57,6 +57,16 @@ MQTT_USERNAME = "YOUR_AIO_USERNAME"
 MQTT_PASSWORD = "YOUR_AIO_KEY"
 MQTT_TOPIC = "YOUR_AIO_USERNAME/feeds/YOUR_AIO_FEED_NAME"
 
+# Status topic — the Flask server subscribes to the same
+# status topic the Pi publishes on. Empty = derive as
+# "{MQTT_TOPIC}-status" (e.g. "mbustosorg/feeds/lindsay50-status").
+# The env var `MQTT_STATUS_TOPIC` (if set) takes precedence over
+# this value at process start. On Adafruit IO the corresponding
+# feed must be created in the AIO dashboard before the Pi
+# starts publishing — the broker silently rejects publishes
+# to a non-existent feed.
+MQTT_STATUS_TOPIC = ""
+
 # REST API URLs for seeding (Flask seeds from itself via localhost).
 # On Heroku, override these via config vars with the actual public URL
 # if the Flask server is behind a proxy that changes the port.

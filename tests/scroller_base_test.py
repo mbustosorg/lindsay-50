@@ -189,10 +189,7 @@ def test_set_text_emits_info_log(caplog):
     s.set_text("hello world", canvas_width=64)
 
     info_records = [r for r in caplog.records if r.levelno == logging.INFO]
-    assert any(
-        "Scroller.set_text" in r.getMessage() and "hello world" in r.getMessage()
-        for r in info_records
-    ), (
+    assert any("Scroller.set_text" in r.getMessage() and "hello world" in r.getMessage() for r in info_records), (
         "scroller.set_text must emit an INFO log line naming the new text. "
         f"Got: {[r.getMessage() for r in caplog.records]}"
     )
