@@ -1,18 +1,19 @@
 ## ADDED Requirements
 
 ### Requirement: Pi publishes StatusSnapshot over MQTT on a dedicated status topic
-The Pi MUST publish a serialized `StatusSnapshot` to a dedicated MQTT status topic at a wall-clock cadence of 30 seconds (±5 seconds). The publish MUST use QoS 0 (fire-and-forget) so a slow broker cannot stall the render loop. The publish MUST NOT block the render loop: if the publish blocks for more than 5 seconds, the next tick of the render loop MUST still proceed on schedule. The wire payload MUST be a JSON object with the following keys: `schema_version`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`. The `pid` field MUST NOT appear in the wire payload.
+The Pi MUST publish a serialized `StatusSnapshot` to a dedicated MQTT status topic at a wall-clock cadence of 5 seconds (±1 second). The publish MUST use QoS 0 (fire-and-forget) so a slow broker cannot stall the render loop. The publish MUST run on a long-lived paho publisher (single `mqtt.Client` held open by the render-loop process via `loop_start()`); `client.publish()` is thread-safe and enqueues into the outgoing buffer without blocking the caller. The wire payload MUST be a JSON object with the following keys: `schema_version`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`. The `pid` field MUST NOT appear in the wire payload. The publish cadence MUST be unified with the existing `.status.json` file write cadence: both writes happen in the same `StatusWriter.tick()` method.
 
-#### Scenario: Pi publishes on the 30-second cadence
-- **WHEN** 30 seconds have elapsed since the previous status publish
+#### Scenario: Pi publishes on the 5-second cadence
+- **WHEN** 5 seconds have elapsed since the previous status publish
 - **THEN** the Pi publishes a fresh `StatusSnapshot` JSON payload to the configured `MQTT_STATUS_TOPIC` at QoS 0
 - **AND** the payload contains the keys `schema_version`, `active_sha`, `started_at`, `updated_at`, `uptime_seconds`, `mqtt_connected`, `last_tick_age_ms`, `messages_rendered`, `last_error`
 - **AND** the payload does NOT contain a `pid` key
 
 #### Scenario: Publish continues when broker is unreachable
 - **WHEN** the broker is unreachable and a status publish attempt fails
-- **THEN** the next status publish is scheduled for 30 seconds after the failed attempt
-- **AND** the render loop's tick interval is unaffected (the publish runs in a separate thread)
+- **THEN** the long-lived paho publisher schedules a reconnect attempt
+- **AND** the next status publish is scheduled for 5 seconds after the failed attempt
+- **AND** the render loop's tick interval is unaffected (the publish runs on a long-lived client and `client.publish()` is non-blocking)
 
 #### Scenario: Publish does not block the render loop
 - **WHEN** the broker accepts the publish slowly (longer than 100ms but less than 5 seconds)
@@ -135,18 +136,18 @@ For each payload received on `MQTT_STATUS_TOPIC`, the browser MUST decode the pa
 - **AND** a re-render sees only the third snapshot, never the first or second
 
 ### Requirement: Browser computes sign state from snapshot age
-The browser MUST compute the sign's state as one of `"live"`, `"unsure"`, or `"offline"` from `(now - snapshot.updated_at)`, where `now` is the browser's wall clock at the time of computation. The thresholds MUST be: `state="live"` when the snapshot is less than 60 seconds old; `state="unsure"` when 60 to 120 seconds old; `state="offline"` when more than 120 seconds old, OR when no snapshot has ever been received. The threshold constants MUST be named (`LIVE_THRESHOLD_S = 60`, `UNSURE_THRESHOLD_S = 120`) and exported in `sign_status.js` so they are easy to find and tune. The server MUST NOT be involved in computing the state — there is no server-side state field and no HTTP endpoint that returns a computed state value.
+The browser MUST compute the sign's state as one of `"live"`, `"unknown"`, or `"offline"` from `(now - snapshot.updated_at)`, where `now` is the browser's wall clock at the time of computation. The thresholds MUST be: `state="live"` when the snapshot is less than 15 seconds old; `state="unknown"` when 15 to 30 seconds old; `state="offline"` when more than 30 seconds old, OR when no snapshot has ever been received. The threshold constants MUST be named (`LIVE_THRESHOLD_S = 15`, `UNKNOWN_THRESHOLD_S = 30`) and exported in `sign_status.js` so they are easy to find and tune. The server MUST NOT be involved in computing the state — there is no server-side state field and no HTTP endpoint that returns a computed state value.
 
 #### Scenario: Fresh snapshot yields live state
-- **WHEN** the most recent snapshot's `updated_at` is 30 seconds in the past
+- **WHEN** the most recent snapshot's `updated_at` is 5 seconds in the past
 - **THEN** the computed state is `"live"`
 
-#### Scenario: Stale-but-recent snapshot yields unsure state
-- **WHEN** the most recent snapshot's `updated_at` is 90 seconds in the past
-- **THEN** the computed state is `"unsure"`
+#### Scenario: Stale-but-recent snapshot yields unknown state
+- **WHEN** the most recent snapshot's `updated_at` is 20 seconds in the past
+- **THEN** the computed state is `"unknown"`
 
 #### Scenario: Old snapshot yields offline state
-- **WHEN** the most recent snapshot's `updated_at` is 180 seconds in the past
+- **WHEN** the most recent snapshot's `updated_at` is 60 seconds in the past
 - **THEN** the computed state is `"offline"`
 
 #### Scenario: No snapshot ever received yields offline state
@@ -156,17 +157,17 @@ The browser MUST compute the sign's state as one of `"live"`, `"unsure"`, or `"o
 ### Requirement: Browser re-evaluates state on a local timer
 The browser MUST run a local `setInterval` (5-second cadence) that re-evaluates the sign state from the in-memory snapshot's age and re-renders the Dashboard pill. The interval MUST produce only DOM updates; it MUST NOT make any network requests (no `fetch`, no new WebSocket connections). The interval MUST be cleared when the page is unloaded. The interval is purely a UI re-render cadence — it does not poll the server.
 
-#### Scenario: Pill transitions from live to unsure without a new message
-- **WHEN** the most recent snapshot was received 30 seconds ago (state was `"live"`)
-- **AND** 35 seconds pass without a new snapshot arriving
-- **THEN** the next interval tick computes state as `"unsure"`
+#### Scenario: Pill transitions from live to unknown without a new message
+- **WHEN** the most recent snapshot was received 5 seconds ago (state was `"live"`)
+- **AND** 15 seconds pass without a new snapshot arriving
+- **THEN** the next interval tick computes state as `"unknown"`
 - **AND** the Dashboard pill re-renders to the amber style
 
-#### Scenario: Pill transitions from unsure to offline without a new message
-- **WHEN** the most recent snapshot was received 90 seconds ago (state was `"unsure"`)
-- **AND** 35 seconds pass without a new snapshot arriving
+#### Scenario: Pill transitions from unknown to offline without a new message
+- **WHEN** the most recent snapshot was received 20 seconds ago (state was `"unknown"`)
+- **AND** 15 seconds pass without a new snapshot arriving
 - **THEN** the next interval tick computes state as `"offline"`
-- **AND** the Dashboard pill re-renders to the grey "Unknown" style
+- **AND** the Dashboard pill re-renders to the grey "Offline" style
 
 #### Scenario: Interval produces no network traffic
 - **WHEN** the interval fires
@@ -180,7 +181,7 @@ The browser MUST run a local `setInterval` (5-second cadence) that re-evaluates 
 - **AND** no further re-renders occur after navigation
 
 ### Requirement: Dashboard "Live" pill reflects the computed state
-The Dashboard page MUST render a "Live" pill whose color, animation, and text reflect the browser-computed state (derived from the snapshot's age — see "Browser computes sign state from snapshot age"). The pill MUST apply the green color and pulse animation and the text "Live" when `state="live"`. The pill MUST apply the amber color and no animation and the text "Live" when `state="unsure"`. The pill MUST apply the grey color and no animation and the text "Unknown" when `state="offline"`. The threshold values for the state transitions are browser-side policy (defined in `sign_status.js`); there is no HTTP endpoint or server round-trip involved in computing or rendering the state.
+The Dashboard page MUST render a "Live" pill whose color, animation, and text reflect the browser-computed state (derived from the snapshot's age — see "Browser computes sign state from snapshot age"). The pill MUST apply the green color and pulse animation and the text "Live" when `state="live"`. The pill MUST apply the amber color and no animation and the text "Unknown" when `state="unknown"`. The pill MUST apply the grey color and no animation and the text "Offline" when `state="offline"`. The threshold values for the state transitions are browser-side policy (defined in `sign_status.js`); there is no HTTP endpoint or server round-trip involved in computing or rendering the state.
 
 #### Scenario: Live state shows green pill with pulse
 - **WHEN** the computed state is `"live"`
@@ -188,16 +189,16 @@ The Dashboard page MUST render a "Live" pill whose color, animation, and text re
 - **AND** the pill has the pulse animation class applied
 - **AND** the pill text reads "Live"
 
-#### Scenario: Unsure state shows amber pill without pulse
-- **WHEN** the computed state is `"unsure"`
+#### Scenario: Unknown state shows amber pill without pulse
+- **WHEN** the computed state is `"unknown"`
 - **THEN** the Dashboard "Live" pill has the amber color class applied
 - **AND** the pill does NOT have the pulse animation class applied
-- **AND** the pill text reads "Live"
+- **AND** the pill text reads "Unknown"
 
-#### Scenario: Offline state shows grey "Unknown" pill
+#### Scenario: Offline state shows grey "Offline" pill
 - **WHEN** the computed state is `"offline"`
 - **THEN** the Dashboard "Live" pill has the grey color class applied
-- **AND** the pill text reads "Unknown"
+- **AND** the pill text reads "Offline"
 
 #### Scenario: Pill updates on each new snapshot
 - **WHEN** a new snapshot arrives on `MQTT_STATUS_TOPIC`
@@ -217,8 +218,8 @@ The Settings page MUST render a new read-only "Sign Health" section at the top o
 - **THEN** the Settings page shows the running SHA, started_at timestamp, uptime (formatted), MQTT-connected flag, last-tick age, messages-rendered count, and last-error value
 - **AND** the section shows the browser-side timestamp of when the snapshot was received
 
-#### Scenario: Snapshot fields render when state is unsure
-- **WHEN** the computed state is `"unsure"` and a snapshot is in memory
+#### Scenario: Snapshot fields render when state is unknown
+- **WHEN** the computed state is `"unknown"` and a snapshot is in memory
 - **THEN** the Settings page shows the snapshot fields and a small "stale" indicator next to the received-at timestamp
 
 #### Scenario: No snapshot yet shows placeholder
@@ -253,7 +254,7 @@ The status topic MUST be configurable via `MQTT_STATUS_TOPIC` in both `heart-mes
 - **AND** `sign_status.js` reads it from `window.APP_CONFIG.mqttStatusTopic` (not from a hardcoded value)
 
 ### Requirement: Status publish does not regress .status.json or envelope publish
-The existing `.status.json` write cadence (3-second throttle, atomic `os.replace`) MUST remain unchanged. The existing `MessageEnvelope` publish path on `MQTT_TOPIC` MUST remain unchanged. A status publish failure MUST NOT prevent subsequent envelope publishes or `.status.json` writes. The status publish MUST be on a separate MQTT client invocation per call (matching the existing `publish_envelope` pattern), and MUST NOT share a long-lived publisher with the envelope path.
+The existing `.status.json` write cadence moves from 3 seconds to 5 seconds (unified with the new MQTT status publish cadence). The atomic `os.replace` semantics MUST remain unchanged. The existing `MessageEnvelope` publish path on `MQTT_TOPIC` MUST remain unchanged. A status publish failure MUST NOT prevent subsequent envelope publishes or `.status.json` writes. The status publish MUST be on a separate MQTT client invocation from the envelope path (a long-lived paho publisher held open by the render-loop process), and MUST NOT share a long-lived publisher with the envelope path.
 
 #### Scenario: Status publish failure does not affect envelope path
 - **WHEN** a status publish fails (broker unreachable)
@@ -263,4 +264,4 @@ The existing `.status.json` write cadence (3-second throttle, atomic `os.replace
 #### Scenario: Status publish does not affect the render loop
 - **WHEN** a status publish takes 1 second to complete
 - **THEN** the render loop's tick interval is unchanged
-- **AND** the `.status.json` write (on the render loop) still fires every 3 seconds
+- **AND** the `.status.json` write (on the render loop) still fires every 5 seconds
