@@ -35,6 +35,15 @@ MQTT_STATUS_TOPIC = ""
 MESSAGES_API_URL = "http://YOUR_FLASK_HOST/api/messages"
 CONFIG_API_URL = "http://YOUR_FLASK_HOST/api/config"
 
+# Origin of the Flask server's media proxy endpoint. The MediaCycler
+# (per-message background effect for MMS attachments) fetches each
+# attachment via "{MEDIA_API_BASE_URL}/api/media/{s3_key}", which the
+# Flask server 302-redirects to a signed S3 URL. Defaults to the
+# MESSAGES_API_URL origin (same Flask host) with no trailing path.
+# The env var MEDIA_API_BASE_URL (if set) takes precedence over this
+# value at process start.
+MEDIA_API_BASE_URL = "http://YOUR_FLASK_HOST"
+
 # BDF font for scrolling text. The repo ships two vendored options
 # (both public-domain Markus Kuhn fonts from the hzeller
 # rpi-rgb-led-matrix repo):

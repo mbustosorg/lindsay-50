@@ -171,6 +171,9 @@ class EffectsCoordinator:
         heart: Effect | None = None,
         fade_step: float = 0.04,
         gamma: float = 2.2,
+        *,
+        media_api_base_url: str = "",
+        media_cache_dir: str = "",
     ) -> None:
         # Required — no default. Raises TypeError if a caller omits it.
         # All live config (pacing fields, rotation, text settings) is
@@ -187,6 +190,16 @@ class EffectsCoordinator:
         self.fade_step = fade_step
         # Gamma correction: linear time → perceptually linear brightness.
         self.gamma = gamma
+        # MediaCycler wiring (issue #38). The coordinator constructs
+        # one when the picked message has a non-empty `media` list;
+        # the cycler replaces `self.effects[self.idx]` for the hold.
+        # `media_api_base_url` is the Flask server origin (e.g.
+        # "http://localhost:3100") — the cycler builds
+        # "{api_base_url}/api/media/{s3_key}" URLs. `media_cache_dir`
+        # is the local directory for downloaded bytes (None / "" means
+        # the OS temp dir).
+        self._media_api_base_url = media_api_base_url or ""
+        self._media_cache_dir = media_cache_dir or ""
 
         self.idx = -1  # first message shown advances this to 0
         self.current = heart  # effect being rendered right now (may be None)
@@ -202,6 +215,12 @@ class EffectsCoordinator:
         # pull — `get_display_message()` (which does random.choice)
         # is only called at the two transition paths below.
         self._last_display_message: str | None = None
+        # `_last_picked_entry` is set by `get_display_message()` to
+        # the `MessageView` it picked, so callers (e.g. the out→in
+        # transition) can read the picked message's `media` list and
+        # decide whether to construct a `MediaCycler`. Reset to None
+        # on every `get_display_message()` call.
+        self._last_picked_entry: MessageView | None = None
         self._last_shown_message_id: str | None = None
         # `_consumed_message_ids` is the set of message ids that have
         # actually FADED IN on the scroller during this process's
@@ -351,6 +370,95 @@ class EffectsCoordinator:
                 return entry.message.id
         return None
 
+    def _maybe_build_media_cycler(self) -> Effect | None:
+        """Construct a `MediaCycler` for the picked message's MMS media.
+
+        Called at the out→in transition. Returns:
+          - A `MediaCycler` if the picked message has a non-empty
+            `media` list AND we have a display to construct it
+            against. The cycler takes over `self.current` for the
+            hold.
+          - None otherwise (SMS-only messages, no display, or no
+            picked entry — e.g. the intro→out path that didn't
+            actually pick a message).
+
+        The cycler handles its own codec failures (D12): if every
+        attachment fails to load, `exhausted` is True at construction
+        and the coordinator's `hold` branch falls back to the
+        rotation effect via `_maybe_fall_back_to_rotation`.
+        """
+        picked = self._last_picked_entry
+        if picked is None:
+            return None
+        media = getattr(picked.message, "media", None) or []
+        if not media:
+            return None
+        if self.display is None:
+            return None
+        # Lazy import — MediaCycler pulls in Pillow (ImageDisplay) and
+        # optionally cv2 (VideoDisplay). The host test suite has Pillow
+        # but not cv2; keeping the import here avoids loading it at
+        # coordinator-import time.
+        from lib_shared.patterns.media_cycler import MediaCycler
+
+        return MediaCycler(
+            picked.message.id,
+            media,
+            display=self.display,
+            api_base_url=self._media_api_base_url,
+            hold_seconds=self.message_manager.get_effects_settings().hold_seconds,
+            cache_dir=self._media_cache_dir or None,
+        )
+
+    def _maybe_fall_back_to_rotation(self) -> None:
+        """If `self.current` is a `MediaCycler` that's exhausted, swap
+        it back to `self.effects[self.idx]`.
+
+        Called at every `hold` and `text_out` tick. Idempotent: when
+        `self.current` is not a `MediaCycler` (the typical case), this
+        is a no-op. When it IS a `MediaCycler` and still has items,
+        the cycler keeps running — the coordinator's existing
+        `hold_seconds` clock decides when to transition out.
+        """
+        from lib_shared.patterns.media_cycler import MediaCycler
+
+        current = self.current
+        if current is None:
+            return
+        if not isinstance(current, MediaCycler):
+            return
+        # `MediaCycler` extends `Effect` but adds `exhausted` —
+        # pyright can't see it through the `isinstance` narrowing.
+        if not current.exhausted:  # type: ignore[attr-defined]
+            return
+        effects = self.effects
+        if not effects:
+            return
+        self.current = effects[self.idx]
+        self.current.set_brightness(self._current_brightness)
+        log.info(
+            "Coordinator media-cycler exhausted: falling back to rotation effect=%s",
+            self.current_effect_name,
+        )
+
+    @property
+    def _current_brightness(self) -> float:
+        """Best-effort read of the current brightness scalar from the
+        fade ramp. Used by `_maybe_fall_back_to_rotation` so the
+        rotation effect resumes at the same brightness the cycler was
+        running at (avoids a visible flash when the cycler
+        transitions out mid-fade)."""
+        # The coordinator doesn't cache the ramp value — the
+        # `tick()` flow applies it via `set_brightness(b)` on every
+        # step. We approximate the current brightness as fully-on
+        # (1.0) in `hold` and `background`; the ramped value during
+        # `out` / `in` is held in the cycler's own `_brightness`
+        # field, which it inherits from the coordinator's last
+        # `set_brightness` call. 1.0 is the correct value for the
+        # cycler's normal "fully visible" state and the typical
+        # fallback target.
+        return 1.0
+
     def get_display_message(self) -> str | None:
         """Pick the body to display next, from the manager's buffered messages.
 
@@ -364,18 +472,27 @@ class EffectsCoordinator:
           4. Otherwise pick uniformly at random from the list and return that
              entry's body, updating `_last_shown_message_id` to the picked id.
 
+        Side effect: also stores the picked entry on `self._last_picked_entry`
+        so callers (e.g. the out→in transition) can read the picked
+        message's `media` list and decide whether to construct a
+        `MediaCycler`. The side channel is reset to None at the start
+        of every call so callers always see the most recent pick.
+
         Returns:
             The body string to show next, or None when the buffer is empty.
         """
+        self._last_picked_entry = None
         entries = self.current_messages
         if len(entries) == 0:
             return None
         head = entries[0]
         if head.message.id != self._last_shown_message_id:
             self._last_shown_message_id = head.message.id
+            self._last_picked_entry = head
             return head.message.body
         picked = random.choice(entries)
         self._last_shown_message_id = picked.message.id
+        self._last_picked_entry = picked
         return picked.message.body
 
     def _pick_next_text(self) -> str | None:
@@ -568,6 +685,18 @@ class EffectsCoordinator:
                 self.idx = (self.idx + 1) % len(effects)
                 self.current = effects[self.idx]
                 self.current.set_brightness(0.0)
+                # MMS media override (issue #38): if the picked
+                # message has a non-empty `media` list, swap a
+                # `MediaCycler` in place of the rotation effect. The
+                # cycler takes over `self.current` for the duration of
+                # the hold, cycling through the attachments
+                # (D4/D5/D12). On `exhausted` the coordinator falls
+                # back to `self.effects[self.idx]` (the rotation entry
+                # we just selected) for the remainder of the hold.
+                media_override = self._maybe_build_media_cycler()
+                if media_override is not None:
+                    self.current = media_override
+                    self.current.set_brightness(0.0)
                 if text:
                     scroller.set_text(text, display.width)
                     scroller.set_brightness(0.0)
@@ -601,11 +730,12 @@ class EffectsCoordinator:
                     scroller.set_text("", display.width)
                     self.showing_text = False
                 log.info(
-                    "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s",
+                    "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s media_override=%s",
                     self.idx,
                     self.current_effect_name,
                     text if text else "",
                     self.showing_text,
+                    "yes" if media_override is not None else "no",
                 )
                 self.mode = "in"
                 self.fade_start = now
@@ -627,6 +757,12 @@ class EffectsCoordinator:
                 self.mode = next_mode
 
         elif mode == "hold":
+            # MediaCycler fall-back (issue #38): if the cycler is
+            # exhausted (every attachment failed to decode or the
+            # list is now empty), swap it back to the rotation
+            # effect for the remainder of the hold. No-op when
+            # `self.current` is a normal Effect.
+            self._maybe_fall_back_to_rotation()
             # Hold semantics (v2):
             #   - Stay on the current message until `hold_seconds` elapses,
             #     UNLESS a genuinely *new* SMS arrives — i.e. the head of the

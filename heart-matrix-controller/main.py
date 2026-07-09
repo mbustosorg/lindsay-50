@@ -139,6 +139,15 @@ coordinator = EffectsCoordinator(
     scroller=scroller,
     effects=effects,
     heart=heartbeat,
+    # MediaCycler wiring (issue #38). The coordinator constructs a
+    # MediaCycler at the out→in transition when the picked message
+    # has a non-empty `media` list; the cycler fetches each
+    # attachment via "{MEDIA_API_BASE_URL}/api/media/{s3_key}".
+    # Default to deriving the origin from MESSAGES_API_URL when
+    # MEDIA_API_BASE_URL isn't set (operators usually point all
+    # three URLs at the same Flask host).
+    media_api_base_url=cfg.if_exists("MEDIA_API_BASE_URL") or cfg.MESSAGES_API_URL.rsplit("/api/", 1)[0],
+    media_cache_dir=str(_REPO_DIR / "data" / "media-cache"),
 )
 
 # Kick off the boot splash. The coordinator's first pull (every 250 ms)
