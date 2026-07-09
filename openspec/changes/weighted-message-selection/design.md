@@ -12,7 +12,7 @@ The browser preview (`/playful`) shares the same Python `MessageSelector` class 
 
 - Define a deterministic priority function that picks the next message given (messages, `now()`, event_log).
 - Make the score's contributions explicit and tunable: a recency-of-display component (sourced from the event log), a recency-of-send component (sourced from the message's `sent_at`), and a favorite boost (sourced from the message's `favorite` flag).
-- Apply a configurable eligibility window (default two weeks) so ancient messages do not compete. The window MUST be exposed on the Settings page so operators can tune it without code or `settings.toml` edits.
+- Apply an eligibility window (default two weeks, module-level constant `OFFSET_SECONDS` in `lib_shared/selector.py`) so ancient messages do not compete. The window is a behavioral knob of the algorithm, not an operational value, so it lives in code rather than `settings.toml`. The constant is seconds-denominated (good for testing with small windows in unit tests), even though the eventual operator-facing presentation on the admin UI is likely days or hours — that's a UI-layer translation deferred to the change that adds the UI.
 - Persist render events on the Pi's disk so a restart does not reset rotation history.
 - Preserve the existing pre-emption invariant: a newly arrived message always shows immediately, bypassing the selector.
 - Use a generic event schema that supports future pattern types (`image_display`, `video_display`, …) and is forward-compatible with MQTT publication for remote debugging.
@@ -26,6 +26,7 @@ The browser preview (`/playful`) shares the same Python `MessageSelector` class 
 - Publishing events to MQTT for remote debugging. Out of scope for v1; the schema is forward-compatible (the event has the fields an MQTT publisher would need) but no MQTT code ships in this change.
 - Changing the broker, transport, or envelope shape.
 - Cross-process coordination of selector state (e.g., distributed locks). The selector is local to whatever process runs it.
+- Adding Settings page UI controls for the selector knobs in this change. The Flask Settings page is not touched; future operator-facing presentation (likely days/hours for the eligibility window) is a separate change that handles UI-layer translation between the seconds-denominated code constant and the operator-facing unit.
 
 ## Decisions
 
@@ -39,11 +40,13 @@ score(message, now, event_log) =
   + w_send      * send_recency(message, eligible_set, now)   # 0..1, 1 = most recent
   + w_favorite  * (1.0 if message.favorite else 0.0)
 
-# Defaults (overridable via settings.toml):
+# Defaults (module-level constants at the top of lib_shared/selector.py):
 #   w_display   = 0.6
 #   w_send      = 0.3
 #   w_favorite  = 0.4   # additive; a favorite never-shown message beats a non-favorite never-shown message
 ```
+
+These weights are behavioral knobs of the algorithm, not operator-facing operational values — they live as module-level constants in `lib_shared/selector.py`. Operators who want to tune them edit the source and redeploy; no `settings.toml` plumbing, no Settings page UI.
 
 The favorite weight is additive rather than a multiplier on `send_recency` (which the issue suggested as one option) because additive lets us tune "how much do favorites dominate" independently from "how recent is recent". The implementer may also implement the issue's alternative — clamping a favorite's effective `sent_at` to `now − 1 hour` — and that is acceptable as long as the result is functionally identical to a favorites-tilted score.
 
@@ -52,6 +55,7 @@ The favorite weight is additive rather than a multiplier on `send_recency` (whic
 - Sort by event-log timestamp then by `sent_at` (lexicographic): simpler but loses the continuous tuning surface; users could not express "favor recent messages more" without reordering keys.
 - Pure ML ranking: deferred (non-goal).
 - Embedding `last_shown_at` on the `Message` model and replicating through server/Pi/browser: rejected (see Decision 5).
+- Surfacing the weights on the Flask Settings page: rejected (behavioral knob → code constant, per the lindsay-50 pattern of `TextSettings.MIN_SPEED/MAX_SPEED/DEFAULT_SPEED` and similar in `lib_shared/`).
 
 ### Decision 2 — `display_recency` is derived from the event log, not a Message field
 
@@ -63,7 +67,7 @@ display_recency(message, now, event_log) =
 
 Where "matching event" means the most recent event in the log whose `event_type` equals the renderer's current pattern type AND whose `message_id` equals `message.id`. A text-render pattern only looks at `text_display` events; an image-render pattern only looks at `image_display` events. This keeps the recency computation per-pattern, so a message shown as an image and then as text does not unfairly suppress its text score.
 
-A never-shown message gets the maximum value — "fresh slate, show me." A message shown recently gets a low value — "sit out for a while." The `saturation_seconds` knob controls how aggressively recently-shown messages are excluded.
+A never-shown message gets the maximum value — "fresh slate, show me." A message shown recently gets a low value — "sit out for a while." The `SATURATION_SECONDS` module-level constant controls how aggressively recently-shown messages are excluded.
 
 ### Decision 3 — `send_recency` is normalized over the eligible set, not over all time
 
@@ -79,7 +83,7 @@ Normalizing across the eligible set (rather than against an absolute reference l
 
 ### Decision 4 — Eligibility window uses `sent_at`, not the event log
 
-A message is eligible iff `now − sent_at ≤ offset_seconds` (default 14 days). The offset is checked against `sent_at` because we want dormant older messages to stay dormant — a message from two years ago should not pop up just because it has never been shown. The implementation exposes `OFFSET_SECONDS` in `settings.toml`.
+A message is eligible iff `now − sent_at ≤ OFFSET_SECONDS` (default 14 days). The offset is checked against `sent_at` because we want dormant older messages to stay dormant — a message from two years ago should not pop up just because it has never been shown. The implementation exposes `OFFSET_SECONDS` as a module-level constant in `lib_shared/selector.py`.
 
 ### Decision 5 — Display-recency lives in a Pi-local append-only event log; server's `Message` model is unchanged
 
@@ -134,12 +138,14 @@ Rationale for bounded ring vs. file-size/age rotation: the display-recency compu
 
 - [Risk] **Forward-compat assumption: future MQTT publication needs the events in real-time.** → Mitigation: the renderer writes events synchronously; a future publisher can subscribe to the `EventLog.append` hook and publish immediately. No retroactive change needed.
 
+- [Risk] **Operator wants to tune the eligibility window on a running sign without a code change.** → Mitigation: deferred to a future change that adds Settings page UI. The eligibility window is a behavioral knob today; once it stabilizes (or once an operator expresses the need), the future change exposes it on the admin UI with the days/hours translation layer. For now, operators edit `lib_shared/selector.py` and redeploy.
+
 ## Migration Plan
 
 - No database migration. The server's `Message` model and SQLite schema are unchanged. The event log is a brand-new file on the Pi.
-- New settings keys: `EVENT_LOG_PATH` (default `data/events.jsonl`), `EVENT_LOG_MAX_ENTRIES` (default 100), `SELECTOR_*` weights, `USE_WEIGHTED_SELECTOR` (default false), `SELECTOR_OFFSET_SECONDS` (default 14 days), `SELECTOR_SATURATION_SECONDS` (default 24 hours). The eligibility window and the three selector weights are ALSO surfaced on the Settings page so operators can tune them without editing `settings.toml`.
-- Deploy Pi first with `USE_WEIGHTED_SELECTOR=false` (the new path is dark-shipped). Old first-in/first-out rotation continues to run. Flip the flag and observe for at least one full `OFFSET_SECONDS` window before rolling to other Pis.
-- Rollback: flip `USE_WEIGHTED_SELECTOR=false` and restart. The previous code path is preserved behind the flag.
+- Two new operational settings keys go into `heart-matrix-controller/settings.toml`: `EVENT_LOG_PATH` (default `data/events.jsonl`) and `EVENT_LOG_MAX_ENTRIES` (default 100). These describe *where the artifact lives on disk* — per-Pi / per-deployment variance — so they belong in `settings.toml`. Everything else (selector weights, decay window, eligibility window, rollout flag) is a code constant in `lib_shared/selector.py`.
+- Deploy Pi first with `USE_WEIGHTED_SELECTOR=False` (the new path is dark-shipped). Old first-in/first-out rotation continues to run. Flip the flag in code and redeploy; observe for at least one full `OFFSET_SECONDS` window before rolling to other Pis.
+- Rollback: set `USE_WEIGHTED_SELECTOR=False` and redeploy. The previous code path is preserved behind the flag.
 
 ## Open Questions
 
@@ -147,3 +153,4 @@ Rationale for bounded ring vs. file-size/age rotation: the display-recency compu
 - Should there be a "max times shown" cap to prevent a popular favorite from dominating? — Deferred to v2; not in this change.
 - Should the selector record WHY it picked each message (which component dominated) for operator debugging? — Deferred; would require either a sidecar log or a UI affordance. Spec does not require it.
 - When the future MQTT publication lands, should it use a dedicated topic (`sign/events`) or reuse the existing envelope topic? — Deferred to the future change.
+- When the operator-facing UI for the eligibility window lands, should it expose the three weights too, or just the window? — Deferred to the UI change.

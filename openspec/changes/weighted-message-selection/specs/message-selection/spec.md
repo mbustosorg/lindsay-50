@@ -51,17 +51,22 @@ The selector SHALL compute a `send_recency` component for each eligible message,
 
 ### Requirement: Two-week eligibility window
 
-The selector SHALL exclude messages whose `sent_at` is older than `now − offset_seconds` from the rotation pool. The default `offset_seconds` SHALL be 1,209,600 (14 days). The offset SHALL be configurable via settings.
+The selector SHALL exclude messages whose `sent_at` is older than `now − OFFSET_SECONDS` from the rotation pool. The default `OFFSET_SECONDS` SHALL be 1,209,600 (14 days). `OFFSET_SECONDS` SHALL be defined as a module-level constant in `lib_shared/selector.py`; it SHALL NOT be a key in `settings.toml` in this change. The constant SHALL be seconds-denominated so unit tests can use small windows (e.g., 60 seconds) without depending on real-world durations. Future operator-facing presentation of the eligibility window on the admin UI is a separate change; the present change MUST NOT add UI controls for `OFFSET_SECONDS`.
 
 #### Scenario: Message older than the offset is excluded
 
-- **WHEN** a message was sent 30 days ago and `offset_seconds` is the 14-day default
+- **WHEN** a message was sent 30 days ago and `OFFSET_SECONDS` is the 14-day default
 - **THEN** that message MUST NOT appear in the eligible set passed to the selector
 
 #### Scenario: Message within the offset is eligible
 
-- **WHEN** a message was sent 7 days ago and `offset_seconds` is the 14-day default
+- **WHEN** a message was sent 7 days ago and `OFFSET_SECONDS` is the 14-day default
 - **THEN** that message MUST appear in the eligible set
+
+#### Scenario: Unit test with a small window
+
+- **WHEN** a unit test sets `OFFSET_SECONDS` to a small value (e.g., 60 seconds) and constructs the selector with messages of varying `sent_at`
+- **THEN** only messages whose `sent_at` falls within the small window MUST appear in the eligible set
 
 ### Requirement: Favorite boost
 
@@ -148,14 +153,19 @@ When two or more messages have identical scores, the selector MUST pick determin
 - **WHEN** two messages have the same weighted score
 - **THEN** the selector MUST pick the message with the lower message-id (or, equivalently, a documented stable ordering) so the result is reproducible
 
-### Requirement: Tunable weights via settings
+### Requirement: Selector weights and tunables are code constants
 
-The three selector weights (display, send, favorite) plus `saturation_seconds`, `offset_seconds`, and `event_log_path` MUST be configurable via `settings.toml` so operators can tune the rotation feel and the log location without code changes. Defaults MUST match the values listed in the design document.
+The selector's three weights (`W_DISPLAY`, `W_SEND`, `W_FAVORITE`), the display-recency decay window (`SATURATION_SECONDS`), the eligibility window (`OFFSET_SECONDS`), and the rollout flag (`USE_WEIGHTED_SELECTOR`) SHALL be defined as module-level constants in `lib_shared/selector.py`. They SHALL NOT be keys in `settings.toml` in this change. Operators tune them by editing the source and redeploying; no Settings page UI controls them in this change. The constants MUST be importable from `lib_shared.selector` (e.g., `from lib_shared.selector import W_DISPLAY, W_SEND, W_FAVORITE, SATURATION_SECONDS, OFFSET_SECONDS, USE_WEIGHTED_SELECTOR`) so tests can verify the documented defaults.
 
-#### Scenario: Settings drive the selector
+#### Scenario: Constants live in code, not settings
 
-- **WHEN** an operator changes `SELECTOR_W_DISPLAY` in `settings.toml` and restarts the relevant process
-- **THEN** the selector MUST use the new weight on the next pick (no caching, no restart of the whole pipeline required)
+- **WHEN** an operator inspects `heart-matrix-controller/settings.toml` and `heart-message-manager/settings.toml`
+- **THEN** neither file SHALL contain `SELECTOR_*` keys or `USE_WEIGHTED_SELECTOR`. The selector knobs SHALL be present in `lib_shared/selector.py` only.
+
+#### Scenario: Constants are importable with documented defaults
+
+- **WHEN** a test imports the constants from `lib_shared.selector`
+- **THEN** `W_DISPLAY` SHALL equal `0.6`, `W_SEND` SHALL equal `0.3`, `W_FAVORITE` SHALL equal `0.4`, `SATURATION_SECONDS` SHALL equal `86400`, `OFFSET_SECONDS` SHALL equal `1209600`, and `USE_WEIGHTED_SELECTOR` SHALL equal `False`
 
 ### Requirement: Event log is a bounded ring
 
@@ -190,16 +200,16 @@ The browser preview at `/playful` SHALL use the same `MessageSelector` Python cl
 - **WHEN** the same message set and clock are passed to the selector in both the browser preview and on the Pi
 - **THEN** both SHALL execute the same Python class — only the event-log source differs (IndexedDB vs Pi-local JSONL)
 
-### Requirement: Display window is configurable from the Settings page
+### Requirement: Eligibility window is a code constant (future-UI candidate)
 
-The Flask Settings page SHALL expose the message-display eligibility window (the `SELECTOR_OFFSET_SECONDS` setting, labeled in days) as an editable control, so operators can tune the rotation feel without editing `settings.toml` and restarting processes. The control MUST persist to the same setting the selector reads on construction. The control MAY also expose the three selector weights (`SELECTOR_W_DISPLAY`, `SELECTOR_W_SEND`, `SELECTOR_W_FAVORITE`) — operators tune them less often, but surfacing them in the same section avoids a `settings.toml` round-trip.
+The message-display eligibility window (`OFFSET_SECONDS` in `lib_shared/selector.py`) SHALL NOT be exposed as a control on the Flask Settings page in this change. The Flask Settings page, the Flask route handlers, and the templates SHALL NOT be modified to add eligibility-window or selector-weight controls. A future change MAY add an operator-facing UI for `OFFSET_SECONDS` (and possibly the three weights and `SATURATION_SECONDS`); that future change is responsible for translating between the seconds-denominated code constant and the days/hours input the operator sees.
 
-#### Scenario: Settings page exposes the display window
+#### Scenario: Settings page does not expose eligibility window in this change
 
-- **WHEN** an operator opens the Settings page
-- **THEN** there SHALL be a labeled control for the display window (in days) showing the current `SELECTOR_OFFSET_SECONDS / 86400` value
+- **WHEN** an operator opens the Settings page in this change
+- **THEN** there SHALL be no labeled control for the message-display eligibility window (in days or otherwise), and no controls for the selector weights or saturation
 
-#### Scenario: Editing the window persists the change
+#### Scenario: Templates and routes are not modified
 
-- **WHEN** the operator changes the display window control and saves
-- **THEN** `SELECTOR_OFFSET_SECONDS` in `settings.toml` SHALL be updated and the selector SHALL pick up the new value on the next pick (no process restart required, matching the existing settings-update pattern)
+- **WHEN** the change is complete
+- **THEN** the Settings template(s), the playful Settings template(s), and the settings-update route handler SHALL NOT have been modified to handle `SELECTOR_OFFSET_SECONDS`, `SELECTOR_W_DISPLAY`, `SELECTOR_W_SEND`, `SELECTOR_W_FAVORITE`, `SELECTOR_SATURATION_SECONDS`, or `USE_WEIGHTED_SELECTOR`
