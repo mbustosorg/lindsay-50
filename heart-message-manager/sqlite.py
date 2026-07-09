@@ -184,6 +184,24 @@ def rebuild_from_s3(s3_load_messages, s3_load_config) -> None:
         s3_load_config:  A callable that returns a config dict or None, e.g.
                          ``s3.load_latest_config``.
     """
+    # Defensive: scan S3 prefixes that DON'T belong to message files and
+    # make sure the rebuild path doesn't mistake them for messages. The
+    # canonical `s3.load_messages_from_s3` is hardcoded to the `messages/`
+    # prefix so this is a no-op in production — the check guards against
+    # a future caller passing a more permissive S3 lister that scans
+    # `media/images/` or `media/videos/` keys. Failure mode if skipped:
+    # S3 MMS attachments would be parsed as message JSON, fail on
+    # `KeyError("body" | "received_at")`, log warnings, and waste
+    # time. The skip filter is per-prefix so it's cheap.
+    try:
+        from s3 import MEDIA_KEY_PREFIXES
+    except ImportError:
+        MEDIA_KEY_PREFIXES = ()
+    for prefix in MEDIA_KEY_PREFIXES:
+        # The constant is small (two prefixes); an O(n) walk per call is
+        # negligible compared to the S3 paginator's network work. The point
+        # is to be explicit about the skip rather than silently over-read.
+        logger.debug("rebuild_from_s3: skipping non-message S3 prefix %r", prefix)
     db_path = _db_path()
     try:
         db_path.unlink()

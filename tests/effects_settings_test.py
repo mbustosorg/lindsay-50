@@ -43,10 +43,12 @@ def _canonical_entries():
 
 
 def test_default_instantiation_uses_canonical_list():
-    """A no-arg constructor picks up the canonical 7-entry list."""
+    """A no-arg constructor picks up the canonical 5-entry list
+    (PngDisplay/VideoDisplay removed in #38 — those are now inner
+    renderers consumed by MediaCycler, not registry entries)."""
     s = EffectsSettings()
-    assert len(s.effects) == 7
-    # Five enabled by default; the two asset-dependent patterns are disabled.
+    assert len(s.effects) == 5
+    # All five are enabled by default.
     enabled = [e["name"] for e in s.effects if e["enabled"]]
     assert len(enabled) == 5
     assert "Hyperspace" in enabled
@@ -54,9 +56,10 @@ def test_default_instantiation_uses_canonical_list():
     assert "Fireworks" in enabled
     assert "NightSky" in enabled
     assert "Honeycomb" in enabled
-    # Disabled-by-default
+    # Inner renderers consumed by MediaCycler (not registry entries)
     assert "VideoDisplay" not in enabled
     assert "PngDisplay" not in enabled
+    assert "ImageDisplay" not in enabled
 
 
 def test_default_pacing_values():
@@ -70,12 +73,11 @@ def test_default_pacing_values():
 
 
 def test_canonical_list_has_known_names():
-    """The canonical list contains exactly the 7 expected effect names."""
+    """The canonical list contains exactly the 5 expected effect names
+    (the 2 asset-dependent display classes were removed in #38)."""
     names = {e["name"] for e in _canonical_entries()}
     assert names == {
         "Hyperspace",
-        "VideoDisplay",
-        "PngDisplay",
         "Honeycomb",
         "Flame",
         "Fireworks",
@@ -111,14 +113,14 @@ def test_round_trip_default():
 def test_from_dict_accepts_empty_dict():
     """An empty dict is valid and yields the canonical defaults."""
     s = EffectsSettings.from_dict({})
-    assert len(s.effects) == 7
+    assert len(s.effects) == 5
     assert s.fade_seconds == 2.0
 
 
 def test_from_dict_none_uses_defaults():
     """from_dict(None) yields the canonical defaults."""
     s = EffectsSettings.from_dict(None)
-    assert len(s.effects) == 7
+    assert len(s.effects) == 5
 
 
 def test_from_dict_with_custom_values():
