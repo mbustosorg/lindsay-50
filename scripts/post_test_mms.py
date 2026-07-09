@@ -36,9 +36,12 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import tomllib
 import urllib.parse
 from http.cookiejar import CookieJar
+from pathlib import Path
 from urllib.request import HTTPCookieProcessor, OpenerDirector, Request, build_opener
 
 # Real, stable, public HTTPS URLs. picsum redirects 302 to a
@@ -57,6 +60,48 @@ PUBLIC_MEDIA: dict[str, dict[str, str]] = {
         "url": "https://www.w3schools.com/html/mov_bbb.mp4",
     },
 }
+
+# Path to the repo's `heart-message-manager/settings.toml` — used
+# as the default source of admin credentials and port when the
+# caller doesn't pass --username/--password/--base-url explicitly.
+# Resolves relative to the repo root (the script's parent's parent
+# = the `lindsay-50/` checkout).
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_SETTINGS = _REPO_ROOT / "heart-message-manager" / "settings.toml"
+
+
+def _load_settings(path: Path) -> dict:
+    """Best-effort TOML load. Returns an empty dict when the file
+    is missing (the operator may not have one set up locally) or
+    unparseable — caller treats empty as "no defaults available".
+    """
+    try:
+        with path.open("rb") as f:
+            return tomllib.load(f)
+    except FileNotFoundError:
+        return {}
+    except tomllib.TOMLDecodeError as e:
+        print(f"warning: could not parse {path}: {e}", file=sys.stderr)
+        return {}
+
+
+def _settings_defaults() -> tuple[str, str, str]:
+    """Read admin username/password + server port from
+    `heart-message-manager/settings.toml`. Returns
+    `(username, password, port)` defaults that the caller can
+    pass through to argparse.
+
+    The file's `[auth]` table carries ADMIN_USERNAME /
+    ADMIN_PASSWORD; the top-level `PORT` is the Flask server's
+    listen port. Anything missing yields an empty string, which
+    argparse translates to "use the argparse default".
+    """
+    cfg = _load_settings(_DEFAULT_SETTINGS)
+    auth = cfg.get("auth", {})
+    username = str(auth.get("ADMIN_USERNAME", "") or "")
+    password = str(auth.get("ADMIN_PASSWORD", "") or "")
+    port = str(cfg.get("PORT", "") or "")
+    return username, password, port
 
 
 def _build_opener(base_url: str, username: str, password: str) -> OpenerDirector:
@@ -170,6 +215,23 @@ def post_test_mms(base_url: str, username: str, password: str, attachments: list
 
 def main(argv: list[str] | None = None) -> None:
     doc_first_line = __doc__.splitlines()[0] if __doc__ else "Post a fake Twilio MMS for local testing."
+
+    # Pull admin creds + port from `heart-message-manager/settings.toml`
+    # when available. Anything missing falls back to the canonical
+    # defaults below. Env vars (e.g. ADMIN_USERNAME) ALWAYS win over
+    # settings.toml, mirroring the server's own precedence rules —
+    # the operator who started the server with env vars is the same
+    # operator running this script.
+    toml_user, toml_pass, toml_port = _settings_defaults()
+    env_user = os.environ.get("ADMIN_USERNAME", "")
+    env_pass = os.environ.get("ADMIN_PASSWORD", "")
+    default_user = env_user or toml_user or "admin"
+    default_pass = env_pass or toml_pass or "secret123"
+    if toml_port:
+        default_base = f"http://localhost:{toml_port}"
+    else:
+        default_base = "http://localhost:3100"
+
     parser = argparse.ArgumentParser(description=doc_first_line)
     parser.add_argument(
         "mode",
@@ -178,20 +240,50 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--base-url",
-        default="http://localhost:3100",
-        help="Base URL of the running Flask app (default: http://localhost:3100).",
+        default=default_base,
+        help=(
+            "Base URL of the running Flask app. " f"Default: {default_base} (settings.toml PORT={toml_port or '3100'})."
+        ),
     )
     parser.add_argument(
         "--username",
-        default="admin",
-        help="Admin username (matches ADMIN_USERNAME env var; default: admin).",
+        default=default_user,
+        help=(
+            "Admin username. Precedence: --username > $ADMIN_USERNAME > "
+            f"settings.toml [auth].ADMIN_USERNAME > 'admin'. Resolved: {default_user!r}."
+        ),
     )
     parser.add_argument(
         "--password",
-        default="secret123",
-        help="Admin password (matches ADMIN_PASSWORD env var; default: secret123).",
+        default=default_pass,
+        help=(
+            "Admin password. Same precedence as --username. " "Resolved value is intentionally not echoed in --help."
+        ),
+    )
+    parser.add_argument(
+        "--settings",
+        type=Path,
+        default=_DEFAULT_SETTINGS,
+        help=("Path to settings.toml. " f"Default: {_DEFAULT_SETTINGS} (relative to the repo root)."),
     )
     args = parser.parse_args(argv)
+
+    # If the caller overrode --settings, recompute from that path —
+    # but only when the user did NOT also pass --username/--password/
+    # --base-url explicitly. argparse already filled those from the
+    # values above, so we need to know "did the user pass anything".
+    # The simplest heuristic: re-resolve only when the values still
+    # match the defaults (i.e. the user didn't override them). For
+    # a smoke script this is good enough; the operator who passed
+    # explicit flags is the operator who wins.
+    if str(args.settings) != str(_DEFAULT_SETTINGS):
+        toml_user, toml_pass, toml_port = _load_settings_from(args.settings)
+        if args.username == default_user and env_user == "":
+            args.username = toml_user or args.username
+        if args.password == default_pass and env_pass == "":
+            args.password = toml_pass or args.password
+        if args.base_url == default_base and toml_port:
+            args.base_url = f"http://localhost:{toml_port}"
 
     if args.mode == "image":
         attachments = ["image"]
@@ -202,9 +294,23 @@ def main(argv: list[str] | None = None) -> None:
 
     print(f"posting test MMS: mode={args.mode} attachments={attachments}")
     print(f"  base_url={args.base_url}")
+    print(f"  username={args.username!r}")
     print(f"  attachments={attachments}")
     post_test_mms(args.base_url, args.username, args.password, attachments)
     print("done. check /messages and the live ring buffer in the admin UI.")
+
+
+def _load_settings_from(path: Path) -> tuple[str, str, str]:
+    """Same shape as `_settings_defaults` but reads from an
+    explicit path (so the operator can point at a non-default
+    settings.toml)."""
+    cfg = _load_settings(path)
+    auth = cfg.get("auth", {})
+    return (
+        str(auth.get("ADMIN_USERNAME", "") or ""),
+        str(auth.get("ADMIN_PASSWORD", "") or ""),
+        str(cfg.get("PORT", "") or ""),
+    )
 
 
 if __name__ == "__main__":
