@@ -63,6 +63,11 @@ def _build_opener(base_url: str, username: str, password: str) -> OpenerDirector
     """Log in via /login (form post) and return an opener with the
     session cookie attached. Avoids pulling in `requests` — keeps
     the script stdlib-only so it runs in any venv.
+
+    Raises `SystemExit(1)` if the login fails (the server returns
+    the login page HTML with status 200 on bad creds — we detect
+    the failure by checking that the post-login URL is NOT
+    `/login` anymore).
     """
     cookie_jar = CookieJar()
     opener = build_opener(HTTPCookieProcessor(cookie_jar))
@@ -71,9 +76,31 @@ def _build_opener(base_url: str, username: str, password: str) -> OpenerDirector
     login_body = urllib.parse.urlencode({"username": username, "password": password}).encode("ascii")
     login_req = Request(login_url, data=login_body, method="POST")
     with opener.open(login_req, timeout=10) as resp:
-        # Flask redirects to `/` on success (302). The opener follows
-        # the redirect; we don't need the response body.
+        # Flask returns 302 → / on success and the opener follows it,
+        # so `resp.url` ends up at the dashboard. On failure Flask
+        # returns 200 with the login HTML, and `resp.url` stays at
+        # /login — that's our auth-failed signal.
+        final_url = resp.url
         resp.read()
+
+    if final_url.rstrip("/") == f"{base_url.rstrip('/')}/login":
+        print(
+            f"login FAILED for user={username!r} against {login_url}",
+            file=sys.stderr,
+        )
+        print(
+            "  -> server stayed on /login, meaning the credentials were rejected.",
+            file=sys.stderr,
+        )
+        print(
+            "  -> check ADMIN_USERNAME / ADMIN_PASSWORD env vars on the server,",
+            file=sys.stderr,
+        )
+        print(
+            "  -> or pass --username / --password to match.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     return opener
 
@@ -112,9 +139,31 @@ def post_test_mms(base_url: str, username: str, password: str, attachments: list
     )
     with opener.open(req, timeout=15) as resp:
         status = resp.status
+        final_url = resp.url
         resp_body = resp.read().decode("utf-8", errors="replace")
-    print(f"POST /api/test-messages -> {status}")
+    print(f"POST /api/test-messages -> {status}  (final url: {final_url})")
     print(f"response body: {resp_body[:200]}")
+    # Detect "auth redirected me to /login" — the route returns 302
+    # and urllib follows it; final_url ends up at /login. The body
+    # is the login HTML, not the TwiML `<Response>` we'd see on a
+    # successful ingest. Flag it loudly so the operator doesn't
+    # have to grep for the <title>Login</title> hint themselves.
+    if final_url.rstrip("/").endswith("/login"):
+        print(
+            "  -> looks like the session cookie wasn't accepted; /api/test-messages redirected to /login.",
+            file=sys.stderr,
+        )
+        print("  -> re-check ADMIN_USERNAME / ADMIN_PASSWORD on the server.", file=sys.stderr)
+        sys.exit(1)
+    # The success response is TwiML XML: <Response><Message>...</Message></Response>.
+    # If we see <html in the body, it's almost certainly a redirect-to-login
+    # or an error page — bail loudly so the operator notices.
+    if "<html" in resp_body.lower() or "<!doctype" in resp_body.lower():
+        print(
+            "  -> response body looks like HTML, not TwiML — the server did not accept the test MMS.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     if status >= 400:
         sys.exit(1)
 
