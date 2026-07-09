@@ -86,6 +86,11 @@ The system SHALL maintain an append-only event log on the Pi's local disk at the
 - **WHEN** the renderer advances from message A to message B
 - **THEN** the event log SHALL contain a new line describing the rendering of message B with the renderer's current pattern's `event_type`
 
+#### Scenario: Event schema carries only immutable facts
+
+- **WHEN** an event is written to the log
+- **THEN** it MUST contain `{event_type, message_id, timestamp, sent_at}` and MUST NOT contain mutable current-state fields such as `favorite` (favorite is read from the message record at pick time, not from the log)
+
 #### Scenario: Selector reads the log on each pick
 
 - **WHEN** the selector picks the next message
@@ -103,7 +108,7 @@ The system SHALL maintain an append-only event log on the Pi's local disk at the
 
 ### Requirement: Generic event format with event_type filter
 
-The event schema SHALL be generic. Each event MUST carry an `event_type` discriminator (e.g., `text_display`, `image_display`, `video_display`) plus `message_id`, `timestamp`, `sent_at`, and `favorite` fields. The selector and any debug consumer MUST be able to filter events by `event_type` and by `message_id`.
+The event schema SHALL be generic. Each event MUST carry an `event_type` discriminator (e.g., `text_display`, `image_display`, `video_display`) plus `message_id`, `timestamp`, and `sent_at` fields. The schema MUST NOT include mutable current-state fields (such as `favorite`). The selector and any debug consumer MUST be able to filter events by `event_type` and by `message_id`.
 
 #### Scenario: Filter by event_type works
 
@@ -152,19 +157,24 @@ The three selector weights (display, send, favorite) plus `saturation_seconds`, 
 - **WHEN** an operator changes `SELECTOR_W_DISPLAY` in `settings.toml` and restarts the relevant process
 - **THEN** the selector MUST use the new weight on the next pick (no caching, no restart of the whole pipeline required)
 
-### Requirement: Event log rotation
+### Requirement: Event log is a bounded ring
 
-The event log SHALL rotate to keep disk usage bounded. When the active file exceeds 10 MB or 30 days of age, whichever comes first, the active file SHALL be archived as `events.jsonl.<UTC-date>.gz` and a fresh active file SHALL be started. Archives SHALL be retained for 90 days, then deleted.
+The event log SHALL be bounded to the most recent N entries (default 100, configurable via `EVENT_LOG_MAX_ENTRIES`). When the log is at capacity, appending a new event SHALL drop the oldest entry. The on-disk file SHALL always hold exactly the most recent N entries.
 
-#### Scenario: Large log triggers rotation
+#### Scenario: At-capacity append drops the oldest entry
 
-- **WHEN** the active event log exceeds 10 MB
-- **THEN** the active file SHALL be archived (gzip-compressed) and a new active file SHALL be started
+- **WHEN** the log has N entries and a new event is appended
+- **THEN** the oldest entry SHALL be dropped and the on-disk file SHALL be rewritten to hold the N most recent entries (in append order)
 
-#### Scenario: Old archive is purged
+#### Scenario: Bounded disk usage
 
-- **WHEN** an archive's date is more than 90 days old
-- **THEN** the archive SHALL be deleted
+- **WHEN** the operator inspects `EVENT_LOG_PATH` on a running Pi
+- **THEN** the file SHALL contain at most `EVENT_LOG_MAX_ENTRIES` lines (default 100)
+
+#### Scenario: Max entries is configurable
+
+- **WHEN** the operator changes `EVENT_LOG_MAX_ENTRIES` in settings and restarts the process
+- **THEN** the in-memory cache and the on-disk file SHALL both cap at the new value
 
 ### Requirement: Browser preview uses the same selector with its own event log
 
@@ -179,3 +189,17 @@ The browser preview at `/playful` SHALL use the same `MessageSelector` Python cl
 
 - **WHEN** the same message set and clock are passed to the selector in both the browser preview and on the Pi
 - **THEN** both SHALL execute the same Python class — only the event-log source differs (IndexedDB vs Pi-local JSONL)
+
+### Requirement: Display window is configurable from the Settings page
+
+The Flask Settings page SHALL expose the message-display eligibility window (the `SELECTOR_OFFSET_SECONDS` setting, labeled in days) as an editable control, so operators can tune the rotation feel without editing `settings.toml` and restarting processes. The control MUST persist to the same setting the selector reads on construction. The control MAY also expose the three selector weights (`SELECTOR_W_DISPLAY`, `SELECTOR_W_SEND`, `SELECTOR_W_FAVORITE`) — operators tune them less often, but surfacing them in the same section avoids a `settings.toml` round-trip.
+
+#### Scenario: Settings page exposes the display window
+
+- **WHEN** an operator opens the Settings page
+- **THEN** there SHALL be a labeled control for the display window (in days) showing the current `SELECTOR_OFFSET_SECONDS / 86400` value
+
+#### Scenario: Editing the window persists the change
+
+- **WHEN** the operator changes the display window control and saves
+- **THEN** `SELECTOR_OFFSET_SECONDS` in `settings.toml` SHALL be updated and the selector SHALL pick up the new value on the next pick (no process restart required, matching the existing settings-update pattern)

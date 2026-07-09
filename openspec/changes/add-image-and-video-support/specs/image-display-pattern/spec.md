@@ -15,10 +15,6 @@ The class in `lib_shared/patterns/png_display.py` MUST be renamed to `ImageDispl
 - **WHEN** `ImageDisplay._paths` is built via `glob`
 - **THEN** the list is sorted by `_natural_key` (so "Artboard 2" precedes "Artboard 10") — same sort logic as before.
 
-#### Scenario: Effects factory returns ImageDisplay for both names
-- **WHEN** `make_effect_class("PngDisplay")` or `make_effect_class("ImageDisplay")` is called
-- **THEN** both return the `ImageDisplay` class from the renamed module.
-
 ### Requirement: ImageDisplay supports PNG, JPEG, GIF, and WebP
 The class MUST load images via PIL/Pillow's `Image.open(path)` and accept any of the file extensions `*.png`, `*.jpg`, `*.jpeg`, `*.gif`, `*.webp` via its directory glob.
 
@@ -50,20 +46,20 @@ The class MUST load images via PIL/Pillow's `Image.open(path)` and accept any of
 - **WHEN** `ImageDisplay._render_image(path_to_corrupt.png)` is called
 - **THEN** the loader logs a WARNING, falls back to the existing `self.bitmap = Bitmap(self._w, self._h); self.palette = Palette(1)` (black-on-black blank), and `tick()` continues. The slideshow does NOT crash.
 
-### Requirement: Default EffectsSettings.effects enables ImageDisplay by default
-The constant `_DEFAULT_EFFECTS_LIST_FULL` in `lib_shared/models.py` MUST be updated to include `{"name": "ImageDisplay", "enabled": True}` in place of the prior `{"name": "PngDisplay", "enabled": False}` entry.
+### Requirement: ImageDisplay and VideoDisplay are removed from the effects registry
+The canonical `lib_shared/config/effects_settings.json` MUST NOT contain entries for `ImageDisplay`, `PngDisplay`, or `VideoDisplay`. The renamed `ImageDisplay` class and the existing `VideoDisplay` class are inner renderers consumed by `MediaCycler` (see `mms-media-support`) via direct Python imports — they are not rotation effects anymore.
 
-#### Scenario: Default rotation includes ImageDisplay enabled
-- **WHEN** `EffectsSettings()` is constructed with no `effects` arg
-- **THEN** the resulting `effects_settings.effects` list includes an entry `{"name": "ImageDisplay", "enabled": True}` and does NOT include any entry with `name == "PngDisplay"`.
+#### Scenario: Canonical JSON carries only non-media effects
+- **WHEN** `lib_shared/config/effects_settings.json` is read by `lib_shared.effects_loader.load_effects_settings()`
+- **THEN** the resulting `effects` list contains the 5 non-media effects (Hyperspace, Honeycomb, Flame, Fireworks, NightSky) and does NOT contain any of `ImageDisplay`, `PngDisplay`, or `VideoDisplay`.
 
-#### Scenario: PngDisplay factory alias still resolves
-- **WHEN** an existing `EffectsSettings.effects` list (built before this change) contains `{"name": "PngDisplay", "enabled": True}`
-- **THEN** `build_effects(effects_settings, display=...)` constructs an `ImageDisplay(display)` for that entry (via the factory alias). No warning, no skip.
+#### Scenario: MediaCycler imports ImageDisplay directly
+- **WHEN** `lib_shared/patterns/media_cycler.py:MediaCycler` is instantiated with an `image/jpeg` media item
+- **THEN** the cycler dispatches by mime type and constructs an `ImageDisplay` via `from lib_shared.patterns.image_display import ImageDisplay` — it does NOT call `lib_shared.effects_loader.make_effect_class("ImageDisplay")`. The class is imported at module load time.
 
-#### Scenario: PngDisplay factory alias logs deprecation
-- **WHEN** `make_effect_class("PngDisplay")` is called
-- **THEN** it returns the `ImageDisplay` class and logs a deprecation WARNING suggesting the operator update their config to use `"ImageDisplay"`.
+#### Scenario: Legacy operator-override entry is silently skipped
+- **WHEN** an operator drops a `config_overrides/effects_settings.json` (or sets `EFFECTS_SETTINGS_OVERRIDE`) that contains `{"name": "ImageDisplay", "enabled": true}` or `{"name": "PngDisplay", "enabled": true}`
+- **THEN** `lib_shared.effects_loader.make_effect_class(...)` returns `None` and emits the existing "unknown effect name" WARNING; `build_effects()` skips the entry and the rotation runs without it. No crash, no broken sign.
 
 ### Requirement: ImageDisplay crossfade behavior is preserved
 The existing two-stage crossfade (hold → out → in with gamma-corrected brightness ramp) MUST be preserved with identical timing defaults.

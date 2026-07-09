@@ -12,7 +12,7 @@ The browser preview (`/playful`) shares the same Python `MessageSelector` class 
 
 - Define a deterministic priority function that picks the next message given (messages, `now()`, event_log).
 - Make the score's contributions explicit and tunable: a recency-of-display component (sourced from the event log), a recency-of-send component (sourced from the message's `sent_at`), and a favorite boost (sourced from the message's `favorite` flag).
-- Apply a configurable eligibility window (default two weeks) so ancient messages do not compete.
+- Apply a configurable eligibility window (default two weeks) so ancient messages do not compete. The window MUST be exposed on the Settings page so operators can tune it without code or `settings.toml` edits.
 - Persist render events on the Pi's disk so a restart does not reset rotation history.
 - Preserve the existing pre-emption invariant: a newly arrived message always shows immediately, bypassing the selector.
 - Use a generic event schema that supports future pattern types (`image_display`, `video_display`, …) and is forward-compatible with MQTT publication for remote debugging.
@@ -98,12 +98,11 @@ The corrected model:
   "event_type": "text_display",
   "message_id": "abc123",
   "timestamp": 1752080123.45,
-  "sent_at": 1752000000.0,
-  "favorite": false
+  "sent_at": 1752000000.0
 }
 ```
 
-Fields are denormalized (`sent_at`, `favorite` repeated from the message) so a debug consumer can filter and sort without joining. `event_type` is the discriminator; supported values in v1 are `text_display`, with `image_display` and `video_display` reserved for future pattern types.
+`sent_at` is denormalized from the message so a debug consumer can filter and sort without joining. `favorite` is intentionally NOT in the schema — favorite is a current-state property of the message (it can change between events), so it should be sourced from the message record at pick time, not captured in the historical log. `event_type` is the discriminator; supported values in v1 are `text_display`, with `image_display` and `video_display` reserved for future pattern types.
 
 ### Decision 6 — Determinism via a stable tie-breaker
 
@@ -113,15 +112,17 @@ Two messages with identical scores must pick deterministically. The selector sor
 
 The selector is only invoked during the regular rotation loop. The MQTT subscribe callback (new envelope) pushes the new message directly to the renderer without consulting the selector. This keeps the selector simple and the pre-emption invariant trivially correct. The renderer MAY write a `preempted` event to the log for debug visibility (out of scope to require).
 
-### Decision 8 — Log rotation for bounded disk usage
+### Decision 8 — Bounded ring of the most recent N events
 
-The event log rotates when the active file exceeds 10 MB or 30 days, whichever first. The rotation moves the active file to `events.jsonl.<UTC-date>.gz` (gzip-compressed) and starts a fresh active file. Archives are retained for 90 days, then deleted. The rotation runs at process startup and on a periodic check (e.g., every hour). The selector's in-memory cache is rebuilt on rotation so old events stop counting toward `display_recency` once archived.
+The event log is a bounded ring of the most recent N entries (default 100, configurable via `EVENT_LOG_MAX_ENTRIES`). When the log is at capacity, appending a new event drops the oldest entry (FIFO eviction). The file on disk is rewritten in full on each eviction so the on-disk file always holds exactly the most recent N entries — there is no archive, no compression, no size-based rotation. `sent_at` is the only "context" field carried per event, which is enough for a future debug consumer to filter the log by sender recency.
+
+Rationale for bounded ring vs. file-size/age rotation: the display-recency computation only cares about recent events. Once an event is more than N entries behind the head, it cannot affect any future `display_recency` value (the message's slot is already outside the cache). Truncating to N entries makes the disk usage predictable (N × ~80 bytes ≈ 8 KB at N=100), makes the on-disk file trivially small enough to read entirely on boot, and removes the operational complexity of archives + retention windows.
 
 ## Risks / Trade-offs
 
 - [Risk] **Event log corruption or partial writes.** A crash mid-write could leave a truncated JSON line at the end of the file. → Mitigation: the reader skips any line that fails JSON parsing and logs a warning. The selector treats missing recent events as a "conservative bias toward variety" (assumes shown recently — does not repeat). One bad line loses at most one event.
 
-- [Risk] **Log file grows unbounded without rotation.** → Mitigation: rotation at 10 MB or 30 days, 90-day archive retention (Decision 8).
+- [Risk] **Log file grows unbounded without rotation.** → Mitigation: bounded ring of the most recent N entries (default 100), FIFO eviction (Decision 8). Disk usage is bounded at N × ~80 bytes ≈ 8 KB.
 
 - [Risk] **Selector reads the file on every pick — could be slow at scale.** → Mitigation: write-through in-memory cache loaded at boot and on every append. The selector reads from cache, not the file. Pick latency is O(matching-events-for-this-pattern-and-id), typically O(1) per candidate.
 
@@ -136,7 +137,7 @@ The event log rotates when the active file exceeds 10 MB or 30 days, whichever f
 ## Migration Plan
 
 - No database migration. The server's `Message` model and SQLite schema are unchanged. The event log is a brand-new file on the Pi.
-- New settings keys: `EVENT_LOG_PATH` (default `data/events.jsonl`), `SELECTOR_*` weights, `USE_WEIGHTED_SELECTOR` (default false), `SELECTOR_OFFSET_SECONDS` (default 14 days), `SELECTOR_SATURATION_SECONDS` (default 24 hours).
+- New settings keys: `EVENT_LOG_PATH` (default `data/events.jsonl`), `EVENT_LOG_MAX_ENTRIES` (default 100), `SELECTOR_*` weights, `USE_WEIGHTED_SELECTOR` (default false), `SELECTOR_OFFSET_SECONDS` (default 14 days), `SELECTOR_SATURATION_SECONDS` (default 24 hours). The eligibility window and the three selector weights are ALSO surfaced on the Settings page so operators can tune them without editing `settings.toml`.
 - Deploy Pi first with `USE_WEIGHTED_SELECTOR=false` (the new path is dark-shipped). Old first-in/first-out rotation continues to run. Flip the flag and observe for at least one full `OFFSET_SECONDS` window before rolling to other Pis.
 - Rollback: flip `USE_WEIGHTED_SELECTOR=false` and restart. The previous code path is preserved behind the flag.
 
