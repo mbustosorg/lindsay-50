@@ -457,8 +457,22 @@ class MessageManager:
         new rule). Re-enrich on the event that changes the inputs so the
         next `get_messages()` read returns up-to-date values without paying
         the filter / formatter cost on the read path.
+
+        When the operator has an active `effects_settings` override on the
+        Pi (env var or `config_overrides/effects_settings.json`), the wire's
+        `effects_settings` block is dropped before `update_from_dict` runs.
+        The override owns ALL of `EffectsSettings` — both the effects list
+        AND the pacing fields — so the wire's block is silently discarded.
+        Top-level `text_settings`, `filters`, `senders`, `sign`, and
+        `timezone` still come from the wire as normal.
         """
-        self._config.update_from_dict(payload)
+        from lib_shared.effects_loader import is_effects_settings_override_active
+
+        payload = dict(payload) if isinstance(payload, dict) else payload
+        if isinstance(payload, dict) and is_effects_settings_override_active() and "effects_settings" in payload:
+            logger.debug("MessageManager dropping wire effects_settings (override active)")
+            payload.pop("effects_settings", None)
+        self._config.update_from_dict(payload or {})
         self._messages._enrich_messages(list(self._messages._msgs))
         post_filters = list(self._config.filters)
         post_suppressed = sum(1 for m in self._messages._msgs if getattr(m, "suppressed", False))
