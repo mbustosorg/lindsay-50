@@ -72,9 +72,7 @@ def fake_loader_cache():
 
 
 class TestPrecedence:
-    def test_env_var_takes_precedence_over_repo_root_override(
-        self, monkeypatch, tmp_path
-    ):
+    def test_env_var_takes_precedence_over_repo_root_override(self, monkeypatch, tmp_path):
         """Env var wins over `config_overrides/effects_settings.json`."""
         env_file = tmp_path / "env_override.json"
         env_file.write_text(
@@ -99,9 +97,7 @@ class TestPrecedence:
         )
         # Repo-root override (different content) — should be IGNORED
         # because env var wins.
-        repo_override = (
-            _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
-        )
+        repo_override = _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
         repo_override.parent.mkdir(exist_ok=True)
         repo_override.write_text(
             json.dumps(
@@ -137,9 +133,7 @@ class TestPrecedence:
         """With no env var, the repo-root override is used."""
         # Make sure no env var is set from prior tests.
         monkeypatch.delenv("EFFECTS_SETTINGS_OVERRIDE", raising=False)
-        repo_override = (
-            _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
-        )
+        repo_override = _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
         repo_override.parent.mkdir(exist_ok=True)
         repo_override.write_text(
             json.dumps(
@@ -172,9 +166,7 @@ class TestPrecedence:
     def test_canonical_used_when_no_override(self, monkeypatch):
         """No env var, no repo-root override → canonical."""
         monkeypatch.delenv("EFFECTS_SETTINGS_OVERRIDE", raising=False)
-        repo_override = (
-            _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
-        )
+        repo_override = _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
         repo_override.unlink(missing_ok=True)
         reset_effects_settings()
         assert is_effects_settings_override_active() is False
@@ -183,9 +175,7 @@ class TestPrecedence:
         assert len(cfg["effects"]) == 7
         assert cfg["recent_count"] == 5
 
-    def test_env_var_pointing_to_missing_file_falls_back(
-        self, monkeypatch, tmp_path
-    ):
+    def test_env_var_pointing_to_missing_file_falls_back(self, monkeypatch, tmp_path):
         """Env var set to a non-existent path → warning + fallback."""
         missing = tmp_path / "nope.json"
         monkeypatch.setenv("EFFECTS_SETTINGS_OVERRIDE", str(missing))
@@ -204,29 +194,19 @@ class TestPrecedence:
 class TestOverrideActive:
     def test_false_when_no_override(self, monkeypatch):
         monkeypatch.delenv("EFFECTS_SETTINGS_OVERRIDE", raising=False)
-        repo_override = (
-            _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
-        )
+        repo_override = _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
         repo_override.unlink(missing_ok=True)
         assert is_effects_settings_override_active() is False
 
-    def test_true_when_env_var_points_to_existing_file(
-        self, monkeypatch, tmp_path
-    ):
+    def test_true_when_env_var_points_to_existing_file(self, monkeypatch, tmp_path):
         f = tmp_path / "ov.json"
         f.write_text("{}")
         monkeypatch.setenv("EFFECTS_SETTINGS_OVERRIDE", str(f))
         assert is_effects_settings_override_active() is True
 
-    def test_false_when_env_var_points_to_missing_file(
-        self, monkeypatch, tmp_path
-    ):
-        monkeypatch.setenv(
-            "EFFECTS_SETTINGS_OVERRIDE", str(tmp_path / "nope.json")
-        )
-        repo_override = (
-            _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
-        )
+    def test_false_when_env_var_points_to_missing_file(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("EFFECTS_SETTINGS_OVERRIDE", str(tmp_path / "nope.json"))
+        repo_override = _PROJECT_ROOT / "config_overrides" / "effects_settings.json"
         repo_override.unlink(missing_ok=True)
         assert is_effects_settings_override_active() is False
 
@@ -280,9 +260,7 @@ class TestSchema:
 
 
 class TestEmptyEffects:
-    def test_empty_effects_list_returns_empty_with_warning(
-        self, caplog, monkeypatch, tmp_path
-    ):
+    def test_empty_effects_list_returns_empty_with_warning(self, caplog, monkeypatch, tmp_path):
         """An empty `effects` list yields `[]` and logs a WARNING.
 
         Uses a tmp_path file (env var) so the loader runs its full
@@ -434,9 +412,7 @@ class TestFactory:
 
 
 class TestReplaceSemantics:
-    def test_override_with_three_effects_returns_only_three(
-        self, monkeypatch, tmp_path
-    ):
+    def test_override_with_three_effects_returns_only_three(self, monkeypatch, tmp_path):
         """REPLACE: override with 3 entries → loader returns 3 entries,
         not a merge of canonical + override."""
         f = tmp_path / "three.json"
@@ -484,9 +460,7 @@ class TestReplaceSemantics:
         # Canonical-only names are NOT in the override (no merge).
         assert make_effect_class("Hyperspace") is None
 
-    def test_override_can_introduce_names_not_in_canonical(
-        self, monkeypatch, tmp_path
-    ):
+    def test_override_can_introduce_names_not_in_canonical(self, monkeypatch, tmp_path):
         """An override can name an effect that's not in the canonical —
         no canonical-validation gate. Resolution still goes through the
         dynamic-import path."""
