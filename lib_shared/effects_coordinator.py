@@ -452,8 +452,27 @@ class EffectsCoordinator:
         is a no-op. When it IS a `MediaCycler` and still has items,
         the cycler keeps running — the coordinator's existing
         `hold_seconds` clock decides when to transition out.
+
+        The `MediaCycler` import is guarded: the browser preview's
+        PyScript bundle does NOT include `lib_shared.patterns.media_cycler`
+        (the cycler pulls in PIL + cv2 + a filesystem cache — none of
+        which Pyodide can satisfy). On the browser path the
+        cycler helper returns a `BrowserMediaOverlay` instead, so
+        `self.current` is never a `MediaCycler` and the isinstance
+        check below is a no-op — but only IF we can resolve the
+        class without a hard ImportError. `try/except ImportError`
+        around the import turns "module missing in bundle" into
+        "skip the fallback entirely", which is the correct behavior
+        when the cycler isn't a constructible option anyway.
         """
-        from lib_shared.patterns.media_cycler import MediaCycler
+        try:
+            from lib_shared.patterns.media_cycler import MediaCycler
+        except ImportError:
+            # MediaCycler isn't loadable in this environment (browser
+            # preview, or a future build that drops the PIL/cv2 deps).
+            # We can't construct one anyway, so the "fall back when
+            # exhausted" path has nothing to fall back from.
+            return
 
         current = self.current
         if current is None:

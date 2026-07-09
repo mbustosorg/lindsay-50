@@ -221,3 +221,42 @@ def test_preview_coord_mms_message_constructs_browser_overlay(caplog):
         }
     finally:
         monkey.undo()
+
+
+def test_preview_fallback_skips_when_media_cycler_module_missing(monkeypatch):
+    """The browser-preview PyScript bundle does NOT include
+    `lib_shared.patterns.media_cycler` (PIL/cv2 deps aren't
+    installable in Pyodide; the cycler helper returns a
+    `BrowserMediaOverlay` instead). The coordinator's
+    `_maybe_fall_back_to_rotation` lazy-imports `MediaCycler`
+    for the `isinstance` check, so the import WOULD raise on the
+    browser path — except the code now guards with
+    `try/except ImportError` and returns silently (since on the
+    browser path no cycler is ever constructed and the fallback
+    has nothing to fall back from).
+
+    Pin the contract: with the cycler module hidden, the preview
+    coordinator's `_maybe_fall_back_to_rotation()` is a clean
+    no-op even when `self.current` is set.
+    """
+    import sys
+
+    # Hide `lib_shared.patterns.media_cycler` so the coordinator's
+    # import raises ImportError. Other lib_shared submodules stay
+    # loadable — we only shadow the one module under test.
+    monkeypatch.setitem(sys.modules, "lib_shared.patterns.media_cycler", None)
+
+    coord = _build_preview_coord(
+        messages=[],
+    )
+    # Stand-in `current` — the fallback must NOT inspect it because
+    # the import guard returns first.
+    sentinel = object()
+    coord.current = sentinel  # type: ignore[assignment]
+
+    # Must not raise — the ImportError guard makes the fallback
+    # a no-op when the cycler module is missing.
+    coord._maybe_fall_back_to_rotation()
+
+    # The `current` was untouched.
+    assert coord.current is sentinel
