@@ -47,8 +47,17 @@ class ConfigReader:
             return {}
 
     def _validate(self) -> None:
-        """Fail fast if any required key is missing from both env and toml."""
-        missing = [k for k in self._required if not self.get_raw(k)]
+        """Fail fast if any required key is missing from both env and toml.
+
+        A required key is "set" if `get_raw(k)` returns a non-None value
+        — empty strings ARE considered set (they are deliberate
+        "use the default" sentinels in settings.toml, e.g.
+        `MQTT_STATUS_TOPIC = ""` which the app resolves to
+        `f"{MQTT_TOPIC}-status"`). The `not self.get_raw(k)` check
+        would reject empty strings as missing; switching to
+        `is None` lets the empty-sentinel pattern work.
+        """
+        missing = [k for k in self._required if self.get_raw(k) is None]
         if missing:
             raise KeyError(f"Missing required config keys: {', '.join(missing)}")
         self._debug_log()

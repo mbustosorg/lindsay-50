@@ -24,9 +24,12 @@ coordinator has no render layer (the app is alive on every admin page
 but the canvas only exists on /preview).
 
 The coordinator is the consumer; `MessageManager` is the source of truth.
-`message_manager` is a required constructor argument. `tick()` throttles a
-~4 Hz pull from `manager.messages.get_messages(...)` and the cached pull
-result becomes the next text shown by the fade state machine.
+`message_manager` is a required constructor argument. `tick()` does NOT
+poll `manager.messages.get_messages(...)` on a timer — random.choice
+over the recent pool runs only at the two background→out transitions
+(`fresh_id` and `idle_timeout`), so a 60Hz tick is cheap. The
+current_messages buffer-read for `fresh_id_landed` is the only
+per-tick access; that's just an in-memory deque slice, not a pull.
 
 Pacing comes from an `EffectsSettings` block (the v2 config shape),
 passed as `settings` (an `EffectsSettings` instance or `None` for
@@ -77,7 +80,7 @@ def build_effects(
             or None (returns [] — there's no settings to derive a
             fallback from).
         effect_class_factory: Callable `name -> type | None`. Defaults
-            to `lib_shared.effects_factory.make_effect_class`. Tests
+            to `lib_shared.effects_loader.make_effect_class`. Tests
             can pass a stub that returns simple effect classes.
         display: The display object handed to each Effect's constructor.
             Required when `effects_settings` is not None — every Effect
@@ -92,7 +95,7 @@ def build_effects(
     if effects_settings is None:
         return []
     if effect_class_factory is None:
-        from lib_shared.effects_factory import make_effect_class
+        from lib_shared.effects_loader import make_effect_class
 
         effect_class_factory = make_effect_class
     if display is None:
@@ -159,11 +162,6 @@ class EffectsCoordinator:
         gamma: gamma exponent applied to the linear fade progress.
     """
 
-    # Throttle the coordinator's pull from MessageManager.messages. 4 Hz is
-    # 4x faster than any human perceives text change and far below the 30+
-    # FPS cost we are avoiding.
-    _PULL_INTERVAL = 0.25
-
     def __init__(
         self,
         message_manager: MessageManager,
@@ -198,10 +196,11 @@ class EffectsCoordinator:
         self.phase_start = 0.0  # start of intro / hold / background
         self.showing_text = False
         self.last_shown_text = None
-        # Pull-throttle state. `_last_message_pull` is the monotonic time of
-        # the last pull from the manager; `_last_display_message` is the
-        # cached body that non-pull ticks consume.
-        self._last_message_pull: float = 0.0
+        # `_last_display_message` is the cached body for the next
+        # fade-in, set by `_pick_next_text` at the background→out
+        # transition and consumed by out→in. There is no per-tick
+        # pull — `get_display_message()` (which does random.choice)
+        # is only called at the two transition paths below.
         self._last_display_message: str | None = None
         self._last_shown_message_id: str | None = None
         # `_consumed_message_ids` is the set of message ids that have
@@ -379,6 +378,30 @@ class EffectsCoordinator:
         self._last_shown_message_id = picked.message.id
         return picked.message.body
 
+    def _pick_next_text(self) -> str | None:
+        """Pick the next body to display, re-rolling if random.choice
+        lands on the body we just showed.
+
+        Called at the two background→out transition paths (`new_id`
+        and `idle`). This is the ONLY call to `get_display_message`
+        in the coordinator's hot path — `random.choice` does not run
+        on a timer. Re-rolls are bounded (5 tries) so a single-message
+        pool can't spin: if all 5 tries land on `last_shown_text`,
+        we return whatever the last try gave us.
+
+        `get_display_message()` itself does the random.choice and
+        the fresh-id-vs-random branching; we just wrap it with the
+        "avoid the body we just showed" loop on top.
+        """
+        body = self.get_display_message()
+        if body is None:
+            return None
+        tries = 0
+        while body == self.last_shown_text and tries < 4:
+            body = self.get_display_message()
+            tries += 1
+        return body
+
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""
         progress = (now - self.fade_start) / self.message_manager.config.effects_settings.fade_seconds
@@ -409,7 +432,9 @@ class EffectsCoordinator:
             scroller_text = self.scroller.text or ""
         log.info(
             "Coordinator._begin_out: from mode=%s effect=%s scroller_text=%r",
-            self.mode, self.current_effect_name, scroller_text,
+            self.mode,
+            self.current_effect_name,
+            scroller_text,
         )
         self.mode = "out"
         self.fade_start = now
@@ -482,7 +507,8 @@ class EffectsCoordinator:
         if rotation != self._last_rotation:
             log.info(
                 "Coordinator rotation rebuild: prev=%s new=%s",
-                self._last_rotation, rotation,
+                self._last_rotation,
+                rotation,
             )
             self.effects = build_effects(effects_settings, display=display)
             self.idx = -1  # next fade picks the head of the new list
@@ -491,14 +517,16 @@ class EffectsCoordinator:
         if text_settings.color != self._last_text_color:
             log.info(
                 "Coordinator scroller color change: prev=%s new=%s",
-                self._last_text_color, text_settings.color,
+                self._last_text_color,
+                text_settings.color,
             )
             scroller.set_color(text_settings.color)
             self._last_text_color = text_settings.color
         if text_settings.speed != self._last_text_speed:
             log.info(
                 "Coordinator scroller speed change: prev=%s new=%s",
-                self._last_text_speed, text_settings.speed,
+                self._last_text_speed,
+                text_settings.speed,
             )
             scroller.set_speed(text_settings.speed)
             self._last_text_speed = text_settings.speed
@@ -506,17 +534,12 @@ class EffectsCoordinator:
         now = time.monotonic()
         mode = self.mode
 
-        # Throttled pull: only fetch a fresh body every _PULL_INTERVAL.
-        # The cached value drives the state-machine transitions.
-        if now - self._last_message_pull >= self._PULL_INTERVAL:
-            new_text = self.get_display_message()
-            if new_text != self._last_display_message:
-                log.info(
-                    "Coordinator pull changed: prev=%r new=%r last_shown_id=%s",
-                    self._last_display_message, new_text, self._last_shown_message_id,
-                )
-            self._last_display_message = new_text
-            self._last_message_pull = now
+        # `text` is the cached body for the next fade-in. It is
+        # populated by `_pick_next_text` at the background→out
+        # transition (the ONLY place we run random.choice — see
+        # `tick()` docstring) and consumed by out→in to set the
+        # scroller. Before the first transition, `text` is None
+        # and the sign shows its background effect with no text.
         text = self._last_display_message
 
         if mode == "intro":
@@ -527,6 +550,21 @@ class EffectsCoordinator:
             # Cross-fade the current effect + any text to black, then swap in
             # the next effect and (if there's text) the next message.
             if self._step_fade(now, fading_out=True):
+                # `_last_display_message` is set by the background→out
+                # transition (the only path that pulls during normal
+                # operation). The intro→out path (the first-ever fade
+                # after boot, or any path that bypassed background)
+                # doesn't have a pulled value yet — pull once here so
+                # the sign has text to show on the fade-in. Without
+                # this, text would be None, the sign would enter
+                # background immediately, and the very next tick would
+                # fire `fresh_id_landed` and loop back through out→in
+                # with idx already advanced — never landing in hold.
+                if self._last_display_message is None:
+                    seeded = self._pick_next_text()
+                    if seeded is not None:
+                        self._last_display_message = seeded
+                text = self._last_display_message
                 self.idx = (self.idx + 1) % len(effects)
                 self.current = effects[self.idx]
                 self.current.set_brightness(0.0)
@@ -564,8 +602,10 @@ class EffectsCoordinator:
                     self.showing_text = False
                 log.info(
                     "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s",
-                    self.idx, self.current_effect_name,
-                    text if text else "", self.showing_text,
+                    self.idx,
+                    self.current_effect_name,
+                    text if text else "",
+                    self.showing_text,
                 )
                 self.mode = "in"
                 self.fade_start = now
@@ -580,7 +620,8 @@ class EffectsCoordinator:
                 next_mode = "hold" if self.showing_text else "background"
                 log.info(
                     "Coordinator in→%s: effect=%s text=%r",
-                    next_mode, self.current_effect_name,
+                    next_mode,
+                    self.current_effect_name,
                     self.last_shown_text or "",
                 )
                 self.mode = next_mode
@@ -602,21 +643,23 @@ class EffectsCoordinator:
             #     instantly. The fix: gate the interrupt on the ID, not the
             #     body, and idle `hold_seconds` otherwise.
             fresh_id_landed = (
-                self.current_messages
-                and self.current_messages[0].message.id not in self._consumed_message_ids
+                self.current_messages and self.current_messages[0].message.id not in self._consumed_message_ids
             )
             if fresh_id_landed:
                 log.info(
                     "Coordinator hold interrupt (new id): pending_text=%r last_shown=%r new_id=%s",
-                    text, self.last_shown_text,
+                    text,
+                    self.last_shown_text,
                     self.current_messages[0].message.id,
                 )
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= effects_settings.hold_seconds:
                 log.info(
                     "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
-                    self.current_effect_name, self.last_shown_text,
-                    now - self.phase_start, effects_settings.hold_seconds,
+                    self.current_effect_name,
+                    self.last_shown_text,
+                    now - self.phase_start,
+                    effects_settings.hold_seconds,
                 )
                 self.mode = "text_out"
                 self.fade_start = now
@@ -636,38 +679,48 @@ class EffectsCoordinator:
                 self.mode = "background"
 
         elif mode == "background":
-            # Background semantics (v2):
+            # Background semantics (v2, pull-once):
             #   - A genuinely new SMS (head.id differs from last-shown) kicks
             #     a fade immediately — the operator just texted, show it now.
-            #   - A random re-pick from the already-shown pool ALSO kicks a
-            #     fade, so the rotating buffer of recent messages keeps the
-            #     sign alive even with zero inbound traffic.
-            #   - `idle_seconds` is honored as a hard ceiling: if neither
-            #     trigger fires within `idle_seconds` of entering background,
-            #     force a re-roll. This was the prior bug — idle_seconds was
-            #     defined and exposed in the admin UI but never read by the
-            #     coordinator, so the sign could sit dormant for 5+ minutes
-            #     even with idle_seconds=10. Now: background kicks a re-roll
-            #     on whichever of (fresh_id, new_random_pick, idle_timeout)
-            #     fires first.
+            #   - After `idle_seconds` of sitting in background with no
+            #     fresh SMS, run ONE `get_display_message()` (which does
+            #     `random.choice` over the recent pool) to pick the next
+            #     body and transition.
+            #
+            # The pull is the meaningful unit of work here. Earlier
+            # versions throttled a `get_display_message()` call to
+            # ~4 Hz and gated the trigger on `text != last_shown_text`,
+            # but that combination is broken: random.choice over a
+            # 2-message pool returns a different body than
+            # `last_shown_text` ~50% of the time, so the trigger fired
+            # on essentially every pull instead of after `idle_seconds`.
+            # The fix is to drop the timer entirely and only call
+            # `get_display_message()` here, when we actually have a
+            # reason to.
             entries_bg = self.current_messages
-            fresh_id_landed = bool(
-                entries_bg and entries_bg[0].message.id not in self._consumed_message_ids
-            )
-            random_pick_changed = bool(text) and text != self.last_shown_text
-            idle_timed_out = (
-                now - self.phase_start >= effects_settings.idle_seconds
-            )
-            if fresh_id_landed or random_pick_changed or idle_timed_out:
-                trigger = (
-                    "new_id" if fresh_id_landed
-                    else "random_repick" if random_pick_changed
-                    else "idle"
-                )
+            fresh_id_landed = bool(entries_bg and entries_bg[0].message.id not in self._consumed_message_ids)
+            idle_elapsed = now - self.phase_start >= effects_settings.idle_seconds
+
+            trigger: str | None = None
+            if fresh_id_landed:
+                trigger = "new_id"
+            elif idle_elapsed:
+                trigger = "idle"
+
+            if trigger is not None:
+                # One pull per transition. `_pick_next_text` re-rolls
+                # internally if `random.choice` happens to land on the
+                # body we just showed (bounded to 5 tries — a
+                # single-message pool can't spin).
+                new_text = self._pick_next_text()
+                if new_text is not None:
+                    self._last_display_message = new_text
                 log.info(
                     "Coordinator background→out (%s): waited=%.1fs idle_seconds=%.1f next_text=%r",
-                    trigger, now - self.phase_start,
-                    effects_settings.idle_seconds, text or "",
+                    trigger,
+                    now - self.phase_start,
+                    effects_settings.idle_seconds,
+                    new_text or "",
                 )
                 self._begin_out(now)  # show the queued message
 

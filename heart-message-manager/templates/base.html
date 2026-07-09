@@ -49,6 +49,7 @@
       mqttUsername:     {{ mqtt.MQTT_USERNAME | tojson }},
       mqttPassword:     {{ mqtt.MQTT_PASSWORD | tojson }},
       mqttTopic:        {{ mqtt.MQTT_TOPIC | tojson }},
+      mqttStatusTopic:  {{ mqtt.MQTT_STATUS_TOPIC | tojson }},
       messagesApiUrl:   {{ config.MESSAGES_API_URL | tojson }},
       configApiUrl:     {{ config.CONFIG_API_URL | tojson }},
       apiKey:           {{ auth.API_SECRET_KEY | tojson }},
@@ -67,6 +68,13 @@
     window.createMqttWsClient = createMqttWsClient;
   </script>
   <script src="{{ url_for('static', filename='app.js') }}?v=16"></script>
+  <!--
+    sign_status.js — Dashboard pill + Settings-page Sign Health section.
+    Loaded on every authenticated page (decision 4.3 in openspec/changes/
+    add-sign-status-reports/design.md). The script is a no-op on pages
+    that have neither #sign-live-pill nor [data-sign-status-field].
+  -->
+  <script src="{{ url_for('static', filename='sign_status.js') }}?v=1"></script>
   <script>
     // PyScript 2024.9.x fires `py:error` on each <py-script>
     // element when its main module raises during evaluation

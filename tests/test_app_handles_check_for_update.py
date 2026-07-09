@@ -97,6 +97,7 @@ class TestCheckForUpdate:
         """If expected != active, exec into the loader with env vars set."""
         monkeypatch.setenv(ENV_ACTIVE_SHA, "old-sha")
         monkeypatch.setenv(ENV_REPO_DIR, str(tmp_path))
+        monkeypatch.setenv("AUTO_UPDATE", "true")
         bc_mock = MagicMock()
         bc_mock.expected_sha = "new-sha"
         with patch("check_for_update.fetch_boot_config", return_value=bc_mock):
@@ -118,6 +119,7 @@ class TestCheckForUpdate:
         """repo_dir kwarg overrides LINDSAY50_REPO_DIR env var when computing the loader path."""
         monkeypatch.setenv(ENV_ACTIVE_SHA, "old")
         monkeypatch.setenv(ENV_REPO_DIR, "/some/other/path")
+        monkeypatch.setenv("AUTO_UPDATE", "true")
         bc_mock = MagicMock()
         bc_mock.expected_sha = "new"
         with patch("check_for_update.fetch_boot_config", return_value=bc_mock):
@@ -138,12 +140,62 @@ class TestCheckForUpdate:
     def test_passes_api_url_and_key_to_fetch(self, monkeypatch):
         """Forward api_url and api_key to fetch_boot_config."""
         monkeypatch.setenv(ENV_ACTIVE_SHA, "old")
+        monkeypatch.setenv("AUTO_UPDATE", "true")
         bc_mock = MagicMock()
         bc_mock.expected_sha = "old"  # match — no exec
         with patch("check_for_update.fetch_boot_config", return_value=bc_mock) as mock_fetch:
             check_for_update(api_url="https://x/api/messages", api_key="my-key")
         assert mock_fetch.call_args.kwargs["api_url"] == "https://x/api/messages"
         assert mock_fetch.call_args.kwargs["api_key"] == "my-key"
+
+
+class TestAutoUpdateDisabled:
+    """AUTO_UPDATE off (or unset) — the local-dev posture.
+
+    Flask-published `check-for-update` envelopes should be a no-op
+    regardless of SHA mismatch, so a developer cloning the repo and
+    running `python3 main.py` from a home-dir copy doesn't get
+    clobbered by a Flask deploy while they're hacking on the code.
+    Production installs opt in via `AUTO_UPDATE = true` in the
+    canonical settings.toml or via the AUTO_UPDATE env var.
+    """
+
+    def test_unset_env_var_no_op_even_on_mismatch(self, monkeypatch):
+        """With AUTO_UPDATE unset (default), a SHA mismatch must NOT exec."""
+        monkeypatch.delenv("AUTO_UPDATE", raising=False)
+        monkeypatch.setenv(ENV_ACTIVE_SHA, "old-sha")
+        bc_mock = MagicMock()
+        bc_mock.expected_sha = "new-sha"
+        with patch("check_for_update.fetch_boot_config", return_value=bc_mock):
+            with patch("check_for_update.os.execvpe") as mock_exec:
+                with patch("check_for_update.fetch_boot_config") as mock_fetch:
+                    check_for_update(api_url="https://x/api/messages", api_key="k")
+        mock_exec.assert_not_called()
+        mock_fetch.assert_not_called()
+
+    def test_explicit_false_no_op_even_on_mismatch(self, monkeypatch):
+        """AUTO_UPDATE=false explicitly — same no-op as unset."""
+        monkeypatch.setenv("AUTO_UPDATE", "false")
+        monkeypatch.setenv(ENV_ACTIVE_SHA, "old-sha")
+        bc_mock = MagicMock()
+        bc_mock.expected_sha = "new-sha"
+        with patch("check_for_update.fetch_boot_config") as mock_fetch:
+            with patch("check_for_update.os.execvpe") as mock_exec:
+                check_for_update(api_url="https://x/api/messages", api_key="k")
+        mock_exec.assert_not_called()
+        mock_fetch.assert_not_called()
+
+    def test_truthy_enables_exec(self, monkeypatch, tmp_path):
+        """AUTO_UPDATE=true re-enables the upgrade path (production posture)."""
+        monkeypatch.setenv("AUTO_UPDATE", "true")
+        monkeypatch.setenv(ENV_ACTIVE_SHA, "old-sha")
+        monkeypatch.setenv(ENV_REPO_DIR, str(tmp_path))
+        bc_mock = MagicMock()
+        bc_mock.expected_sha = "new-sha"
+        with patch("check_for_update.fetch_boot_config", return_value=bc_mock):
+            with patch("check_for_update.os.execvpe") as mock_exec:
+                check_for_update(api_url="https://x/api/messages", api_key="k")
+        mock_exec.assert_called_once()
 
 
 class TestExecIntoLoader:

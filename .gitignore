@@ -4,12 +4,20 @@ __pycache__
 .vscode/
 .DS_Store
 .ipynb_checkpoints/
-config/
+/config/
 data/
 images/sound*
 .venv/
 test-code/
 .python-version
+
+# Operator local-dev overrides. The folder is tracked in git (via a
+# `.gitkeep` placeholder) so the override mechanism is discoverable on
+# a fresh clone; the contents are gitignored so operators can drop
+# `effects_settings.json`, `config.json`, `seed_messages.json` here
+# without committing them. See openspec/changes/effects-override/design.md D1.
+config_overrides/*
+!config_overrides/.gitkeep
 
 settings.toml
 

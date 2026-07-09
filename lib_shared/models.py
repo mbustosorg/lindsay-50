@@ -162,20 +162,29 @@ class SignSettings:
 # EffectsSettings + TextSettings — v2 config blocks
 # ---------------------------------------------------------------------------
 
-# Canonical full 9-effect list. The 7 render-anywhere effects are enabled;
-# the 2 asset-dependent effects (VideoDisplay, PngDisplay) are disabled by
-# default because they need operator-supplied asset files.
-_DEFAULT_EFFECTS_LIST_FULL: List[dict] = [
-    {"name": "Hyperspace", "enabled": True},
-    {"name": "VideoDisplay", "enabled": False},
-    {"name": "PngDisplay", "enabled": False},
-    {"name": "Honeycomb", "enabled": True},
-    {"name": "WindFire", "enabled": True},
-    {"name": "CoronalMassEjection", "enabled": True},
-    {"name": "Eyeball", "enabled": True},
-    {"name": "Fireworks", "enabled": True},
-    {"name": "NightSky", "enabled": True},
-]
+
+def _default_effects_list() -> List[dict]:
+    """Return the canonical effects list (loaded via the loader).
+
+    Reads `lib_shared.effects_loader.load_effects_settings()["effects"]`
+    on first call and strips the loader-only `module` / `class_name`
+    fields (the dataclass only needs `name` and `enabled`). Caches the
+    result on the function attribute so subsequent calls are cheap.
+
+    Imports are deferred to the function body so the module-level
+    import of `models.py` doesn't pull in the loader at the wrong
+    moment (the loader module imports `os`, `pathlib`, etc., and we
+    want `models.py` to remain importable in any environment).
+    """
+    cached = getattr(_default_effects_list, "_cache", None)
+    if cached is not None:
+        return cached
+    from lib_shared.effects_loader import load_effects_settings
+
+    entries = load_effects_settings().get("effects", [])
+    cleaned = [{"name": e["name"], "enabled": e["enabled"]} for e in entries]
+    _default_effects_list._cache = cleaned  # type: ignore[attr-defined]
+    return cleaned
 
 
 class EffectsSettings:
@@ -198,14 +207,14 @@ class EffectsSettings:
 
         Args:
             effects: List of `{"name": str, "enabled": bool}` dicts. Defaults
-                to the canonical 7-entry list.
+                to the canonical list loaded via `lib_shared.effects_loader`.
             fade_seconds: Seconds for one full fade (default 2.0).
             hold_seconds: Seconds to keep a message fully visible (default 15.0).
             intro_seconds: Seconds to show the boot-splash heart (default 5.0).
             idle_seconds: Seconds of idleness before a random message plays (default 300.0).
             recent_count: Size of the idle-rotation recent-messages pool (default 5).
         """
-        self.effects = list(effects) if effects is not None else [dict(e) for e in _DEFAULT_EFFECTS_LIST_FULL]
+        self.effects = list(effects) if effects is not None else [dict(e) for e in _default_effects_list()]
         self.fade_seconds = fade_seconds
         self.hold_seconds = hold_seconds
         self.intro_seconds = intro_seconds
@@ -230,7 +239,7 @@ class EffectsSettings:
                 name string.
         """
         d = d or {}
-        effects = d.get("effects", _DEFAULT_EFFECTS_LIST_FULL)
+        effects = d.get("effects", _default_effects_list())
         if not isinstance(effects, list) or not all(
             isinstance(n, dict) and isinstance(n.get("name"), str) and isinstance(n.get("enabled"), bool)
             for n in effects

@@ -67,6 +67,15 @@ MQTT_PORT = 8883
 MQTT_USERNAME = "your-aio-username"
 MQTT_PASSWORD = "your-aio-key"    # same as AIO_KEY
 MQTT_TOPIC = "your-feed-name"      # bare feed name or "user/feeds/feed" path
+# Status topic — the Pi publishes a health snapshot to this every
+# 5s. Empty = derive as "{MQTT_TOPIC}-status" (e.g. for AIO:
+# "your-aio-username/feeds/your-feed-name-status"). On Adafruit
+# IO you MUST create the corresponding feed in the AIO dashboard
+# before the first publish lands — the broker silently rejects
+# publishes to a non-existent feed (no error in journalctl, the
+# payload just disappears). For local Mosquitto, the broker
+# auto-creates topics, so no setup is needed.
+MQTT_STATUS_TOPIC = ""
 
 # AWS S3 (for message logging — use MinIO locally)
 AWS_ACCESS_KEY_ID = "..."

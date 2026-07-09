@@ -1,31 +1,59 @@
 """Tests for lib_shared.models.EffectsSettings (v2 config block).
 
 Covers:
-- Default values (7 enabled + 2 disabled canonical effects)
+- Default values (5 enabled + 2 disabled canonical effects) read via
+  the loader
 - Round-trip via from_dict / to_dict
 - Validation (out-of-range pacing, bad recent_count, malformed entries)
 - Wire shape (what the device + admin UI consume)
+
+`_DEFAULT_EFFECTS_LIST_FULL` is gone — the canonical list now lives in
+`lib_shared/config/effects_settings.json` and is read via
+`lib_shared.effects_loader.load_effects_settings()`. These tests cover
+the dataclass; the JSON / loader side is covered in
+`tests/effects_loader_test.py`.
 """
 
 import pytest
 
-from lib_shared.models import EffectsSettings, _DEFAULT_EFFECTS_LIST_FULL
+import lib_shared.effects_loader as effects_loader
+from lib_shared.models import EffectsSettings
+
+
+@pytest.fixture(autouse=True)
+def _reset_loader_cache():
+    """Clear the loader cache before each test so `_default_effects_list`
+    inside `models.py` re-reads from the loader."""
+    effects_loader.reset_effects_settings()
+    # Also clear the per-function cache so a fresh list is built.
+    from lib_shared.models import _default_effects_list
+
+    if hasattr(_default_effects_list, "_cache"):
+        delattr(_default_effects_list, "_cache")
+    yield
+    effects_loader.reset_effects_settings()
+    if hasattr(_default_effects_list, "_cache"):
+        delattr(_default_effects_list, "_cache")
+
+
+def _canonical_entries():
+    """Return the canonical effects list (loaded via the loader)."""
+    cfg = effects_loader.load_effects_settings()
+    return [{"name": e["name"], "enabled": e["enabled"]} for e in cfg["effects"]]
 
 
 def test_default_instantiation_uses_canonical_list():
-    """A no-arg constructor picks up the 9-entry canonical list."""
+    """A no-arg constructor picks up the canonical 7-entry list."""
     s = EffectsSettings()
-    assert len(s.effects) == 9
-    # Seven enabled by default; the two asset-dependent patterns are disabled.
+    assert len(s.effects) == 7
+    # Five enabled by default; the two asset-dependent patterns are disabled.
     enabled = [e["name"] for e in s.effects if e["enabled"]]
-    assert len(enabled) == 7
+    assert len(enabled) == 5
     assert "Hyperspace" in enabled
+    assert "Flame" in enabled
     assert "Fireworks" in enabled
     assert "NightSky" in enabled
     assert "Honeycomb" in enabled
-    assert "WindFire" in enabled
-    assert "CoronalMassEjection" in enabled
-    assert "Eyeball" in enabled
     # Disabled-by-default
     assert "VideoDisplay" not in enabled
     assert "PngDisplay" not in enabled
@@ -42,16 +70,14 @@ def test_default_pacing_values():
 
 
 def test_canonical_list_has_known_names():
-    """The canonical list contains exactly the 9 expected effect names."""
-    names = {e["name"] for e in _DEFAULT_EFFECTS_LIST_FULL}
+    """The canonical list contains exactly the 7 expected effect names."""
+    names = {e["name"] for e in _canonical_entries()}
     assert names == {
         "Hyperspace",
         "VideoDisplay",
         "PngDisplay",
         "Honeycomb",
-        "WindFire",
-        "CoronalMassEjection",
-        "Eyeball",
+        "Flame",
         "Fireworks",
         "NightSky",
     }
@@ -85,14 +111,14 @@ def test_round_trip_default():
 def test_from_dict_accepts_empty_dict():
     """An empty dict is valid and yields the canonical defaults."""
     s = EffectsSettings.from_dict({})
-    assert len(s.effects) == 9
+    assert len(s.effects) == 7
     assert s.fade_seconds == 2.0
 
 
 def test_from_dict_none_uses_defaults():
     """from_dict(None) yields the canonical defaults."""
     s = EffectsSettings.from_dict(None)
-    assert len(s.effects) == 9
+    assert len(s.effects) == 7
 
 
 def test_from_dict_with_custom_values():
@@ -100,7 +126,7 @@ def test_from_dict_with_custom_values():
     d = {
         "effects": [
             {"name": "Hyperspace", "enabled": True},
-            {"name": "Fireworks", "enabled": False},
+            {"name": "Flame", "enabled": False},
         ],
         "fade_seconds": 1.5,
         "hold_seconds": 7.0,
@@ -171,7 +197,7 @@ def test_validate_accepts_zero_pacing():
 
 def test_constructor_copies_effects_list():
     """The constructor copies the effects list (not the same reference)."""
-    src: list = [{"name": "Fireworks", "enabled": True}]
+    src: list = [{"name": "Flame", "enabled": True}]
     s = EffectsSettings(effects=src)
     src.append({"name": "Hyperspace", "enabled": True})
     # Mutating the source list doesn't affect the constructed instance.

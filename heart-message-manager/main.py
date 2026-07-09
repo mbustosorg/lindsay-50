@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import html
+import json
 import logging
 import uuid
 from pathlib import Path
@@ -44,16 +45,21 @@ REQUIRED_KEYS: set[str] = {
     "CONFIG_API_URL",
     "MESSAGES_API_URL",
 }
+# `MQTT_STATUS_TOPIC` is intentionally NOT in REQUIRED_KEYS: it has a
+# derived default of `f"{MQTT_TOPIC}-status"` (see `_resolve_status_topic`
+# below) and operators shouldn't have to set an empty string just to get
+# the default. Set it explicitly only if you want a different topic name.
 _cfg = get_config(REQUIRED_KEYS)
 
 import sqlite, s3
 from server_time import format_from_iso, now_utc_iso
 from lib_shared.boot_config import BootConfig, from_heroku_or_git as _boot_config_from_heroku_or_git
 from lib_shared.config_migrations import migrate, migrate_on_startup
+from lib_shared.effects_loader import load_effects_settings
 from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.models import MessageEnvelope
-from lib_shared.models import _DEFAULT_EFFECTS_LIST_FULL
 from lib_shared.scroller_base import ScrollerBase
+from lib_shared.sign_status import LatestSignStatus, REQUIRED_SNAPSHOT_KEYS
 
 # App setup
 app = Flask(__name__)
@@ -99,13 +105,92 @@ sqlite.rebuild_from_s3(s3.load_messages_from_s3, s3.load_latest_config)
 
 
 # Platform MQTT client (paho on every platform) — used only as a publisher
-# (no Flask-side subscriber). The device and the browser both subscribe to
-# the broker on their own.
+# (no Flask-side subscriber on the envelope topic). The device and the
+# browser both subscribe to the envelope topic on their own. The status
+# topic IS subscribed by Flask (Decision 4 in openspec/changes/
+# add-sign-status-reports/design.md): the latest snapshot is held in
+# memory for the browser's load-time hydration GET /api/sign-status
+# call.
 from lib_shared.paho_mqtt_client import PahoMqttClient
 
 
 def _noop_dispatch(_payload: str) -> None:
     """Flask no longer subscribes to MQTT envelopes; drop them on the floor."""
+
+
+def _on_status_payload(raw_payload: str) -> None:
+    """Decode a status-topic payload and store it in `latest_status`.
+
+    Wired as `status_dispatch_callback` on the PahoMqttClient. Both
+    arguments MUST be optional in the dispatch table — a malformed
+    payload or a payload missing required keys is logged at WARN
+    and dropped (the store is not replaced). Required-keys list lives
+    in `lib_shared.sign_status.REQUIRED_SNAPSHOT_KEYS` (one source
+    of truth for the snapshot schema).
+    """
+    try:
+        parsed = json.loads(raw_payload)
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "[flask] _on_status_payload: parse failed (topic=%s): %s",
+            _mqtt_status_topic,
+            exc,
+        )
+        return
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "[flask] _on_status_payload: payload is not a dict: %r",
+            parsed,
+        )
+        return
+    missing = [k for k in REQUIRED_SNAPSHOT_KEYS if k not in parsed]
+    if missing:
+        logger.warning(
+            "[flask] _on_status_payload: missing required keys %s; dropping payload",
+            ", ".join(missing),
+        )
+        return
+    try:
+        latest_status.update(parsed)
+    except ValueError as exc:
+        logger.warning(
+            "[flask] _on_status_payload: store rejected payload: %s",
+            exc,
+        )
+        return
+    logger.debug(
+        "[flask] _on_status_payload: stored snapshot updated_at=%s",
+        parsed.get("updated_at"),
+    )
+
+
+# Latest-snapshot in-memory store. Populated by the status_dispatch_callback
+# below; read by GET /api/sign-status. Flask owns one instance for the
+# whole process lifetime (Decision 4 in design.md). The store is reset
+# to empty on every Flask restart — see "Flask restart loses the latest
+# snapshot" in the Risks section.
+latest_status = LatestSignStatus()
+
+
+# Resolve the status topic. Default rule (Decision 2): "{MQTT_TOPIC}-status"
+# — operators can override via `MQTT_STATUS_TOPIC` in settings.toml or env
+# (env wins). Adafruit IO requires an explicit feed creation; this matches
+# the device's convention in heart-matrix-controller/main.py.
+def _resolve_status_topic() -> str:
+    raw = _cfg.if_exists("MQTT_STATUS_TOPIC") or ""
+    if raw.strip():
+        return raw
+    base = _cfg.if_exists("MQTT_TOPIC") or ""
+    return f"{base}-status"
+
+
+_mqtt_status_topic = _resolve_status_topic()
+_raw_mqtt_status_topic = _cfg.if_exists("MQTT_STATUS_TOPIC")
+logger.info(
+    "[flask] status topic resolved to %r (source: %s)",
+    _mqtt_status_topic,
+    "explicit MQTT_STATUS_TOPIC" if (_raw_mqtt_status_topic or "").strip() else "derived from MQTT_TOPIC",
+)
 
 
 _mqtt_client = PahoMqttClient(
@@ -115,6 +200,8 @@ _mqtt_client = PahoMqttClient(
     username=_cfg.MQTT_USERNAME,
     password=_cfg.MQTT_PASSWORD,
     topic=_cfg.MQTT_TOPIC,
+    status_topic=_mqtt_status_topic,
+    status_dispatch_callback=_on_status_payload,
 )
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
@@ -206,9 +293,9 @@ def api_messages():
         # for debugging, not just From/Body. `default=str` coerces any
         # non-JSON-serializable value (FileStorage, etc.) to its repr.
         import json as _json
+
         logger.info(
-            "Twilio webhook: reconstructed_url=%s X-Forwarded-Proto=%s "
-            "X-Twilio-Signature=%s",
+            "Twilio webhook: reconstructed_url=%s X-Forwarded-Proto=%s " "X-Twilio-Signature=%s",
             webhook_url,
             forwarded_proto,
             (signature[:12] + "...") if signature else "(none)",
@@ -401,10 +488,36 @@ def api_sign_boot_config():
     config = _resolve_boot_config()
     if not config.expected_sha:
         return jsonify({"error": "could not resolve expected SHA"}), 500
-    return jsonify({
-        "expected_sha": config.expected_sha,
-        "short_sha": config.short_sha,
-    })
+    return jsonify(
+        {
+            "expected_sha": config.expected_sha,
+            "short_sha": config.short_sha,
+        }
+    )
+
+
+@app.route("/api/sign-status", methods=["GET"])
+def api_sign_status():
+    """GET /api/sign-status — return the most recent snapshot Flask has.
+
+    Decision 4 + Decision 7 in openspec/changes/add-sign-status-reports/
+    design.md: the browser does a single load-time fetch against this
+    endpoint for hydration; the browser does NOT call this on a timer.
+    Always returns HTTP 200 — even when the in-memory store is empty
+    (browser sees `snapshot: null`). Does NOT compute or include a
+    `state` field — state is browser-side (the Flask store has no
+    notion of "live / unknown / offline"; it just holds the latest
+    payload).
+    """
+    # Module-level `latest_status` was instantiated near the top of
+    # this file — it's a `LatestSignStatus` instance, with a lock-
+    # guarded snapshot() and received_at_wallclock() methods.
+    return jsonify(
+        {
+            "snapshot": latest_status.snapshot(),
+            "received_at": latest_status.received_at_wallclock(),
+        }
+    )
 
 
 # Admin API (S3 browser)
@@ -504,22 +617,18 @@ def _save_and_publish(cfg: SignConfig) -> None:
 
 
 # Canonical set of effect class names the device knows about. Mirrors
-# `lib_shared.models._DEFAULT_EFFECTS_LIST_FULL` (the device-side
-# `_EFFECT_CLASSES` map in heart-matrix-controller/main.py is keyed on the
-# same names). Used by `_build_sign_config_from_request` to reject
-# incoming entries whose name isn't in this set.
-_KNOWN_EFFECT_NAMES = frozenset(
-    [
-        "Hyperspace",
-        "VideoDisplay",
-        "PngDisplay",
-        "Honeycomb",
-        "WindFire",
-        "CoronalMassEjection",
-        "Eyeball",
-        "Fireworks",
-        "NightSky",
-    ]
+# the loader-driven `lib_shared/config/effects_settings.json` (the
+# device-side `_EFFECT_CLASSES` map in heart-matrix-controller/main.py is
+# keyed on the same names). Used by `_build_sign_config_from_request` to
+# reject incoming entries whose name isn't in this set. The frozenset is
+# derived from `load_effects_settings()["effects"]` at startup so an
+# operator's `config_overrides/effects_settings.json` is honored without
+# a code change.
+_KNOWN_EFFECT_NAMES = frozenset(entry["name"] for entry in load_effects_settings().get("effects", []))
+logger.info(
+    "[flask] _KNOWN_EFFECT_NAMES derived from loader: count=%d names=%s",
+    len(_KNOWN_EFFECT_NAMES),
+    sorted(_KNOWN_EFFECT_NAMES),
 )
 
 
@@ -739,6 +848,7 @@ def settings():
         # INFO because the volume is low (1 POST per settings save) and
         # the diagnostic value is high.
         import json as _json
+
         form_keys = sorted(request.form.keys())
         logger.info(
             "[settings] POST /settings raw_form_keys=%d form=%s",
@@ -830,9 +940,10 @@ def settings():
             enabled_map[name] = True
         # Any canonical name absent from the form list is treated as disabled
         # (its checkbox wasn't ticked). We rebuild the list in the canonical
-        # order from the current model defaults so ordering is preserved.
+        # order from the loader-driven defaults so ordering is preserved
+        # and the source of truth matches the JSON the Pi sees.
         new_effects = []
-        for entry in _DEFAULT_EFFECTS_LIST_FULL:
+        for entry in load_effects_settings().get("effects", []):
             new_effects.append({"name": entry["name"], "enabled": entry["name"] in enabled_map})
         es_form.effects = new_effects
         cfg.effects_settings = es_form
@@ -853,6 +964,7 @@ def settings():
     return render_template(
         "settings.html",
         cfg=cfg,
+        effects_settings=load_effects_settings(),
         sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
         speed_labels=ScrollerBase.SPEED_LABELS,
         # Deployed SHA: what Flask expects the Pi to be running.
@@ -1057,6 +1169,13 @@ def _inject_app_config():
             # Flask publisher, and the browser all share this single
             # source of truth, so they always agree.
             "MQTT_TOPIC": _cfg.if_exists("MQTT_TOPIC") or "",
+            # Status topic — separate from MQTT_TOPIC, used for the
+            # sign's periodic health snapshot. sign_status.js reads
+            # this from window.APP_CONFIG.mqttStatusTopic to open a
+            # second MQTT-WS connection for the status flow. The
+            # resolution happens server-side (default: "{MQTT_TOPIC}-status")
+            # so the browser never has to derive it.
+            "MQTT_STATUS_TOPIC": _mqtt_status_topic,
         },
         "config": {
             "MESSAGES_API_URL": _cfg.if_exists("MESSAGES_API_URL") or "",

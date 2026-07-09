@@ -76,7 +76,6 @@ def _load_app_module(mock_cfg):
     models_mod.Message = MagicMock()
     models_mod.MessageEnvelope = MagicMock()
     models_mod.MessageView = MagicMock()
-    models_mod._DEFAULT_EFFECTS_LIST_FULL = []
 
     # Mock the v2 config migration module (heart-message-manager/main.py
     # imports it at module level). The startup migration runs at app load
@@ -612,9 +611,9 @@ class TestSettingsSaveFormFieldMerge:
             "effects_settings_fade_seconds",
             "effects_settings_recent_count",
         ):
-            assert key in raw_records[0].getMessage(), (
-                f"raw-form log missing {key!r}; got: {raw_records[0].getMessage()[:500]}"
-            )
+            assert (
+                key in raw_records[0].getMessage()
+            ), f"raw-form log missing {key!r}; got: {raw_records[0].getMessage()[:500]}"
 
         # Pacing merge summary must report fade_seconds as POST='5' saved=5.0.
         merge_records = [r for r in caplog.records if "[settings] effect pacing merge" in r.getMessage()]

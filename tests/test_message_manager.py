@@ -1633,3 +1633,103 @@ class TestTopLevelImportsGuard:
         assert (
             "lib_shared.config_reader" not in top
         ), f"config_reader must not be imported at top: top-level imports: {top}"
+
+
+# ---------------------------------------------------------------------------
+# Wire-strip on override (effects-override spec: D7)
+# ---------------------------------------------------------------------------
+
+
+class TestHandleConfigOverrideStrip:
+    """When the operator has an active `effects_settings` override on the
+    Pi, the wire's `effects_settings` block is dropped before the in-memory
+    config sees it. Top-level `text_settings`, `filters`, `senders`,
+    `sign`, and `timezone` still come from the wire."""
+
+    @pytest.fixture
+    def manager(self, messages_api_url, config_api_url, api_key):
+        mm = _mm()
+        return mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+
+    @pytest.fixture
+    def override_active(self, monkeypatch):
+        """Make `is_effects_settings_override_active()` return True."""
+        from lib_shared import effects_loader
+
+        monkeypatch.setattr(effects_loader, "is_effects_settings_override_active", lambda: True)
+
+    @pytest.fixture
+    def override_inactive(self, monkeypatch):
+        """Make `is_effects_settings_override_active()` return False."""
+        from lib_shared import effects_loader
+
+        monkeypatch.setattr(effects_loader, "is_effects_settings_override_active", lambda: False)
+
+    def test_override_active_strips_effects_settings_block(self, manager, override_active):
+        """Wire `effects_settings` is dropped when override is active."""
+        manager._handle_config(
+            {
+                "text_settings": {"speed": 4, "color": 0x00FF00, "text_effect": "scroll"},
+                "effects_settings": {
+                    "effects": [{"name": "Fireworks", "enabled": True}],
+                    "fade_seconds": 9.0,
+                    "hold_seconds": 9.0,
+                    "intro_seconds": 9.0,
+                    "idle_seconds": 9.0,
+                    "recent_count": 9,
+                },
+                "filters": [{"type": "keyword", "pattern": "spam", "action": "suppress"}],
+            }
+        )
+        # effects_settings from the wire did NOT land — the loader-driven
+        # canonical value (recent_count=5) is what the manager holds.
+        assert manager.config.effects_settings.recent_count == 5
+        assert manager.config.effects_settings.fade_seconds == 2.0
+        # But text_settings and filters DID land from the wire.
+        assert manager.config.text_settings.speed == 4
+        assert manager.config.text_settings.color == 0x00FF00
+        assert len(manager.config.filters) == 1
+        assert manager.config.filters[0].pattern == "spam"
+
+    def test_override_inactive_preserves_effects_settings_block(self, manager, override_inactive):
+        """Wire `effects_settings` is applied when no override is active."""
+        manager._handle_config(
+            {
+                "effects_settings": {
+                    "effects": [{"name": "Fireworks", "enabled": True}],
+                    "fade_seconds": 7.0,
+                    "hold_seconds": 7.0,
+                    "intro_seconds": 7.0,
+                    "idle_seconds": 7.0,
+                    "recent_count": 7,
+                },
+            }
+        )
+        assert manager.config.effects_settings.recent_count == 7
+        assert manager.config.effects_settings.fade_seconds == 7.0
+
+    def test_override_active_text_only_passes_through(self, manager, override_active):
+        """Override active + wire sends only text_settings → text applies."""
+        manager._handle_config(
+            {
+                "text_settings": {"speed": 2, "color": 0xABCDEF, "text_effect": "scroll"},
+            }
+        )
+        assert manager.config.text_settings.speed == 2
+        assert manager.config.text_settings.color == 0xABCDEF
+
+    def test_override_active_timezone_and_filters_pass_through(self, manager, override_active):
+        """Override active: timezone and filters come from the wire."""
+        manager._handle_config(
+            {
+                "timezone": "US/Eastern",
+                "filters": [{"type": "sender", "pattern": "+15550000000", "action": "suppress"}],
+            }
+        )
+        assert manager.config.timezone == "US/Eastern"
+        assert len(manager.config.filters) == 1
+        assert manager.config.filters[0].type == "sender"
