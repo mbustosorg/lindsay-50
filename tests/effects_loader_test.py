@@ -356,9 +356,14 @@ class TestFactory:
         assert cls.__module__ == "lib_shared.patterns.fireworks"
 
     def test_resolves_all_browser_safe_effects(self):
-        """Fireworks, Flame, Hyperspace, NightSky have no heavy top-level
-        deps and resolve cleanly without numpy / cv2 / PIL installed."""
-        for name in ("Fireworks", "Flame", "Hyperspace", "NightSky"):
+        """Fireworks, Hyperspace, NightSky have no heavy top-level
+        deps and resolve cleanly without numpy / cv2 / PIL installed.
+
+        Flame was removed (refactor(patterns): remove the Flame effect);
+        the new patterns (WindFire, CoronalMassEjection, Eyeball) all
+        import `numpy` at module top-level, so they don't qualify here.
+        """
+        for name in ("Fireworks", "Hyperspace", "NightSky"):
             cls = make_effect_class(name)
             assert cls is not None, f"{name!r} did not resolve"
             assert cls.__name__ == name
