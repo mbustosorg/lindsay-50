@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Post a fake Twilio MMS to a locally-running heart-message-manager.
 
 Bypasses the Twilio signature path entirely (the test injection
@@ -91,15 +92,18 @@ def _settings_defaults() -> tuple[str, str, str]:
     `(username, password, port)` defaults that the caller can
     pass through to argparse.
 
-    The file's `[auth]` table carries ADMIN_USERNAME /
-    ADMIN_PASSWORD; the top-level `PORT` is the Flask server's
-    listen port. Anything missing yields an empty string, which
-    argparse translates to "use the argparse default".
+    Both shapes exist in the wild — settings.toml.example uses
+    a `[auth]` table, but real deployed configs (including the
+    one this script was originally tested against) flatten
+    ADMIN_USERNAME / ADMIN_PASSWORD to the top level. Read top-
+    level first and fall back to the `[auth]` table — this
+    mirrors the server's own `ConfigReader.get_raw` precedence
+    in `lib_shared/config_reader.py`.
     """
     cfg = _load_settings(_DEFAULT_SETTINGS)
-    auth = cfg.get("auth", {})
-    username = str(auth.get("ADMIN_USERNAME", "") or "")
-    password = str(auth.get("ADMIN_PASSWORD", "") or "")
+    auth = cfg.get("auth", {}) if isinstance(cfg.get("auth"), dict) else {}
+    username = str(cfg.get("ADMIN_USERNAME", "") or "") or str(auth.get("ADMIN_USERNAME", "") or "")
+    password = str(cfg.get("ADMIN_PASSWORD", "") or "") or str(auth.get("ADMIN_PASSWORD", "") or "")
     port = str(cfg.get("PORT", "") or "")
     return username, password, port
 
@@ -250,7 +254,7 @@ def main(argv: list[str] | None = None) -> None:
         default=default_user,
         help=(
             "Admin username. Precedence: --username > $ADMIN_USERNAME > "
-            f"settings.toml [auth].ADMIN_USERNAME > 'admin'. Resolved: {default_user!r}."
+            f"settings.toml top-level > [auth] > 'admin'. Resolved: {default_user!r}."
         ),
     )
     parser.add_argument(
@@ -303,14 +307,15 @@ def main(argv: list[str] | None = None) -> None:
 def _load_settings_from(path: Path) -> tuple[str, str, str]:
     """Same shape as `_settings_defaults` but reads from an
     explicit path (so the operator can point at a non-default
-    settings.toml)."""
+    settings.toml). Same precedence: top-level first, then
+    `[auth]` fallback — matching `_settings_defaults` and the
+    server's own `ConfigReader`."""
     cfg = _load_settings(path)
-    auth = cfg.get("auth", {})
-    return (
-        str(auth.get("ADMIN_USERNAME", "") or ""),
-        str(auth.get("ADMIN_PASSWORD", "") or ""),
-        str(cfg.get("PORT", "") or ""),
-    )
+    auth = cfg.get("auth", {}) if isinstance(cfg.get("auth"), dict) else {}
+    username = str(cfg.get("ADMIN_USERNAME", "") or "") or str(auth.get("ADMIN_USERNAME", "") or "")
+    password = str(cfg.get("ADMIN_PASSWORD", "") or "") or str(auth.get("ADMIN_PASSWORD", "") or "")
+    port = str(cfg.get("PORT", "") or "")
+    return username, password, port
 
 
 if __name__ == "__main__":
