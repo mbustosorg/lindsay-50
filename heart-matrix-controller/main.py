@@ -199,7 +199,11 @@ def _build_status_snapshot() -> StatusSnapshot:
 # config_reader.get_raw). Adafruit IO requires an explicit feed
 # creation — the operator must create the derived feed in the AIO
 # dashboard before the first publish lands.
-_status_topic_resolved = cfg.MQTT_STATUS_TOPIC or f"{cfg.MQTT_TOPIC}-status"
+#
+# `cfg.if_exists(...)` (not `cfg.MQTT_STATUS_TOPIC`) — `MQTT_STATUS_TOPIC`
+# is intentionally NOT in REQUIRED_KEYS so it has no attribute-style
+# accessor; `if_exists` returns None for unset keys instead of raising.
+_status_topic_resolved = cfg.if_exists("MQTT_STATUS_TOPIC") or f"{cfg.MQTT_TOPIC}-status"
 
 _status_publisher = StatusPublisher(
     host=cfg.MQTT_HOST,
