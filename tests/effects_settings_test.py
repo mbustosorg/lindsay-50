@@ -206,3 +206,91 @@ def test_constructor_copies_effects_list():
     src.append({"name": "Hyperspace", "enabled": True})
     # Mutating the source list doesn't affect the constructed instance.
     assert len(s.effects) == 1
+
+
+def test_default_pacing_reads_from_override(tmp_path, monkeypatch):
+    """Pacing fields default to the loader's value (canonical or override).
+
+    Without an override, the loader returns the canonical pacing — the
+    `test_default_pacing_values` assertions above pin that. With an
+    override file set via `EFFECTS_SETTINGS_OVERRIDE`, the same no-arg
+    constructor picks up the override's pacing instead, so an operator
+    who edits only `idle_seconds` (etc.) sees the change on the device
+    even when the device boots with no wire envelope sync.
+
+    This pins the `idle_seconds=30` override scenario the device was
+    failing on 2026-07-09: the override file's pacing fields were
+    silently discarded because the constructor hardcoded `300.0`.
+    """
+    import json
+
+    override = tmp_path / "effects_settings.json"
+    override.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "effects": [
+                    {
+                        "name": "Fireworks",
+                        "enabled": True,
+                        "module": "lib_shared.patterns.fireworks",
+                        "class_name": "Fireworks",
+                    }
+                ],
+                "fade_seconds": 1.0,
+                "hold_seconds": 7.0,
+                "intro_seconds": 3.0,
+                "idle_seconds": 30.0,
+                "recent_count": 8,
+            }
+        )
+    )
+    monkeypatch.setenv("EFFECTS_SETTINGS_OVERRIDE", str(override))
+    effects_loader.reset_effects_settings()
+
+    s = EffectsSettings()
+    assert s.fade_seconds == 1.0
+    assert s.hold_seconds == 7.0
+    assert s.intro_seconds == 3.0
+    assert s.idle_seconds == 30.0
+    assert s.recent_count == 8
+
+
+def test_from_dict_empty_dict_reads_pacing_from_override(tmp_path, monkeypatch):
+    """`from_dict({})` on a device with no wire envelope still honors
+    the operator's override pacing — the override file is the
+    sole source of truth when the wire is silent."""
+    import json
+
+    override = tmp_path / "effects_settings.json"
+    override.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "effects": [
+                    {
+                        "name": "Hyperspace",
+                        "enabled": True,
+                        "module": "lib_shared.patterns.hyperspace",
+                        "class_name": "Hyperspace",
+                    }
+                ],
+                "fade_seconds": 1.0,
+                "hold_seconds": 7.0,
+                "intro_seconds": 3.0,
+                "idle_seconds": 30.0,
+                "recent_count": 8,
+            }
+        )
+    )
+    monkeypatch.setenv("EFFECTS_SETTINGS_OVERRIDE", str(override))
+    effects_loader.reset_effects_settings()
+
+    # Empty wire envelope → every pacing field is missing → must fall
+    # through to the loader, which honors the override.
+    s = EffectsSettings.from_dict({})
+    assert s.idle_seconds == 30.0
+    assert s.fade_seconds == 1.0
+    assert s.hold_seconds == 7.0
+    assert s.intro_seconds == 3.0
+    assert s.recent_count == 8
