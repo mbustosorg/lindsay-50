@@ -80,7 +80,7 @@ def build_effects(
             or None (returns [] — there's no settings to derive a
             fallback from).
         effect_class_factory: Callable `name -> type | None`. Defaults
-            to `lib_shared.effects_factory.make_effect_class`. Tests
+            to `lib_shared.effects_loader.make_effect_class`. Tests
             can pass a stub that returns simple effect classes.
         display: The display object handed to each Effect's constructor.
             Required when `effects_settings` is not None — every Effect
@@ -95,7 +95,7 @@ def build_effects(
     if effects_settings is None:
         return []
     if effect_class_factory is None:
-        from lib_shared.effects_factory import make_effect_class
+        from lib_shared.effects_loader import make_effect_class
 
         effect_class_factory = make_effect_class
     if display is None:

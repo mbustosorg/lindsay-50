@@ -92,7 +92,6 @@ def _load_app_module(paho_client_ctor):
 
     models_mod.MessageEnvelope = _FakeEnvelope
     models_mod.MessageView = MagicMock()
-    models_mod._DEFAULT_EFFECTS_LIST_FULL = []
 
     cm_mod = _make_mock("lib_shared.config_migrations")
     cm_mod.migrate = MagicMock(side_effect=lambda d, current_version: d or {})

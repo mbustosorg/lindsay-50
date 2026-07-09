@@ -369,14 +369,3 @@ if (document.readyState === "loading") {
 } else {
   init();
 }
-
-// Exports for unit tests (when run under a toolchain that supports
-// ES module imports; in the browser these are inert).
-export {
-  LIVE_THRESHOLD_S,
-  UNKNOWN_THRESHOLD_S,
-  stateFromAge,
-  healthFromSnapshot,
-  isValidSnapshot,
-  formatUptime,
-};

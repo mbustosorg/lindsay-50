@@ -55,9 +55,9 @@ import sqlite, s3
 from server_time import format_from_iso, now_utc_iso
 from lib_shared.boot_config import BootConfig, from_heroku_or_git as _boot_config_from_heroku_or_git
 from lib_shared.config_migrations import migrate, migrate_on_startup
+from lib_shared.effects_loader import load_effects_settings
 from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.models import MessageEnvelope
-from lib_shared.models import _DEFAULT_EFFECTS_LIST_FULL
 from lib_shared.scroller_base import ScrollerBase
 from lib_shared.sign_status import LatestSignStatus, REQUIRED_SNAPSHOT_KEYS
 
@@ -617,20 +617,18 @@ def _save_and_publish(cfg: SignConfig) -> None:
 
 
 # Canonical set of effect class names the device knows about. Mirrors
-# `lib_shared.models._DEFAULT_EFFECTS_LIST_FULL` (the device-side
-# `_EFFECT_CLASSES` map in heart-matrix-controller/main.py is keyed on the
-# same names). Used by `_build_sign_config_from_request` to reject
-# incoming entries whose name isn't in this set.
-_KNOWN_EFFECT_NAMES = frozenset(
-    [
-        "Hyperspace",
-        "VideoDisplay",
-        "PngDisplay",
-        "Honeycomb",
-        "Flame",
-        "Fireworks",
-        "NightSky",
-    ]
+# the loader-driven `lib_shared/config/effects_settings.json` (the
+# device-side `_EFFECT_CLASSES` map in heart-matrix-controller/main.py is
+# keyed on the same names). Used by `_build_sign_config_from_request` to
+# reject incoming entries whose name isn't in this set. The frozenset is
+# derived from `load_effects_settings()["effects"]` at startup so an
+# operator's `config_overrides/effects_settings.json` is honored without
+# a code change.
+_KNOWN_EFFECT_NAMES = frozenset(entry["name"] for entry in load_effects_settings().get("effects", []))
+logger.info(
+    "[flask] _KNOWN_EFFECT_NAMES derived from loader: count=%d names=%s",
+    len(_KNOWN_EFFECT_NAMES),
+    sorted(_KNOWN_EFFECT_NAMES),
 )
 
 
@@ -942,9 +940,10 @@ def settings():
             enabled_map[name] = True
         # Any canonical name absent from the form list is treated as disabled
         # (its checkbox wasn't ticked). We rebuild the list in the canonical
-        # order from the current model defaults so ordering is preserved.
+        # order from the loader-driven defaults so ordering is preserved
+        # and the source of truth matches the JSON the Pi sees.
         new_effects = []
-        for entry in _DEFAULT_EFFECTS_LIST_FULL:
+        for entry in load_effects_settings().get("effects", []):
             new_effects.append({"name": entry["name"], "enabled": entry["name"] in enabled_map})
         es_form.effects = new_effects
         cfg.effects_settings = es_form
@@ -965,6 +964,7 @@ def settings():
     return render_template(
         "settings.html",
         cfg=cfg,
+        effects_settings=load_effects_settings(),
         sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
         speed_labels=ScrollerBase.SPEED_LABELS,
         # Deployed SHA: what Flask expects the Pi to be running.

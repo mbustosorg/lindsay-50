@@ -48,7 +48,7 @@ from the v2 `SignConfig` held by the app-scoped manager.
 single source of truth that translates an `EffectsSettings`
 block into a list of instantiated Effect objects; both the
 Pi and the preview call it. It delegates to
-`lib_shared.effects_factory.make_effect_class` for the name →
+`lib_shared.effects_loader.make_effect_class` for the name →
 class mapping; that factory's per-name import scope means the
 browser preview can request any effect by name and the
 factory's import will only fail (return None) for the
