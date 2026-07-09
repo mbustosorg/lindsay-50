@@ -1,19 +1,49 @@
 """Tests for lib_shared.models.EffectsSettings (v2 config block).
 
 Covers:
-- Default values (5 enabled + 2 disabled canonical effects)
+- Default values (5 enabled + 2 disabled canonical effects) read via
+  the loader
 - Round-trip via from_dict / to_dict
 - Validation (out-of-range pacing, bad recent_count, malformed entries)
 - Wire shape (what the device + admin UI consume)
+
+`_DEFAULT_EFFECTS_LIST_FULL` is gone — the canonical list now lives in
+`lib_shared/config/effects_settings.json` and is read via
+`lib_shared.effects_loader.load_effects_settings()`. These tests cover
+the dataclass; the JSON / loader side is covered in
+`tests/effects_loader_test.py`.
 """
 
 import pytest
 
-from lib_shared.models import EffectsSettings, _DEFAULT_EFFECTS_LIST_FULL
+import lib_shared.effects_loader as effects_loader
+from lib_shared.models import EffectsSettings
+
+
+@pytest.fixture(autouse=True)
+def _reset_loader_cache():
+    """Clear the loader cache before each test so `_default_effects_list`
+    inside `models.py` re-reads from the loader."""
+    effects_loader.reset_effects_settings()
+    # Also clear the per-function cache so a fresh list is built.
+    from lib_shared.models import _default_effects_list
+
+    if hasattr(_default_effects_list, "_cache"):
+        delattr(_default_effects_list, "_cache")
+    yield
+    effects_loader.reset_effects_settings()
+    if hasattr(_default_effects_list, "_cache"):
+        delattr(_default_effects_list, "_cache")
+
+
+def _canonical_entries():
+    """Return the canonical effects list (loaded via the loader)."""
+    cfg = effects_loader.load_effects_settings()
+    return [{"name": e["name"], "enabled": e["enabled"]} for e in cfg["effects"]]
 
 
 def test_default_instantiation_uses_canonical_list():
-    """A no-arg constructor picks up the 7-entry canonical list."""
+    """A no-arg constructor picks up the canonical 7-entry list."""
     s = EffectsSettings()
     assert len(s.effects) == 7
     # Five enabled by default; the two asset-dependent patterns are disabled.
@@ -41,7 +71,7 @@ def test_default_pacing_values():
 
 def test_canonical_list_has_known_names():
     """The canonical list contains exactly the 7 expected effect names."""
-    names = {e["name"] for e in _DEFAULT_EFFECTS_LIST_FULL}
+    names = {e["name"] for e in _canonical_entries()}
     assert names == {
         "Hyperspace",
         "VideoDisplay",
