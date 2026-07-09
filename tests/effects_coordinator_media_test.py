@@ -422,7 +422,11 @@ def test_out_to_in_picks_up_cycler_for_mms_message(tmp_path):
 
         assert isinstance(coord.current, MediaCycler)
         # The cycler has 1 item and is not exhausted.
-        assert coord.current.exhausted is False
-        assert coord.current.items_remaining == 1
+        # `isinstance` doesn't narrow through Pyright on the cycler's
+        # extra attributes — silence the report.
+        current = coord.current
+        assert current is not None
+        assert current.exhausted is False  # type: ignore[attr-defined]
+        assert current.items_remaining == 1  # type: ignore[attr-defined]  # noqa: E501
     finally:
         monkey.undo()

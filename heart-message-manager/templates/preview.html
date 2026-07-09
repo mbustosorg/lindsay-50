@@ -19,6 +19,19 @@
       <canvas id="sign-canvas" width="768" height="768"
               class="block w-full max-w-[min(800px,100%)] h-auto aspect-square mx-auto"
               style="image-rendering: auto;"></canvas>
+      {# Browser-side media overlay (issue #38). Positioned over the
+         LED-fuzzy canvas; `preview.js` swaps `src=` / `style.opacity`
+         each frame from `BrowserMediaOverlay`'s read-only
+         properties. Hidden when the picked message has no media —
+         the LED look is preserved. The `<video>` is muted/looped/
+         autoplayed to satisfy browser autoplay policies for silent
+         looping clips. #}
+      <img id="browser-media-image" alt=""
+           class="absolute inset-4 max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] mx-auto object-contain pointer-events-none hidden"
+           style="z-index: 2; opacity: 0;">
+      <video id="browser-media-video" muted loop autoplay playsinline
+             class="absolute inset-4 max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] mx-auto object-contain pointer-events-none hidden"
+             style="z-index: 2; opacity: 0;"></video>
       <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
         Loading preview…
       </div>

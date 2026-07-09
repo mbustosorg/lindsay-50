@@ -105,6 +105,7 @@ def _load_app_module(mock_cfg, mqtt_publisher):
     # lib_shared.models: use the REAL module so MessageEnvelope / Message
     # construction is exercised end-to-end.
     from lib_shared import models as real_models  # noqa: WPS433 - intentional reimport
+
     sys.modules["lib_shared.models"] = real_models
 
     cm_mod = _make_mock("lib_shared.config_migrations")

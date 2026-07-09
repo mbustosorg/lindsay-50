@@ -248,6 +248,7 @@ def _install_js_api() -> None:
     js.window.get_frame_rgba = get_frame_rgba
     js.window.get_current_text = get_current_text
     js.window.get_current_effect_name = get_current_effect_name
+    js.window.get_current_media = get_current_media
 
 
 def tick():
@@ -277,3 +278,35 @@ def get_current_text():
     """Return the body of the message currently being scrolled."""
     coord = _coord()
     return coord.current_text if coord is not None else ""
+
+
+def get_current_media():
+    """Return the active MMS attachment the JS-side DOM should render.
+
+    Read by `preview.js` on each animation frame. When the coordinator's
+    current effect is a `BrowserMediaOverlay` (preview-side analogue of
+    `MediaCycler`, issue #38), this returns a dict ``{url, kind, opacity,
+    key}`` that drives the `<img>` / `<video>` element's `src` /
+    visibility and `style.opacity`. Otherwise returns a stub with empty
+    strings so the JS-side always gets a well-formed payload.
+
+    The `key` is the bare S3 key; the JS uses it as the cache key
+    for `<source>` element swapping (changing the URL on the same
+    element doesn't always trigger a `load` event for video).
+    """
+    coord = _coord()
+    if coord is None:
+        return {"url": "", "kind": "", "opacity": 0.0, "key": ""}
+    current = coord.current
+    try:
+        from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+    except ImportError:
+        return {"url": "", "kind": "", "opacity": 0.0, "key": ""}
+    if isinstance(current, BrowserMediaOverlay):
+        return {
+            "url": current.current_media_url,
+            "kind": current.current_media_kind,
+            "opacity": current.current_opacity,
+            "key": current.current_media_key,
+        }
+    return {"url": "", "kind": "", "opacity": 0.0, "key": ""}

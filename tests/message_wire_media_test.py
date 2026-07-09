@@ -22,7 +22,6 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 from lib_shared.models import Message, MessageView
 
-
 # ---------------------------------------------------------------------------
 # Message round-trip
 # ---------------------------------------------------------------------------

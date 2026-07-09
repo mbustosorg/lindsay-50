@@ -48,11 +48,10 @@ from tests.effects_coordinator_test import (  # noqa: E402
 
 def _build_preview_coord(messages=None, effects_settings=None):
     """Build a coordinator the way `static/preview/heart-message-manager/
-    app_main.py` does: with no media_api_base_url, no media_cache_dir.
-
-    The preview's per-page `preview_main.py` calls `coord.bind(...)`
-    with the page-local render layer; we mirror that here via the
-    constructor."""
+    app_main.py` does: with `is_browser=True` and `media_api_base_url`
+    set to a stub origin. The preview's per-page `preview_main.py`
+    calls `coord.bind(...)` with the page-local render layer; we
+    mirror that here via the constructor."""
     from lib_shared.effects_coordinator import EffectsCoordinator
     from lib_shared.models import EffectsSettings, TextSettings
 
@@ -70,6 +69,10 @@ def _build_preview_coord(messages=None, effects_settings=None):
         scroller=scroller,
         effects=[fx_a],
         heart=heart,
+        # issue #38: the preview constructs a BrowserMediaOverlay
+        # (DOM-driven) instead of a MediaCycler (PIL/cv2-driven).
+        is_browser=True,
+        media_api_base_url="http://preview.test",
     )
 
 
@@ -142,13 +145,15 @@ def test_preview_coord_handles_sms_only_message():
         monkey.undo()
 
 
-def test_preview_coord_mms_message_cycler_drops_with_no_api_url(caplog):
-    """An MMS message in the preview: the cycler is constructed,
-    every attachment is dropped (no api_base_url — the preview
-    is illustrative, not a real fetcher), and the coordinator
-    falls back to the rotation effect. Logs a WARNING per item
-    so the operator sees the dropped attachments in the
-    browser's dev console."""
+def test_preview_coord_mms_message_constructs_browser_overlay(caplog):
+    """An MMS message in the preview: with `is_browser=True`, the
+    coordinator constructs a `BrowserMediaOverlay` (not a
+    `MediaCycler`) at the out→in transition. The overlay's
+    `current_media_url` exposes the Flask proxy URL the JS-side
+    `<img>` / `<video>` elements follow; with `media_api_base_url`
+    set, the URL is built cleanly. No codec drops — the browser's
+    native `<img>` decoder handles format failure at the JS layer,
+    not in the Python cycler."""
     import logging
     import re
 
@@ -180,32 +185,39 @@ def test_preview_coord_mms_message_cycler_drops_with_no_api_url(caplog):
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
     try:
-        with caplog.at_level(logging.WARNING, logger="heart"):
-            coord.start()
-            clock.advance(0.001)
-            coord.tick()  # intro → out
-            clock.advance(0.02)
-            coord.tick()  # out → in
-            clock.advance(0.02)
-            coord.tick()  # in → hold
-        # The current is a MediaCycler at this point (the cycler
-        # was constructed for the picked MMS message).
-        from lib_shared.patterns.media_cycler import MediaCycler
-
-        assert isinstance(coord.current, MediaCycler)
-        # Both items dropped (no api_base_url → all items dropped).
-        assert coord.current.exhausted is True
-        # The coordinator's `_maybe_fall_back_to_rotation` runs at
-        # the next hold tick; after a few more ticks, the rotation
-        # effect is back in place.
+        coord.start()
+        clock.advance(0.001)
+        coord.tick()  # intro → out
         clock.advance(0.02)
-        coord.tick()  # hold tick — _maybe_fall_back_to_rotation fires
-        assert not isinstance(coord.current, MediaCycler)
-        # The dropped items logged a WARNING per item.
-        drop_warnings = [
-            r for r in caplog.records if r.levelno == logging.WARNING and re.search(r"dropping item", r.getMessage())
-        ]
-        # At least one drop warning (the cycler logs one per dropped item).
-        assert len(drop_warnings) >= 1
+        coord.tick()  # out → in
+        clock.advance(0.02)
+        coord.tick()  # in → hold
+        # The current is a BrowserMediaOverlay (preview path) — NOT a
+        # MediaCycler. The DOM elements are now driven by the
+        # overlay's read-only properties via preview.js.
+        from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+        assert isinstance(coord.current, BrowserMediaOverlay)
+        # No codec drops — items remain in the working list, and the
+        # overlay is not exhausted (1-item case stays False; this
+        # has 2 items anyway, so still False).
+        assert coord.current.exhausted is False
+        assert coord.current.items_remaining == 2
+        # The flask proxy URL is built from the coordinator's
+        # configured base + the active key. After `tick()` it
+        # points at a real Flask route.
+        current = coord.current
+        current.tick()  # activate an item
+        assert current.current_media_url.startswith(
+            "http://preview.test/api/media/",
+        )
+        assert current.current_media_kind == "image"
+        # The first picked item is `image/jpeg` (random over the
+        # not-yet-shown set with 2 candidates, but for the first
+        # advance the cycle picks uniformly — could be either).
+        assert current.current_media_key in {
+            "media/images/2026-07/a.jpg",
+            "media/images/2026-07/b.png",
+        }
     finally:
         monkey.undo()

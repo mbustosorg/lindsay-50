@@ -248,6 +248,63 @@
 
   function startRenderLoop(canvas) {
     const ctx = canvas.getContext("2d");
+    const mediaImg = document.getElementById("browser-media-image");
+    const mediaVideo = document.getElementById("browser-media-video");
+    let lastMediaKey = "";
+
+    function applyMedia(media) {
+      // Browser-side media overlay (issue #38). `preview_main.py`
+      // exposes `BrowserMediaOverlay.current_media_url` /
+      // `current_media_kind` / `current_opacity` via
+      // `window.get_current_media()`. The overlay DOM elements sit
+      // above the canvas; the LED-fuzzy render underneath stays
+      // visible when the overlay is transparent. When `url` is empty
+      // (no picked media, or the cycler is exhausted), both
+      // elements are hidden and the canvas shows through.
+      if (!mediaImg || !mediaVideo) return;
+      const url = (media && media.url) || "";
+      const kind = (media && media.kind) || "";
+      const opacity = (media && typeof media.opacity === "number") ? media.opacity : 0;
+      const key = (media && media.key) || "";
+
+      if (!url || !kind) {
+        // No active media — hide both, leave the canvas alone.
+        if (!mediaImg.hidden) mediaImg.hidden = true;
+        if (!mediaVideo.hidden) mediaVideo.hidden = true;
+        if (key !== lastMediaKey) lastMediaKey = "";
+        return;
+      }
+
+      // Swap src only when the underlying item changed — reassigning
+      // the same URL forces a re-decode in some browsers and creates
+      // a flash. The S3 key (`media.key`) is the stable identifier.
+      if (key !== lastMediaKey) {
+        if (kind === "image") {
+          if (!mediaImg.hidden) mediaImg.hidden = true;
+          mediaImg.src = url;
+          mediaVideo.removeAttribute("src");
+          mediaVideo.load();
+          mediaImg.hidden = false;
+        } else if (kind === "video") {
+          if (!mediaVideo.hidden) mediaVideo.hidden = true;
+          mediaImg.removeAttribute("src");
+          mediaVideo.src = url;
+          mediaVideo.load();
+          // `muted`+`playsinline`+`autoplay` already on the element;
+          // calling play() resumes after the load promise resolves.
+          const playPromise = mediaVideo.play();
+          if (playPromise && typeof playPromise.then === "function") {
+            playPromise.catch(() => { /* user-gesture required — visible to user */ });
+          }
+          mediaVideo.hidden = false;
+        }
+        lastMediaKey = key;
+      }
+
+      // Apply opacity (tracks `set_brightness` from the coordinator).
+      mediaImg.style.opacity = String(opacity);
+      mediaVideo.style.opacity = String(opacity);
+    }
 
     function frame(now) {
       if (now - lastTick >= FRAME_MS) {
@@ -266,6 +323,15 @@
           const text = typeof window.get_current_text === "function"
             ? window.get_current_text() : "";
           updateStatus(effectName, text);
+
+          // Pull the active media attachment (issue #38). When the
+          // picked message has MMS attachments, the coordinator's
+          // `BrowserMediaOverlay` exposes them here; `preview.js`
+          // swaps the DOM `<img>` / `<video>` element's `src` to
+          // match. No-ops cleanly for SMS-only messages.
+          if (typeof window.get_current_media === "function") {
+            applyMedia(window.get_current_media());
+          }
 
           if (typeof window.get_frame_rgba === "function") {
             const bytes = window.get_frame_rgba();

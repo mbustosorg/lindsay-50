@@ -174,6 +174,7 @@ class EffectsCoordinator:
         *,
         media_api_base_url: str = "",
         media_cache_dir: str = "",
+        is_browser: bool = False,
     ) -> None:
         # Required — no default. Raises TypeError if a caller omits it.
         # All live config (pacing fields, rotation, text settings) is
@@ -200,6 +201,16 @@ class EffectsCoordinator:
         # the OS temp dir).
         self._media_api_base_url = media_api_base_url or ""
         self._media_cache_dir = media_cache_dir or ""
+        # `is_browser` toggles between two media render paths:
+        # host/Pi builds a `MediaCycler` that decodes each
+        # attachment with PIL/cv2 and blits it onto the rgbmatrix
+        # canvas (real-display fidelity); preview/browser builds a
+        # `BrowserMediaOverlay` that hands the same Flask proxy URL
+        # to the DOM `<img>` / `<video>` elements that `preview.js`
+        # drives — the browser handles decoding natively so we
+        # don't need OpenCV in Pyodide. Mirrors the existing
+        # `MessageManager(is_browser=True)` flag.
+        self._is_browser = bool(is_browser)
 
         self.idx = -1  # first message shown advances this to 0
         self.current = heart  # effect being rendered right now (may be None)
@@ -371,21 +382,32 @@ class EffectsCoordinator:
         return None
 
     def _maybe_build_media_cycler(self) -> Effect | None:
-        """Construct a `MediaCycler` for the picked message's MMS media.
+        """Construct a `MediaCycler` (Pi) or `BrowserMediaOverlay`
+        (preview) for the picked message's MMS media.
 
         Called at the out→in transition. Returns:
-          - A `MediaCycler` if the picked message has a non-empty
+          - A media effect if the picked message has a non-empty
             `media` list AND we have a display to construct it
-            against. The cycler takes over `self.current` for the
+            against. The effect takes over `self.current` for the
             hold.
           - None otherwise (SMS-only messages, no display, or no
             picked entry — e.g. the intro→out path that didn't
             actually pick a message).
 
-        The cycler handles its own codec failures (D12): if every
-        attachment fails to load, `exhausted` is True at construction
-        and the coordinator's `hold` branch falls back to the
-        rotation effect via `_maybe_fall_back_to_rotation`.
+        Which effect gets constructed depends on `is_browser`:
+          - Host (Pi): `MediaCycler` decodes with PIL/cv2 and blits
+            through the `Bitmap`/`Palette` pipeline (real-display
+            fidelity — every LED pixel is driven by Python).
+          - Preview: `BrowserMediaOverlay` carries the same cycle
+            logic but exposes the active attachment to the JS-side
+            DOM `<img>` / `<video>` elements via three read-only
+            properties. The browser handles decoding natively — no
+            OpenCV in Pyodide, no PyScript bytes round-trip.
+
+        Both paths handle codec failures (D12): if the working list
+        becomes empty, `exhausted` is True at construction and the
+        coordinator's `hold` branch falls back to the rotation
+        effect via `_maybe_fall_back_to_rotation`.
         """
         picked = self._last_picked_entry
         if picked is None:
@@ -395,6 +417,17 @@ class EffectsCoordinator:
             return None
         if self.display is None:
             return None
+        hold_seconds = self.message_manager.get_effects_settings().hold_seconds
+        if self._is_browser:
+            # Lazy import — same rationale as the host branch.
+            from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+            return BrowserMediaOverlay(
+                picked.message.id,
+                media,
+                api_base_url=self._media_api_base_url,
+                hold_seconds=hold_seconds,
+            )
         # Lazy import — MediaCycler pulls in Pillow (ImageDisplay) and
         # optionally cv2 (VideoDisplay). The host test suite has Pillow
         # but not cv2; keeping the import here avoids loading it at
@@ -406,7 +439,7 @@ class EffectsCoordinator:
             media,
             display=self.display,
             api_base_url=self._media_api_base_url,
-            hold_seconds=self.message_manager.get_effects_settings().hold_seconds,
+            hold_seconds=hold_seconds,
             cache_dir=self._media_cache_dir or None,
         )
 

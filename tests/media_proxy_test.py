@@ -80,6 +80,7 @@ def _load_app_module(mock_cfg, mqtt_publisher):
     log_setup_mod.configure_logging = MagicMock()
 
     from lib_shared import models as real_models
+
     sys.modules["lib_shared.models"] = real_models
 
     cm_mod = _make_mock("lib_shared.config_migrations")
@@ -121,9 +122,7 @@ def _load_app_module(mock_cfg, mqtt_publisher):
     s3_mod.save_config_snapshot = MagicMock()
     s3_mod._s3_bucket = MagicMock(return_value="test-bucket")
     s3_mod._s3_client = MagicMock()
-    s3_mod.log_media = MagicMock(
-        side_effect=lambda ctype, url: f"media/images/2026-07/k.{ctype.split('/')[-1]}"
-    )
+    s3_mod.log_media = MagicMock(side_effect=lambda ctype, url: f"media/images/2026-07/k.{ctype.split('/')[-1]}")
     s3_mod.signed_media_url = MagicMock(
         side_effect=lambda key, expires_in=3600: f"https://test-bucket.s3.amazonaws.com/{key}?X-Amz-Signature=abc"
     )
@@ -305,6 +304,7 @@ def test_api_media_with_signing_failure_returns_404(client, monkeypatch):
 def test_api_media_with_signing_exception_returns_404(client, monkeypatch):
     """If `s3.signed_media_url` raises (boto3 BotoCoreError / ClientError),
     the endpoint returns 404 rather than 500."""
+
     def boom(key, expires_in=3600):
         raise RuntimeError("NoSuchKey")
 
@@ -346,9 +346,11 @@ def test_api_media_signs_url_per_request(client):
 def test_api_media_with_different_keys_uses_different_signed_urls(client, monkeypatch):
     """Each request must pass its own S3 key to `signed_media_url`."""
     seen_keys = []
+
     def capture(key, expires_in=3600):
         seen_keys.append(key)
         return f"https://test-bucket.s3.amazonaws.com/{key}?sig=ok"
+
     monkeypatch.setattr(sys.modules["s3"], "signed_media_url", capture)
     sys.modules["heart-message-manager.main"].s3.signed_media_url = capture
 

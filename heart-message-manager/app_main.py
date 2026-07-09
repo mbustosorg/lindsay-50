@@ -278,7 +278,19 @@ _message_manager = MessageManager(
     on_change=create_proxy(_on_change_js),
 )
 
-_coordinator = EffectsCoordinator(message_manager=_message_manager)
+_coordinator = EffectsCoordinator(
+    message_manager=_message_manager,
+    # Media overlay wiring (issue #38). The coordinator builds a
+    # `BrowserMediaOverlay` at the out→in transition when the picked
+    # message has a non-empty `media` list; the overlay surfaces the
+    # Flask proxy URL to the JS-side `<img>` / `<video>` elements via
+    # `current_media_url` / `current_media_kind`, and tracks the
+    # coordinator's `set_brightness` ramp via `current_opacity`. The
+    # browser handles decoding natively (no OpenCV in Pyodide).
+    media_api_base_url=str(js.window.location.origin),
+    media_cache_dir="",
+    is_browser=True,
+)
 
 _mqtt_ws_client = None
 _mqtt_ws_url = str(_cfg.get("mqttWsUrl") or "")
