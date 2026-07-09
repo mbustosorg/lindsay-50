@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "effects": [
+    {"name": "Hyperspace", "module": "lib_shared.patterns.hyperspace", "class_name": "Hyperspace", "enabled": true},
+    {"name": "VideoDisplay", "module": "lib_shared.patterns.video_display", "class_name": "VideoDisplay", "enabled": false},
+    {"name": "PngDisplay", "module": "lib_shared.patterns.png_display", "class_name": "PngDisplay", "enabled": false},
+    {"name": "Honeycomb", "module": "lib_shared.patterns.honeycomb", "class_name": "Honeycomb", "enabled": true},
+    {"name": "Flame", "module": "lib_shared.patterns.flame", "class_name": "Flame", "enabled": true},
+    {"name": "Fireworks", "module": "lib_shared.patterns.fireworks", "class_name": "Fireworks", "enabled": true},
+    {"name": "NightSky", "module": "lib_shared.patterns.nightsky", "class_name": "NightSky", "enabled": true}
+  ],
+  "fade_seconds": 2.0,
+  "hold_seconds": 15.0,
+  "intro_seconds": 5.0,
+  "idle_seconds": 300.0,
+  "recent_count": 5
+}
