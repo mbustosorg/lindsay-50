@@ -4,6 +4,39 @@ All notable changes to lindsay-50 are documented in this file.
 
 ## [Unreleased] — 2026-07-02
 
+### Added — MMS image and video attachments (issue #38, `openspec_change_name: add-image-and-video-support`)
+
+The Flask webhook now ingests MMS attachments: Twilio's `MediaUrl0..`
+links are downloaded to S3 (`media/images/<YYYY-MM>/` and
+`media/videos/<YYYY-MM>/`, mirroring the messages archive layout),
+the `Message` wire shape carries a `media: list[{type, url}]` field,
+and the Pi's `EffectsCoordinator` constructs a `MediaCycler` per
+message at the out→in fade transition so each attachment renders as
+the background effect while the text scrolls.
+
+PngDisplay is now `ImageDisplay` (PNG / JPEG / GIF / WebP); `PngDisplay`
+is gone. The effect registry moved out of `models.py:_DEFAULT_EFFECTS_LIST`
+into a JSON-driven loader (`lib_shared/effects_loader.py`,
+`config/effects.json`); operators override via the `EFFECTS_SETTINGS_OVERRIDE`
+env var and the `/settings` admin page renders the merged list
+verbatim.
+
+A new Flask route `GET /api/media/<key>` 302s each request to a freshly-
+signed S3 URL behind `api_login_required` — both Pi and browser follow
+the same redirect, so S3 credentials stay server-side. The preview's
+`MediaCycler` analogue is a DOM-driven `BrowserMediaOverlay` (no
+PIL/cv2 in Pyodide): `<img>` / `<video>` elements positioned over the
+LED canvas, swapped from `current_media_url` each frame.
+
+The admin `/messages` table now has a Media column with thumbnails
+(image), play-badge (video), and a click-to-zoom lightbox modal. The
+SQLite schema gained a `media TEXT` column with an in-place
+`ALTER TABLE ADD COLUMN` migration for pre-issue-38 databases.
+
+Out of scope for this change: pre-caching attachments on receive
+(section 11.5). The Pi's cycler fetches each attachment lazily on
+cycle advance; the browser's `<img>` / `<video>` fetches on demand.
+
 ### Added — Self-upgrading Pi matrix controller (issue #49)
 
 The Pi matrix controller now upgrades itself whenever Flask restarts with a
