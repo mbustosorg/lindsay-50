@@ -29,8 +29,8 @@ Usage:
     python scripts/post_test_mms.py video
     python scripts/post_test_mms.py both
 
-    # 3. Watch the admin UI at http://localhost:5000/messages
-    #    and the live ring buffer at http://localhost:5000/
+    # 3. Watch the admin UI at http://localhost:3100/messages
+    #    and the live ring buffer at http://localhost:3100/
 """
 
 from __future__ import annotations
@@ -129,8 +129,8 @@ def main(argv: list[str] | None = None) -> None:
     )
     parser.add_argument(
         "--base-url",
-        default="http://localhost:5000",
-        help="Base URL of the running Flask app (default: http://localhost:5000).",
+        default="http://localhost:3100",
+        help="Base URL of the running Flask app (default: http://localhost:3100).",
     )
     parser.add_argument(
         "--username",
