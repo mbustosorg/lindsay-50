@@ -69,7 +69,7 @@ class MatrixDisplay(DisplayBase):
         options.chain_length = int(_opt("MATRIX_CHAIN", 2))
         options.parallel = int(_opt("MATRIX_PARALLEL", 1))
         #options.hardware_mapping = _opt("MATRIX_HARDWARE_MAPPING", "regular")
-        options.pixel_mapper_config = _opt("MATRIX_PIXEL_MAPPER", "V-mapper")
+        options.pixel_mapper_config = _opt("MATRIX_PIXEL_MAPPER", "V-mapper;Rotate:180")
 
         options.pwm_bits = int(_opt("MATRIX_PWM_BITS", 10))
         options.brightness = int(_opt("MATRIX_BRIGHTNESS", 100))
