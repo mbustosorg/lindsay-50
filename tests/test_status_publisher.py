@@ -147,8 +147,11 @@ class TestPublish:
 
     def test_publish_returns_false_on_non_success_rc(self, mock_client_factory):
         factory, client = mock_client_factory
-        # Simulate a failed publish (e.g. broker disconnect).
-        client.publish.return_value.rc = mqtt.MQTT_ERR_NO_CONN
+        # Use a non-success, non-NO_CONN rc (queue full, bad topic,
+        # etc. — values paho's loop thread won't auto-recover from).
+        # The defensive reconnect timer fires in this path. NO_CONN is
+        # NOT tested here; that path is its own test below.
+        client.publish.return_value.rc = 15  # MQTT_ERR_QUEUE_FULL
         pub = StatusPublisher(
             host="h",
             port=1883,
@@ -164,6 +167,36 @@ class TestPublish:
         # moment to fire, then verify a second connect_async attempt.
         time.sleep(0.1)
         assert client.connect_async.call_count >= 2
+        pub.close()
+
+    def test_publish_returns_true_on_no_conn_rc(self, mock_client_factory):
+        """`MQTT_ERR_NO_CONN` is a transient state — paho's loop
+        thread will retry CONNACK on its own. The defensive
+        reconnect timer would just pile up redundant reconnect
+        attempts during a brief disconnect, so we treat NO_CONN
+        as success and skip the timer.
+
+        Pin the QoS-0 fire-and-forget semantics: the publish was
+        queued, paho will flush it on reconnect, the caller doesn't
+        need to know.
+        """
+        factory, client = mock_client_factory
+        client.publish.return_value.rc = mqtt.MQTT_ERR_NO_CONN
+        pub = StatusPublisher(
+            host="h",
+            port=1883,
+            username="u",
+            password="p",
+            topic="t",
+            client_factory=factory,
+            reconnect_interval_s=0.05,
+        )
+        ok = pub.publish({"active_sha": "x"})
+        assert ok is True
+        # No defensive reconnect timer fires — count stays at 1
+        # (just the initial connect_async at constructor time).
+        time.sleep(0.1)
+        assert client.connect_async.call_count == 1
         pub.close()
 
     def test_publish_swallows_client_publish_exception(self, mock_client_factory):

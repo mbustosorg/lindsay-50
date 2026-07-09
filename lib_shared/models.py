@@ -197,29 +197,50 @@ class EffectsSettings:
     def __init__(
         self,
         effects: Optional[List[dict]] = None,
-        fade_seconds: float = 2.0,
-        hold_seconds: float = 15.0,
-        intro_seconds: float = 5.0,
-        idle_seconds: float = 300.0,
-        recent_count: int = 5,
+        fade_seconds: Optional[float] = None,
+        hold_seconds: Optional[float] = None,
+        intro_seconds: Optional[float] = None,
+        idle_seconds: Optional[float] = None,
+        recent_count: Optional[int] = None,
     ):
         """Initialize EffectsSettings.
 
         Args:
             effects: List of `{"name": str, "enabled": bool}` dicts. Defaults
                 to the canonical list loaded via `lib_shared.effects_loader`.
-            fade_seconds: Seconds for one full fade (default 2.0).
-            hold_seconds: Seconds to keep a message fully visible (default 15.0).
-            intro_seconds: Seconds to show the boot-splash heart (default 5.0).
-            idle_seconds: Seconds of idleness before a random message plays (default 300.0).
-            recent_count: Size of the idle-rotation recent-messages pool (default 5).
+            fade_seconds: Seconds for one full fade. Default `None` falls
+                through to the loader's value (canonical or operator
+                override) so an `effects_settings` override honors its
+                own pacing.
+            hold_seconds: Seconds to keep a message fully visible. Default
+                `None` falls through to the loader.
+            intro_seconds: Seconds to show the boot-splash heart. Default
+                `None` falls through to the loader.
+            idle_seconds: Seconds of idleness before a random message
+                plays. Default `None` falls through to the loader.
+            recent_count: Size of the idle-rotation recent-messages pool.
+                Default `None` falls through to the loader.
+
+        The loader-driven defaults are what make an operator's override
+        file (env var or `config_overrides/effects_settings.json`) take
+        effect even when the device boots without any wire envelope —
+        the device constructs `EffectsSettings()` directly and the
+        pacing values come from the same source the loader writes.
         """
+        # Read the loader output once so the override (env var or
+        # config_overrides/) and canonical fall through identically for
+        # the effects list and every pacing field. The same source-of-
+        # truth path that `_default_effects_list` already uses.
+        from lib_shared.effects_loader import load_effects_settings
+
+        loader_cfg = load_effects_settings()
+
         self.effects = list(effects) if effects is not None else [dict(e) for e in _default_effects_list()]
-        self.fade_seconds = fade_seconds
-        self.hold_seconds = hold_seconds
-        self.intro_seconds = intro_seconds
-        self.idle_seconds = idle_seconds
-        self.recent_count = recent_count
+        self.fade_seconds = fade_seconds if fade_seconds is not None else loader_cfg.get("fade_seconds", 2.0)
+        self.hold_seconds = hold_seconds if hold_seconds is not None else loader_cfg.get("hold_seconds", 15.0)
+        self.intro_seconds = intro_seconds if intro_seconds is not None else loader_cfg.get("intro_seconds", 5.0)
+        self.idle_seconds = idle_seconds if idle_seconds is not None else loader_cfg.get("idle_seconds", 300.0)
+        self.recent_count = recent_count if recent_count is not None else loader_cfg.get("recent_count", 5)
 
     @classmethod
     def from_dict(cls, d):
@@ -245,13 +266,30 @@ class EffectsSettings:
             for n in effects
         ):
             raise ValueError("effects must be a list of {name: str, enabled: bool} objects")
+        # Pacing fields are passed as `None` when absent so `__init__`
+        # can fall through to the loader (canonical or operator
+        # override). This way an empty wire envelope (`{}`) on a device
+        # that boots with no config sync still gets the operator's
+        # pacing values from the override file. When the field IS
+        # present, it gets type-coerced here (str→float, str→int) so
+        # the wire layer can tolerate JSON strings from older clients
+        # while the explicit-value path in `__init__` gets a typed
+        # value.
+        def _f(key: str) -> Optional[float]:
+            v = d.get(key)
+            return None if v is None else float(v)
+
+        def _i(key: str) -> Optional[int]:
+            v = d.get(key)
+            return None if v is None else int(v)
+
         return cls(
             effects=[{"name": n["name"], "enabled": n["enabled"]} for n in effects],
-            fade_seconds=float(d.get("fade_seconds", 2.0)),
-            hold_seconds=float(d.get("hold_seconds", 15.0)),
-            intro_seconds=float(d.get("intro_seconds", 5.0)),
-            idle_seconds=float(d.get("idle_seconds", 300.0)),
-            recent_count=int(d.get("recent_count", 5)),
+            fade_seconds=_f("fade_seconds"),
+            hold_seconds=_f("hold_seconds"),
+            intro_seconds=_f("intro_seconds"),
+            idle_seconds=_f("idle_seconds"),
+            recent_count=_i("recent_count"),
         )
 
     def to_dict(self):

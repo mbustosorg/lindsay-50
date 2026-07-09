@@ -144,7 +144,15 @@ class StatusPublisher:
                 qos=0,
             )
             rc = getattr(result, "rc", None)
-            if rc is not None and rc != mqtt.MQTT_ERR_SUCCESS:
+            # `MQTT_ERR_NO_CONN` is a transient state — paho's loop thread
+            # already handles CONNACK retries on its own, so the defensive
+            # reconnect timer would just pile up redundant reconnects on
+            # every brief disconnect. Only schedule a reconnect for rc
+            # values paho won't auto-recover from (queue full, bad topic,
+            # etc.). The QoS-0 fire-and-forget semantics mean a brief
+            # disconnect drops the current publish; paho will catch up on
+            # the next 5s tick.
+            if rc is not None and rc != mqtt.MQTT_ERR_SUCCESS and rc != mqtt.MQTT_ERR_NO_CONN:
                 logger.warning(
                     "StatusPublisher.publish: rc=%s (topic=%s); scheduling reconnect",
                     rc,

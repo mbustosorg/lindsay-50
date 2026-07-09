@@ -108,6 +108,34 @@ def _restore_time_monotonic():
         _time.monotonic = real_monotonic
 
 
+@pytest.fixture(autouse=True)
+def _reset_effects_settings_cache():
+    """Clear the loader cache (and the per-function cache in
+    `_default_effects_list`) after every test that touches it.
+
+    Tests that drive `EFFECTS_SETTINGS_OVERRIDE` (e.g. the override-
+    added / deleted-canonical tests in `test_admin_settings_route.py`)
+    populate the loader cache with their override's data, then
+    `monkeypatch.undo()` removes the env var. The cache, however,
+    persists. A sibling test that constructs `EffectsSettings()` (or
+    calls `make_effect_class(...)`) without resetting the cache picks
+    up the override's pacing values and a stale effects list — the
+    `apply_settings` failures on 2026-07-09 trace back to this
+    interaction.
+
+    The reset happens AFTER the test (not before) so a test that
+    legitimately wants a populated cache can keep it for the duration
+    of its own body; the reset only reaches across test boundaries.
+    """
+    yield
+    import lib_shared.effects_loader as _loader
+    from lib_shared.models import _default_effects_list
+
+    _loader.reset_effects_settings()
+    if hasattr(_default_effects_list, "_cache"):
+        delattr(_default_effects_list, "_cache")
+
+
 # ---------------------------------------------------------------------------
 # Sample data fixtures
 # ---------------------------------------------------------------------------
