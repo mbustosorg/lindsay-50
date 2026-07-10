@@ -22,8 +22,7 @@
          the coordinator is idle (no picked entry), `data-msg` is
          empty and the link looks like plain text. #}
       <a id="preview-message-link" href="#" role="button"
-         class="text-slate-500"
-         onclick="return showPreviewMessageModal(event)">
+         class="text-slate-500">
         <span id="preview-message">Idle</span>
       </a>
       {# The link looks like plain text (text-slate-500) until
@@ -74,7 +73,7 @@
      gated by the auth) owns the MQTT-WS connection and the in-browser
      MessageManager; preview.js only registers a per-page callback to
      drive `coordinator.request_message(body)` on each new envelope. -->
-<script src="{{ url_for('static', filename='preview/preview.js') }}?v=4"></script>
+<script src="{{ url_for('static', filename='preview/preview.js') }}?v=5"></script>
 
 {# --- JSON Viewer Modal (mirrors testing.html's #json-modal) --- #}
 <div id="json-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
@@ -94,39 +93,14 @@
 </div>
 
 <script>
-// Mirrors testing.html's showMessageModal. The link in the preview
-// status bar carries a `data-msg` attribute (base64-encoded JSON)
-// updated by preview.js whenever the picked message changes.
-// Uses `this` (the link element) — same shape as the testing
-// page's row click handler — because `event.currentTarget` is not
-// reliably the inline-handler element across all browsers when
-// the click bubbles from a nested span.
-// Returns `false` to suppress the href="#" navigation.
-function showPreviewMessageModal() {
-  const link = this;
-  const raw = link && link.dataset && link.dataset.msg;
-  if (!raw) {
-    // No picked message (idle, boot splash) — no-op.
-    return false;
-  }
-  // Match the encode site (preview.js): base64 of UTF-8 JSON.
-  // Reverse with decodeURIComponent(escape(atob(...))) to recover
-  // the original UTF-8 string before parsing.
-  let item;
-  try {
-    item = JSON.parse(decodeURIComponent(escape(atob(raw))));
-  } catch (e) {
-    console.warn("[preview-modal] decode failed", e);
-    return false;
-  }
-  document.getElementById('json-modal-title').textContent = 'Message ' + item.id;
-  document.getElementById('json-modal-body').textContent = JSON.stringify(item, null, 2);
-  const modal = document.getElementById('json-modal');
-  modal.classList.remove('hidden');
-  modal.classList.add('flex');
-  return false;
-}
-
+// The click handler that opens the modal lives in preview.js —
+// attached via addEventListener on the `#preview-message-link`
+// anchor. Putting it there (rather than as an inline onclick on
+// the <a>) lets us register the listener exactly once after
+// startRenderLoop has confirmed the DOM is ready, and avoids the
+// `this`-on-bubbled-click ambiguity. closeJsonModal stays inline
+// because it's referenced by the close button's onclick and the
+// inline `<script>` runs synchronously during parse.
 function closeJsonModal() {
   const modal = document.getElementById('json-modal');
   if (!modal) return;

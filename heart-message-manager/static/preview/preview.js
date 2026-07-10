@@ -271,6 +271,43 @@
     const mediaImg = document.getElementById("browser-media-image");
     const mediaVideo = document.getElementById("browser-media-video");
     const messageLink = document.getElementById("preview-message-link");
+    if (messageLink) {
+      // Wire the modal click directly via addEventListener. The
+      // previous inline `onclick="return showPreviewMessageModal(event)"`
+      // approach was fragile: it relied on `this` resolving to the
+      // anchor after the click bubbled from the inner <span>, and on
+      // the inline handler not being clobbered by anything that
+      // touches attributes. A direct listener on the anchor is the
+      // robust path — `this` is always the anchor, the listener
+      // can't be shadowed by template edits, and we can `preventDefault`
+      // to suppress the href="#" navigation.
+      messageLink.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        const raw = messageLink.dataset.msg;
+        if (!raw) {
+          console.warn("[preview-js] message link clicked but no data-msg; idle state?");
+          return;
+        }
+        try {
+          const item = JSON.parse(decodeURIComponent(escape(atob(raw))));
+          document.getElementById("json-modal-title").textContent = "Message " + item.id;
+          document.getElementById("json-modal-body").textContent = JSON.stringify(item, null, 2);
+          const modal = document.getElementById("json-modal");
+          if (!modal) {
+            console.error("[preview-js] #json-modal element not found");
+            return;
+          }
+          modal.classList.remove("hidden");
+          modal.classList.add("flex");
+          console.log("[preview-js] modal opened for message id=%s", item.id);
+        } catch (e) {
+          console.error("[preview-js] modal decode failed:", e, "raw=", raw.slice(0, 80));
+        }
+      });
+      console.log("[preview-js] message-link click handler attached");
+    } else {
+      console.error("[preview-js] #preview-message-link element not found");
+    }
     let lastMediaKey = "";
     let frameCount = 0;
     let lastEffectNameForLog = "";
