@@ -622,31 +622,36 @@ def test_out_to_in_and_in_to_hold_emit_info_logs(caplog):
     caplog.set_level(logging.INFO)
     _drive(clock, coord, 0.3)  # intro → out → in → hold
 
-    # out → in: the new shape splits into two lines — a "selected"
-    # dump carrying the full picked message, then a "starting fade
-    # in" line. We assert both are present and the picked message
-    # made it into the selected line.
+    # Round 4: selected-log carries msg + body + effect in one
+    # record. The fade-in-starting log fires at out→in only.
     selected = _info_records(caplog, "Coordinator: selected")
     assert selected, "Expected 'Coordinator: selected' INFO log at out→in"
     assert "m1" in selected[0].getMessage()
+    assert "effect=" in selected[0].getMessage(), (
+        f"round-4 selected-log must carry effect= on the same line "
+        f"as the picked message; got: {selected[0].getMessage()[:120]}"
+    )
     fade_in = _info_records(caplog, "starting fade in")
     assert fade_in, "Expected 'starting fade in' INFO log"
 
-    # in → hold fires once the fade-in completes (showing_text was True).
-    # Round 3 (debug-visibility): the `body=` field is gone from
-    # the fade-in-done log — the selected-log at the pick site
-    # already carried it. Two fields only: effect + next_mode.
+    # Round 4 (debug-visibility): the `fade in done` log was
+    # dropped entirely — internal fade-mechanics, not a sign-state
+    # event the operator needs to read.
     fade_in_done = _info_records(caplog, "fade in done")
-    assert fade_in_done, "Expected 'fade in done' INFO log"
-    assert "next_mode=hold" in fade_in_done[0].getMessage()
-    assert "hi" not in fade_in_done[0].getMessage(), (
-        f"fade-in-done log should not carry body= (round 3 dropped it); got: {fade_in_done[0].getMessage()!r}"
+    assert not fade_in_done, (
+        f"round 4 dropped the 'fade in done' log — operator sees "
+        f"selected → fade out → fade in, no 'done' confirmation. "
+        f"Got: {[r.getMessage() for r in fade_in_done]}"
     )
     monkey.undo()
 
 
-def test_hold_to_text_out_and_text_out_to_background_log_at_info(caplog):
-    """A full hold→text_out→background cycle also logs each transition."""
+def test_hold_to_text_out_and_text_out_to_background_silent(caplog):
+    """Round 4 (debug-visibility): the `hold→text_out` and
+    `text_out→background` transition logs are dropped. Internal
+    fade-mechanics between selected and the next selected — the
+    operator reads the next cycle's `Coordinator: selected` line
+    for that."""
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
@@ -657,7 +662,6 @@ def test_hold_to_text_out_and_text_out_to_background_log_at_info(caplog):
         source="mqtt",
         suppressed=False,
     )
-    # hold_seconds tiny so the cycle drains naturally
     mgr = _StubMessageManager(messages=[msg])
     coord, *_ = _build(
         intro_seconds=0.0,
@@ -670,8 +674,14 @@ def test_hold_to_text_out_and_text_out_to_background_log_at_info(caplog):
     caplog.set_level(logging.INFO)
     _drive(clock, coord, 0.4)  # intro → out → in → hold → text_out → background
 
-    assert _info_records(caplog, "Coordinator hold→text_out"), "expected hold→text_out INFO log"
-    assert _info_records(caplog, "Coordinator text_out→background"), "expected text_out→background INFO log"
+    hold_to_text = _info_records(caplog, "hold→text_out")
+    text_to_bg = _info_records(caplog, "text_out→background")
+    assert not hold_to_text, (
+        f"round 4 dropped 'hold→text_out' — got: {[r.getMessage() for r in hold_to_text]}"
+    )
+    assert not text_to_bg, (
+        f"round 4 dropped 'text_out→background' — got: {[r.getMessage() for r in text_to_bg]}"
+    )
     monkey.undo()
 
 
@@ -683,6 +693,12 @@ def test_hold_does_not_interrupt_on_random_picks_from_shown_set(caplog):
     hold instantly and `hold_seconds` would never be observed — that
     was the bug operators saw: messages would appear briefly then
     disappear after a few seconds regardless of hold_seconds setting.
+
+    Round 4: the `hold→text_out` and `hold interrupt` log lines are
+    GONE. The contract being pinned is behavioral (hold survives
+    `hold_seconds`) rather than log-shape. So instead of asserting
+    the log lines, this test asserts the coordinator lands in
+    background after `hold_seconds` of random re-picks.
     """
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
@@ -705,7 +721,6 @@ def test_hold_does_not_interrupt_on_random_picks_from_shown_set(caplog):
         suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1, msg2])
-    # hold_seconds = 0.5 so we can measure whether it elapses; idle_seconds irrelevant here.
     coord, *_ = _build(
         intro_seconds=0.0,
         fade_seconds=0.05,
@@ -715,20 +730,20 @@ def test_hold_does_not_interrupt_on_random_picks_from_shown_set(caplog):
     )
     coord.start()
 
-    caplog.set_level(logging.INFO)
-    # Drain to background via text_out so we enter the hold state cleanly.
-    _drive(clock, coord, 0.4)  # intro → out → in → hold
-    # Drain through hold_seconds to let it reach text_out naturally.
-    _drive(clock, coord, 0.6)  # hold → text_out → background
-
-    hold_to_text_out = _info_records(caplog, "Coordinator hold→text_out")
-    assert hold_to_text_out, (
-        "hold_seconds must elapse to text_out without being interrupted. "
-        "If this fails, the bug returned: random re-picks are interrupting holds."
+    # Drain to background via the natural hold→text_out→background
+    # path with random re-picks happening between ticks. After 1.0s
+    # the coordinator must be in background — proves hold_seconds
+    # was honored.
+    _drive(clock, coord, 1.0)
+    assert coord.mode == "background", (
+        f"hold_seconds=0.5 must let the coordinator reach background "
+        f"after random re-picks; got mode={coord.mode!r}. If this fires, "
+        f"random re-picks are interrupting holds again."
     )
     # And: no 'Coordinator hold interrupt' should have fired — that
-    # log line only fires when a FRESH id arrives.
-    interrupts = _info_records(caplog, "Coordinator hold interrupt")
+    # log line only fires when a FRESH id arrives (which now goes
+    # through the queue, not interrupt).
+    interrupts = _info_records(caplog, "hold interrupt")
     assert (
         not interrupts
     ), f"Expected zero hold interrupts from random re-picks; got: {[r.getMessage() for r in interrupts]}"

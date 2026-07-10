@@ -114,13 +114,16 @@ class ScrollerBase:
         now = time.monotonic()
         self.start_time = now
         self.last_frame = now
-        # INFO (not DEBUG): the Pi can't easily change LOG_LEVEL at runtime, and
-        # the coordinator's state machine calls set_text exactly when a new
-        # message enters the scroller (out→in transitions + interrupt by new
-        # SMS during hold/background). Every scroller-text change is therefore
-        # a sign-lifecycle event operators need to see in the journal without
-        # toggling LOG_LEVEL.
-        log.info(
+        # Round 4 (debug-visibility): set_text was INFO because the
+        # operator couldn't toggle LOG_LEVEL at runtime on the Pi and
+        # the call marked a sign-lifecycle event. After the round-4
+        # log consolidation — selected-log carries msg + effect,
+        # starting fade out / fade in mark transitions — the
+        # scroller's internal set_text call is no longer an
+        # operator-visible event. Demoted to DEBUG so it's still
+        # available for low-level scroller debugging when needed,
+        # but doesn't appear in the default journal stream.
+        log.debug(
             "Scroller.set_text: text=%r text_width=%d canvas_width=%d",
             self.text,
             self.text_width,

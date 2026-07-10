@@ -524,27 +524,53 @@ class EffectsCoordinator:
         self._last_display_message = body
         return body
 
-    def _emit_selected_log(self) -> None:
+    def _resolve_next_effect_name(self) -> str:
+        """Return the class name of the effect that will render the
+        currently-picked entry at the next out→in. Read-only peek —
+        does NOT mutate `self.idx` or `self.current`.
+
+        The decision mirrors `_maybe_build_media_cycler` without its
+        side effects:
+
+          - If the picked message has a non-empty `media` list, the
+            cycler will overlay the rotation effect for the hold:
+              - Host (Pi): `MediaCycler`
+              - Browser preview: `BrowserMediaOverlay`
+          - Otherwise: the rotation effect at `(self.idx + 1) % len(self.effects)`.
+
+        Used at the pick site so the `Coordinator: selected` log
+        can carry the effect name on the SAME line as the picked
+        message — round 4 (debug-visibility): operator wants the
+        "what" (msg id + body) and "how" (effect) in a single log,
+        before the fade-out line.
+        """
+        entry = self._last_picked_entry
+        media = list(getattr(entry.message, "media", []) or []) if entry is not None else []
+        if media:
+            return "BrowserMediaOverlay" if self._is_browser else "MediaCycler"
+        if not self.effects:
+            return "?"
+        next_idx = (self.idx + 1) % len(self.effects)
+        return type(self.effects[next_idx]).__name__
+
+    def _emit_selected_log(self, effect_name: str | None = None) -> None:
         """Emit the `Coordinator: selected` log for the picked body.
 
-        Round 3 (debug-visibility): this log moved to the pick site
-        (called from every `_begin_out` caller via `_pick_next`),
-        so it fires BEFORE the fade-out log rather than buried at
-        out→in. The operator reading the journal sees:
+        Round 4 (debug-visibility): the selected log carries the
+        picked message AND the effect that will render it, all in
+        one record. The operator's first journal line for any
+        transition now answers "what is on the sign and how is it
+        being rendered" — `msg_id + body + effect` plus a pretty-
+        printed JSON of the full `Message`. The follow-on `starting
+        fade out` and `starting fade in` lines keep the timeline
+        without repeating the same facts.
 
-            Coordinator: selected msg_id=… sender=… media=N body=…
-              { pretty-printed JSON of Message.to_dict() }
-
-            Coordinator: starting fade out from mode=… effect=… trigger=…
-
-        Two related logs back-to-back: the selected-log tells you
-        WHAT will be shown, the fade-out log tells you the sign is
-        starting to fade. Effect-name resolution is deferred to the
-        out→in site because we don't know which rotation effect
-        will be active until idx advances there.
-
-        Pure log emission — no state mutation. `_pick_next` already
-        wrote `_last_display_message` and `_last_picked_entry`.
+        The `effect_name` argument is optional — when the pick
+        happens with an empty buffer (intro_done + nothing
+        buffered, cycler_complete + nothing buffered) the caller
+        has nothing to log and falls back to the `<no picked
+        entry>` summary. When the caller provides a name, it's the
+        resolved "next effect" via `_resolve_next_effect_name()`.
         """
         import json as _json
 
@@ -556,10 +582,17 @@ class EffectsCoordinator:
         media_list = list(getattr(msg, "media", []) or [])
         media_types = ", ".join(sorted({m.get("type", "?") for m in media_list}))
         type_suffix = f" ({media_types})" if media_types else ""
+        # Round 4: effect name folds into the same summary line. A
+        # missing name (empty pick path) shows `effect=?` so the
+        # line shape is stable for log scrapers — operators grep
+        # for `effect=MediaCycler`, `effect=Honeycomb`, etc., and
+        # see exactly which effect will own the next hold.
+        effect_part = f"effect={effect_name} " if effect_name else "effect=? "
         summary = (
             f"Coordinator: selected "
             f"msg_id={msg.id} "
             f"sender={msg.sender} "
+            f"{effect_part}"
             f"media={len(media_list)}{type_suffix} "
             f"body={msg.body!r}"
         )
@@ -684,11 +717,10 @@ class EffectsCoordinator:
         # of media-only MMS that all consume simultaneously).
         picked_body = self._pick_next()
         if picked_body is not None:
-            # `_pick_next` already wrote `_last_display_message` and
-            # updated `_last_picked_entry`; emit the selected-log
-            # so the operator sees the new pick first, then the
-            # fade-out line below.
-            self._emit_selected_log()
+            # Round 4: resolve and pass the effect name so the
+            # selected-log carries msg + body + effect in one record.
+            # `_last_picked_entry` was just set by `_pick_next`.
+            self._emit_selected_log(self._resolve_next_effect_name())
         else:
             log.info(
                 "Coordinator cycler_complete, no replacement — rotation will run for the rest of the hold"
@@ -951,7 +983,9 @@ class EffectsCoordinator:
                 # The picked body, when present, becomes the first
                 # thing on the sign after the heart fades out.
                 if self._pick_next() is not None:  # type: ignore[attr-defined]
-                    self._emit_selected_log()
+                    # Round 4: include the effect name so the
+                    # selected-log carries msg + body + effect.
+                    self._emit_selected_log(self._resolve_next_effect_name())
                 self._begin_out_trigger = "intro_done"
                 self._begin_out(now)
 
@@ -1042,21 +1076,13 @@ class EffectsCoordinator:
                 scroller.set_brightness(1.0)
                 self.phase_start = now
                 next_mode = "hold" if self.showing_text else "background"
-                # Round 3 (debug-visibility): the `body=` field is
-                # gone from this log — the picked body's body was
-                # already emitted by `_emit_selected_log` at the
-                # `_begin_out` site, so re-logging it here just
-                # duplicates the line. Two fields only: effect (what
-                # just faded in), next_mode (where the state machine
-                # goes next). The previous `body=` field was the
-                # other half of the round-2 ISC-21 leak — for
-                # empty-body MMS it surfaced the previous message's
-                # body via the `last_shown_text` fallback.
-                log.info(
-                    "Coordinator: fade in done effect=%s next_mode=%s",
-                    self.current_effect_name,
-                    next_mode,
-                )
+                # Round 4 (debug-visibility): the `fade in done`
+                # log is dropped entirely. The selected-log at the
+                # pick site carried the picked msg + effect; the
+                # `starting fade in` log at out→in marks the
+                # transition. Operators don't need a third line
+                # confirming the fade has completed — that's an
+                # internal timing detail, not a sign-state event.
                 self.mode = next_mode
 
         elif mode == "hold":
@@ -1116,33 +1142,26 @@ class EffectsCoordinator:
                 # current_messages (the fresh-id check just passed
                 # for that id), so `_pick_next` returns it.
                 if self._pick_next() is not None:  # type: ignore[attr-defined]
-                    self._emit_selected_log()
-                # `pending_text=` and `last_shown=` are gone — the
-                # pending body was already logged by the
-                # `Coordinator: selected` block above; the held
-                # body was already logged by the selected-log at
-                # the start of THIS cycle (which began with the
-                # pick that put this message on the sign). The
-                # new_id field is the operator's anchor.
-                log.info(
-                    "Coordinator hold interrupt (new id): new_id=%s",
-                    self.current_messages[0].message.id,
-                )
+                    # Round 4: include the effect name so the
+                    # selected-log carries msg + body + effect.
+                    self._emit_selected_log(self._resolve_next_effect_name())
+                # Round 4: the `hold interrupt (new id)` log is
+                # dropped — the `Coordinator: selected` block above
+                # already carries the new pick's msg id; the
+                # follow-on `starting fade out` line marks the
+                # transition. The `new_id` field used to anchor the
+                # operator's eye, but with effect+msg on the same
+                # selected-log line that anchor moved.
                 self._begin_out_trigger = "fresh_id_interrupt"
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= effects_settings.hold_seconds:
-                # `held_text=` is gone — the body that was on the
-                # sign is the job of the previous cycle's
-                # selected-log. This log carries the effect that
-                # just finished holding, and the timing fields,
-                # so the operator can grep `hold→text_out` to see
-                # when the hold elapsed.
-                log.info(
-                    "Coordinator hold→text_out: effect=%s held_for=%.1fs hold_seconds=%.1f",
-                    self.current_effect_name,
-                    now - self.phase_start,
-                    effects_settings.hold_seconds,
-                )
+                # Round 4: the `hold→text_out` log is dropped
+                # entirely. Timing detail (`held_for=…`,
+                # `hold_seconds=…`) isn't a sign-state event — the
+                # operator reads the held message from the
+                # selected-log at the START of the cycle, and the
+                # next selected-log fires when the next message
+                # lands. No mid-cycle state event is needed.
                 self.mode = "text_out"
                 self.fade_start = now
                 self.last_step = 0.0
@@ -1163,10 +1182,10 @@ class EffectsCoordinator:
                 scroller.set_brightness(1.0)
                 self.showing_text = False
                 self.phase_start = now
-                log.info(
-                    "Coordinator text_out→background: effect=%s",
-                    self.current_effect_name,
-                )
+                # Round 4: the `text_out→background` log is dropped.
+                # Same rationale as `hold→text_out` — internal
+                # fade-mechanics, not a sign-state event the
+                # operator needs to read.
                 self.mode = "background"
 
         elif mode == "background":
@@ -1248,7 +1267,9 @@ class EffectsCoordinator:
                 # — there's no point fading out for nothing.
                 picked_body = self._pick_next()
                 if picked_body is not None:
-                    self._emit_selected_log()
+                    # Round 4: include the effect name so the
+                    # selected-log carries msg + body + effect.
+                    self._emit_selected_log(self._resolve_next_effect_name())
                     self._begin_out_trigger = trigger  # "idle" or "new_id"
                     self._begin_out(now)  # show the queued message
                 # else: no message to show — stay in background.

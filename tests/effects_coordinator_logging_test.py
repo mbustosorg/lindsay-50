@@ -186,6 +186,86 @@ def test_selection_log_dumps_full_picked_message(caplog, monkeypatch):
     assert m.group(1), f"fade-in log had empty effect name: {fade_in[0].getMessage()}"
 
 
+def test_selection_log_carries_effect_name(caplog, monkeypatch):
+    """Round 4 (debug-visibility): the `Coordinator: selected`
+    log carries the picked message AND the effect that will render
+    it on the SAME summary line. The operator's first journal
+    record for any transition now answers "what is on the sign and
+    how is it being rendered" — `msg_id=... body=... effect=...`
+    plus the pretty-printed JSON of the full Message.
+
+    The effect name resolves at the pick site via
+    `_resolve_next_effect_name()`:
+      - Media-bearing message → `MediaCycler` (host path)
+      - Otherwise → `type(self.effects[(idx + 1) % len(effects)]).__name__`
+        (the rotation entry that will own the next hold)
+    """
+    picked_msg = Message(
+        id="r4-eff-test", sender="+1", body="round-4 single line",
+        received_at="2026-07-10T05:00:00Z", media=[],
+    )
+    view = MessageView(picked_msg, source="mqtt", suppressed=False)
+    coord, clock, _monkey, _mgr = _build_coord(
+        intro_seconds=0.0, fade_seconds=0.02, idle_seconds=1e9,
+        messages=[view], monkey=monkeypatch,
+    )
+    with caplog.at_level(logging.INFO):
+        coord.start()
+        # Drive to intro→out→in so the pick site runs.
+        for _ in range(50):
+            clock.advance(0.005)
+            coord.tick()
+
+    selected = [r for r in caplog.records if "Coordinator: selected" in r.getMessage()]
+    assert selected, "expected at least one 'Coordinator: selected' INFO line"
+    summary = selected[0].getMessage().splitlines()[0]
+    assert "msg_id=r4-eff-test" in summary, summary
+    assert "body='round-4 single line'" in summary, summary
+    # Round 4: effect name lives on the SAME summary line —
+    # `effect=Honeycomb`, `effect=NightSky`, etc.
+    import re as _re
+    m = _re.search(r"effect=(\S+)", summary)
+    assert m is not None, (
+        f"round 4 dropped the effect= field from the selected-log's "
+        f"summary line; got: {summary}"
+    )
+    effect_name = m.group(1)
+    assert effect_name in ("Honeycomb", "NightSky"), (
+        f"unexpected effect name for a non-media message; "
+        f"expected one of the rotation effects, got: {effect_name!r}"
+    )
+
+
+def test_selection_log_carries_media_cycler_effect(caplog, monkeypatch):
+    """Round 4: a media-bearing message resolves to MediaCycler
+    (or BrowserMediaOverlay on the preview) on the selected-log
+    summary line. Picks the effect name at the pick site instead
+    of deferring to out→in (where idx advances)."""
+    picked_msg = Message(
+        id="r4-cycler", sender="+1", body="",
+        received_at="2026-07-10T05:00:00Z",
+        media=[{"type": "image/jpeg", "url": "media/images/2026-07/pic.jpg"}],
+    )
+    view = MessageView(picked_msg, source="mqtt", suppressed=False)
+    coord, clock, _monkey, _mgr = _build_coord(
+        intro_seconds=0.0, fade_seconds=0.02, idle_seconds=1e9,
+        messages=[view], monkey=monkeypatch,
+    )
+    with caplog.at_level(logging.INFO):
+        coord.start()
+        for _ in range(50):
+            clock.advance(0.005)
+            coord.tick()
+
+    selected = [r for r in caplog.records if "Coordinator: selected" in r.getMessage()]
+    assert selected
+    summary = selected[0].getMessage().splitlines()[0]
+    assert "effect=MediaCycler" in summary, (
+        f"media-bearing pick should resolve to MediaCycler at the "
+        f"pick site; got: {summary}"
+    )
+
+
 def test_selection_log_emitted_once_per_transition(caplog, monkeypatch):
     """The selection log fires once per out→in transition, not per
     tick() — idempotent on the same picked entry."""
@@ -241,9 +321,12 @@ def test_fade_out_log_is_single_line(caplog, monkeypatch):
     assert "mode=" in line and "effect=" in line and "trigger=" in line, line
 
 
-def test_fade_in_done_log_is_single_line(caplog, monkeypatch):
-    """`in→<mode>` was the verbose 3-arg INFO 'Coordinator in→...';
-    collapsed to single 'Coordinator: fade in done' line."""
+def test_fade_in_done_log_dropped(caplog, monkeypatch):
+    """Round 4 (debug-visibility): the `fade in done` log was
+    dropped entirely. Internal fade-mechanics — the operator reads
+    the picked message + effect from the `Coordinator: selected`
+    log and the transition from `starting fade out` / `starting
+    fade in`. A third "done" line is redundant."""
     picked_msg = Message(
         id="x", sender="+1", body="y", received_at="t", media=[],
     )
@@ -261,7 +344,10 @@ def test_fade_in_done_log_is_single_line(caplog, monkeypatch):
         r for r in caplog.records
         if "fade in done" in r.getMessage()
     ]
-    assert fade_in_done, "expected a 'fade in done' INFO line"
+    assert not fade_in_done, (
+        f"round 4 dropped the 'fade in done' log; got: "
+        f"{[r.getMessage() for r in fade_in_done]}"
+    )
 
 
 def test_old_verbose_log_strings_absent(caplog, monkeypatch):
@@ -377,13 +463,13 @@ def test_selection_log_includes_media_types_in_summary(caplog, monkeypatch):
     assert "image/jpeg" in line, f"missing image type in summary: {line}"
 
 
-def test_fade_in_done_log_has_no_body(caplog, monkeypatch):
-    """Round 3 (debug-visibility): the `body=` field is gone from
-    the `fade in done` log entirely — the selected-log at the pick
-    site already carried the body, so re-logging it at fade-in-done
-    just duplicates. This replaces the round-2 ISC-21 test (which
-    pinned the `body=` field's value to be non-stale); the underlying
-    bug is fixed by removing the field, not by correcting the read.
+def test_fade_in_done_and_hold_text_out_logs_dropped(caplog, monkeypatch):
+    """Round 4 (debug-visibility): the per-cycle `fade in done`,
+    `hold→text_out`, and `text_out→background` logs are dropped
+    entirely. They conveyed timing/internal state between the
+    picked message and the next picked message — operator reads
+    the next selected-log for that, not transient fade-stepping
+    notices. This test pins the absense of all three strings.
     """
     first_msg = Message(
         id="m1", sender="+1", body="heya",
@@ -408,15 +494,18 @@ def test_fade_in_done_log_has_no_body(caplog, monkeypatch):
             clock.advance(0.005)
             coord.tick()
 
-    fade_in_done_records = [r for r in caplog.records if "fade in done" in r.getMessage()]
-    assert fade_in_done_records, "expected at least one fade-in-done log"
-    for r in fade_in_done_records:
-        msg = r.getMessage()
-        assert "body=" not in msg, (
-            f"fade-in-done log should not carry body= (round 3 dropped it); got: {msg!r}"
-        )
-        assert "heya" not in msg, (
-            f"fade-in-done log leaked 'heya' from prior cycle; got: {msg!r}"
+    all_text = "\n".join(r.getMessage() for r in caplog.records)
+    for dropped in (
+        "fade in done",
+        "hold→text_out",
+        "text_out→background",
+        # Round 4 also drops the hold-interrupt (new id) line —
+        # the new queue + next-pick mechanism replaced the
+        # interrupt, so the log line is gone too.
+        "hold interrupt (new id)",
+    ):
+        assert dropped not in all_text, (
+            f"round 4 dropped '{dropped}'; got full text:\n{all_text[:800]}"
         )
 
 

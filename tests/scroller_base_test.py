@@ -167,29 +167,38 @@ def test_set_text_with_bytes_decodes_utf8():
     assert s.text == "hi"
 
 
-def test_set_text_emits_info_log(caplog):
-    """set_text must log at INFO (not DEBUG) so Pi operators see scroller-text
-    changes in journalctl without toggling LOG_LEVEL.
+def test_set_text_emits_debug_log(caplog):
+    """set_text was demoted from INFO to DEBUG in round 4
+    (debug-visibility). The Pi's default LOG_LEVEL=INFO no longer
+    surfaces every scroller.set_text call. After the round-4 log
+    consolidation — selected-log carries msg + effect, starting
+    fade out / fade in mark transitions — the scroller's internal
+    set_text call is no longer an operator-visible event.
 
-    The Pi is running in production with LOG_LEVEL=INFO; if this log line
-    drops back to DEBUG, every "what is the sign showing right now?"
-    diagnostic has to wait for a service restart that flips LOG_LEVEL. With
-    an INFO log here, every coordinator-driven text change (out→in on a
-    fresh message, hold/background interrupt by a new SMS) is one
-    `journalctl -u lindsay_50 -f` grep away.
+    DEBUG keeps it available for low-level scroller debugging
+    when toggled at runtime. Operators grep the selected-log line
+    for `what is on the sign?` diagnostics now, not the set_text
+    line.
     """
     import logging
 
     s = _StubScroller()
     s.compute_layout(64, 64)
-    # Set root logger to INFO so the lib_shared.scroller_base logger
-    # (which defaults to WARNING with no propagate=False) lets INFO
-    # records through. caplog's handler is attached to root by default.
-    caplog.set_level(logging.INFO)
+    # Lift the root logger to DEBUG so the lib_shared.scroller_base
+    # logger (which defaults to WARNING) lets DEBUG records through.
+    caplog.set_level(logging.DEBUG)
     s.set_text("hello world", canvas_width=64)
 
+    debug_records = [r for r in caplog.records if r.levelno == logging.DEBUG]
+    assert any("Scroller.set_text" in r.getMessage() and "hello world" in r.getMessage() for r in debug_records), (
+        "scroller.set_text must emit a DEBUG log line (round 4 demoted it "
+        "from INFO). Got: "
+        f"{[(r.levelname, r.getMessage()) for r in caplog.records]}"
+    )
+    # And the INFO-level stream must NOT see it (the operator's
+    # default LOG_LEVEL=INFO journal stays quiet for this internal call).
     info_records = [r for r in caplog.records if r.levelno == logging.INFO]
-    assert any("Scroller.set_text" in r.getMessage() and "hello world" in r.getMessage() for r in info_records), (
-        "scroller.set_text must emit an INFO log line naming the new text. "
-        f"Got: {[r.getMessage() for r in caplog.records]}"
+    assert not any("Scroller.set_text" in r.getMessage() for r in info_records), (
+        "scroller.set_text must NOT emit an INFO log (round 4 demoted it); "
+        f"got: {[r.getMessage() for r in info_records]}"
     )
