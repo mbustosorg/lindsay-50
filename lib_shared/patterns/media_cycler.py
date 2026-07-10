@@ -651,7 +651,16 @@ def _build_default_fetcher(api_key: str) -> Callable[[str], bytes]:
 
 
 def _ext_for_mime(mime: str) -> str:
-    """Return a sensible `.ext` for a MIME type (with leading dot)."""
+    """Return a sensible `.ext` for a MIME type (with leading dot).
+
+    Used by `MediaCycler._resolve_local_path` when the S3 key has no
+    extension (the `.bin` fallback from `_media_key`). Twilio MMS
+    video on iPhone/Android is `video/3gpp` (H.263 in a 3GP container)
+    — the browser preview's `<video>` element can't infer the codec
+    from the `.bin` filename alone. Listing `.3gp` here is a hint, not
+    a guarantee: OpenCV's `VideoCapture` sniffs by content and would
+    open a `.bin` containing 3GP bytes just the same.
+    """
     table = {
         "image/jpeg": ".jpg",
         "image/jpg": ".jpg",
@@ -663,5 +672,7 @@ def _ext_for_mime(mime: str) -> str:
         "video/x-msvideo": ".avi",
         "video/x-matroska": ".mkv",
         "video/webm": ".webm",
+        "video/3gpp": ".3gp",
+        "video/3gpp2": ".3g2",
     }
     return table.get((mime or "").lower(), "")

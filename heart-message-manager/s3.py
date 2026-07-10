@@ -79,6 +79,15 @@ _MIME_EXT_TABLE = {
     "video/x-matroska": (".mkv",),
     "video/webm": (".webm",),
     "video/gif": (".gif",),
+    # Twilio MMS video on iPhone/Android is typically 3GPP (`video/3gpp`
+    # or `video/3gpp2`). Without this mapping the S3 key fallback at
+    # `_media_key:336` writes `.bin` (genuinely unknown), which the
+    # browser preview's `<video>` element can't play (the codec is
+    # H.263, only browser-native when the extension hints the container).
+    # OpenCV's `VideoCapture` sniffs by content and would have worked
+    # on `.bin` anyway, but the browser preview reads by URL extension.
+    "video/3gpp": (".3gp",),
+    "video/3gpp2": (".3g2",),
 }
 
 # ---------------------------------------------------------------------------

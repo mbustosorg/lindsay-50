@@ -317,6 +317,7 @@
     // coordinator is sitting on the same message for 15+ seconds.
     let lastLinkMessageId = "";
     let lastEmptyLogAt = 0;
+    let emptyFramesSinceLog = 0;
     // Coordinator-state heartbeat: lets the developer console
     // show the live state-machine values (mode, scroller brightness,
     // media opacity, phase elapsed) at 1 Hz so you can correlate
@@ -361,21 +362,19 @@
         if (!mediaImg.hidden) mediaImg.hidden = true;
         if (!mediaVideo.hidden) mediaVideo.hidden = true;
         if (PREVIEW_DEBUG) {
-          // Throttle the "hiding overlay" log to once per second.
-          // The previous implementation gated this on key-change
-          // and reset `lastMediaKey = ""` inside, which meant
-          // the log never fired when `key` was persistently ""
-          // (the symptom we're trying to diagnose — overlay
-          // returns empty url on every frame). The time-based
-          // throttle gives us a steady signal we can correlate
-          // with the "python returned empty" log.
+          // Throttle the "hiding overlay" log to once per 30s. The
+          // previous 1s throttle spammed the console when the
+          // preview sat idle for minutes — drain to 30s and skip
+          // entirely if the "python returned empty" log already
+          // fired in the same window (they convey the same info).
           const now = Date.now();
-          if (now - lastEmptyLogAt > 1000) {
+          if (now - lastEmptyLogAt > 30000) {
             console.log(
               "[preview-media] hiding overlay: url=%s kind=%s key=%s (no picked media, or BrowserMediaOverlay returned empty url)",
               url, kind, key,
             );
             lastEmptyLogAt = now;
+            emptyFramesSinceLog = 0;
           }
         }
         lastMediaKey = "";
@@ -585,18 +584,29 @@
                   );
                 }
               } else {
+                // Empty payload is the normal idle state (no MMS in
+                // flight). The 1s throttle spammed the console when
+                // the preview sat idle for minutes — drain to once
+                // every 30s, and only fire on a 30-multiple so an
+                // operator looking at a wall of logs gets a clear
+                // "still empty" signal every 30s instead of a
+                // continuous stream.
                 const now = Date.now();
-                if (now - lastEmptyLogAt > 1000) {
+                emptyFramesSinceLog += 1;
+                if (now - lastEmptyLogAt > 30000) {
                   const shape = media === null
                     ? "null"
                     : media === undefined
                       ? "undefined"
                       : `{key=${JSON.stringify(media.key)} url=${JSON.stringify(media.url)} kind=${JSON.stringify(media.kind)} opacity=${media.opacity}}`;
                   console.log(
-                    "[preview-media] python returned empty: %s — image will NOT render this frame (no BrowserMediaOverlay active, or overlay returned empty url)",
+                    "[preview-media] python returned empty (%d idle frames, ~%ds): %s — no BrowserMediaOverlay active or overlay returned empty url",
+                    emptyFramesSinceLog,
+                    Math.round(emptyFramesSinceLog / 30),
                     shape,
                   );
                   lastEmptyLogAt = now;
+                  emptyFramesSinceLog = 0;
                 }
               }
             }
@@ -632,7 +642,19 @@
               lastDiagnosticsAt = nowMs;
               let diag = {};
               try { diag = window.get_diagnostics(); } catch (e) { /* ignore */ }
-              const key = `${diag.mode}|${diag.effect_name}|${diag.scroller_brightness}|${diag.media_opacity}|${diag.showing_text}|${diag.phase_elapsed}`;
+              // Dedup key: includes everything that constitutes a
+              // material state change EXCEPT `phase_elapsed`
+              // (monotonically increments every frame) and the
+              // raw brightness values (numeric jitter between
+              // frames produces spurious keys). Two-decimal
+              // rounding smooths jitter without losing meaning.
+              // Without this, the throttled 1s-tick log fires on
+              // EVERY second regardless of state.
+              const key = `${diag.mode || "?"}|${diag.effect_name || "?"}|` +
+                `${Number(diag.scroller_brightness || 0).toFixed(2)}|` +
+                `${Number(diag.media_opacity || 0).toFixed(2)}|` +
+                `${diag.showing_text ? "y" : "n"}|` +
+                `${diag.scroller_text || ""}`;
               if (key !== lastDiagnosticsKey) {
                 console.log(
                   `[preview-state] mode=${diag.mode || "?"} effect=${diag.effect_name || "?"} ` +
