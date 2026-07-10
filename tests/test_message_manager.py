@@ -449,6 +449,72 @@ class TestDispatchMessage:
         cb_arg = cb.call_args[0]
         assert cb_arg == ()
 
+    def test_dispatch_message_envelope_preserves_media(self, messages_api_url, config_api_url, api_key):
+        """Issue #38: the `media` field on the wire envelope round-trips to
+        the in-memory Message. Without this, the coordinator's
+        `BrowserMediaOverlay` (preview) / `MediaCycler` (Pi) sees
+        `media=[]` on every picked message and the image never
+        renders — even though Flask published the right envelope.
+        Regression test for the `_handle_message` drop."""
+        cb = MagicMock()
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=cb,
+        )
+        env = _make_env(
+            {
+                "id": "m1",
+                "sender": "+15551234567",
+                "body": "mms",
+                "received_at": "2026-06-01T12:00:00Z",
+                "media": [
+                    {"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"},
+                    {"type": "image/png", "url": "media/images/2026-07/b.png"},
+                ],
+            }
+        )
+        mgr.dispatch(env)
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.media == [
+            {"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"},
+            {"type": "image/png", "url": "media/images/2026-07/b.png"},
+        ]
+
+    def test_dispatch_message_envelope_absent_media_defaults_to_empty(
+        self,
+        messages_api_url,
+        config_api_url,
+        api_key,
+    ):
+        """SMS-only envelopes (no `media` key) map to `media=[]` on the
+        Message. The defensive `payload.get("media") or []` collapses
+        both "missing key" and "explicit None" to the same default."""
+        cb = MagicMock()
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=cb,
+        )
+        env = _make_env(
+            {
+                "id": "m2",
+                "sender": "+15551234567",
+                "body": "sms only",
+                "received_at": "2026-06-01T12:00:00Z",
+                # no `media` key
+            }
+        )
+        mgr.dispatch(env)
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.media == []
+
     def test_dispatch_invokes_on_change_on_config(self, messages_api_url, config_api_url, api_key):
         """A type=config envelope updates the config and on_change IS invoked."""
         cb = MagicMock()

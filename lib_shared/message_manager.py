@@ -435,12 +435,22 @@ class MessageManager:
         Enrichment of the new view runs here at event time so the
         next read sees up-to-date derived fields without paying the
         filter / formatter cost on the read path.
+
+        `media` is read off the wire envelope so MMS attachments
+        (issue #38) round-trip to the in-memory buffer + the
+        coordinator's `BrowserMediaOverlay` / `MediaCycler`. An
+        empty list on the wire (the SMS-only case) maps to
+        `media=[]` via the `Message` dataclass default; an absent
+        key behaves the same. The publish side (`Message.to_dict`)
+        always emits the field, so consumers can rely on it being
+        present.
         """
         msg = Message(
             id=payload.get("id", ""),
             sender=payload.get("sender", ""),
             body=payload.get("body", ""),
             received_at=payload.get("received_at", ""),
+            media=payload.get("media") or [],
         )
 
         view = self._messages.add(msg, source="mqtt")
