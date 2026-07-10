@@ -305,8 +305,9 @@ def _install_js_api() -> None:
     js.window.get_current_effect_name = get_current_effect_name
     js.window.get_current_media = get_current_media
     js.window.get_current_message = get_current_message
+    js.window.get_diagnostics = get_diagnostics
     print(
-        "[preview-py] _install_js_api: window.tick, get_frame_rgba, get_current_text, get_current_effect_name, get_current_media, get_current_message all installed"
+        "[preview-py] _install_js_api: window.tick, get_frame_rgba, get_current_text, get_current_effect_name, get_current_media, get_current_message, get_diagnostics all installed"
     )
 
 
@@ -448,6 +449,105 @@ def get_current_media():
         pass
     return to_js(
         {"url": "", "kind": "", "opacity": 0.0, "key": ""},
+        dict_converter=js.Object.fromEntries,
+    )
+
+
+def get_diagnostics():
+    """Return a snapshot of coordinator state for browser-console diagnostics.
+
+    Read by `preview.js` once per second so the developer console
+    shows the live state machine values during a debug session. The
+    fields captured are the ones that explain the most common
+    "where did the text go?" bugs:
+
+      - `mode`: one of `intro` / `out` / `in` / `hold` / `text_out`
+        / `background`. The phases that visibly change the scroller's
+        `set_brightness` ramp are `out` (1.0 → 0.0), `in` (0.0 → 1.0),
+        and `text_out` (1.0 → 0.0 with the effect held).
+      - `phase_elapsed`: seconds since the current `mode` started.
+        Useful for correlating per-second logs against the
+        configured `fade_seconds` / `hold_seconds` / `idle_seconds`.
+      - `scroller_brightness`: the value `set_brightness` last
+        applied to the scroller — this is what the canvas text pixels
+        are actually being painted at. If this is 0 during a phase
+        that should be lit, the coordinator's fade ramp is the bug,
+        not the layer ordering.
+      - `media_opacity`: the value `set_brightness` last applied to
+        the active effect (BrowserMediaOverlay or rotation entry).
+        When the picked message has MMS attachments and the
+        overlay is the current effect, this is what controls the
+        `<img>` / `<video>` element's CSS opacity (forwarded by
+        `applyMedia` in preview.js).
+      - `showing_text`: `True` when the scroller's body is non-empty
+        and should be rendered. Goes `False` at the `text_out` →
+        `background` transition; goes back to `True` at the next
+        out → in transition.
+      - `scroller_text`: the body currently being scrolled (truncated
+        to 32 chars so the console line stays one-line per second).
+      - `effect_name`: class name of `coord.current` — `BrowserMediaOverlay`
+        while an MMS message is the picked entry, the rotation entry
+        (e.g. `Fireworks`) once the overlay runs out of items or the
+        buffer is empty.
+
+    Returns the dict wrapped in `to_js(dict_converter=Object.fromEntries)`
+    so the JS side gets a real `Object` (not a `Map`), and empty when
+    the coordinator hasn't bound yet.
+    """
+    coord = _coord()
+    if coord is None:
+        return to_js({}, dict_converter=js.Object.fromEntries)
+    current = coord.current
+    effect_name = ""
+    media_opacity = 0.0
+    try:
+        effect_name = type(current).__name__ if current is not None else ""
+        from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay as _BMO
+
+        if current is not None and isinstance(current, _BMO):
+            media_opacity = float(current.current_opacity)
+        elif current is not None and hasattr(current, "_brightness"):
+            media_opacity = float(current._brightness)
+    except (ImportError, AttributeError):
+        pass
+    scroller = coord.scroller
+    scroller_text = scroller.text if scroller is not None else ""
+    scroller_brightness = scroller._brightness if scroller is not None else 0.0
+    fade_start = float(getattr(coord, "fade_start", 0.0) or 0.0)
+    fade_seconds = 1.0
+    try:
+        fade_seconds = float(coord.message_manager.config.effects_settings.fade_seconds)
+    except Exception:
+        pass
+    # Phase-elapsed: the coordinator only updates `phase_start` at the
+    # `in→hold` transition (effects_coordinator.py:838), not at every
+    # mode change. For the out / in / text_out / background phases
+    # `phase_start` is stale — it carries over from the previous hold.
+    # Use `fade_start` for the fade phases (out / in / text_out are all
+    # fade ramps keyed off `fade_start`) and fall back to the live
+    # `phase_start` only for hold / background.
+    phase_elapsed = 0.0
+    fade_progress = 1.0
+    if coord.mode in ("out", "in", "text_out"):
+        if fade_start > 0.0:
+            phase_elapsed = _time.monotonic() - fade_start
+            fade_progress = max(0.0, min(1.0, phase_elapsed / max(fade_seconds, 1e-6)))
+    else:
+        phase_start = float(getattr(coord, "phase_start", 0.0) or 0.0)
+        if phase_start > 0.0:
+            phase_elapsed = _time.monotonic() - phase_start
+    return to_js(
+        {
+            "mode": coord.mode,
+            "phase_elapsed": round(float(phase_elapsed), 2),
+            "scroller_brightness": round(float(scroller_brightness), 3),
+            "media_opacity": round(float(media_opacity), 3),
+            "showing_text": bool(coord.showing_text),
+            "scroller_text": (scroller_text or "")[:32],
+            "effect_name": effect_name,
+            "fade_progress": round(float(fade_progress), 3),
+            "fade_seconds": round(float(fade_seconds), 2),
+        },
         dict_converter=js.Object.fromEntries,
     )
 

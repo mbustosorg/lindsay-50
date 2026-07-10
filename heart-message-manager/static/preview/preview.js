@@ -317,6 +317,13 @@
     // coordinator is sitting on the same message for 15+ seconds.
     let lastLinkMessageId = "";
     let lastEmptyLogAt = 0;
+    // Coordinator-state heartbeat: lets the developer console
+    // show the live state-machine values (mode, scroller brightness,
+    // media opacity, phase elapsed) at 1 Hz so you can correlate
+    // what's on screen with what's happening in the fade ramp.
+    // Set `window.__PREVIEW_DEBUG__ = false` to silence these logs.
+    let lastDiagnosticsAt = 0;
+    let lastDiagnosticsKey = "";
 
     // Diagnostic flag — set to `false` in devtools or by overriding
     // `window.__PREVIEW_DEBUG__ = false` to silence the overlay
@@ -590,6 +597,42 @@
             // object. Render it as fuzzy LED circles (see blitFuzzy).
             const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
             blitFuzzy(ctx, view);
+          }
+
+          // Coordinator-state heartbeat: log mode + brightness once
+          // per second so we can correlate what's on screen with the
+          // fade ramp's values. The combination of mode + brightness
+          // explains most "where did the text go?" regressions:
+          // - `mode=hold & scroller_brightness=1.0` is the healthy
+          //   full-text state.
+          // - `mode=text_out & scroller_brightness≈0.5` means the
+          //   coordinator is mid-fade-out after hold ended.
+          // - `mode=in & scroller_brightness≈0.2` means the in-phase
+          //   fade-in is partway through.
+          // - `media_opacity=0` while mode=hold means the
+          //   BrowserMediaOverlay hasn't been swapped in as `current`
+          //   (the picked message's `media` list was empty, or the
+          //   cycler was never constructed).
+          if (PREVIEW_DEBUG && typeof window.get_diagnostics === "function") {
+            const nowMs = Date.now();
+            if (nowMs - lastDiagnosticsAt > 1000) {
+              lastDiagnosticsAt = nowMs;
+              let diag = {};
+              try { diag = window.get_diagnostics(); } catch (e) { /* ignore */ }
+              const key = `${diag.mode}|${diag.effect_name}|${diag.scroller_brightness}|${diag.media_opacity}|${diag.showing_text}|${diag.phase_elapsed}`;
+              if (key !== lastDiagnosticsKey) {
+                console.log(
+                  `[preview-state] mode=${diag.mode || "?"} effect=${diag.effect_name || "?"} ` +
+                  `scroller_b=${Number(diag.scroller_brightness || 0).toFixed(2)} ` +
+                  `media_opacity=${Number(diag.media_opacity || 0).toFixed(2)} ` +
+                  `showing_text=${diag.showing_text ? "yes" : "no"} ` +
+                  `phase_elapsed=${Number(diag.phase_elapsed || 0).toFixed(1)}s ` +
+                  `fade_progress=${Number(diag.fade_progress || 0).toFixed(2)} ` +
+                  `text=${JSON.stringify(diag.scroller_text || "")}`,
+                );
+                lastDiagnosticsKey = key;
+              }
+            }
           }
         } catch (e) {
           console.error("Frame error:", e);
