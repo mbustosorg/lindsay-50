@@ -54,8 +54,11 @@ class PreviewScroller(ScrollerBase):
 
         Pillow's text() draws with the y coordinate as the TOP of the glyph,
         so top_y = vertical_center - (font_height // 2). Matches the device's
-        MatrixScroller (one centered line).
+        MatrixScroller (one centered line). `canvas_width` is intentionally
+        unused — the preview scroller is a single centered line, so the
+        vertical center only depends on `canvas_height`.
         """
+        _ = canvas_width  # see docstring — preview is single-line centered
         self.single_line = True
         self.top_y = (canvas_height - self.font_height) // 2
         self.bottom_y = self.top_y  # unused
@@ -71,38 +74,64 @@ class PreviewScroller(ScrollerBase):
             return 0
         return bbox[2] - bbox[0]
 
-    def draw_text(self, canvas, text, x, y, color):
-        """Blit `text` at (x, y) on the canvas with the RGBA layer made opaque.
+    def draw_text(self, canvas, text, x, y, color):  # pyright: ignore[reportUnusedParameter]
+        """Blit `text` at (x, y) on the canvas with brightness tracked in alpha.
 
-        The base class passes the WebCanvas instance; the actual Pillow image
-        lives at canvas.image. Pillow's `ImageDraw.text` on an RGBA image
-        anti-aliases glyph edges as partial-alpha pixels (typically ~226 / 255
-        at the edge), so the text would otherwise look semi-transparent once
-        it's composited on top of the BrowserMediaOverlay's `<img>` / `<video>`
-        background — the image behind shows through the edges and the user
-        reads that as the text "fading out". The two-step approach here bakes
-        Pillow's anti-aliased RGB into a fully-opaque RGBA pixel: render text
-        onto a temporary RGB layer (no alpha, so the AA grayscale is captured
-        in the RGB values themselves), then composite it onto the canvas
-        with a binary "any non-black pixel is opaque text" mask. The browser
-        preview's image layering relies on this invariant — lit pixels
-        alpha=255, gaps alpha=0 — and a partially-transparent text violates
-        it.
+        The `color` argument from the base class is the brightness-scaled
+        RGB and is deliberately ignored here — we re-derive the un-scaled
+        color from `self._color` so the alpha track stays the single
+        source of fade truth.
+
+        Two invariants have to hold for the scroller text to read
+        correctly on top of the BrowserMediaOverlay's DOM `<img>`/`<video>`:
+
+        1. **Anti-aliased edges must be smooth, not opaque-dim.** If the
+           AA coverage is baked into a binary mask (any non-black pixel
+           → alpha 255), the edges land as dim-color-opaque pixels and
+           read as a "shadow" / "bleed through" halo when the media is
+           the background. Instead we capture the AA coverage in the
+           alpha channel directly: render text in WHITE on black, take
+           the L intensity (which equals the coverage for white-on-black
+           since the L-luma formula R*299+G*587+B*114 reduces to v
+           when R=G=B=v), and use that as the per-pixel alpha. RGB
+           stays at the un-scaled text color, so the interior renders
+           at full intensity and the edges fade smoothly to transparent
+           — the media behind shows through the edge pixels naturally.
+
+        2. **Brightness must drive ALPHA, not RGB.** The base class's
+           `color_tuple()` scales the text color by brightness
+           (1.0 → full color, 0.0 → black), and the scroller's fade-out
+           during the coordinator's `text_out` phase goes 1.0 → 0.0.
+           If that scaled color landed on the canvas as opaque pixels,
+           brightness 0 would be opaque black pixels — the "black dots"
+           the user saw persisting through the fade. Scaling the alpha
+           band by brightness instead means brightness 0 ⇒ alpha 0
+           everywhere, and the text vanishes cleanly.
         """
+        _ = color  # see docstring — we use self._color for the RGB instead
         target = canvas.image if hasattr(canvas, "image") else canvas
-        # Render text onto a temporary RGB layer so the anti-aliased
-        # coverage is encoded as RGB values rather than alpha.
+        orig_r = (self._color >> 16) & 0xFF
+        orig_g = (self._color >> 8) & 0xFF
+        orig_b = self._color & 0xFF
+        # Render text in WHITE on black. The L intensity then equals
+        # the anti-aliased coverage directly (0 at background, 255 at
+        # text interior, smooth at the edges) — independent of the
+        # text color, so a darker scroller color doesn't drag the
+        # alpha coverage down with it.
         temp = Image.new("RGB", target.size, (0, 0, 0))
-        ImageDraw.Draw(temp).text((x, y), text, fill=color, font=self.font)
-        # Build a binary mask: any non-black pixel in `temp` is part of
-        # the rendered glyph (anti-aliased edges included), so it lands
-        # opaque on the canvas. `Image.eval` on an RGB image returns
-        # RGB (the input mode), but `paste(..., mask=...)` requires an
-        # L-mode mask, so convert explicitly.
-        mask = Image.eval(temp, lambda v: 255 if v > 0 else 0).convert("L")
-        r, g, b = temp.split()
-        opaque = Image.merge("RGBA", (r, g, b, Image.new("L", temp.size, 255)))
-        target.paste(opaque, (0, 0), mask=mask)
+        ImageDraw.Draw(temp).text((x, y), text, fill=(255, 255, 255), font=self.font)
+        # Scale the coverage by brightness. At b=0 the alpha is 0
+        # everywhere, the paste is a no-op, and the text vanishes
+        # without leaving opaque black pixels on the canvas.
+        alpha_band = temp.convert("L").point(lambda v: int(v * self._brightness))
+        # RGBA: un-scaled text color in RGB, brightness-scaled
+        # coverage in A.
+        opaque = Image.new("RGBA", target.size, (orig_r, orig_g, orig_b, 0))
+        opaque.putalpha(alpha_band)
+        # Paste with the alpha band as the mask — Pillow multiplies
+        # the source alpha by the mask alpha, so the resulting alpha
+        # is exactly `alpha_band`.
+        target.paste(opaque, (0, 0), mask=alpha_band)
 
     def render(self, canvas):
         """Override the base render so the canvas is cleared first.

@@ -34,7 +34,7 @@
     <div class="relative bg-slate-900 rounded-xl p-4 shadow-2xl w-full max-w-full">
       <canvas id="sign-canvas" width="768" height="768"
               class="block w-full max-w-[min(800px,100%)] h-auto aspect-square mx-auto"
-              style="image-rendering: auto; z-index: 1;"></canvas>
+              style="position: relative; image-rendering: auto; z-index: 1;"></canvas>
       {# Browser-side media overlay (issue #38). Positioned BEHIND the
          LED-fuzzy canvas (z-index 0 vs the canvas's z-index 1) so the
          scroller text and lit LED pixels drawn to the canvas overlay
@@ -49,7 +49,17 @@
          `BrowserMediaOverlay`'s read-only properties. Hidden when the
          picked message has no media — the LED look is preserved.
          The `<video>` is muted/looped/ autoplayed to satisfy browser
-         autoplay policies for silent looping clips. #}
+         autoplay policies for silent looping clips.
+
+         Layering note: the canvas needs `position: relative` for its
+         `z-index: 1` to take effect — z-index is ignored on
+         `position: static` elements. Without this, the absolutely-
+         positioned image / video siblings (which DO honor their
+         `z-index: 0`) paint on top of the static canvas in source
+         order, and the media DOM element ends up covering the
+         canvas's lit pixels (text appears to fade out as the media
+         fades in, even though the canvas is drawing the text at full
+         opacity). #}
       <img id="browser-media-image" alt="" hidden
            class="absolute inset-0 w-full h-full object-cover pointer-events-none"
            style="z-index: 0; opacity: 0;">
@@ -74,14 +84,14 @@
      binding shim here — the coordinator's render layer is bound
      onto the app-scoped coordinator that `app_main.py` already
      installed. -->
-<py-script src="{{ url_for('static', filename='preview/heart-message-manager/preview_main.py') }}?v=9"></py-script>
+<py-script src="{{ url_for('static', filename='preview/heart-message-manager/preview_main.py') }}?v=13"></py-script>
 
 <!-- App-side main loop. Loaded after PyScript so it can wait for the
      runtime's `py:done` event. base.html's `app.js` (loaded earlier,
      gated by the auth) owns the MQTT-WS connection and the in-browser
      MessageManager; preview.js only registers a per-page callback to
      drive `coordinator.request_message(body)` on each new envelope. -->
-<script src="{{ url_for('static', filename='preview/preview.js') }}?v=11"></script>
+<script src="{{ url_for('static', filename='preview/preview.js') }}?v=13"></script>
 
 {# --- JSON Viewer Modal (mirrors testing.html's #json-modal) --- #}
 <div id="json-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
