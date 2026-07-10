@@ -347,19 +347,25 @@
         // No active media — hide both, leave the canvas alone.
         if (!mediaImg.hidden) mediaImg.hidden = true;
         if (!mediaVideo.hidden) mediaVideo.hidden = true;
-        if (key !== lastMediaKey) {
-          if (PREVIEW_DEBUG) {
-            const now = Date.now();
-            if (now - lastEmptyLogAt > 1000) {
-              console.log(
-                "[preview-media] hiding overlay: url=%r kind=%r key=%r (exhausted or no picked media)",
-                url, kind, key,
-              );
-              lastEmptyLogAt = now;
-            }
+        if (PREVIEW_DEBUG) {
+          // Throttle the "hiding overlay" log to once per second.
+          // The previous implementation gated this on key-change
+          // and reset `lastMediaKey = ""` inside, which meant
+          // the log never fired when `key` was persistently ""
+          // (the symptom we're trying to diagnose — overlay
+          // returns empty url on every frame). The time-based
+          // throttle gives us a steady signal we can correlate
+          // with the "python returned empty" log.
+          const now = Date.now();
+          if (now - lastEmptyLogAt > 1000) {
+            console.log(
+              "[preview-media] hiding overlay: url=%s kind=%s key=%s (no picked media, or BrowserMediaOverlay returned empty url)",
+              url, kind, key,
+            );
+            lastEmptyLogAt = now;
           }
-          lastMediaKey = "";
         }
+        lastMediaKey = "";
         return;
       }
 
@@ -369,7 +375,7 @@
       if (key !== lastMediaKey) {
         if (PREVIEW_DEBUG) {
           console.log(
-            "[preview-media] swapping %s src: key=%r url=%r opacity=%.2f",
+            "[preview-media] swapping %s src: key=%s url=%s opacity=%.2f",
             kind, key, url, opacity,
           );
         }
@@ -385,7 +391,7 @@
           mediaImg.addEventListener("error", function onErr() {
             mediaImg.removeEventListener("error", onErr);
             console.error(
-              "[preview-media] <img> failed to load url=%r key=%r — check the Flask /api/media/<key> response and the S3 object exists",
+              "[preview-media] <img> failed to load url=%s key=%s — check the Flask /api/media/<key> response and the S3 object exists",
               url, key,
             );
           }, { once: true });
@@ -400,7 +406,7 @@
           if (playPromise && typeof playPromise.then === "function") {
             playPromise.catch((err) => {
               console.warn(
-                "[preview-media] <video> play() rejected url=%r key=%r (often: autoplay without user gesture): %s",
+                "[preview-media] <video> play() rejected url=%s key=%s (often: autoplay without user gesture): %s",
                 url, key, err && err.message ? err.message : err,
               );
             });
@@ -408,7 +414,7 @@
           mediaVideo.addEventListener("error", function onErr() {
             mediaVideo.removeEventListener("error", onErr);
             console.error(
-              "[preview-media] <video> failed to load url=%r key=%r — check codec, Flask proxy response, and S3 object",
+              "[preview-media] <video> failed to load url=%s key=%s — check codec, Flask proxy response, and S3 object",
               url, key,
             );
           }, { once: true });
@@ -536,30 +542,48 @@
           if (typeof window.get_current_media === "function") {
             const media = window.get_current_media();
             if (PREVIEW_DEBUG) {
-              // Verbose: log on every key change, including the
-              // empty/null case. The earlier gate (media.key ||
-              // media.url) suppressed the "Python returned empty"
-              // case — which is exactly what we need to see when
-              // the image isn't loading. applyMedia logs the
-              // actual <img> swap; this just confirms what Python
-              // returned.
-              const mediaKey = (media && media.key) || "";
-              if (mediaKey !== lastMediaKey) {
-                if (media && (media.key || media.url)) {
+              // Two distinct log paths so the diagnostic actually
+              // fires in the case we care about:
+              //
+              //   1. Non-empty payload (key/url present): log on
+              //      every key change — the rAF loop at 30 FPS
+              //      would otherwise spam the console during a
+              //      15s hold. This is the "happy path" diagnostic
+              //      that confirms the overlay is producing a real
+              //      URL.
+              //
+              //   2. Empty payload (key/url are ""): the previous
+              //      implementation gated this on key-change too,
+              //      which meant the log NEVER fired when Python
+              //      was persistently returning the empty stub
+              //      (the symptom we're trying to diagnose — the
+              //      picked message has media but the overlay
+              //      produces an empty URL on every frame).
+              //      Throttle to once per second instead, so we
+              //      get a steady "Python returned empty" signal
+              //      that the user can correlate with the picked-
+              //      message log to confirm the overlay isn't
+              //      producing a URL.
+              if (media && (media.key || media.url)) {
+                if (media.key !== lastMediaKey) {
                   console.log(
-                    "[preview-media] python returned: key=%r kind=%r url=%r opacity=%.2f",
+                    "[preview-media] python returned: key=%s kind=%s url=%s opacity=%.2f",
                     media.key, media.kind, media.url, media.opacity || 0,
                   );
-                } else {
+                }
+              } else {
+                const now = Date.now();
+                if (now - lastEmptyLogAt > 1000) {
                   const shape = media === null
                     ? "null"
                     : media === undefined
                       ? "undefined"
                       : `{key=${JSON.stringify(media.key)} url=${JSON.stringify(media.url)} kind=${JSON.stringify(media.kind)} opacity=${media.opacity}}`;
                   console.log(
-                    "[preview-media] python returned empty: %s — image will NOT render this frame (no BrowserMediaOverlay active)",
+                    "[preview-media] python returned empty: %s — image will NOT render this frame (no BrowserMediaOverlay active, or overlay returned empty url)",
                     shape,
                   );
+                  lastEmptyLogAt = now;
                 }
               }
             }
