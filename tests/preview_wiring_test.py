@@ -229,6 +229,8 @@ def _build_coord(message_manager=None, **kwargs):
     if message_manager is None:
         message_manager = SimpleNamespace(
             messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+            # Round 4 (queue redesign): empty FIFO returns None.
+            take_next_new_message=lambda: None,
             config=SimpleNamespace(
                 effects_settings=EffectsSettings(),
                 text_settings=TextSettings(),
@@ -257,6 +259,8 @@ def test_coordinator_reads_pacing_from_message_manager():
 
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+            # Round 4 (queue redesign): empty FIFO returns None.
+            take_next_new_message=lambda: None,
         config=SimpleNamespace(
             effects_settings=EffectsSettings(
                 fade_seconds=2.0,
@@ -402,6 +406,8 @@ def test_config_update_live_applies_to_render_layer():
     heart = _make_effect("Heart")()
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+            # Round 4 (queue redesign): empty FIFO returns None.
+            take_next_new_message=lambda: None,
         config=SimpleNamespace(
             effects_settings=EffectsSettings(),
             text_settings=TextSettings(),

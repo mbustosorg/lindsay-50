@@ -129,6 +129,8 @@ def _make_effect(name):
 def _make_manager(effects_settings=None, text_settings=None):
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+        # Round 4 (queue redesign): empty FIFO returns None.
+        take_next_new_message=lambda: None,
         config=SimpleNamespace(
             effects_settings=effects_settings or EffectsSettings(),
             text_settings=text_settings or TextSettings(),

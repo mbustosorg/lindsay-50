@@ -11,9 +11,10 @@ module is importable in either runtime without a top-level network dependency.
 import asyncio
 import json
 import logging
+from collections import deque
 from typing import Callable, Optional
 
-from lib_shared.models import EffectsSettings, MessageEnvelope, Message, SignConfig, TextSettings
+from lib_shared.models import EffectsSettings, MessageEnvelope, Message, MessageView, SignConfig, TextSettings
 from lib_shared.messages import InMemoryMessages
 
 logger = logging.getLogger(__name__)
@@ -219,6 +220,23 @@ class MessageManager:
         """
         self._config = SignConfig()
         self._messages = InMemoryMessages(self._config, maxlen=100)
+        # Round 4 (queue redesign): FIFO of fresh arrivals that
+        # arrived over MQTT but haven't been picked yet. The
+        # coordinator's `_pick_next` drains one entry off this
+        # queue at each natural pick site (cycle complete, intro
+        # done, background idle). Replaces the prior
+        # immediate-interrupt path on a fresh id.
+        #
+        # `deque` (not `list`) for two reasons: (1) `popleft()` is
+        # O(1) and atomic under the GIL, matching the existing
+        # `InMemoryMessages._msgs` pattern — the paho daemon
+        # thread appends while the main thread consumes. (2)
+        # `maxlen=200` (2× the buffer's 100) bounds memory while
+        # covering the worst-case flood; overflow drops oldest.
+        # The browser preview is single-threaded (JS event loop)
+        # so the atomicity is moot there but the type stays
+        # consistent across runtimes.
+        self._new_messages_queue: deque[MessageView] = deque(maxlen=200)
         self._on_change = on_change
         self._on_check_for_update = on_check_for_update
         self._messages_api_url = messages_api_url
@@ -554,8 +572,35 @@ class MessageManager:
         view = self._messages.add(msg, source="mqtt")
         if view is not None:
             self._messages._enrich_messages([view])
+            # Round 4 (queue redesign): only the live MQTT path
+            # enqueues. Seed-from-API (line 699, `source="rest"`)
+            # and hydrate-from-cache (line 408, mixed rest/mqtt
+            # sources for replay) bypass the queue — those are
+            # pre-existing state, not fresh arrivals the
+            # coordinator should pick next. The buffer's
+            # `add()` returned None for duplicates (re-deliveries),
+            # so `view is not None` already gates the enqueue.
+            self._new_messages_queue.append(view)
         logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
         self._emit_change()
+
+    def take_next_new_message(self) -> MessageView | None:
+        """Pop the OLDEST queued fresh arrival, FIFO.
+
+        Returns None when the queue is empty. The coordinator's
+        `_pick_next` short-circuits on this BEFORE the recent-
+        pool random pick — when something is queued, the random
+        pool is ignored for that transition.
+
+        Round 4 contract: this is the ONLY way the coordinator
+        consumes the queue. The flush is one entry per pick
+        site; rapid SMS arrivals accumulate in order until the
+        coordinator naturally picks them off.
+        """
+        try:
+            return self._new_messages_queue.popleft()
+        except IndexError:
+            return None
 
     def _handle_config(self, payload: dict) -> None:
         """Apply a SignConfig dict to the in-memory config and re-enrich buffered messages.

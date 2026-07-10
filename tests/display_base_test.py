@@ -118,6 +118,8 @@ def test_subclass_render_called_once_per_tick():
 
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+        # Round 4 (queue redesign): empty FIFO returns None.
+        take_next_new_message=lambda: None,
         # Pacing values are read live from the manager — set
         # intro_seconds=0 and fade_seconds=0.01 on the manager's
         # EffectSettings so the test's tick timing is honored.

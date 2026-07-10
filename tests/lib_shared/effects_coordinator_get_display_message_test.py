@@ -42,10 +42,19 @@ class _StubMessageManager:
     """Minimal MessageManager stub exposing just the surface EffectsCoordinator reads."""
 
     def __init__(self, messages=None, recent_count=5):
+        from collections import deque
         from lib_shared.models import EffectsSettings, TextSettings
 
         self._entries = list(messages or [])
         self._recent_count = recent_count
+        # Round 4 (queue redesign): the stub now mirrors the
+        # production MessageManager API. `take_next_new_message`
+        # returns None (the FIFO is empty) — this stub seeds via
+        # the constructor, so all entries are "pre-existing" and
+        # the random-pool path applies. Tests that exercise the
+        # queue drain should append to `_new_messages_queue`
+        # directly.
+        self._new_messages_queue: deque = deque()
         # The coordinator reads `recent_count` (and the rest of
         # the pacing) live from `message_manager.config.effects_settings`.
         self.config = SimpleNamespace(
@@ -75,6 +84,12 @@ class _StubMessageManager:
 
     def add(self, view):
         self._entries.append(view)
+
+    def take_next_new_message(self):
+        try:
+            return self._new_messages_queue.popleft()
+        except IndexError:
+            return None
 
 
 def _build(message_manager=None, recent_count=5):
