@@ -22,13 +22,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "heart-matrix-controller")
 from event_log import EventLog, _REQUIRED_KEYS  # noqa: E402
 
 
-def _make_event(message_id: str, timestamp: float, sent_at: float, event_type: str = "text_display") -> dict:
+def _make_event(message_id: str, timestamp: float, received_at: float, event_type: str = "text_display") -> dict:
     """Build a well-formed event dict."""
     return {
         "event_type": event_type,
         "message_id": message_id,
         "timestamp": timestamp,
-        "sent_at": sent_at,
+        "received_at": received_at,
     }
 
 
@@ -47,7 +47,7 @@ def test_append_writes_parseable_jsonl_and_updates_cache(tmp_path):
         "event_type": "text_display",
         "message_id": "m1",
         "timestamp": 100.0,
-        "sent_at": 50.0,
+        "received_at": 50.0,
     }
 
     # On-disk file contains a parseable JSON line.
@@ -274,7 +274,7 @@ def test_log_survives_restart(tmp_path):
     assert second.last_for("m3", "text_display") is not None
 
 
-# --- 6.17 Unit test: event schema contains exactly {event_type, message_id, timestamp, sent_at} — adding favorite fails the test ---
+# --- 6.17 Unit test: event schema contains exactly {event_type, message_id, timestamp, received_at} — adding favorite fails the test ---
 
 
 def test_event_schema_has_exactly_required_keys(tmp_path):
@@ -286,22 +286,22 @@ def test_event_schema_has_exactly_required_keys(tmp_path):
             "event_type": "text_display",
             "message_id": "m1",
             "timestamp": 100.0,
-            "sent_at": 50.0,
+            "received_at": 50.0,
             "favorite": True,
         }
     )
     persisted = log.last_for("m1", "text_display")
     assert persisted is not None
-    assert set(persisted.keys()) == {"event_type", "message_id", "timestamp", "sent_at"}
+    assert set(persisted.keys()) == {"event_type", "message_id", "timestamp", "received_at"}
     assert "favorite" not in persisted
 
 
 def test_event_schema_rejects_event_missing_required_keys(tmp_path):
     """An event missing any required key is silently dropped (not stored)."""
     log = EventLog(path=str(tmp_path / "e.jsonl"), max_entries=10)
-    log.append({"event_type": "text_display", "message_id": "m1", "timestamp": 100.0})  # missing sent_at
-    log.append({"message_id": "m1", "timestamp": 100.0, "sent_at": 50.0})  # missing event_type
-    log.append({"event_type": "text_display", "timestamp": 100.0, "sent_at": 50.0})  # missing message_id
+    log.append({"event_type": "text_display", "message_id": "m1", "timestamp": 100.0})  # missing received_at
+    log.append({"message_id": "m1", "timestamp": 100.0, "received_at": 50.0})  # missing event_type
+    log.append({"event_type": "text_display", "timestamp": 100.0, "received_at": 50.0})  # missing message_id
     assert len(log) == 0
 
 
@@ -316,7 +316,7 @@ def test_event_schema_rejects_non_dict_input(tmp_path):
 
 def test_required_keys_constant_is_locked():
     """The required-keys constant is the documented 4-key set, no favorite."""
-    assert _REQUIRED_KEYS == frozenset({"event_type", "message_id", "timestamp", "sent_at"})
+    assert _REQUIRED_KEYS == frozenset({"event_type", "message_id", "timestamp", "received_at"})
 
 
 # --- Misc defensive tests ---

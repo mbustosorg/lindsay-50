@@ -99,15 +99,15 @@ class Message:
             "media": self.media,
         }
 
-    def sent_at_epoch(self) -> float:
-        """Return the message's `sent_at` as epoch seconds (float).
+    def received_at_epoch(self) -> float:
+        """Return the message's `received_at` as epoch seconds (float).
 
-        Used by the weighted message selector (issue #26) to compute
-        the eligibility filter (`now - sent_at <= OFFSET_SECONDS`) and
-        the send-recency normalization. The Message dataclass stores
+        Used by the message selector (issue #26) to compute the
+        eligibility filter (`now - received_at_epoch <= OFFSET_SECONDS`)
+        and the send-recency normalization. The Message dataclass stores
         `received_at` as an ISO 8601 UTC string; this method is the
         canonical conversion to epoch seconds for selectors and event-log
-        writes (the event schema carries `sent_at` as a float, see
+        writes (the event schema carries `received_at` as a float, see
         `heart-matrix-controller/event_log.py`).
 
         Returns 0.0 on parse failure so a malformed `received_at`

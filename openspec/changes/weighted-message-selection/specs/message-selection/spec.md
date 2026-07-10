@@ -51,7 +51,7 @@ The selector SHALL compute a `send_recency` component for each eligible message,
 
 ### Requirement: Two-week eligibility window
 
-The selector SHALL exclude messages whose `sent_at` is older than `now − OFFSET_SECONDS` from the rotation pool. The default `OFFSET_SECONDS` SHALL be 1,209,600 (14 days). `OFFSET_SECONDS` SHALL be defined as a module-level constant in `lib_shared/selector.py`; it SHALL NOT be a key in `settings.toml` in this change. The constant SHALL be seconds-denominated so unit tests can use small windows (e.g., 60 seconds) without depending on real-world durations. Future operator-facing presentation of the eligibility window on the admin UI is a separate change; the present change MUST NOT add UI controls for `OFFSET_SECONDS`.
+The selector SHALL exclude messages whose `received_at` is older than `now − OFFSET_SECONDS` from the rotation pool. The default `OFFSET_SECONDS` SHALL be 1,209,600 (14 days). `OFFSET_SECONDS` SHALL be defined as a module-level constant in `lib_shared/selector.py`; it SHALL NOT be a key in `settings.toml` in this change. The constant SHALL be seconds-denominated so unit tests can use small windows (e.g., 60 seconds) without depending on real-world durations. Future operator-facing presentation of the eligibility window on the admin UI is a separate change; the present change MUST NOT add UI controls for `OFFSET_SECONDS`.
 
 #### Scenario: Message older than the offset is excluded
 
@@ -65,16 +65,16 @@ The selector SHALL exclude messages whose `sent_at` is older than `now − OFFSE
 
 #### Scenario: Unit test with a small window
 
-- **WHEN** a unit test sets `OFFSET_SECONDS` to a small value (e.g., 60 seconds) and constructs the selector with messages of varying `sent_at`
-- **THEN** only messages whose `sent_at` falls within the small window MUST appear in the eligible set
+- **WHEN** a unit test sets `OFFSET_SECONDS` to a small value (e.g., 60 seconds) and constructs the selector with messages of varying `received_at`
+- **THEN** only messages whose `received_at` falls within the small window MUST appear in the eligible set
 
 ### Requirement: Favorite boost
 
-The selector SHALL treat messages marked `favorite = true` as having a higher priority than equivalent non-favorite messages. The implementation MAY achieve this by adding a positive favorite weight to the score or by clamping the favorite message's effective `sent_at` to a recent timestamp; either approach satisfies this requirement as long as a favorite with the same recency-of-display as a non-favorite scores higher.
+The selector SHALL treat messages marked `favorite = true` as having a higher priority than equivalent non-favorite messages. The implementation MAY achieve this by adding a positive favorite weight to the score or by clamping the favorite message's effective `received_at` to a recent timestamp; either approach satisfies this requirement as long as a favorite with the same recency-of-display as a non-favorite scores higher.
 
 #### Scenario: Favorite beats non-favorite at equal recency
 
-- **WHEN** two messages have identical event-log recency and identical `sent_at`, but only one is marked `favorite`
+- **WHEN** two messages have identical event-log recency and identical `received_at`, but only one is marked `favorite`
 - **THEN** the favorite message MUST be selected over the non-favorite
 
 #### Scenario: Non-favorite message can still be selected
@@ -94,7 +94,7 @@ The system SHALL maintain an append-only event log on the Pi's local disk at the
 #### Scenario: Event schema carries only immutable facts
 
 - **WHEN** an event is written to the log
-- **THEN** it MUST contain `{event_type, message_id, timestamp, sent_at}` and MUST NOT contain mutable current-state fields such as `favorite` (favorite is read from the message record at pick time, not from the log)
+- **THEN** it MUST contain `{event_type, message_id, timestamp, received_at}` and MUST NOT contain mutable current-state fields such as `favorite` (favorite is read from the message record at pick time, not from the log)
 
 #### Scenario: Selector reads the log on each pick
 
@@ -113,7 +113,7 @@ The system SHALL maintain an append-only event log on the Pi's local disk at the
 
 ### Requirement: Generic event format with event_type filter
 
-The event schema SHALL be generic. Each event MUST carry an `event_type` discriminator (e.g., `text_display`, `image_display`, `video_display`) plus `message_id`, `timestamp`, and `sent_at` fields. The schema MUST NOT include mutable current-state fields (such as `favorite`). The selector and any debug consumer MUST be able to filter events by `event_type` and by `message_id`.
+The event schema SHALL be generic. Each event MUST carry an `event_type` discriminator (e.g., `text_display`, `image_display`, `video_display`) plus `message_id`, `timestamp`, and `received_at` fields. The schema MUST NOT include mutable current-state fields (such as `favorite`). The selector and any debug consumer MUST be able to filter events by `event_type` and by `message_id`.
 
 #### Scenario: Filter by event_type works
 
@@ -146,7 +146,7 @@ A newly arrived message (received via the MQTT subscribe callback or the Twilio 
 
 ### Requirement: Stable tie-breaker
 
-When two or more messages have identical scores, the selector MUST pick deterministically using a stable tie-breaker (lower message-id first, with older `sent_at` as a secondary tie-breaker).
+When two or more messages have identical scores, the selector MUST pick deterministically using a stable tie-breaker (lower message-id first, with older `received_at` as a secondary tie-breaker).
 
 #### Scenario: Identical scores resolve by message-id
 

@@ -19,10 +19,10 @@ Schema contract (locked — see `heart-matrix-controller/event_log.py`
 module docstring for the full rationale):
 
     {
-        "event_type":  "text_display" | ...,
-        "message_id":  "<uuid>",
-        "timestamp":   1752080123.45,
-        "sent_at":     1752000000.0
+        "event_type":   "text_display" | ...,
+        "message_id":   "<uuid>",
+        "timestamp":    1752080123.45,
+        "received_at":  1752000000.0
     }
 
 No mutable fields (no `favorite`). The schema is forward-compatible
@@ -42,7 +42,7 @@ _STORE_NAME = "events"
 # Required keys per event. Kept in lockstep with the Pi-side schema in
 # `heart-matrix-controller/event_log.py` so the same selector class
 # works against both backends.
-_REQUIRED_KEYS = ("event_type", "message_id", "timestamp", "sent_at")
+_REQUIRED_KEYS = ("event_type", "message_id", "timestamp", "received_at")
 
 
 def _hasattr_safe(obj, name):
@@ -109,7 +109,7 @@ def _clean_event(event):
             "event_type": str(candidate["event_type"]),
             "message_id": str(candidate["message_id"]),
             "timestamp": float(candidate["timestamp"]),
-            "sent_at": float(candidate["sent_at"]),
+            "received_at": float(candidate["received_at"]),
         }
     except Exception:
         return None

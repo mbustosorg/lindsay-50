@@ -6,10 +6,10 @@ reads the log to compute ``display_recency`` for each candidate message. Each
 event carries ONLY immutable facts about the render itself:
 
     {
-        "event_type":  "text_display" | "image_display" | "video_display" | ...,
-        "message_id":  "<uuid>",
-        "timestamp":   1752080123.45,   # epoch seconds, render time
-        "sent_at":     1752000000.0     # epoch seconds, denormalized from message
+        "event_type":   "text_display" | "image_display" | "video_display" | ...,
+        "message_id":   "<uuid>",
+        "timestamp":    1752080123.45,   # epoch seconds, render time
+        "received_at":  1752000000.0     # epoch seconds, denormalized from message
     }
 
 ``favorite`` is intentionally NOT in the schema — favorite is a mutable
@@ -46,7 +46,7 @@ log = logging.getLogger("heart")
 
 # Required keys for an event. Mutable current-state fields (favorite, etc.)
 # are deliberately NOT here — see module docstring.
-_REQUIRED_KEYS = frozenset({"event_type", "message_id", "timestamp", "sent_at"})
+_REQUIRED_KEYS = frozenset({"event_type", "message_id", "timestamp", "received_at"})
 
 
 class EventLog:
@@ -102,7 +102,7 @@ class EventLog:
         """Append one event to the log.
 
         The event MUST be a dict containing exactly the four required keys
-        (``event_type``, ``message_id``, ``timestamp``, ``sent_at``) — no other
+        (``event_type``, ``message_id``, ``timestamp``, ``received_at``) — no other
         fields are stored on disk or in memory. Any extra fields are silently
         dropped so a caller that accidentally passes ``favorite`` cannot
         pollute the schema.
@@ -112,7 +112,7 @@ class EventLog:
 
         Args:
             event: A dict with the four required keys (see module docstring).
-                ``timestamp`` and ``sent_at`` are floats (epoch seconds).
+                ``timestamp`` and ``received_at`` are floats (epoch seconds).
                 ``message_id`` is a string. ``event_type`` is a string
                 discriminator (e.g. ``"text_display"``).
         """
@@ -313,5 +313,5 @@ def _clean_event(event: object) -> Optional[dict]:
         "event_type": str(event["event_type"]),
         "message_id": str(event["message_id"]),
         "timestamp": float(event["timestamp"]),
-        "sent_at": float(event["sent_at"]),
+        "received_at": float(event["received_at"]),
     }

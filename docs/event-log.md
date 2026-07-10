@@ -23,7 +23,7 @@ The directory is `EVENT_LOG_PATH`'s parent and is auto-created.
 ## Schema (every line)
 
 ```json
-{"event_type": "text_display", "message_id": "<id>", "timestamp": 1700000000.0, "sent_at": 1699999900.0}
+{"event_type": "text_display", "message_id": "<id>", "timestamp": 1700000000.0, "received_at": 1699999900.0}
 ```
 
 | Field         | Type         | Description                                                |
@@ -31,7 +31,7 @@ The directory is `EVENT_LOG_PATH`'s parent and is auto-created.
 | `event_type`  | string       | Discriminator — `"text_display"`, `"image_display"`, `"video_display"`, etc. The selector filters by this for per-event-type display-recency. |
 | `message_id`  | string       | The ID of the displayed message. The selector reads it for `display_recency` lookup. |
 | `timestamp`   | float (secs) | When the message advanced onto the display. Used to compute `display_recency`. |
-| `sent_at`     | float (secs) | When the SMS was received — denormalized for debugging. **Not** used by the selector (eligibility is checked against the message record, not the event log). |
+| `received_at` | float (secs) | When the SMS was received — denormalized for debugging. **Not** used by the selector (eligibility is checked against the message record, not the event log). |
 
 The schema is **exactly** these four keys — `favorite`, `body`, and any other
 mutable/derived fields are explicitly absent. See
@@ -107,6 +107,6 @@ rg 'm1' heart-matrix-controller/data/events.jsonl
 
 Future work MAY publish events to an MQTT topic (e.g. `sign/events`) for
 remote debugging. The schema is forward-compatible — each event already
-has `event_type`, `message_id`, `timestamp`, `sent_at` — but **no MQTT
+has `event_type`, `message_id`, `timestamp`, `received_at` — but **no MQTT
 code ships in this change**. See `openspec/changes/weighted-message-selection/tasks.md`
 §9 for the deferred list.

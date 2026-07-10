@@ -26,13 +26,13 @@ from lib_shared.effects_coordinator import EffectsCoordinator  # noqa: E402
 from lib_shared.models import Message, MessageView, EffectsSettings, TextSettings  # noqa: E402
 
 
-def _make_message_view(message_id: str, body: str, sent_at_iso: str) -> MessageView:
+def _make_message_view(message_id: str, body: str, received_at_iso: str) -> MessageView:
     """Build a MessageView wrapping a fresh Message."""
     msg = Message(
         id=message_id,
         sender="+15551234567",
         body=body,
-        received_at=sent_at_iso,
+        received_at=received_at_iso,
     )
     return MessageView(message=msg, source="rest", suppressed=False, rules=[])
 
@@ -128,7 +128,7 @@ def test_non_preempted_out_to_in_writes_text_display_event(tmp_path):
             "event_type": "text_display",
             "message_id": "non-fresh-id",
             "timestamp": 100.0,
-            "sent_at": 50.0,
+            "received_at": 50.0,
         }
     )
     assert len(event_log) == 1
@@ -137,7 +137,7 @@ def test_non_preempted_out_to_in_writes_text_display_event(tmp_path):
     assert last["message_id"] == "non-fresh-id"
     assert last["event_type"] == "text_display"
     assert last["timestamp"] == 100.0
-    assert last["sent_at"] == 50.0
+    assert last["received_at"] == 50.0
 
 
 def test_preemption_flag_is_reset_after_consumption(tmp_path):
