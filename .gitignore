@@ -11,6 +11,13 @@ images/sound*
 test-code/
 .python-version
 
+# Case-insensitive match for files or directories named exactly "temp"
+# (e.g. lib_shared/TEMP, foo/temp/, foo/temp). Does NOT match template.py,
+# temperature.py, tempfile*, etc. — the pattern is exact 4-char basename.
+# Tracked files like heart-message-manager/temp are unaffected (gitignore
+# never overrides tracking; clean those up separately if desired).
+[Tt][Ee][Mm][Pp]
+
 # Operator local-dev overrides. The folder is tracked in git (via a
 # `.gitkeep` placeholder) so the override mechanism is discoverable on
 # a fresh clone; the contents are gitignored so operators can drop
