@@ -450,7 +450,7 @@
       const id = (msg && msg.id) || "";
       if (id === lastLinkMessageId) return;
       lastLinkMessageId = id;
-      if (!plain || !id) {
+      if (!msg || !id) {
         // Idle / no picked entry — drop the data-msg so the
         // click handler is a no-op and revert the link to plain-
         // text styling so "Now displaying: Idle" doesn't read as
@@ -464,7 +464,7 @@
       //   decode: JSON.parse(decodeURIComponent(escape(atob(raw))))
       // — the unescape/escape dance round-trips UTF-8 safely.
       try {
-        const json = JSON.stringify(plain);
+        const json = JSON.stringify(msg);
         const b64 = btoa(unescape(encodeURIComponent(json)));
         messageLink.dataset.msg = b64;
         // Switch the link to the indigo/underline treatment so
