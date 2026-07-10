@@ -119,8 +119,10 @@ def test_matrix_scroller_init_loads_font_and_sets_layout(fresh_module):
     # Single-line layout: top_y == bottom_y, both centered on the panel.
     assert s.single_line is True
     assert s.top_y == s.bottom_y
-    # baseline_for(canvas_height // 2) = 32 + 10 - 6 = 36
-    assert s.top_y == 36
+    # baseline_for(canvas_height // 2) = 32 + 10 - 6 = 36, then a -10
+    # nudge moves the text up a little (commit 91722d7 — "move text
+    # up a little"). Final = 26.
+    assert s.top_y == 26
 
 
 def test_matrix_scroller_set_text_initializes_positions(fresh_module):
