@@ -147,10 +147,18 @@ class VideoDisplay(Effect):
         img = self._frame
         if img is None:
             return
-        if self._brightness < 1.0:
+        # Apply the brightness scaling when `b != 1.0` (the prior
+        # gate was `b < 1.0`, which silently dropped MediaCycler's
+        # ~15% brightness boost at full panel brightness — the gate
+        # tripped before the scaling could run). The boost pushes
+        # dark pixels brighter; saturated pixels are held at 255
+        # by the `min(255, …)` clamp inside the point lambda so a
+        # `b > 1.0` value never produces an out-of-range channel
+        # that PIL would wrap modulo 256.
+        if self._brightness != 1.0:
             # `point` is a C-level operation — much cheaper than
             # iterating per-pixel from Python.
-            img = img.point(lambda v: int(v * self._brightness))
+            img = img.point(lambda v: min(255, int(v * self._brightness)))
         canvas.SetImage(img)
 
     @property

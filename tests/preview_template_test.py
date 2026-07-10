@@ -346,6 +346,12 @@ def test_preview_csp_allows_s3_endpoint_when_explicit():
         _restore_sys_modules(snapshot)
 
     # Prod: no AWS_S3_ENDPOINT_URL → virtual-hosted-style AWS URL.
+    # us-east-1 is special-cased to the legacy global endpoint
+    # (``<bucket>.s3.amazonaws.com``) — that's the actual signed URL
+    # origin boto3 produces for us-east-1 buckets with virtual-host
+    # addressing, so the CSP must allow that origin (not the
+    # regional form ``<bucket>.s3.us-east-1.amazonaws.com``, which
+    # boto3 never signs for this region).
     prod_cfg = _cfg_with(
         {"AWS_S3_BUCKET": "test-bucket", "AWS_S3_REGION": "us-east-1"},
     )
@@ -359,12 +365,12 @@ def test_preview_csp_allows_s3_endpoint_when_explicit():
         csp = response.headers.get("Content-Security-Policy", "")
         img_src = _extract_directive(csp, "img-src")
         assert (
-            "https://test-bucket.s3.us-east-1.amazonaws.com" in img_src
-        ), f"img-src must allow the AWS S3 origin; got: {img_src!r}"
+            "https://test-bucket.s3.amazonaws.com" in img_src
+        ), f"img-src must allow the legacy AWS S3 origin (us-east-1); got: {img_src!r}"
         media_src = _extract_directive(csp, "media-src")
         assert (
-            "https://test-bucket.s3.us-east-1.amazonaws.com" in media_src
-        ), f"media-src must allow the AWS S3 origin (for <video>); got: {media_src!r}"
+            "https://test-bucket.s3.amazonaws.com" in media_src
+        ), f"media-src must allow the legacy AWS S3 origin (for <video>); got: {media_src!r}"
     finally:
         _restore_sys_modules(snapshot)
 

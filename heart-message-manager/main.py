@@ -1453,6 +1453,16 @@ def _derive_s3_origin() -> str:
          virtual-hosted-style URL
          ``https://<bucket>.s3.<region>.amazonaws.com``. Build the
          same shape from `AWS_S3_BUCKET` + `AWS_S3_REGION`.
+      3. **`us-east-1` is special-cased** to the legacy global endpoint
+         ``https://<bucket>.s3.amazonaws.com`` (no region in the host).
+         boto3's default signing URL for us-east-1 buckets is the
+         legacy form even with virtual-host addressing; building the
+         regional form ``https://<bucket>.s3.us-east-1.amazonaws.com``
+         here would put a CSP allow-list entry on an origin boto3
+         never actually signs, and the browser blocks the load. (The
+         regional form is also valid, but unused by our pipeline.)
+      4. Missing region → legacy global form (same rationale: that's
+         what an unconfigured boto3 client signs in us-east-1).
 
     Returns an empty string when the origin can't be determined
     (the CSP code treats that as "leave img-src alone"). Never
@@ -1469,6 +1479,11 @@ def _derive_s3_origin() -> str:
             return ""
         bucket = _cfg.if_exists("AWS_S3_BUCKET")
         region = _cfg.if_exists("AWS_S3_REGION")
+        # Resolve to the actual signed URL origin boto3 will produce.
+        # `us-east-1` (and missing region, which boto3 also defaults to
+        # the us-east-1 namespace) → legacy global endpoint.
+        if bucket and (not region or region == "us-east-1"):
+            return f"https://{bucket}.s3.amazonaws.com"
         if bucket and region:
             return f"https://{bucket}.s3.{region}.amazonaws.com"
         return ""

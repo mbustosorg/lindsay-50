@@ -68,6 +68,27 @@ logger = logging.getLogger("heart")
 # Image items don't have a natural duration, so the floor wins.
 _MIN_ITEM_SECONDS = 10.0
 
+# Multiplicative brightness boost applied on top of the coordinator's
+# global ramp when forwarding `set_brightness(b)` to the active inner
+# renderer (ImageDisplay / VideoDisplay). 1.15 = ~15% brighter than the
+# rotation effects, which compensates for the loss of perceived
+# brightness that photos and videos carry vs. generated pixel art —
+# night-sky stars and flame highlights look more vivid on the panel
+# than a luminance-balanced JPEG does at the same nominal brightness.
+#
+# This is a behavioral knob of the cycler's rendering algorithm, NOT
+# a per-deployment operational value — it lives in code (not
+# settings.toml) per the project's "behavioral knobs in code" rule.
+# Surfaces as a settings.toml knob later if operators ask to tune it.
+#
+# Applied unclamped at the cycler level: the inner renderer clamps at
+# the channel level (255 for 8-bit palette entries, 255 for 8-bit
+# pixel values) so dark pixels get pulled brighter (int(100*1.15)=115)
+# while already-saturated pixels stay clamped (int(255*1.15)=min(255,293)=255).
+# The visible effect: media appears consistently brighter than the
+# rotation effects at the same nominal brightness.
+_MEDIA_BRIGHTNESS_BOOST = 1.15
+
 
 class MediaCycler(Effect):
     """Effect that cycles through a message's media attachments.
@@ -98,6 +119,7 @@ class MediaCycler(Effect):
         cache_dir: str | Path | None = None,
         fetcher: Optional[Callable[[str], bytes]] = None,
         api_key: str = "",
+        brightness_boost: float = _MEDIA_BRIGHTNESS_BOOST,
     ) -> None:
         """Initialize the cycler.
 
@@ -182,8 +204,15 @@ class MediaCycler(Effect):
         # Brightness from the coordinator (forwarded to the active
         # renderer; not applied independently — D7: "the cycler's
         # `set_brightness` is stored as a factor and applied when
-        # blitting").
+        # blitting"). The cycler multiplies this by `_brightness_boost`
+        # before forwarding to the active renderer so media appears
+        # consistently brighter than the rotation effects at the
+        # same nominal coordinator brightness.
         self._brightness: float = 1.0
+        # Multiplicative boost forwarded alongside `set_brightness`.
+        # Module-level constant by default; constructor kwarg lets
+        # callers (tests) override it.
+        self._brightness_boost: float = float(brightness_boost)
         # Phase tracking for advance — `hold` keeps the active item
         # until its window elapses, `advance` swaps to a new item on
         # the next tick. We don't track `out` / `in` internally; the
@@ -462,10 +491,20 @@ class MediaCycler(Effect):
         is stored as a factor and applied when blitting" — applies
         to VideoDisplay; ImageDisplay multiplies it with its own
         per-image fade level).
+
+        The cycler applies a multiplicative `_brightness_boost` (see
+        module-level `_MEDIA_BRIGHTNESS_BOOST`) on top of `b` before
+        forwarding. The boost is sent UNCLAMPED — inner renderers
+        clamp at the channel level (8-bit palette entries / 8-bit
+        pixel values), which is the right grain for "push dark
+        pixels brighter, leave saturated pixels saturated." A 1.15×
+        boost on a 100/255 channel becomes 115/255 (visible
+        brightening); a 1.15× boost on a 255/255 channel stays at
+        255 (clamped).
         """
         self._brightness = b
         if self._active is not None:
-            self._active.set_brightness(b)
+            self._active.set_brightness(b * self._brightness_boost)
 
     def tick(self) -> None:
         """Advance the cycler one frame.

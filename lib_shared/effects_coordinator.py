@@ -467,26 +467,30 @@ class EffectsCoordinator:
 
     def _maybe_fall_back_to_rotation(self) -> None:
         """If `self.current` is a `MediaCycler` or `BrowserMediaOverlay`
-        that's exhausted, swap it back to `self.effects[self.idx]`.
+        that's done (exhausted or complete), trigger the existing
+        fade-out machinery so the cycler fades to black and the
+        rotation effect fades in for the next cycle.
 
-        Called at every `hold` and `text_out` tick. Idempotent: when
-        `self.current` is not one of the media effects (the typical
-        case), this is a no-op. When it IS and still has items, the
-        cycler keeps running — the coordinator's existing
-        `hold_seconds` clock decides when to transition out.
+        Called at every `hold`, `text_out`, and `background` tick.
+        Idempotent: when `self.current` is not one of the media
+        effects (the typical case), this is a no-op. When it IS and
+        still has items, the cycler keeps running — the
+        coordinator's existing `hold_seconds` clock decides when to
+        transition out.
 
-        The cycler classes extend `Effect` and add `exhausted: bool`.
-        On the host path we test `isinstance(current, MediaCycler)`;
-        on the browser path the cycler helper returned a
-        `BrowserMediaOverlay` instead (PIL/cv2 aren't in the PyScript
-        bundle). Both classes share the same `exhausted` contract
-        (D12), so the same fallback logic applies — duck-type on
-        `exhausted` rather than `isinstance`, so the browser preview
-        ALSO gets a fallback when an attachment's URL 404s / the
-        DOM overlay had every item rejected. Without this, a browser
-        preview with no playable media sits on the boot `<img>` /
-        `<video>` and never returns to a rotation effect — the
-        canvas below the overlay is black for the rest of the hold.
+        The cycler classes extend `Effect` and add `exhausted: bool`
+        and `complete: bool`. On the host path we test
+        `isinstance(current, MediaCycler)`; on the browser path the
+        cycler helper returned a `BrowserMediaOverlay` instead
+        (PIL/cv2 aren't in the PyScript bundle). Both classes share
+        the same `exhausted` / `complete` contracts, so the same
+        fallback logic applies — duck-type on the flags rather than
+        `isinstance`, so the browser preview ALSO gets a fallback
+        when an attachment's URL 404s / the DOM overlay had every
+        item rejected. Without this, a browser preview with no
+        playable media sits on the boot `<img>` / `<video>` and
+        never returns to a rotation effect — the canvas below the
+        overlay is black for the rest of the hold.
 
         The `MediaCycler` import is guarded: the browser preview's
         PyScript bundle does NOT include `lib_shared.patterns.media_cycler`
@@ -494,7 +498,15 @@ class EffectsCoordinator:
         which Pyodide can satisfy). `try/except ImportError` around
         the import turns "module missing in bundle" into "only the
         browser side of the isinstance check", which is the right
-        behavior — the duck-typed `exhausted` branch still works.
+        behavior — the duck-typed flag branch still works.
+
+        The fade-out path delegates to `_begin_out(now)` so the
+        crossfade is driven by the same `_step_fade` machinery every
+        other mode transition uses — no parallel fade code, no
+        duplicate throttling. We clear `_last_picked_entry` first so
+        the `out` mode's MediaCycler rebuild at fade-complete returns
+        None (we want the rotation effect, not a fresh cycler for
+        the same message).
         """
         try:
             from lib_shared.patterns.media_cycler import MediaCycler as _MediaCycler
@@ -529,42 +541,45 @@ class EffectsCoordinator:
         # `complete` = cycler played everything it was given (1-item
         # ran for `item["duration"]` seconds; multi-item cycled
         # through every attachment once). Both trigger the same
-        # swap-back-to-rotation behavior — the cycler is done
-        # either way, and the rotation effect should take over for
-        # the remainder of the hold/idle window.
+        # fade-out-to-rotation behavior — the cycler is done either
+        # way, and the rotation effect should take over for the
+        # remainder of the hold/idle window.
         is_done = bool(current.exhausted) or bool(getattr(current, "complete", False))  # type: ignore[attr-defined]
         if not is_done:
+            return
+        # If we're already mid-fade-out (the previous tick triggered
+        # this), let the existing `out` mode complete naturally —
+        # re-entering here would just restart the fade clock.
+        if self.mode == "out":
+            return
+        # The cycler was just swapped in by an out→in transition
+        # and brightness is climbing back to 1.0. Firing another
+        # fade-out mid fade-in would oscillate. Bail; the cycler's
+        # `complete` / `exhausted` flags stay set, so the next tick
+        # in `hold` / `background` will pick up the fade.
+        if self.mode == "in":
             return
         effects = self.effects
         if not effects:
             return
-        self.current = effects[self.idx]
-        self.current.set_brightness(self._current_brightness)
         reason = "exhausted" if getattr(current, "exhausted", False) else "complete"  # type: ignore[attr-defined]
         log.info(
-            "Coordinator media-cycler %s (%s): falling back to rotation effect=%s",
+            "Coordinator media-cycler %s (%s): fading out for rotation effect=%s",
             reason,
             "BrowserMediaOverlay" if is_browser_overlay else "MediaCycler",
             self.current_effect_name,
         )
-
-    @property
-    def _current_brightness(self) -> float:
-        """Best-effort read of the current brightness scalar from the
-        fade ramp. Used by `_maybe_fall_back_to_rotation` so the
-        rotation effect resumes at the same brightness the cycler was
-        running at (avoids a visible flash when the cycler
-        transitions out mid-fade)."""
-        # The coordinator doesn't cache the ramp value — the
-        # `tick()` flow applies it via `set_brightness(b)` on every
-        # step. We approximate the current brightness as fully-on
-        # (1.0) in `hold` and `background`; the ramped value during
-        # `out` / `in` is held in the cycler's own `_brightness`
-        # field, which it inherits from the coordinator's last
-        # `set_brightness` call. 1.0 is the correct value for the
-        # cycler's normal "fully visible" state and the typical
-        # fallback target.
-        return 1.0
+        # Clear the picked entry so the `out` mode's cycler rebuild
+        # at fade-complete returns None (we want the rotation
+        # effect, not a fresh cycler for the same message — the
+        # cycler just finished playing everything it had).
+        self._last_picked_entry = None
+        # Trigger the existing fade-out machinery. `out` mode fades
+        # `self.current` (the cycler) to 0, advances `self.idx`,
+        # swaps to the next rotation effect at brightness 0, and
+        # transitions to `in` for the fade-up. The `_step_fade`
+        # throttle handles per-step palette writes during the ramp.
+        self._begin_out(time.monotonic())
 
     def get_display_message(self) -> str | None:
         """Pick the body to display next, from the manager's buffered messages.
@@ -909,6 +924,15 @@ class EffectsCoordinator:
                 self.last_step = 0.0
 
         elif mode == "text_out":
+            # MediaCycler fall-back (issue #38 follow-up): if the
+            # cycler completes during text_out, kick the fade-out
+            # now so the rotation effect takes over at the same
+            # time the text finishes clearing. Without this call,
+            # we'd transition to `background` with a stale cycler
+            # and only catch the fade on the next background tick —
+            # the user sees one extra frame of the cycler with no
+            # text, which looks like a hang.
+            self._maybe_fall_back_to_rotation()
             # Only the text fades; the background effect stays lit.
             if self._step_fade(now, fading_out=True, fade_effect=False):
                 scroller.set_text("", display.width)

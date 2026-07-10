@@ -335,10 +335,13 @@ def test_maybe_fall_back_to_rotation_noop_for_non_cycler():
     assert coord.current is initial
 
 
-def test_maybe_fall_back_to_rotation_swaps_when_cycler_exhausted():
-    """A `MediaCycler` with `exhausted=True` is swapped back to
-    `self.effects[self.idx]`. The rotation effect resumes for the
-    remainder of the hold."""
+def test_maybe_fall_back_to_rotation_triggers_fade_when_cycler_exhausted():
+    """A `MediaCycler` with `exhausted=True` triggers the existing
+    fade-out machinery — `self.current` stays as the cycler, and
+    `self.mode` flips to `"out"` so `_step_fade` ramps the cycler's
+    brightness to 0 on the next tick. The rotation effect swap
+    happens later, when the `out` mode's fade completes (driven
+    by the live `tick()` flow, not the helper)."""
     from lib_shared.patterns.media_cycler import MediaCycler
 
     fx_a = _make_effect("A")()
@@ -346,6 +349,7 @@ def test_maybe_fall_back_to_rotation_swaps_when_cycler_exhausted():
     coord = _build_coord(message_manager=_StubMessageManager(messages=[]))
     coord.effects = [fx_a, fx_b]
     coord.idx = 1
+    coord.mode = "hold"
 
     # Build a cycler and mark it exhausted.
     cycler = MediaCycler(
@@ -358,17 +362,20 @@ def test_maybe_fall_back_to_rotation_swaps_when_cycler_exhausted():
     coord.current = cycler
 
     coord._maybe_fall_back_to_rotation()
-    # self.current swapped back to effects[1] = fx_b.
-    assert coord.current is fx_b
+    # Cycler still in place; fade-out triggered via the existing
+    # `out` mode machinery — `_step_fade` drives the ramp on the
+    # next tick, `out`-mode-completion does the rotation swap.
+    assert coord.current is cycler
+    assert coord.mode == "out"
 
 
-def test_maybe_fall_back_to_rotation_swaps_when_cycler_complete():
-    """A `MediaCycler` with `complete=True` is swapped back to
-    `self.effects[self.idx]` — same swap path as `exhausted`. The
-    cycler played through its content (1-item ran for `duration`
-    seconds; multi-item cycled every attachment); the coordinator
-    takes the rotation effect for the remainder of the hold / idle
-    window instead of looping the same frame."""
+def test_maybe_fall_back_to_rotation_triggers_fade_when_cycler_complete():
+    """A `MediaCycler` with `complete=True` triggers the existing
+    fade-out machinery — same path as `exhausted`. The cycler
+    played through its content (1-item ran for `duration` seconds;
+    multi-item cycled every attachment); the coordinator fades the
+    cycler to black and the rotation effect fades in for the next
+    cycle instead of looping the same frame."""
     from lib_shared.patterns.media_cycler import MediaCycler
 
     fx_a = _make_effect("A")()
@@ -376,6 +383,7 @@ def test_maybe_fall_back_to_rotation_swaps_when_cycler_complete():
     coord = _build_coord(message_manager=_StubMessageManager(messages=[]))
     coord.effects = [fx_a, fx_b]
     coord.idx = 1
+    coord.mode = "hold"
 
     cycler = MediaCycler(
         "m2",
@@ -390,8 +398,149 @@ def test_maybe_fall_back_to_rotation_swaps_when_cycler_complete():
     coord.current = cycler
 
     coord._maybe_fall_back_to_rotation()
-    # Same outcome as exhausted — swap back to effects[1].
-    assert coord.current is fx_b
+    # Cycler still in place; fade-out triggered (mode flipped to
+    # `out`). The actual rotation swap happens later in the live
+    # `tick()` flow when the fade completes — covered by the
+    # `_fade_completes_swaps_to_rotation_effect` end-to-end test
+    # below.
+    assert coord.current is cycler
+    assert coord.mode == "out"
+
+
+def test_maybe_fall_back_to_rotation_clears_last_picked_entry():
+    """The fade-out trigger clears `_last_picked_entry` so the
+    `out` mode's MediaCycler rebuild at fade-complete returns None
+    — we want the rotation effect to take over, not a fresh cycler
+    for the same message that just finished playing."""
+    from lib_shared.patterns.media_cycler import MediaCycler
+
+    fx_a = _make_effect("A")()
+    coord = _build_coord(message_manager=_StubMessageManager(messages=[]))
+    coord.effects = [fx_a]
+    coord.idx = 0
+    coord.mode = "hold"
+    # Pretend the cycler was built off a picked message — set the
+    # side-channel sentinel so we can verify it's cleared.
+    coord._last_picked_entry = "stale"  # type: ignore[assignment]
+
+    cycler = MediaCycler(
+        "m3",
+        [{"type": "image/jpeg", "url": "key/c.jpg"}],
+        display=coord.display,
+    )
+    cycler.complete = True
+    coord.current = cycler
+
+    coord._maybe_fall_back_to_rotation()
+    # Picked entry cleared so the out-mode cycler rebuild at
+    # fade-complete returns None.
+    assert coord._last_picked_entry is None
+
+
+def test_maybe_fall_back_to_rotation_idempotent_in_out_mode():
+    """Once the helper has flipped mode to `out`, subsequent calls
+    are no-ops — the live `out` mode machinery is driving the fade,
+    and re-entering would just restart the fade clock."""
+    from lib_shared.patterns.media_cycler import MediaCycler
+
+    fx_a = _make_effect("A")()
+    coord = _build_coord(message_manager=_StubMessageManager(messages=[]))
+    coord.effects = [fx_a]
+    coord.idx = 0
+    coord.mode = "out"  # already mid-fade-out
+
+    cycler = MediaCycler(
+        "m4",
+        [{"type": "image/jpeg", "url": "key/d.jpg"}],
+        display=coord.display,
+    )
+    cycler.complete = True
+    coord.current = cycler
+
+    # Capture fade_start before — it should be unchanged after a
+    # second helper call (helper is a no-op while mode is `out`).
+    coord.fade_start = 12345.0
+    coord._maybe_fall_back_to_rotation()
+    assert coord.fade_start == 12345.0
+
+
+def test_maybe_fall_back_to_rotation_idempotent_in_in_mode():
+    """The cycler was just swapped in by an out→in transition
+    (mode is `in`, brightness climbing back to 1.0). Firing
+    another fade-out mid fade-in would oscillate — bail; the
+    cycler's `complete` / `exhausted` flags stay set, so the
+    next tick in `hold` / `background` will pick up the fade."""
+    from lib_shared.patterns.media_cycler import MediaCycler
+
+    fx_a = _make_effect("A")()
+    coord = _build_coord(message_manager=_StubMessageManager(messages=[]))
+    coord.effects = [fx_a]
+    coord.idx = 0
+    coord.mode = "in"  # mid fade-in
+
+    cycler = MediaCycler(
+        "m5",
+        [{"type": "image/jpeg", "url": "key/e.jpg"}],
+        display=coord.display,
+    )
+    cycler.complete = True
+    coord.current = cycler
+
+    coord._maybe_fall_back_to_rotation()
+    # Mode stayed `in` — helper refused to retrigger.
+    assert coord.mode == "in"
+
+
+def test_fade_out_completes_swaps_to_rotation_effect():
+    """End-to-end: after the helper triggers the fade-out and the
+    fade completes (driven by the `out` mode), the rotation effect
+    takes over `self.current` and mode flips to `in`."""
+    from lib_shared.patterns.media_cycler import MediaCycler
+    from lib_shared.models import EffectsSettings
+
+    fx_a = _make_effect("A")()
+    fx_b = _make_effect("B")()
+    mgr = _StubMessageManager(
+        messages=[],
+        effects_settings=EffectsSettings(
+            intro_seconds=0.0,
+            fade_seconds=0.05,
+            hold_seconds=1.0,
+            idle_seconds=1.0,
+        ),
+    )
+    coord = _build_coord(message_manager=mgr)
+    coord.effects = [fx_a, fx_b]
+    coord.idx = 0
+    coord.mode = "hold"
+
+    cycler = MediaCycler(
+        "m6",
+        [{"type": "image/jpeg", "url": "key/f.jpg"}],
+        display=coord.display,
+    )
+    cycler.complete = True
+    coord.current = cycler
+
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+
+    try:
+        coord._maybe_fall_back_to_rotation()
+        # Helper set mode to `out`, cycler still in place.
+        assert coord.mode == "out"
+        assert coord.current is cycler
+
+        # Drive a tick past fade_seconds — the `out` mode's fade
+        # completes and the rotation swap runs.
+        clock.advance(0.06)
+        coord.tick()
+        # Cycler replaced by the next rotation effect, fade-in started.
+        assert coord.current is fx_b
+        assert coord.mode == "in"
+    finally:
+        monkey.undo()
 
 
 # ---------------------------------------------------------------------------

@@ -266,7 +266,11 @@ def test_media_cycler_video_item_uses_video_display(tmp_path):
 
 
 def test_media_cycler_set_brightness_forwards(tmp_path, cfg_stub):
-    """`set_brightness(b)` forwards to the active inner renderer."""
+    """`set_brightness(b)` forwards to the active inner renderer,
+    multiplied by the brightness boost (default 1.15x). The cycler
+    keeps `self._brightness` as the unboosted value (the
+    coordinator's b) and pushes `b * boost` to the inner renderer
+    so the on-panel brightness is the boosted product."""
     cache_dir = tmp_path / "cache"
     cache_dir.mkdir()
     key = "media/images/2026-07/a.jpg"
@@ -278,8 +282,32 @@ def test_media_cycler_set_brightness_forwards(tmp_path, cfg_stub):
     )
     assert cycler._active is not None
     cycler.set_brightness(0.5)
+    # Cycler's introspection field stays at the unboosted value —
+    # the coordinator asks for 0.5 brightness, the cycler reports 0.5.
     assert cycler._brightness == 0.5
-    # And the inner ImageDisplay reflects it.
+    # And the inner ImageDisplay gets the boosted product so the
+    # palette pushes the image ~15% brighter at full panel brightness.
+    inner = cycler._active
+    assert getattr(inner, "_coord_b", None) == 0.5 * 1.15 or getattr(inner, "_brightness", None) == 0.5 * 1.15
+
+
+def test_media_cycler_set_brightness_boost_is_configurable(tmp_path, cfg_stub):
+    """The `brightness_boost` constructor kwarg overrides the
+    module-level default — useful for tests that want to assert the
+    exact forwarded brightness without the 1.15x multiplier."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    key = "media/images/2026-07/a.jpg"
+    _prep_cache_for_jpeg(cache_dir, key)
+    cycler = _make_cycler(
+        "msg-5b",
+        [{"type": "image/jpeg", "url": key}],
+        cache_dir=cache_dir,
+        brightness_boost=1.0,  # disable the boost
+    )
+    assert cycler._active is not None
+    cycler.set_brightness(0.5)
+    # With boost=1.0 the inner renderer sees the unboosted value.
     inner = cycler._active
     assert getattr(inner, "_coord_b", None) == 0.5 or getattr(inner, "_brightness", None) == 0.5
 

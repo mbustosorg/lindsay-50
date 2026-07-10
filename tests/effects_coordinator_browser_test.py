@@ -262,7 +262,7 @@ def test_preview_fallback_skips_when_media_cycler_module_missing(monkeypatch):
     assert coord.current is sentinel
 
 
-def test_preview_fallback_swaps_when_browser_overlay_exhausted():
+def test_preview_fallback_triggers_fade_when_browser_overlay_exhausted():
     """Browser-side fallback (issue #38, debug-2026-07-09).
 
     Regression for the "preview isn't falling back to a standard
@@ -270,29 +270,31 @@ def test_preview_fallback_swaps_when_browser_overlay_exhausted():
     `BrowserMediaOverlay` instead of a `MediaCycler` at the out→in
     transition (PIL/cv2 aren't in the PyScript bundle). If every
     attachment's URL 404s, the overlay flips `exhausted=True` and
-    the canvas should swap back to a rotation effect — otherwise the
+    the canvas should fade to a rotation effect — otherwise the
     preview sits on an empty overlay for the rest of the hold (the
     user-visible symptom: "image isn't rendering, and the canvas
     stays black underneath").
 
     Pin the contract: with `coord.current` set to a
     `BrowserMediaOverlay` whose `exhausted=True`, calling
-    `_maybe_fall_back_to_rotation()` swaps `coord.current` back to
-    `coord.effects[coord.idx]` — same as the host-side
-    MediaCycler branch.
+    `_maybe_fall_back_to_rotation()` triggers the existing fade-out
+    machinery (mode flips to `out`, overlay stays as current). The
+    rotation effect swap happens later when the `out` mode's fade
+    completes — same as the host-side MediaCycler branch.
     """
     from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
 
     coord = _build_preview_coord(messages=[])
-    # Stand-in rotation effect — a real Effect with `set_brightness`
-    # so the fallback's post-swap `set_brightness(self._current_brightness)`
-    # call doesn't AttributeError. Distinct identity, so we can
-    # assert the swap rather than a no-op.
+    # Stand-in rotation effect — a real Effect so the `out` mode's
+    # post-fade swap can attach it without an AttributeError.
+    # Distinct identity, so we can assert the swap rather than a
+    # no-op when the fade completes.
     from tests.preview_wiring_test import _make_effect
 
     rotation_effect = _make_effect("Rotation")()
     coord.effects = [rotation_effect]  # type: ignore[assignment]
     coord.idx = 0
+    coord.mode = "hold"
     # Construct a `BrowserMediaOverlay` directly (we don't need a
     # real out→in transition here; we're testing the fallback
     # branch in isolation).
@@ -307,7 +309,10 @@ def test_preview_fallback_swaps_when_browser_overlay_exhausted():
 
     coord._maybe_fall_back_to_rotation()
 
-    # The swapped-in current IS the rotation effect.
+    # The helper triggered the fade-out — overlay is still current
+    # and the coordinator's mode is `out` so `_step_fade` will
+    # ramp the overlay's brightness to 0 on the next tick.
     assert (
-        coord.current is rotation_effect
-    ), "BrowserMediaOverlay exhausted should fall back to " "coord.effects[coord.idx]; got %r" % (coord.current,)
+        coord.current is overlay
+    ), "BrowserMediaOverlay should still be current until fade completes; got %r" % (coord.current,)
+    assert coord.mode == "out"
