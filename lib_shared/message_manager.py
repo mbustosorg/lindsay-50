@@ -590,6 +590,7 @@ class MessageManager:
                             sender=item.get("sender", ""),
                             body=item.get("body", ""),
                             received_at=item.get("received_at", ""),
+                            media=item.get("media") or [],
                         )
                         for item in data[:100]
                     ]

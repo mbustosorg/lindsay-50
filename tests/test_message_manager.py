@@ -221,6 +221,89 @@ class TestSeedServer:
         assert mgr.config.timezone == "US/Pacific"
         assert mgr.config.sign.name == "Test Sign"
 
+    def test_seed_preserves_media_from_rest_payload(
+        self, messages_api_url, config_api_url, api_key
+    ):
+        """REST seed must carry `media` through to the in-memory Message.
+
+        Regression for the "fresh MMS includes media, restart Flask
+        and they're gone" symptom. The Flask REST API correctly
+        returns `media` in the JSON (Message.to_dict includes it),
+        but MessageManager.seed() was constructing `Message(...)`
+        with only 4 fields and dropping the list. Manual Refresh on
+        the Testing page takes this path; cold-load via app.js does
+        too. Same shape as the MQTT-envelope fix (1fc1fff).
+        """
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            is_browser=False,
+        )
+        rest_payload = [
+            {
+                "id": "mms1",
+                "sender": "+15553333333",
+                "body": "with attachment",
+                "received_at": "2026-07-01T12:00:00Z",
+                "media": [
+                    {"type": "image/png", "url": "media/images/2026-07/k.png"},
+                ],
+            },
+        ]
+
+        async def mock_fetch(url):
+            return rest_payload if url == messages_api_url else {}
+
+        mgr._fetch = mock_fetch  # type: ignore[assignment]
+        asyncio.run(mgr.seed())
+
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.id == "mms1"
+        assert msgs[0].message.media == [
+            {"type": "image/png", "url": "media/images/2026-07/k.png"},
+        ]
+        # And the top-level MessageView attribute (the JS-side
+        # proxy surface) mirrors it — both reading paths agree.
+        assert msgs[0].media == msgs[0].message.media
+
+    def test_seed_missing_media_defaults_to_empty(
+        self, messages_api_url, config_api_url, api_key
+    ):
+        """REST payload without `media` (SMS-only) → `media == []`.
+
+        The `or []` collapse handles both "key absent" and "explicit
+        None" so a malformed payload can't crash the constructor.
+        """
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            is_browser=False,
+        )
+        rest_payload = [
+            {
+                "id": "sms1",
+                "sender": "+15554444444",
+                "body": "no attach",
+                "received_at": "2026-07-01T13:00:00Z",
+                # no media key
+            },
+        ]
+
+        async def mock_fetch(url):
+            return rest_payload if url == messages_api_url else {}
+
+        mgr._fetch = mock_fetch  # type: ignore[assignment]
+        asyncio.run(mgr.seed())
+
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.media == []
+
 
 class TestSeedBrowser:
     def test_seed_calls_fetch_for_messages_then_config_browser(
