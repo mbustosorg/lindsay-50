@@ -37,7 +37,15 @@ import threading
 log = logging.getLogger("heart")
 
 _DB_NAME = "lindsay50"
-_DB_VERSION = 1
+# Bumped from 1 to 2 after issue #26 local testing surfaced
+# `NotFoundError: One of the specified object stores was not found`
+# in browsers that opened the DB at version 1 before the `events`
+# store existed. `onupgradeneeded` only fires when the requested
+# version exceeds the stored one, so stale DBs opened at v1 sit
+# forever without the store until the version is increased. The
+# existing `_on_upgrade` handler creates the missing store if it
+# doesn't already exist, so a v2 open on a v1 DB is self-healing.
+_DB_VERSION = 2
 _STORE_NAME = "events"
 # Required keys per event. Kept in lockstep with the Pi-side schema in
 # `heart-matrix-controller/event_log.py` so the same selector class
