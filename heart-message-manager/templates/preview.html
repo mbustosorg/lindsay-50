@@ -42,11 +42,11 @@
          the LED look is preserved. The `<video>` is muted/looped/
          autoplayed to satisfy browser autoplay policies for silent
          looping clips. #}
-      <img id="browser-media-image" alt=""
-           class="absolute inset-4 max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] mx-auto object-contain pointer-events-none hidden"
+      <img id="browser-media-image" alt="" hidden
+           class="absolute inset-4 max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] mx-auto object-contain pointer-events-none"
            style="z-index: 2; opacity: 0;">
-      <video id="browser-media-video" muted loop autoplay playsinline
-             class="absolute inset-4 max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] mx-auto object-contain pointer-events-none hidden"
+      <video id="browser-media-video" muted loop autoplay playsinline hidden
+             class="absolute inset-4 max-w-[calc(100%-2rem)] max-h-[calc(100%-2rem)] mx-auto object-contain pointer-events-none"
              style="z-index: 2; opacity: 0;"></video>
       <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
         Loading preview…
