@@ -362,6 +362,38 @@ def test_maybe_fall_back_to_rotation_swaps_when_cycler_exhausted():
     assert coord.current is fx_b
 
 
+def test_maybe_fall_back_to_rotation_swaps_when_cycler_complete():
+    """A `MediaCycler` with `complete=True` is swapped back to
+    `self.effects[self.idx]` — same swap path as `exhausted`. The
+    cycler played through its content (1-item ran for `duration`
+    seconds; multi-item cycled every attachment); the coordinator
+    takes the rotation effect for the remainder of the hold / idle
+    window instead of looping the same frame."""
+    from lib_shared.patterns.media_cycler import MediaCycler
+
+    fx_a = _make_effect("A")()
+    fx_b = _make_effect("B")()
+    coord = _build_coord(message_manager=_StubMessageManager(messages=[]))
+    coord.effects = [fx_a, fx_b]
+    coord.idx = 1
+
+    cycler = MediaCycler(
+        "m2",
+        [{"type": "image/jpeg", "url": "key/b.jpg"}],
+        display=coord.display,
+    )
+    # `complete` is set when the cycler decides it's done — we
+    # flip it manually here so the test doesn't have to drive the
+    # elapsed-time path.
+    cycler.complete = True
+    cycler.exhausted = False  # mutually independent; cover both shapes
+    coord.current = cycler
+
+    coord._maybe_fall_back_to_rotation()
+    # Same outcome as exhausted — swap back to effects[1].
+    assert coord.current is fx_b
+
+
 # ---------------------------------------------------------------------------
 # Out→in transition: end-to-end
 # ---------------------------------------------------------------------------

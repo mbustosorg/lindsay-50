@@ -197,6 +197,19 @@ class MediaCycler(Effect):
         # gated by `hold_seconds`, not by an internal "all items
         # shown" counter).
         self.exhausted: bool = False
+        # When True, the cycler has shown all of its natural content
+        # and the coordinator should fall back to the rotation effect
+        # at the next tick. Distinct from `exhausted` (D12 codec
+        # failure): `exhausted` means "I have no playable items left
+        # to try"; `complete` means "I played everything I was given
+        # — I'm done on purpose." For 1-item lists, `complete` flips
+        # after `item["duration"]` seconds (10s for images, video
+        # length for videos). For multi-item, after every item has
+        # been shown at least once. Coordinator swap-in happens via
+        # `_maybe_fall_back_to_rotation` (called from `hold` and
+        # `background` branches) — the same duck-typed check that
+        # already handles `exhausted`.
+        self.complete: bool = False
 
         if self._items:
             self._cache_dir.mkdir(parents=True, exist_ok=True)
@@ -367,7 +380,10 @@ class MediaCycler(Effect):
             return
 
         # 1-item case: never advance internally — the coordinator
-        # cuts off via hold_seconds. Re-pick the same item.
+        # cuts off via hold_seconds. Re-pick the same item. Flip
+        # `complete` after the item's natural duration so the
+        # coordinator swaps us out for the rotation effect (instead
+        # of looping the same frame for `idle_seconds`).
         if len(self._items) == 1:
             item = self._items[0]
             if item["renderer"] is None:
@@ -390,9 +406,11 @@ class MediaCycler(Effect):
 
         # Multi-item case: pick uniformly at random from
         # not-yet-shown-this-cycle items. If every item is shown,
-        # reset the cycle and pick again (uniform random over the
-        # full list).
+        # we've completed the cycle — flip `complete` so the
+        # coordinator swaps us out for the rotation effect instead
+        # of looping the same item set forever.
         not_shown = [it for it in self._items if not it["shown"]]
+        all_shown = not not_shown
         candidates = not_shown if not_shown else self._items
         chosen = random.choice(candidates)
 
@@ -410,6 +428,14 @@ class MediaCycler(Effect):
         self._phase = "hold"
         self._phase_start = time.monotonic()
         chosen["shown"] = True
+        # Once every item has been shown, the cycle is done — flip
+        # `complete` so the coordinator falls back to the rotation
+        # effect at the next tick. We don't reset the `shown` flags;
+        # if the coordinator wants another cycle (e.g. the
+        # rotation effect also finished early), a fresh MediaCycler
+        # will be constructed at the next out→in.
+        if all_shown:
+            self.complete = True
 
     def _drop_item(self, item: dict) -> None:
         """Remove `item` from `self._items` and clean up its renderer."""
@@ -462,7 +488,14 @@ class MediaCycler(Effect):
             return
 
         if len(self._items) <= 1:
-            # 1-item case — never advance internally.
+            # 1-item case — never advance internally, but DO flip
+            # `complete` after the item's natural duration so the
+            # coordinator swaps us out for the rotation effect
+            # instead of looping the same frame for `idle_seconds`.
+            if len(self._items) == 1:
+                elapsed = time.monotonic() - self._phase_start
+                if elapsed >= self._items[0]["duration"]:
+                    self.complete = True
             return
 
         elapsed = time.monotonic() - self._phase_start

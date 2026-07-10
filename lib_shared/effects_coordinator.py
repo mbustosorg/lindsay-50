@@ -522,18 +522,28 @@ class EffectsCoordinator:
         is_browser_overlay = isinstance(current, _BrowserOverlay)
         if not (is_media_cycler or is_browser_overlay):
             return
-        # Both cyclers extend `Effect` and add `exhausted` —
-        # pyright can't see it through `isinstance` narrowing, so
-        # the attribute access is annotated.
-        if not current.exhausted:  # type: ignore[attr-defined]
+        # Both cyclers extend `Effect` and add `exhausted` and
+        # `complete` — pyright can't see them through `isinstance`
+        # narrowing, so the attribute access is annotated.
+        # `exhausted` = codec failure (D12, every item dropped);
+        # `complete` = cycler played everything it was given (1-item
+        # ran for `item["duration"]` seconds; multi-item cycled
+        # through every attachment once). Both trigger the same
+        # swap-back-to-rotation behavior — the cycler is done
+        # either way, and the rotation effect should take over for
+        # the remainder of the hold/idle window.
+        is_done = bool(current.exhausted) or bool(getattr(current, "complete", False))  # type: ignore[attr-defined]
+        if not is_done:
             return
         effects = self.effects
         if not effects:
             return
         self.current = effects[self.idx]
         self.current.set_brightness(self._current_brightness)
+        reason = "exhausted" if getattr(current, "exhausted", False) else "complete"  # type: ignore[attr-defined]
         log.info(
-            "Coordinator media-cycler exhausted (%s): falling back to rotation effect=%s",
+            "Coordinator media-cycler %s (%s): falling back to rotation effect=%s",
+            reason,
             "BrowserMediaOverlay" if is_browser_overlay else "MediaCycler",
             self.current_effect_name,
         )
@@ -912,6 +922,20 @@ class EffectsCoordinator:
                 self.mode = "background"
 
         elif mode == "background":
+            # MediaCycler fall-back (issue #38 follow-up): if the
+            # cycler is exhausted or has completed playback of
+            # every item, swap it back to the rotation effect for
+            # the remainder of the idle window. Without this, an
+            # empty-body MMS lands in background with
+            # `self.current = MediaCycler` and the cycler loops the
+            # same frame(s) for the full `idle_seconds` (60s by
+            # default, was 5min before that). The user-visible
+            # symptom: a 1-second screenshot-video sits on the
+            # panel for the whole idle window before re-rolling.
+            # With this call, the cycler signals `complete` after
+            # `item["duration"]` (10s for images, video length for
+            # videos) and we fall back here on the next tick.
+            self._maybe_fall_back_to_rotation()
             # Background semantics (v2, pull-once):
             #   - A genuinely new SMS (head.id differs from last-shown) kicks
             #     a fade immediately — the operator just texted, show it now.

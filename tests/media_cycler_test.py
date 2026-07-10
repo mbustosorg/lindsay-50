@@ -427,6 +427,159 @@ def test_media_cycler_one_item_does_not_signal_exhausted(tmp_path, cfg_stub):
 
 
 # ---------------------------------------------------------------------------
+# `complete` flag — the cycler signals "I've shown everything I was given"
+# so the coordinator can swap us out for the rotation effect instead of
+# looping the same frame for `idle_seconds`.
+# ---------------------------------------------------------------------------
+
+
+def test_media_cycler_one_item_complete_flips_after_duration(tmp_path, cfg_stub):
+    """1-item cycler flips `complete = True` once `item["duration"]`
+    seconds have elapsed in the active phase. The coordinator reads
+    this on the next tick and swaps the cycler out for the rotation
+    effect — prevents the user-visible "frozen last frame sits for
+    60s" symptom from empty-body MMS in background mode."""
+
+    class _FakeRenderer:
+        def set_brightness(self, b):
+            pass
+
+        def tick(self):
+            pass
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    key = "media/images/2026-07/one.jpg"
+    _prep_cache_for_jpeg(cache_dir, key)
+    cycler = _make_cycler("msg-c1", [{"type": "image/jpeg", "url": key}], cache_dir=cache_dir)
+    # The cycler already built its inner renderer (ImageDisplay). We
+    # swap in a FakeRenderer so we don't need to drive ImageDisplay's
+    # state machine — only the cycler's elapsed-vs-duration check.
+    fake = _FakeRenderer()
+    cycler._items[0]["renderer"] = fake
+    cycler._active = fake
+    cycler._phase = "hold"
+    cycler._phase_start = time.monotonic()
+    cycler._items[0]["duration"] = 5.0  # arbitrary
+
+    assert cycler.complete is False
+    # Tick with elapsed=0 → still not complete.
+    cycler.tick()
+    assert cycler.complete is False
+    # Force elapsed > duration.
+    cycler._phase_start = time.monotonic() - 6.0
+    cycler.tick()
+    assert cycler.complete is True
+    # Stays True on subsequent ticks (one-shot flip).
+    cycler.tick()
+    assert cycler.complete is True
+
+
+def test_media_cycler_one_item_complete_stays_false_under_duration(tmp_path, cfg_stub):
+    """1-item cycler does NOT flip `complete` while elapsed < duration.
+    The coordinator uses this to keep the cycler in place for the
+    item's natural display window."""
+
+    class _FakeRenderer:
+        def set_brightness(self, b):
+            pass
+
+        def tick(self):
+            pass
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    key = "media/images/2026-07/two.jpg"
+    _prep_cache_for_jpeg(cache_dir, key)
+    cycler = _make_cycler("msg-c2", [{"type": "image/jpeg", "url": key}], cache_dir=cache_dir)
+    fake = _FakeRenderer()
+    cycler._items[0]["renderer"] = fake
+    cycler._active = fake
+    cycler._phase = "hold"
+    cycler._phase_start = time.monotonic()
+    cycler._items[0]["duration"] = 30.0  # bigger than test runtime
+
+    # Many ticks with elapsed=0 — complete stays False.
+    for _ in range(20):
+        cycler.tick()
+    assert cycler.complete is False
+
+
+def test_media_cycler_multi_item_complete_flips_when_all_shown(tmp_path, cfg_stub):
+    """Multi-item cycler flips `complete = True` when every item has
+    been shown at least once. After that, the coordinator swaps us
+    out for the rotation effect — no looping forever."""
+
+    class _FakeRenderer:
+        def __init__(self):
+            self.idx = -1
+
+        def set_brightness(self, b):
+            pass
+
+        def tick(self):
+            pass
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    images = []
+    for i in range(3):
+        key = f"media/images/2026-07/c3-{i}.jpg"
+        _prep_cache_for_jpeg(cache_dir, key)
+        images.append({"type": "image/jpeg", "url": key})
+
+    cycler = _make_cycler("msg-c3", images, cache_dir=cache_dir)
+    # Replace renderers with fakes (deterministic) and pre-mark all
+    # items as shown so the next `_cycle_advance()` lands on the
+    # "all_shown" branch and flips `complete`.
+    fakes = [_FakeRenderer() for _ in range(3)]
+    for item, fake in zip(cycler._items, fakes):
+        item["renderer"] = fake
+        item["shown"] = True
+    cycler._active = fakes[0]
+    cycler._phase = "hold"
+
+    assert cycler.complete is False
+    cycler._cycle_advance()  # picks from self._items (all shown → complete=True)
+    assert cycler.complete is True
+
+
+def test_media_cycler_multi_item_complete_stays_false_while_some_unshown(tmp_path, cfg_stub):
+    """Multi-item cycler does NOT flip `complete` while some items
+    are still unshown — keeps the rotation going through the full
+    attachment list before signaling done."""
+
+    class _FakeRenderer:
+        def set_brightness(self, b):
+            pass
+
+        def tick(self):
+            pass
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    images = []
+    for i in range(3):
+        key = f"media/images/2026-07/c4-{i}.jpg"
+        _prep_cache_for_jpeg(cache_dir, key)
+        images.append({"type": "image/jpeg", "url": key})
+
+    cycler = _make_cycler("msg-c4", images, cache_dir=cache_dir)
+    fakes = [_FakeRenderer() for _ in range(3)]
+    for item, fake in zip(cycler._items, fakes):
+        item["renderer"] = fake
+    # Two of three shown; one unshown.
+    cycler._items[0]["shown"] = True
+    cycler._items[1]["shown"] = True
+    cycler._items[2]["shown"] = False
+    cycler._active = fakes[0]
+    cycler._phase = "hold"
+
+    cycler._cycle_advance()  # picks an unshown item; not all shown
+    assert cycler.complete is False
+
+
+# ---------------------------------------------------------------------------
 # Multi-item cycling
 # ---------------------------------------------------------------------------
 
