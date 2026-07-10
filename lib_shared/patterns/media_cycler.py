@@ -675,4 +675,8 @@ def _ext_for_mime(mime: str) -> str:
         "video/3gpp": ".3gp",
         "video/3gpp2": ".3g2",
     }
-    return table.get((mime or "").lower(), "")
+    # Strip MIME parameters (e.g. `; charset=binary`, `; codecs="h263"`)
+    # before lookup — Twilio sends parameterized Content-Types that
+    # otherwise don't match the table. See `s3._safe_ext` for the
+    # server-side sibling of this fix.
+    return table.get(((mime or "").split(";", 1)[0].strip().lower()), "")

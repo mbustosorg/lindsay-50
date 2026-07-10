@@ -281,8 +281,17 @@ def _safe_ext(content_type: str, fallback: str = "") -> str:
     the leading dot, or `fallback` (also expected to include the dot) on
     unknown types. Lowercases the result so `/media/.../key.MP4` and
     `/media/.../key.mp4` are indistinguishable on the wire.
+
+    Strips MIME parameters before lookup: `video/3gpp; codecs="h263"`
+    resolves the same as plain `video/3gpp`. Twilio sometimes appends
+    charset / codec hints that aren't part of the canonical MIME, and
+    without the strip the `_MIME_EXT_TABLE` exact-lookup falls through
+    to `.bin` for perfectly good `video/3gpp` rows — the user's
+    reported symptom. The split is on `;` (MIME spec §5.3.2 — parameters
+    are `;`-separated from the type/subtype) and trims whitespace.
     """
-    ext = _MIME_EXT_TABLE.get(content_type.lower())
+    base = content_type.split(";", 1)[0].strip().lower()
+    ext = _MIME_EXT_TABLE.get(base)
     if ext is None:
         return fallback
     return ext[0].lower()

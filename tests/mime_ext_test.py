@@ -142,3 +142,68 @@ def test_cycler_ext_unknown_mime_returns_empty():
     assert _ext_for_mime("video/x-matroska") == ".mkv"  # documented case
     assert _ext_for_mime("application/octet-stream") == ""  # unknown
     assert _ext_for_mime("") == ""
+
+
+# --- Parameter stripping (fix for user-reported .bin symptom) -------------
+
+
+def test_cycler_ext_3gpp_strips_parameters():
+    """`video/3gpp; codecs="h263"` resolves the same as plain
+    `video/3gpp`. Twilio appends charset / codec hints that aren't
+    part of the canonical MIME, and without the strip the table
+    exact-match miss falls through to empty (the cycler side) or
+    `.bin` (the s3 side). Symptom: a perfectly good Twilio video
+    lands in S3 as `.bin` and the browser preview's `<video>`
+    element can't infer a codec from the URL extension.
+    """
+    from lib_shared.patterns.media_cycler import _ext_for_mime
+
+    assert _ext_for_mime("video/3gpp") == ".3gp"
+    assert _ext_for_mime('video/3gpp; codecs="h263"') == ".3gp"
+    assert _ext_for_mime("video/3gpp; charset=binary") == ".3gp"
+    assert _ext_for_mime("VIDEO/3GPP;  charset=binary") == ".3gp"
+
+
+def test_s3_safe_ext_strips_parameters():
+    """The s3-side `_safe_ext` (server-side sibling of the cycler
+    fix) also strips MIME parameters. Pinned via AST scan — same
+    reason as the table-level tests (avoid importing s3.py which
+    pulls boto3 + config).
+
+    Layered on d0f3a9a, which added `video/3gpp → .3gp` to the
+    `_MIME_EXT_TABLE`. d0f3a9a's entry is exact-match — without the
+    parameter strip, Twilio's `video/3gpp; codecs="h263"` form
+    misses the table and falls through to `.bin` (the user's
+    reported symptom). This test pins the strip at the call site
+    so a future regression that drops the split without a
+    replacement is caught immediately.
+    """
+    import re as _re
+
+    src_path = _PROJECT_ROOT / "heart-message-manager" / "s3.py"
+    src = src_path.read_text(encoding="utf-8")
+
+    # Slice from `def _safe_ext(` to the next top-level `def `.
+    # Using `\n\n` would match inside the docstring; using `\ndef `
+    # reliably hits the boundary between this function and whatever
+    # follows it (regardless of whether there's a blank line).
+    safe_ext_start = src.index("def _safe_ext(")
+    m = _re.search(r"^def ", src[safe_ext_start + 1:], _re.MULTILINE)
+    assert m is not None, "no following top-level `def ` found — file shape changed?"
+    safe_ext_end = safe_ext_start + 1 + m.start()
+    body = src[safe_ext_start:safe_ext_end]
+    assert 'split(";", 1)' in body, (
+        "_safe_ext should strip MIME parameters (e.g. `; charset=binary`) "
+        "before the table lookup — Twilio sends parameterized Content-Types "
+        "that would otherwise miss the exact-match table and fall through to "
+        "`.bin`. Symptom: live `media-...bin` URLs for video/3gpp MMS."
+    )
+
+
+def test_cycler_ext_unknown_with_parameters_returns_empty():
+    """Parameter stripping doesn't accidentally match an unknown
+    type — `application/octet-stream; foo=bar` is still unknown."""
+    from lib_shared.patterns.media_cycler import _ext_for_mime
+
+    assert _ext_for_mime("application/octet-stream; foo=bar") == ""
+    assert _ext_for_mime("image/svg+xml; charset=utf-8") == ""

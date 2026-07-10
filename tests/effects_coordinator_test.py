@@ -585,8 +585,11 @@ def test_begin_out_emits_info_log(caplog):
     clock.advance(0.001)
     coord.tick()  # intro → out via _begin_out
 
-    matches = _info_records(caplog, "Coordinator._begin_out")
-    assert matches, "Expected INFO log line 'Coordinator._begin_out'; got: " + "; ".join(
+    # Log shape consolidated in debug-visibility: single
+    # "Coordinator: starting fade out from mode=X effect=Y trigger=Z"
+    # line replaces the old verbose "Coordinator._begin_out:" form.
+    matches = _info_records(caplog, "starting fade out")
+    assert matches, "Expected INFO log line 'starting fade out'; got: " + "; ".join(
         r.getMessage() for r in caplog.records
     )
     # The log line carries the from-mode and the active effect for context.
@@ -614,14 +617,22 @@ def test_out_to_in_and_in_to_hold_emit_info_logs(caplog):
     caplog.set_level(logging.INFO)
     _drive(clock, coord, 0.3)  # intro → out → in → hold
 
-    # out → in fires with the new effect name + the text that was set.
-    out_to_in = _info_records(caplog, "Coordinator out→in")
-    assert out_to_in, "Expected 'Coordinator out→in' INFO log"
-    assert "hi" in out_to_in[0].getMessage()
+    # out → in: the new shape splits into two lines — a "selected"
+    # dump carrying the full picked message, then a "starting fade
+    # in" line. We assert both are present and the picked message
+    # made it into the selected line.
+    selected = _info_records(caplog, "Coordinator: selected")
+    assert selected, "Expected 'Coordinator: selected' INFO log at out→in"
+    assert "m1" in selected[0].getMessage()
+    fade_in = _info_records(caplog, "starting fade in")
+    assert fade_in, "Expected 'starting fade in' INFO log"
 
     # in → hold fires once the fade-in completes (showing_text was True).
-    in_to_hold = _info_records(caplog, "Coordinator in→hold")
-    assert in_to_hold, "Expected 'Coordinator in→hold' INFO log"
+    # New shape: "Coordinator: fade in done effect=X next_mode=hold text=..."
+    fade_in_done = _info_records(caplog, "fade in done")
+    assert fade_in_done, "Expected 'fade in done' INFO log"
+    assert "next_mode=hold" in fade_in_done[0].getMessage()
+    assert "hi" in fade_in_done[0].getMessage()
     monkey.undo()
 
 
@@ -755,14 +766,17 @@ def test_background_re_rolls_on_idle_timeout(caplog):
     _drive(clock, coord, 1.0)
 
     # The idle trigger must have fired at least once.
-    matches = _info_records(caplog, "Coordinator background→out", "(idle)")
-    assert matches, (
-        "Expected at least one 'Coordinator background→out' INFO log with "
-        "the (idle) trigger when the coordinator sat in background past "
+    # Log shape consolidated in debug-visibility: the verbose
+    # "Coordinator background→out (idle):" form is gone — the same
+    # "starting fade out" line carries `trigger=idle` in its args.
+    matches = _info_records(caplog, "starting fade out")
+    assert matches, "Expected at least one 'starting fade out' INFO log"
+    idle_lines = [r for r in matches if "trigger=idle" in r.getMessage()]
+    assert idle_lines, (
+        "Expected at least one 'starting fade out' INFO log with "
+        "trigger=idle when the coordinator sat in background past "
         "idle_seconds. If missing, the fix isn't wired up."
     )
-    msg_log = matches[0].getMessage()
-    assert "0.3" in msg_log, f"Expected idle_seconds=0.3 in the log; got: {msg_log!r}"
     monkey.undo()
 
 
@@ -806,12 +820,20 @@ def test_background_re_rolls_on_fresh_id(caplog):
     clock.advance(0.5)  # past PULL_INTERVAL
     coord.tick()
 
-    matches = _info_records(caplog, "Coordinator background→out", "(new_id)")
-    assert matches, "Expected background→out with (new_id) trigger when an un-shown SMS lands."
-    # And the actual fade-in path should also fire.
+    matches = _info_records(caplog, "starting fade out")
+    assert matches, "Expected 'starting fade out' INFO log when a new SMS lands in background."
+    new_id_lines = [r for r in matches if "trigger=new_id" in r.getMessage()]
+    assert new_id_lines, (
+        "Expected 'starting fade out' with trigger=new_id when an un-shown SMS lands."
+    )
+    # And the actual fade-in path should also fire — split into
+    # "Coordinator: selected" + "starting fade in" lines.
     assert _info_records(
-        caplog, "Coordinator out→in"
-    ), "After background→out (new_id), out→in should follow and set scroller text."
+        caplog, "starting fade in"
+    ), "After starting fade out (new_id), the fade-in should follow."
+    assert _info_records(
+        caplog, "Coordinator: selected"
+    ), "After starting fade out (new_id), the selection log should fire."
     monkey.undo()
 
 

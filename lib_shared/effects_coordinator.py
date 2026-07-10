@@ -588,6 +588,7 @@ class EffectsCoordinator:
         # swaps to the next rotation effect at brightness 0, and
         # transitions to `in` for the fade-up. The `_step_fade`
         # throttle handles per-step palette writes during the ramp.
+        self._begin_out_trigger = "cycler_complete"
         self._begin_out(time.monotonic())
 
     def _current_is_active_media_cycler(self) -> bool:
@@ -731,11 +732,18 @@ class EffectsCoordinator:
         scroller_text = ""
         if self.scroller is not None:
             scroller_text = self.scroller.text or ""
+        # Single-line fade-start: one of three triggers — intro→out
+        # (first-ever boot), idle (hold/background ran their full
+        # duration), or fresh-id interrupt. Carry the trigger so the
+        # operator can grep for it; drop the verbose multi-arg form
+        # (per-cycle noise — selection info goes in the `Coordinator:
+        # selected ...` line emitted at the `out→in` site).
         log.info(
-            "Coordinator._begin_out: from mode=%s effect=%s scroller_text=%r",
+            "Coordinator: starting fade out from mode=%s effect=%s scroller=%r trigger=%s",
             self.mode,
             self.current_effect_name,
             scroller_text,
+            getattr(self, "_begin_out_trigger", "-"),
         )
         self.mode = "out"
         self.fade_start = now
@@ -845,6 +853,7 @@ class EffectsCoordinator:
 
         if mode == "intro":
             if now - self.phase_start >= effects_settings.intro_seconds:
+                self._begin_out_trigger = "intro_done"
                 self._begin_out(now)
 
         elif mode == "out":
@@ -913,13 +922,40 @@ class EffectsCoordinator:
                 else:
                     scroller.set_text("", display.width)
                     self.showing_text = False
+                # Selection-time INFO: dumps the FULL picked message
+                # (id, sender, body, media count) plus the chosen
+                # effect, in a single line. Operators tailing the
+                # sign journal can grep "Coordinator: selected" to
+                # reconstruct what the Pi is showing without
+                # cross-referencing the rotation rebuild +
+                # `set_text` + `out→in` chain. Fires once per
+                # selection (gated on `mode` flip to "in", not on
+                # every tick — see _last_picked_entry at line 880 for
+                # the same idempotency contract). Media list is
+                # summarized to a count to keep the line short when
+                # an MMS has many attachments.
+                picked = getattr(self, "_last_picked_entry", None)
+                if picked is not None:
+                    pm = picked.message
+                    log.info(
+                        "Coordinator: selected idx=%d effect=%s msg_id=%s body=%r sender=%s media=%d",
+                        self.idx,
+                        self.current_effect_name,
+                        pm.id,
+                        pm.body,
+                        pm.sender,
+                        len(getattr(pm, "media", []) or []),
+                    )
+                else:
+                    log.info(
+                        "Coordinator: selected idx=%d effect=%s (no picked entry — rotation)",
+                        self.idx,
+                        self.current_effect_name,
+                    )
                 log.info(
-                    "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s media_override=%s",
-                    self.idx,
+                    "Coordinator: starting fade in effect=%s idx=%d",
                     self.current_effect_name,
-                    text if text else "",
-                    self.showing_text,
-                    "yes" if media_override is not None else "no",
+                    self.idx,
                 )
                 self.mode = "in"
                 self.fade_start = now
@@ -933,9 +969,9 @@ class EffectsCoordinator:
                 self.phase_start = now
                 next_mode = "hold" if self.showing_text else "background"
                 log.info(
-                    "Coordinator in→%s: effect=%s text=%r",
-                    next_mode,
+                    "Coordinator: fade in done effect=%s next_mode=%s text=%r",
                     self.current_effect_name,
+                    next_mode,
                     self.last_shown_text or "",
                 )
                 self.mode = next_mode
@@ -995,6 +1031,7 @@ class EffectsCoordinator:
                     self.last_shown_text,
                     self.current_messages[0].message.id,
                 )
+                self._begin_out_trigger = "fresh_id_interrupt"
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= effects_settings.hold_seconds:
                 log.info(
@@ -1104,13 +1141,10 @@ class EffectsCoordinator:
                 new_text = self._pick_next_text()
                 if new_text is not None:
                     self._last_display_message = new_text
-                log.info(
-                    "Coordinator background→out (%s): waited=%.1fs idle_seconds=%.1f next_text=%r",
-                    trigger,
-                    now - self.phase_start,
-                    effects_settings.idle_seconds,
-                    new_text or "",
-                )
+                # The verbose multi-arg "background→out (...)" log is
+                # dropped — operators now grep "Coordinator: starting
+                # fade out trigger=<X>" emitted inside `_begin_out`.
+                self._begin_out_trigger = trigger  # "idle" or "new_id"
                 self._begin_out(now)  # show the queued message
 
         current = self.current
