@@ -407,7 +407,7 @@ def get_current_media():
     coord = _coord()
     if coord is None:
         return to_js(
-            {"url": "", "kind": "", "opacity": 0.0, "key": ""},
+            {"url": "", "kind": "", "opacity": 0.0, "brightness": 1.0, "key": ""},
             dict_converter=js.Object.fromEntries,
         )
     current = coord.current
@@ -415,7 +415,7 @@ def get_current_media():
         from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
     except ImportError:
         return to_js(
-            {"url": "", "kind": "", "opacity": 0.0, "key": ""},
+            {"url": "", "kind": "", "opacity": 0.0, "brightness": 1.0, "key": ""},
             dict_converter=js.Object.fromEntries,
         )
     if isinstance(current, BrowserMediaOverlay):
@@ -424,6 +424,14 @@ def get_current_media():
                 "url": current.current_media_url,
                 "kind": current.current_media_kind,
                 "opacity": current.current_opacity,
+                # `brightness` is the multiplicative boost applied
+                # on top of full opacity (~1.15 by default). The JS
+                # applies it as `style.filter = "brightness(N)"`
+                # which scales pixel brightness multiplicatively —
+                # matches the panel's channel-level clamping for
+                # the Pi side. Sent UNCLAMPED; the JS clamps before
+                # applying to keep the CSS sane.
+                "brightness": current.current_brightness,
                 "key": current.current_media_key,
             },
             dict_converter=js.Object.fromEntries,
@@ -448,7 +456,7 @@ def get_current_media():
     except Exception:
         pass
     return to_js(
-        {"url": "", "kind": "", "opacity": 0.0, "key": ""},
+        {"url": "", "kind": "", "opacity": 0.0, "brightness": 1.0, "key": ""},
         dict_converter=js.Object.fromEntries,
     )
 

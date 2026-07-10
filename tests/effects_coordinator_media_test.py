@@ -35,7 +35,6 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 # ---------------------------------------------------------------------------
 
 from tests.effects_coordinator_test import (  # noqa: E402
-    _StubCanvas,
     _StubDisplay,
     _StubScroller,
     _StubMessageManager,
@@ -88,10 +87,10 @@ def _build_coord(
     heart = _make_effect("Heart")()
     return EffectsCoordinator(
         message_manager=message_manager,
-        display=display,
-        scroller=scroller,
-        effects=[fx_a],
-        heart=heart,
+        display=display,  # type: ignore[arg-type]
+        scroller=scroller,  # type: ignore[arg-type]
+        effects=[fx_a],  # type: ignore[arg-type]
+        heart=heart,  # type: ignore[arg-type]
         media_api_base_url=media_api_base_url,
         media_cache_dir=media_cache_dir,
     )
@@ -106,20 +105,27 @@ def _patch_config(monkeypatch):
     cfg_stub = SimpleNamespace(
         if_exists=lambda k: {"PNG_INTERVAL": "0.05", "PNG_FADE": "0.02"}.get(k),
     )
+
+    def _stub_get_config(required_keys=None):  # required_keys: signature match
+        # Mark `required_keys` as intentionally unused at runtime —
+        # the real get_config has the same signature, callers ignore it.
+        _ = required_keys
+        return cfg_stub
+
     monkeypatch.setattr(
         "lib_shared.config_reader.get_config",
-        lambda required_keys=None: cfg_stub,
+        _stub_get_config,
     )
     try:
         import lib_shared.patterns.image_display as _image_mod
     except ImportError:
         _image_mod = None
     if _image_mod is not None:
-        monkeypatch.setattr(_image_mod, "get_config", lambda required_keys=None: cfg_stub)
+        monkeypatch.setattr(_image_mod, "get_config", _stub_get_config)
 
 
 @pytest.fixture(autouse=True)
-def _auto_patch_config(monkeypatch):
+def auto_patch_config_fixture(monkeypatch):
     """Auto-patch get_config for every test in this module.
 
     Most tests in this file construct a MediaCycler somewhere
@@ -239,7 +245,7 @@ def test_maybe_build_media_cycler_constructs_for_mms_message(tmp_path):
     assert str(cycler._cache_dir) == str(cache_dir)
 
 
-def test_maybe_build_media_cycler_uses_default_cache_dir_when_unset(tmp_path):
+def test_maybe_build_media_cycler_uses_default_cache_dir_when_unset():
     """An empty `media_cache_dir` falls back to the OS temp dir
     (the cycler's own default) — the coordinator doesn't force a
     cache location on operators who haven't set one."""
@@ -271,7 +277,7 @@ def test_maybe_build_media_cycler_uses_default_cache_dir_when_unset(tmp_path):
         # The cycler's default cache dir is "{tempdir}/lindsay-50-media"
         # — the coordinator passing cache_dir=None (via "" → None) lets
         # the cycler pick that.
-        assert "lindsay-50-media" in str(cycler._cache_dir)
+        assert "lindsay-50-media" in str(cycler._cache_dir)  # type: ignore[attr-defined]
     finally:
         # Best-effort cleanup; the cache file may have a different
         # sha256 if tests run with different keys. We don't want
@@ -311,7 +317,7 @@ def test_maybe_fall_back_to_rotation_keeps_cycler_when_not_exhausted(tmp_path):
     cycler = coord._maybe_build_media_cycler()
     assert cycler is not None
     # Cycler has 1 item and is not exhausted (1-item case stays False).
-    assert cycler.exhausted is False
+    assert cycler.exhausted is False  # type: ignore[attr-defined]
     coord.current = cycler
 
     coord._maybe_fall_back_to_rotation()
@@ -355,7 +361,7 @@ def test_maybe_fall_back_to_rotation_triggers_fade_when_cycler_exhausted():
     cycler = MediaCycler(
         "m1",
         [{"type": "image/jpeg", "url": "key/a.jpg"}],
-        display=coord.display,
+        display=coord.display,  # type: ignore[arg-type]
     )
     # Force the cycler into the exhausted state (D12: every item dropped).
     cycler.exhausted = True
@@ -388,7 +394,7 @@ def test_maybe_fall_back_to_rotation_triggers_fade_when_cycler_complete():
     cycler = MediaCycler(
         "m2",
         [{"type": "image/jpeg", "url": "key/b.jpg"}],
-        display=coord.display,
+        display=coord.display,  # type: ignore[arg-type]
     )
     # `complete` is set when the cycler decides it's done — we
     # flip it manually here so the test doesn't have to drive the
@@ -426,7 +432,7 @@ def test_maybe_fall_back_to_rotation_clears_last_picked_entry():
     cycler = MediaCycler(
         "m3",
         [{"type": "image/jpeg", "url": "key/c.jpg"}],
-        display=coord.display,
+        display=coord.display,  # type: ignore[arg-type]
     )
     cycler.complete = True
     coord.current = cycler
@@ -452,7 +458,7 @@ def test_maybe_fall_back_to_rotation_idempotent_in_out_mode():
     cycler = MediaCycler(
         "m4",
         [{"type": "image/jpeg", "url": "key/d.jpg"}],
-        display=coord.display,
+        display=coord.display,  # type: ignore[arg-type]
     )
     cycler.complete = True
     coord.current = cycler
@@ -481,7 +487,7 @@ def test_maybe_fall_back_to_rotation_idempotent_in_in_mode():
     cycler = MediaCycler(
         "m5",
         [{"type": "image/jpeg", "url": "key/e.jpg"}],
-        display=coord.display,
+        display=coord.display,  # type: ignore[arg-type]
     )
     cycler.complete = True
     coord.current = cycler
@@ -517,7 +523,7 @@ def test_fade_out_completes_swaps_to_rotation_effect():
     cycler = MediaCycler(
         "m6",
         [{"type": "image/jpeg", "url": "key/f.jpg"}],
-        display=coord.display,
+        display=coord.display,  # type: ignore[arg-type]
     )
     cycler.complete = True
     coord.current = cycler
@@ -541,6 +547,94 @@ def test_fade_out_completes_swaps_to_rotation_effect():
         assert coord.mode == "in"
     finally:
         monkey.undo()
+
+
+# ---------------------------------------------------------------------------
+# Media-cycler fresh-id interrupt suppression (issue #38 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_current_is_active_media_cycler_true_when_cycler_active(tmp_path):
+    """`_current_is_active_media_cycler` returns True when
+    `self.current` is a MediaCycler whose `complete` and `exhausted`
+    flags are both False — the cycler is still playing its natural
+    duration and should suppress fresh-id interrupts."""
+    from lib_shared.patterns.media_cycler import MediaCycler
+
+    fx_a = _make_effect("A")()
+    coord = _build_coord(message_manager=_StubMessageManager(messages=[]))
+    coord.effects = [fx_a]
+    coord.idx = 0
+
+    # Pre-populate the cache so the cycler's `_cycle_advance` can
+    # build the inner renderer without dropping the item (which
+    # would flip `exhausted=True` before the assertion).
+    cache_dir = tmp_path / "media-cache"
+    cached = _prep_cache_for_jpeg(cache_dir, "key/supp-a.jpg")
+
+    cycler = MediaCycler(
+        "m-supp-1",
+        [{"type": "image/jpeg", "url": "key/supp-a.jpg", "path": str(cached)}],
+        display=coord.display,  # type: ignore[arg-type]
+        cache_dir=str(cache_dir),
+    )
+    # Defaults: complete=False, exhausted=False.
+    assert cycler.exhausted is False  # type: ignore[attr-defined]
+    assert cycler.complete is False  # type: ignore[attr-defined]
+    coord.current = cycler
+    assert coord._current_is_active_media_cycler() is True
+
+
+def test_current_is_active_media_cycler_false_when_done(tmp_path):
+    """`_current_is_active_media_cycler` returns False when the
+    cycler has flipped `complete=True` or `exhausted=True` — the
+    coordinator should let the interrupt through so the next
+    fade (or the existing `_maybe_fall_back_to_rotation`) handles
+    the transition."""
+    from lib_shared.patterns.media_cycler import MediaCycler
+
+    fx_a = _make_effect("A")()
+    coord = _build_coord(message_manager=_StubMessageManager(messages=[]))
+    coord.effects = [fx_a]
+    coord.idx = 0
+
+    # Pre-populate the cache so the cycler's `_cycle_advance` can
+    # build the inner renderer without dropping the item — we want
+    # to test the explicit flag flip, not the construction-time drop.
+    cache_dir = tmp_path / "media-cache"
+    cached_b = _prep_cache_for_jpeg(cache_dir, "key/supp-b.jpg")
+    cached_c = _prep_cache_for_jpeg(cache_dir, "key/supp-c.jpg")
+
+    cycler_done = MediaCycler(
+        "m-supp-2",
+        [{"type": "image/jpeg", "url": "key/supp-b.jpg", "path": str(cached_b)}],
+        display=coord.display,  # type: ignore[arg-type]
+        cache_dir=str(cache_dir),
+    )
+    cycler_done.complete = True
+    coord.current = cycler_done
+    assert coord._current_is_active_media_cycler() is False
+
+    cycler_exhausted = MediaCycler(
+        "m-supp-3",
+        [{"type": "image/jpeg", "url": "key/supp-c.jpg", "path": str(cached_c)}],
+        display=coord.display,  # type: ignore[arg-type]
+        cache_dir=str(cache_dir),
+    )
+    cycler_exhausted.exhausted = True
+    coord.current = cycler_exhausted
+    assert coord._current_is_active_media_cycler() is False
+
+
+def test_current_is_active_media_cycler_false_for_normal_effect():
+    """When `self.current` is a normal Effect (not a cycler),
+    the helper returns False — no exemption applies."""
+    fx_a = _make_effect("A")()
+    coord = _build_coord(message_manager=_StubMessageManager(messages=[]))
+    coord.effects = [fx_a]
+    coord.idx = 0
+    coord.current = fx_a
+    assert coord._current_is_active_media_cycler() is False
 
 
 # ---------------------------------------------------------------------------

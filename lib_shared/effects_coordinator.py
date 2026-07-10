@@ -581,6 +581,59 @@ class EffectsCoordinator:
         # throttle handles per-step palette writes during the ramp.
         self._begin_out(time.monotonic())
 
+    def _current_is_active_media_cycler(self) -> bool:
+        """True when `self.current` is a media cycler (host or
+        browser) that hasn't yet completed its natural playback.
+
+        Used by the `hold` and `background` branches to suppress
+        fresh-id interrupts while a media cycler is still
+        delivering its content (10s for images, video length for
+        videos). Without this guard, a text-only SMS arriving 2
+        seconds after an image interrupts the image mid-display;
+        with the guard, the cycler plays out its full window and
+        the new SMS gets picked at the next background→out
+        transition.
+
+        Duck-typed via the `exhausted` / `complete` flags added
+        by `MediaCycler` and `BrowserMediaOverlay` — both
+        cyclers set `exhausted=True` for codec failures and
+        `complete=True` after their natural duration elapses.
+        A cycler with either flag set is "done" and shouldn't
+        block the interrupt (the coordinator's existing
+        `_maybe_fall_back_to_rotation` will handle the
+        transition).
+        """
+        current = self.current
+        if current is None:
+            return False
+        # Lazy-import the cycler classes for the same reason
+        # `_maybe_fall_back_to_rotation` does — the browser
+        # preview's PyScript bundle doesn't ship `media_cycler.py`,
+        # and we don't want to bind it here either.
+        try:
+            from lib_shared.patterns.media_cycler import MediaCycler as _MediaCycler
+        except ImportError:
+            _MediaCycler = None  # type: ignore[assignment]
+        try:
+            from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay as _BrowserOverlay
+        except ImportError:
+            _BrowserOverlay = object  # type: ignore[assignment,misc]
+        is_media_cycler = _MediaCycler is not None and isinstance(current, _MediaCycler)
+        is_browser_overlay = isinstance(current, _BrowserOverlay)
+        if not (is_media_cycler or is_browser_overlay):
+            return False
+        # Active = cycler is in place AND neither flag has fired.
+        # `getattr(..., "complete", False)` covers the legacy path
+        # where a cycler class might not have the attribute — those
+        # cyclers are always "still playing" from the coordinator's
+        # perspective (the existing hold_seconds clock handles the
+        # cutoff in that case).
+        if getattr(current, "exhausted", False):  # type: ignore[attr-defined]
+            return False
+        if getattr(current, "complete", False):  # type: ignore[attr-defined]
+            return False
+        return True
+
     def get_display_message(self) -> str | None:
         """Pick the body to display next, from the manager's buffered messages.
 
@@ -900,9 +953,26 @@ class EffectsCoordinator:
             #     few seconds" — every random pick interrupted the hold
             #     instantly. The fix: gate the interrupt on the ID, not the
             #     body, and idle `hold_seconds` otherwise.
+            #   - **Media cycler exemption** (issue #38 follow-up): when
+            #     the active effect is a MediaCycler / BrowserMediaOverlay
+            #     that hasn't completed its natural duration (10s for
+            #     images, video length for videos), suppress fresh-id
+            #     interrupts. Without this, a 1-second-old image fades
+            #     out the moment a fresh text-only SMS arrives — the
+            #     operator sees the image for ~2 seconds (fade-in + a
+            #     sliver of `hold`) instead of the 10-second window
+            #     the cycler is supposed to deliver. The new SMS queues
+            #     up in the buffer and gets picked at the next
+            #     background→out transition once the cycler completes.
             fresh_id_landed = (
                 self.current_messages and self.current_messages[0].message.id not in self._consumed_message_ids
             )
+            if fresh_id_landed and self._current_is_active_media_cycler():
+                fresh_id_landed = False
+                log.info(
+                    "Coordinator hold: suppressing fresh-id interrupt while media cycler active effect=%s",
+                    self.current_effect_name,
+                )
             if fresh_id_landed:
                 log.info(
                     "Coordinator hold interrupt (new id): pending_text=%r last_shown=%r new_id=%s",
@@ -980,6 +1050,21 @@ class EffectsCoordinator:
             # reason to.
             entries_bg = self.current_messages
             fresh_id_landed = bool(entries_bg and entries_bg[0].message.id not in self._consumed_message_ids)
+            # **Media cycler exemption** (issue #38 follow-up): when
+            # the active effect is a MediaCycler / BrowserMediaOverlay
+            # that hasn't completed its natural duration, suppress
+            # fresh-id interrupts. Mirrors the same exemption in
+            # `hold` mode. Without this, the cycler gets cut off
+            # the moment a new SMS arrives, instead of playing
+            # out its full 10s window. The new SMS queues up in
+            # the buffer and gets picked at the next background→out
+            # transition once the cycler completes.
+            if fresh_id_landed and self._current_is_active_media_cycler():
+                fresh_id_landed = False
+                log.info(
+                    "Coordinator background: suppressing fresh-id interrupt while media cycler active effect=%s",
+                    self.current_effect_name,
+                )
             idle_elapsed = now - self.phase_start >= effects_settings.idle_seconds
 
             trigger: str | None = None

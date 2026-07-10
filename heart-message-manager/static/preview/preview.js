@@ -347,6 +347,13 @@
       const url = (media && media.url) || "";
       const kind = (media && media.kind) || "";
       const opacity = (media && typeof media.opacity === "number") ? media.opacity : 0;
+      // Multiplicative brightness boost applied as a CSS
+      // `filter: brightness(N)` on the overlay element — matches
+      // the panel's channel-level clamping on the Pi side. Sent
+      // unclamped from Python so the JS can clamp to a sane range
+      // before applying; the Python default is 1.15.
+      const rawBrightness = (media && typeof media.brightness === "number") ? media.brightness : 1.0;
+      const brightness = Math.max(0.0, Math.min(2.0, rawBrightness));
       const key = (media && media.key) || "";
 
       if (!url || !kind) {
@@ -428,9 +435,15 @@
         lastMediaKey = key;
       }
 
-      // Apply opacity (tracks `set_brightness` from the coordinator).
+      // Apply opacity (tracks `set_brightness` from the coordinator)
+      // and the multiplicative brightness boost (separate CSS
+      // `filter: brightness(N)` on the overlay element so the
+      // boost reaches the rendered pixels instead of being
+      // silently clamped by CSS opacity's [0,1] range).
       mediaImg.style.opacity = String(opacity);
       mediaVideo.style.opacity = String(opacity);
+      mediaImg.style.filter = "brightness(" + brightness.toFixed(3) + ")";
+      mediaVideo.style.filter = "brightness(" + brightness.toFixed(3) + ")";
     }
 
     function updateMessageLink() {

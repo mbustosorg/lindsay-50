@@ -56,6 +56,19 @@ logger = logging.getLogger("heart")
 # coordinator handles the cutoff via `hold_seconds`.
 _MIN_ITEM_SECONDS = 10.0
 
+# Multiplicative brightness boost applied on top of the coordinator's
+# global ramp when forwarding `set_brightness(b)` to `self._brightness`.
+# Mirrors MediaCycler's `_MEDIA_BRIGHTNESS_BOOST` — the two paths
+# (Pi / browser preview) should produce visually equivalent brightness
+# at the same coordinator `b`. On the preview side the JS-side
+# `preview.js` reads `current_brightness` and applies it as a CSS
+# `filter: brightness(N)` on the `<img>` / `<video>` overlay element,
+# which scales pixel brightness multiplicatively (dark pixels pulled
+# brighter, saturated pixels clamped by the browser's compositor) —
+# matches the panel's behavior on the Pi (clamped at the 8-bit
+# channel level inside `Effect.set_brightness`).
+_BROWSER_MEDIA_BRIGHTNESS_BOOST = 1.15
+
 
 class BrowserMediaOverlay(Effect):
     """Preview-side `Effect` that surfaces an MMS attachment to the DOM.
@@ -90,10 +103,21 @@ class BrowserMediaOverlay(Effect):
         *,
         api_base_url: str = "",
         hold_seconds: float = 15.0,
+        brightness_boost: float = _BROWSER_MEDIA_BRIGHTNESS_BOOST,
     ) -> None:
         self.message_id = message_id
         self._api_base_url = (api_base_url or "").rstrip("/")
         self._hold_seconds = max(0.0, float(hold_seconds))
+        # Multiplicative brightness boost forwarded alongside
+        # `set_brightness`. Mirrors MediaCycler's
+        # `_MEDIA_BRIGHTNESS_BOOST` so the Pi panel and the browser
+        # preview produce visually equivalent brightness for the
+        # same coordinator `b`. The JS-side `preview.js` reads
+        # `current_brightness` and applies it as a CSS
+        # `filter: brightness(N)` on the overlay `<img>` / `<video>`
+        # element — matches the Pi's channel-level clamping inside
+        # `Effect.set_brightness`.
+        self._brightness_boost: float = float(brightness_boost)
 
         # `_items` carries one dict per attachment:
         #   {"type": str, "url": str, "key": str, "kind": str,
@@ -143,6 +167,18 @@ class BrowserMediaOverlay(Effect):
         # cuts off via `hold_seconds`).
         self.exhausted: bool = False
 
+        # `True` signals the coordinator to fade out the cycler
+        # and transition to the next rotation effect — mirrors
+        # `MediaCycler.complete`. Distinct from `exhausted`:
+        # `exhausted` means "I have no playable items left"
+        # (D12 codec failure); `complete` means "I played
+        # everything I was given — I'm done on purpose." The
+        # coordinator's `_maybe_fall_back_to_rotation` checks
+        # both via duck-typing (`getattr(current, "complete",
+        # False)`) so the same fade-out trigger fires on the
+        # preview side as on the Pi side.
+        self.complete: bool = False
+
         if not self._items:
             self.exhausted = True
             logger.info(
@@ -189,8 +225,33 @@ class BrowserMediaOverlay(Effect):
 
     @property
     def current_opacity(self) -> float:
-        """Tracks `set_brightness` so the JS-side fade stays in sync."""
-        return float(self._brightness)
+        """Coordinator's fade ramp, clamped to [0, 1] for CSS opacity.
+
+        Distinct from `current_brightness` — opacity drives the
+        fade-in / fade-out crossfade (0 = invisible, 1 = visible);
+        brightness is the multiplicative boost on top of full
+        opacity. The two are applied independently in `preview.js`
+        via `style.opacity` and `style.filter = "brightness(N)"`.
+        """
+        return max(0.0, min(1.0, float(self._brightness)))
+
+    @property
+    def current_brightness(self) -> float:
+        """The multiplicative brightness boost applied to the overlay.
+
+        Returned as the raw boosted value (NOT clamped to 1.0) so
+        the JS-side `filter: brightness(N)` can render the ~15%
+        boost on top of full opacity. `preview.js` clamps the
+        filter value to a sane range before applying it to the
+        DOM, but the panel's effect on the Pi is visually
+        equivalent: dark pixels pulled brighter, saturated pixels
+        held at the 8-bit ceiling.
+
+        Mirrors `MediaCycler`'s `_brightness_boost` factor — both
+        paths produce visually equivalent brightness for the same
+        coordinator `b`.
+        """
+        return float(self._brightness) * self._brightness_boost
 
     @property
     def items_remaining(self) -> int:
@@ -202,14 +263,16 @@ class BrowserMediaOverlay(Effect):
     def set_brightness(self, b: float) -> None:
         """Forward the coordinator's global brightness.
 
-        The browser overlay reads `current_opacity` (which exposes
-        `self._brightness`) on every frame and applies it to the
-        `<img>` / `<video>` element's `style.opacity`. There is no
-        per-pixel fade — the browser's compositor handles that for
-        free — but the value still has to track the coordinator's
-        cross-fade so the underlying canvas + overlay line up.
+        The browser overlay reads `current_opacity` (the clamped
+        fade-ramp value) and `current_brightness` (the boosted
+        value, unclamped) on every frame and applies them to the
+        `<img>` / `<video>` element's `style.opacity` and
+        `style.filter` respectively. There is no per-pixel fade
+        — the browser's compositor handles that for free — but
+        the values still have to track the coordinator's cross-
+        fade so the underlying canvas + overlay line up.
         """
-        self._brightness = max(0.0, min(1.0, float(b)))
+        self._brightness = max(0.0, float(b))
 
     def tick(self) -> None:
         """Advance the cycle clock.
@@ -219,6 +282,12 @@ class BrowserMediaOverlay(Effect):
         fresh item. Honors `hold_seconds` by stopping the advance
         when the cumulative window exceeds the hold — the
         coordinator's own clock handles the ultimate cut-off.
+
+        For the 1-item case, mirrors `MediaCycler.tick`: flip
+        `complete=True` after `item["duration"]` seconds so the
+        coordinator fades the overlay out and transitions to a
+        rotation effect (issue #38 follow-up — the prior behavior
+        looped the same frame for the full hold / idle window).
         """
         if self.exhausted:
             return
@@ -228,7 +297,14 @@ class BrowserMediaOverlay(Effect):
 
         elapsed = time.monotonic() - self._phase_start
         if len(self._items) <= 1:
-            # 1-item case — never advance internally.
+            # 1-item case — never advance internally, but DO flip
+            # `complete` after the item's natural duration so the
+            # coordinator swaps us out for the rotation effect
+            # instead of looping the same frame for the full
+            # hold / idle window.
+            if len(self._items) == 1:
+                if elapsed >= self._items[0]["duration"]:
+                    self.complete = True
             return
         if elapsed >= self._active["duration"]:
             if elapsed >= self._hold_seconds:
@@ -248,7 +324,7 @@ class BrowserMediaOverlay(Effect):
         `<img>` / `<video>` element above the canvas is the
         visible "rendered" attachment.
         """
-        return None
+        del canvas  # intentionally unused — see docstring
 
     # -- cycle advance -------------------------------------------------------
 
@@ -275,11 +351,19 @@ class BrowserMediaOverlay(Effect):
             return
 
         not_shown = [it for it in self._items if not it["shown"]]
+        all_shown = not not_shown
         candidates = not_shown if not_shown else self._items
         chosen = random.choice(candidates)
         self._active = chosen
         self._phase_start = time.monotonic()
         chosen["shown"] = True
+        # Once every item has been shown, the cycle is done — flip
+        # `complete` so the coordinator falls back to the rotation
+        # effect at the next tick. We don't reset the `shown` flags;
+        # if the coordinator wants another cycle, a fresh overlay
+        # will be constructed at the next out→in.
+        if all_shown:
+            self.complete = True
         if not initial:
             # Initial picks fire on the first `tick()`; logging them
             # is noisy because every overlay construction triggers

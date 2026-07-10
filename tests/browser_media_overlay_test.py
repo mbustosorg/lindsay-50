@@ -167,9 +167,10 @@ def test_current_media_url_empty_when_no_active():
 
 
 def test_current_opacity_tracks_set_brightness():
-    """`set_brightness(b)` clamps to [0.0, 1.0] and is exposed via
-    `current_opacity`. The JS overlay element reads the value each
-    frame and applies it to `style.opacity`."""
+    """`set_brightness(b)` stores the value (clamped to >= 0) and
+    `current_opacity` exposes it clamped to [0.0, 1.0] for CSS
+    `opacity` consumption. The JS overlay element reads the value
+    each frame and applies it to `style.opacity`."""
     from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
 
     overlay = BrowserMediaOverlay("m1", [], api_base_url="http://flask.test")
@@ -179,11 +180,47 @@ def test_current_opacity_tracks_set_brightness():
     assert overlay.current_opacity == pytest.approx(1.0)
     overlay.set_brightness(0.0)
     assert overlay.current_opacity == pytest.approx(0.0)
-    # Out-of-range values clamped.
+    # Out-of-range values clamped at the property boundary — the
+    # underlying `set_brightness` keeps the unclamped value so
+    # `current_brightness` (the boost multiplier) can read it.
     overlay.set_brightness(2.5)
     assert overlay.current_opacity == pytest.approx(1.0)
     overlay.set_brightness(-0.5)
     assert overlay.current_opacity == pytest.approx(0.0)
+
+
+def test_current_brightness_boosted_above_one():
+    """`current_brightness` returns the coordinator's brightness
+    multiplied by the module-level `_BROWSER_MEDIA_BRIGHTNESS_BOOST`
+    (default 1.15). The value is sent UNCLAMPED so the JS-side
+    `filter: brightness(N)` can render the boost on top of full
+    opacity — `current_opacity` separately clamps to [0, 1] for
+    CSS `opacity`."""
+    from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+    overlay = BrowserMediaOverlay("m1", [], api_base_url="http://flask.test")
+    overlay.set_brightness(1.0)
+    # 1.0 * 1.15 = 1.15 — JS will apply `filter: brightness(1.15)`
+    # to the overlay element.
+    assert overlay.current_brightness == pytest.approx(1.15)
+    overlay.set_brightness(0.5)
+    assert overlay.current_brightness == pytest.approx(0.5 * 1.15)
+
+
+def test_current_brightness_boost_configurable():
+    """The `brightness_boost` constructor kwarg overrides the
+    default 1.15 — useful for tests that want exact brightness
+    values, or future operator tuning via settings.toml."""
+    from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+    overlay = BrowserMediaOverlay(
+        "m1",
+        [],
+        api_base_url="http://flask.test",
+        brightness_boost=1.0,
+    )
+    overlay.set_brightness(1.0)
+    assert overlay.current_brightness == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +337,60 @@ def test_tick_respects_hold_seconds():
     overlay.tick()
     # Held — same item.
     assert overlay._active is first_active
+
+
+def test_tick_single_item_flips_complete_after_duration():
+    """Mirrors `MediaCycler.tick`: for a 1-item list, `complete=True`
+    is set once `elapsed >= item["duration"]` so the coordinator's
+    `_maybe_fall_back_to_rotation` triggers the fade-out at the
+    next coordinator tick — instead of looping the same frame
+    for the full hold / idle window (issue #38 follow-up)."""
+    from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+    overlay = BrowserMediaOverlay(
+        "m1",
+        [{"type": "image/jpeg", "url": "media/x.jpg"}],
+        api_base_url="http://flask.test",
+        hold_seconds=1e9,
+    )
+    for it in overlay._items:
+        it["duration"] = 0.05  # short for fast test
+    overlay.tick()
+    assert overlay._active is not None
+    # Under duration — `complete` stays False.
+    overlay.tick()
+    assert overlay.complete is False
+    # Past duration — `complete` flips on.
+    time.sleep(0.06)
+    overlay.tick()
+    assert overlay.complete is True
+
+
+def test_tick_multi_item_flips_complete_when_all_shown():
+    """Mirrors `MediaCycler.tick`: for multi-item lists, `complete=True`
+    is set when every item has been shown at least once during the
+    cycle — the coordinator swaps the cycler out for the rotation
+    effect instead of looping the same item set."""
+    from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+    overlay = BrowserMediaOverlay(
+        "m1",
+        [
+            {"type": "image/jpeg", "url": "media/a.jpg"},
+            {"type": "image/png", "url": "media/b.png"},
+        ],
+        api_base_url="http://flask.test",
+        hold_seconds=1e9,
+    )
+    for it in overlay._items:
+        it["duration"] = 0.01
+    # Tick enough times for the cycle to visit every item.
+    for _ in range(10):
+        overlay.tick()
+        time.sleep(0.02)
+    # All items shown → `complete` flipped.
+    assert overlay.complete is True
+    assert all(it["shown"] for it in overlay._items)
 
 
 def test_render_is_noop():
