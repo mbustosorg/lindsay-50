@@ -309,6 +309,14 @@ def test_preview_csp_allows_s3_endpoint_when_explicit():
         assert "http://localhost:9000" in img_src, (
             f"img-src must allow the MinIO origin; got: {img_src!r}"
         )
+        # The same S3 origin must be in media-src — <video> and
+        # <audio> elements fetch from the same signed-URL origin,
+        # and without an explicit media-src they fall back to
+        # default-src 'self' (which doesn't allow the S3 host).
+        media_src = _extract_directive(csp, "media-src")
+        assert "http://localhost:9000" in media_src, (
+            f"media-src must allow the MinIO origin (for <video>); got: {media_src!r}"
+        )
     finally:
         _restore_sys_modules(snapshot)
 
@@ -327,6 +335,10 @@ def test_preview_csp_allows_s3_endpoint_when_explicit():
         img_src = _extract_directive(csp, "img-src")
         assert "https://test-bucket.s3.us-east-1.amazonaws.com" in img_src, (
             f"img-src must allow the AWS S3 origin; got: {img_src!r}"
+        )
+        media_src = _extract_directive(csp, "media-src")
+        assert "https://test-bucket.s3.us-east-1.amazonaws.com" in media_src, (
+            f"media-src must allow the AWS S3 origin (for <video>); got: {media_src!r}"
         )
     finally:
         _restore_sys_modules(snapshot)

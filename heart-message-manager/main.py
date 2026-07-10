@@ -1370,6 +1370,13 @@ _PREVIEW_CSP_BASE = (
     "https://pyscript.net https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
     "img-src 'self' data:; "
+    # media-src is set explicitly because `default-src 'self'`
+    # would otherwise be the fallback for `<video src=…>` loads
+    # (the browser doesn't allow the S3 origin without an
+    # explicit media-src, even though img-src is allowed). The
+    # S3 origin is spliced in by `_set_preview_csp` from the
+    # same config the S3 client reads.
+    "media-src 'self'; "
     "connect-src 'self' "
     "https://cdn.jsdelivr.net https://pyscript.net"
 )
@@ -1413,6 +1420,15 @@ def _set_preview_csp(response):
             csp = csp.replace(
                 "img-src 'self' data:",
                 f"img-src 'self' data: {s3_origin}",
+            )
+            # media-src is the CSP directive for <video> and <audio>;
+            # the S3 redirect target is the same origin as the image
+            # load, so the same allow-list entry applies. Without
+            # this, the video load falls back to `default-src 'self'`
+            # and is blocked the same way the image was in 6ecb815.
+            csp = csp.replace(
+                "media-src 'self'",
+                f"media-src 'self' {s3_origin}",
             )
         response.headers["Content-Security-Policy"] = csp
     return response
