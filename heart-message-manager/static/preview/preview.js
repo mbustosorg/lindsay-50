@@ -465,7 +465,7 @@
         const media = (msg && Array.isArray(msg.media)) ? msg.media : [];
         const mediaUrls = media.map((m) => m && m.url).filter(Boolean);
         console.log(
-          "[preview-modal] picked message: id=%r body=%r media_count=%d media_urls=%s",
+          "[preview-modal] picked message: id=%s body=%s media_count=%d media_urls=%s",
           id || "(none)",
           ((msg && msg.body) || "").slice(0, 40),
           media.length,
@@ -524,7 +524,7 @@
           updateStatus(effectName, text);
           updateMessageLink();
           if (PREVIEW_DEBUG && effectName !== lastEffectNameForLog) {
-            console.log("[preview-effect] now=%r (was=%r)", effectName || "—", lastEffectNameForLog || "—");
+            console.log("[preview-effect] now=%s (was=%s)", effectName || "—", lastEffectNameForLog || "—");
             lastEffectNameForLog = effectName;
           }
 
