@@ -413,6 +413,7 @@ Each effect subclass of `Effect` (rgb_display.py) maintains its own `bitmap` and
 | `CoronalMassEjection` | Radial star throwing off Perlin-turbulence flares (numpy + SetImage) |
 | `Eyeball` | Wandering-gaze eye with a soft-edged iris (numpy + SetImage) |
 | `Marble` | Tumbling 3D ridged-Perlin volume sliced by a rotating plane (numpy + SetImage) |
+| `Metaballs` | Bouncing fire blobs that merge/split via a multiplicative distance field (numpy + SetImage) |
 | `PngDisplay` | Static or animated PNG rendered from flash |
 | `VideoDisplay` | Frame sequence from flash, same blitting approach |
 
