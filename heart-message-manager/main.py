@@ -542,6 +542,18 @@ def _process_inbound_media_async(payload: dict) -> None:
                 download_failures,
                 len(media_pairs),
             )
+        # One-line summary of what survived the download+upload
+        # round-trip. The browser preview's `BrowserMediaOverlay` will
+        # render an empty list when `media_list` is empty, so this
+        # log line is the single best signal for "why isn't the
+        # image showing up in the preview?". Grep the Flask log
+        # for `MMS async: built media_list` after each test post.
+        logger.info(
+            "MMS async: built media_list items=%d content_types=%s keys=%s",
+            len(media_list),
+            [m.get("type") for m in media_list],
+            [m.get("url") for m in media_list],
+        )
 
         msg = Message(
             id=str(uuid.uuid4()),
