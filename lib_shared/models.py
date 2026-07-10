@@ -108,6 +108,7 @@ class MessageView:
         rules: list["FilterRule"] | None = None,
         sender_name: str = "",
         display_time: str | None = None,
+        media: list | None = None,
     ) -> None:
         """Initialize a MessageView.
 
@@ -118,6 +119,14 @@ class MessageView:
             rules: List of FilterRule objects that suppressed the message.
             sender_name: Display name for the sender (from the senders allowlist).
             display_time: Pre-formatted local time string, or None (set by _enrich_messages).
+            media: Optional MMS attachments list. Defaults to
+                ``message.media`` if not supplied — surface it as a
+                flat top-level attribute so the JS-side Pyodide
+                proxy exposes ``entry.media`` alongside ``source`` /
+                ``display_time``. Without this, the testing page's
+                modal (which ``JSON.stringify``s the entry) sees
+                ``media`` nested under ``entry.message.media`` and
+                the inline row click / the modal popup disagree.
         """
         self.message = message
         self.source = source
@@ -125,6 +134,12 @@ class MessageView:
         self.rules = list(rules) if rules is not None else []
         self.sender_name = sender_name
         self.display_time = display_time
+        # Mirror the wrapped Message's `media` so it's a flat field on
+        # the view — JS-side Pyodide proxies only expose instance
+        # attributes set in __init__, not @property accessors, so this
+        # has to be a real attribute for `item.media` and
+        # `JSON.stringify(item).media` to work on the testing page.
+        self.media = list(media) if media is not None else list(message.media)
 
     def to_dict(self):
         return {
