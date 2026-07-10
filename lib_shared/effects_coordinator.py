@@ -427,18 +427,16 @@ class EffectsCoordinator:
         """
         picked = self._last_picked_entry
         if picked is None:
-            log.info(
-                "Coordinator media-cycler: no picked entry; rotation effect will run instead",
-            )
+            # The "no picked entry" condition is already conveyed by
+            # the selection log's `(no picked entry — rotation)`
+            # annotation emitted at the out→in site. The old INFO
+            # line here was redundant — drop it.
             return None
         media = getattr(picked.message, "media", None) or []
         if not media:
-            log.info(
-                "Coordinator media-cycler: picked message has empty media; "
-                "rotation effect will run (message_id=%s body=%r)",
-                picked.message.id,
-                picked.message.body,
-            )
+            # Same rationale: the selection log's pretty-printed JSON
+            # already shows `media=[]` and the body. The old INFO
+            # line that duplicated that info is gone (ISC-22).
             return None
         if self.display is None:
             log.info(
@@ -571,13 +569,11 @@ class EffectsCoordinator:
         effects = self.effects
         if not effects:
             return
-        reason = "exhausted" if getattr(current, "exhausted", False) else "complete"  # type: ignore[attr-defined]
-        log.info(
-            "Coordinator media-cycler %s (%s): fading out for rotation effect=%s",
-            reason,
-            "BrowserMediaOverlay" if is_browser_overlay else "MediaCycler",
-            self.current_effect_name,
-        )
+        # The cycler-exhaustion INFO line was dropped in
+        # round 2 (ISC-22) — the same event is conveyed by the
+        # `starting fade out trigger=cycler_complete` line emitted
+        # inside `_begin_out` below. The redundant INFO was firing
+        # right next to it, doubling the per-cycle noise.
         # Clear the picked entry so the `out` mode's cycler rebuild
         # at fade-complete returns None (we want the rotation
         # effect, not a fresh cycler for the same message — the
@@ -729,9 +725,16 @@ class EffectsCoordinator:
         # INFO level — operators need to see sign-lifecycle events in the
         # journal without service-restart gymnastics. The `trigger` kwarg
         # disambiguates the two paths.
-        scroller_text = ""
-        if self.scroller is not None:
-            scroller_text = self.scroller.text or ""
+        # Show `self.last_shown_text` (what was actually on the
+        # sign just before this fade-out), NOT
+        # `self.scroller.text` — by the time `_begin_out` runs the
+        # scroller has been cleared for the new cycle, so
+        # `self.scroller.text` is always `''` here. The
+        # `last_shown_text` field carries the body of the just-
+        # shown message (set at the out→in site when text was
+        # truthy) — or the empty string if the just-shown message
+        # was media-only with body='' (ISC-23).
+        last_text = self.last_shown_text or ""
         # Single-line fade-start: one of three triggers — intro→out
         # (first-ever boot), idle (hold/background ran their full
         # duration), or fresh-id interrupt. Carry the trigger so the
@@ -739,10 +742,10 @@ class EffectsCoordinator:
         # (per-cycle noise — selection info goes in the `Coordinator:
         # selected ...` line emitted at the `out→in` site).
         log.info(
-            "Coordinator: starting fade out from mode=%s effect=%s scroller=%r trigger=%s",
+            "Coordinator: starting fade out from mode=%s effect=%s last_text=%r trigger=%s",
             self.mode,
             self.current_effect_name,
-            scroller_text,
+            last_text,
             getattr(self, "_begin_out_trigger", "-"),
         )
         self.mode = "out"
@@ -922,30 +925,48 @@ class EffectsCoordinator:
                 else:
                     scroller.set_text("", display.width)
                     self.showing_text = False
-                # Selection-time INFO: dumps the FULL picked message
-                # (id, sender, body, media count) plus the chosen
-                # effect, in a single line. Operators tailing the
-                # sign journal can grep "Coordinator: selected" to
-                # reconstruct what the Pi is showing without
-                # cross-referencing the rotation rebuild +
-                # `set_text` + `out→in` chain. Fires once per
-                # selection (gated on `mode` flip to "in", not on
-                # every tick — see _last_picked_entry at line 880 for
-                # the same idempotency contract). Media list is
-                # summarized to a count to keep the line short when
-                # an MMS has many attachments.
+                # Selection-time INFO: the picked `Message` IS the
+                # operator-visible event — the sign just decided what
+                # to show. We emit a single multi-line log block:
+                #   - a 1-line summary carrying idx, effect, msg_id,
+                #     media count, and (when present) media MIME types
+                #     in parentheses (e.g. `media=2 (image/jpeg, video/mp4)`)
+                #   - a 2-space-indented pretty-printed JSON of the
+                #     full Message (id, sender, body, received_at,
+                #     media list) driven from `Message.to_dict()`.
+                #
+                # Operators tailing the sign journal can grep
+                # `Coordinator: selected` to land on the summary
+                # line; the JSON block below it carries everything
+                # the Pi is about to show. Fires once per selection
+                # (gated on `mode` flip to "in", not on every tick —
+                # see _last_picked_entry at line 880 for the same
+                # idempotency contract). The visual scroller fallback
+                # for empty-body MMS (e.g. "With a pic!") is NOT
+                # surfaced here — the log shows the actual picked
+                # body, which is `''` for media-only messages.
+                import json as _json
                 picked = getattr(self, "_last_picked_entry", None)
                 if picked is not None:
                     pm = picked.message
-                    log.info(
-                        "Coordinator: selected idx=%d effect=%s msg_id=%s body=%r sender=%s media=%d",
-                        self.idx,
-                        self.current_effect_name,
-                        pm.id,
-                        pm.body,
-                        pm.sender,
-                        len(getattr(pm, "media", []) or []),
+                    media_list = list(getattr(pm, "media", []) or [])
+                    media_types = ", ".join(
+                        sorted({m.get("type", "?") for m in media_list})
                     )
+                    type_suffix = f" ({media_types})" if media_types else ""
+                    summary = (
+                        f"Coordinator: selected idx={self.idx} "
+                        f"effect={self.current_effect_name} "
+                        f"msg_id={pm.id} "
+                        f"sender={pm.sender} "
+                        f"media={len(media_list)}{type_suffix}"
+                    )
+                    json_body = _json.dumps(
+                        pm.to_dict(), indent=2, ensure_ascii=False
+                    )
+                    # Single log call with embedded newlines so the
+                    # block appears as one record in journalctl.
+                    log.info("%s\n  %s", summary, json_body.replace("\n", "\n  "))
                 else:
                     log.info(
                         "Coordinator: selected idx=%d effect=%s (no picked entry — rotation)",
@@ -968,11 +989,27 @@ class EffectsCoordinator:
                 scroller.set_brightness(1.0)
                 self.phase_start = now
                 next_mode = "hold" if self.showing_text else "background"
+                # Read body from the picked entry, NOT from
+                # `self.last_shown_text`. The latter is only updated
+                # on the `if text:` branch at line 893 — when a new
+                # MMS arrives with body='' (caption-less media),
+                # `last_shown_text` keeps its value from the prior
+                # message (e.g. "With a pic!"), which is what the
+                # operator saw in the live journal and reported as
+                # confusing (ISC-21). The visual scroller fallback
+                # on the matrix is unchanged — only the log is
+                # corrected.
+                picked = getattr(self, "_last_picked_entry", None)
+                body_for_log = (
+                    picked.message.body
+                    if picked is not None
+                    else (self.last_shown_text or "")
+                )
                 log.info(
-                    "Coordinator: fade in done effect=%s next_mode=%s text=%r",
+                    "Coordinator: fade in done effect=%s next_mode=%s body=%r",
                     self.current_effect_name,
                     next_mode,
-                    self.last_shown_text or "",
+                    body_for_log or "",
                 )
                 self.mode = next_mode
 
