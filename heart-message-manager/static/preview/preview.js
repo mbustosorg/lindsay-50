@@ -49,8 +49,9 @@
   // ------------------------------------------------------------------
 
   function init() {
+    console.log("[preview-js] init() entered; canvas=" + !!document.getElementById("sign-canvas"));
     const canvas = document.getElementById("sign-canvas");
-    if (!canvas) return;
+    if (!canvas) { console.error("[preview-js] #sign-canvas not found; aborting"); return; }
     setupFuzzyRendering(canvas);
     sizeCanvasToViewport(canvas);
     // Re-size on viewport changes. We use a ResizeObserver on the card
@@ -113,12 +114,30 @@
     // older runtimes that don't fire `py:done`).
     const onReady = () => {
       hideLoading();
+      console.log("[preview-js] onReady fired; starting render loop");
       startRenderLoop(canvas);
     };
+    document.addEventListener("py:done", () => console.log("[preview-js] received py:done event"));
     document.addEventListener("py:done", onReady);
+    document.addEventListener("py:all-done", () => console.log("[preview-js] received py:all-done event"));
     document.addEventListener("py:all-done", onReady);
     // Backwards-compat for older PyScript releases.
+    document.addEventListener("pyodideReady", () => console.log("[preview-js] received pyodideReady event"));
     document.addEventListener("pyodideReady", onReady);
+    // Surface PyScript module-eval failures (the reason py:done
+    // never fires). PyScript dispatches a CustomEvent with the
+    // failing element's details if a module throws during
+    // evaluation; without this listener, the preview sits on
+    // "Loading preview…" forever with no console signal.
+    document.addEventListener("py:error", (e) => {
+      console.error("[preview-js] py:error event — PyScript module evaluation failed:", e);
+    });
+    window.addEventListener("error", (e) => {
+      console.error("[preview-js] window.error:", e.message, e.filename, e.lineno);
+    });
+    window.addEventListener("unhandledrejection", (e) => {
+      console.error("[preview-js] unhandled promise rejection:", e.reason);
+    });
   }
 
   function sizeCanvasToViewport(canvas) {
@@ -247,11 +266,13 @@
   // ------------------------------------------------------------------
 
   function startRenderLoop(canvas) {
+    console.log("[preview-js] startRenderLoop entered");
     const ctx = canvas.getContext("2d");
     const mediaImg = document.getElementById("browser-media-image");
     const mediaVideo = document.getElementById("browser-media-video");
     const messageLink = document.getElementById("preview-message-link");
     let lastMediaKey = "";
+    let frameCount = 0;
     let lastEffectNameForLog = "";
     // Tracks the id of the message currently bound to the status
     // link. The link's `data-msg` is rewritten only when this
@@ -439,6 +460,10 @@
         // — installed by preview_main.py when the <py-script> body runs.
         try {
           if (typeof window.tick === "function") window.tick();
+          frameCount++;
+          if (frameCount === 1 || frameCount === 30 || frameCount % 300 === 0) {
+            console.log(`[preview-js] frame ${frameCount}: tick() returned; window.tick=${typeof window.tick}, window.get_frame_rgba=${typeof window.get_frame_rgba}`);
+          }
           const effectName = typeof window.get_current_effect_name === "function"
             ? window.get_current_effect_name() : "";
           const text = typeof window.get_current_text === "function"

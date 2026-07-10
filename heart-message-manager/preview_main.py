@@ -68,7 +68,9 @@ py-config.toml declared packages).
 
 from pyodide_js import loadPackage  # type: ignore[reportGeneralTypeIssues]  # noqa: F401  (top-level await: PyScript 2024.9.x runs via `eval_code_async`)
 
+print("[preview-py] module evaluation START (line 69)")
 await loadPackage(["micropip", "numpy", "Pillow"])  # type: ignore[reportGeneralTypeIssues]  # top-level await — see note above
+print("[preview-py] loadPackage complete (line 72)")
 
 import sys
 
@@ -94,11 +96,13 @@ from preview_display import WebCanvas, WebDisplay  # noqa: E402
 from preview_scroller import PreviewScroller  # noqa: E402
 from lib_shared.effects_coordinator import build_effects  # noqa: E402
 from lib_shared.models import EffectsSettings, TextSettings  # noqa: E402
+print("[preview-py] preview_display/preview_scroller/effects_coordinator/models imported")
 
 # Standard bitmap patterns the browser preview can run (no filesystem
 # assets, no OpenCV). PngDisplay / VideoDisplay stay Pi-only; the
 # shared `build_effects` factory filters them out by name.
 from lib_shared.patterns.heartbeat import Heartbeat  # noqa: E402
+print("[preview-py] heartbeat pattern imported")
 
 # The 64x64 logical panel — source of truth matches the device.
 PANEL_WIDTH = 64
@@ -131,6 +135,7 @@ def _coordinator():
 
 _web_canvas = WebCanvas(PANEL_WIDTH, PANEL_HEIGHT)
 _display = WebDisplay(_web_canvas)
+print(f"[preview-py] canvas built: {PANEL_WIDTH}x{PANEL_HEIGHT}")
 
 # Boot-time defaults. The app-scoped MessageManager is the source of
 # truth for the SignConfig; once the seed completes (called by app.js
@@ -148,12 +153,13 @@ _scroller = PreviewScroller(
     speed=_text_settings.speed,
 )
 _heart = Heartbeat(_display)
+print("[preview-py] heart effect built")
 
 
 import asyncio  # noqa: E402
 
 
-async def _wait_for_coordinator(timeout_s: float = 5.0, poll_ms: int = 20) -> None:
+async def _wait_for_coordinator(timeout_s: float = 15.0, poll_ms: int = 20) -> None:
     """Poll `js.window._coordinator` until `app_main.py` sets it.
 
     PyScript 2024.9.x evaluates each `<py-script>` element as
@@ -165,20 +171,26 @@ async def _wait_for_coordinator(timeout_s: float = 5.0, poll_ms: int = 20) -> No
     its top-level statements first. This waiter closes that
     race without requiring a JS-side event hook.
     """
+    print(f"[preview-py] _wait_for_coordinator START (timeout={timeout_s}s, poll={poll_ms}ms)")
     deadline = asyncio.get_event_loop().time() + timeout_s
     poll_s = poll_ms / 1000.0
     attempts = 0
     while True:
-        if getattr(js.window, "_coordinator", None) is not None:
-            if attempts > 0:
-                print(f"[preview] coordinator appeared after {attempts} polls ({attempts * poll_s:.2f}s)")
+        coord = getattr(js.window, "_coordinator", None)
+        if coord is not None:
+            print(f"[preview-py] coordinator appeared after {attempts} polls ({attempts * poll_s:.2f}s)")
             return
         if asyncio.get_event_loop().time() >= deadline:
+            has_app = getattr(js.window, "_message_manager", None) is not None
+            has_seed = getattr(js.window, "_seed", None) is not None
             raise RuntimeError(
                 f"app_main.py did not install window._coordinator within {timeout_s}s "
-                f"({int(timeout_s / poll_s)} polls) — preview_main.py cannot bind"
+                f"({int(timeout_s / poll_s)} polls) — preview_main.py cannot bind. "
+                f"_message_manager present={has_app}, _seed present={has_seed}"
             )
         attempts += 1
+        if attempts % 25 == 0:  # every 500 ms
+            print(f"[preview-py] still waiting for _coordinator after {attempts} polls ({attempts * poll_s:.2f}s)")
         await asyncio.sleep(poll_s)
 
 
@@ -193,6 +205,7 @@ async def _bootstrap() -> None:
     app-scoped manager's buffer.
     """
     await _wait_for_coordinator()
+    print("[preview-py] _bootstrap: coordinator available, proceeding to bind")
 
     # --- Bind the render layer to the app-scoped coordinator ---
     # The coordinator is already wired to the app-scoped
@@ -202,28 +215,53 @@ async def _bootstrap() -> None:
     # call `_sync_render_layer()` and read the manager's
     # current config into the rotation + scroller.
     coord = _coordinator()
+    print(f"[preview-py] _bootstrap: got coordinator id={id(coord)}; calling coord.bind()")
     coord.bind(
         display=_display,
         scroller=_scroller,
         effects=_effects,
         heart=_heart,
     )
+    print("[preview-py] _bootstrap: coord.bind() returned")
     _coord_ref["coord"] = coord
 
     # Begin the boot splash. The first pulled message (from the
     # app-scoped manager's buffer) plays once the heart fades out
     # — mirroring the device's "show the last seeded message at
     # startup" behavior.
+    print("[preview-py] _bootstrap: calling coord.start()")
     coord.start()
+    print("[preview-py] _bootstrap: coord.start() returned")
 
     # Install the JS surface last, once the coordinator is bound
     # and the boot has been kicked. Any `tick()` call that lands
     # after this returns is safe.
     _install_js_api()
-    print("[preview] bootstrap complete; JS surface installed")
+    print("[preview-py] _bootstrap: complete; JS surface installed. py:done should fire.")
 
 
-asyncio.ensure_future(_bootstrap())
+async def _bootstrap_with_logging():
+    """Wrap `_bootstrap` so any exception is logged instead of swallowed.
+
+    `asyncio.ensure_future` returns a Task that runs to completion
+    even if it raises — but in PyScript 2024.9.x, an unhandled
+    exception in a top-level task disappears from the devtools
+    console. The whole reason the preview stops loading (and we
+    can't tell why) is because the exception is invisible. This
+    wrapper catches and prints.
+    """
+    try:
+        await _bootstrap()
+    except Exception as e:
+        print(f"[preview-py] FATAL: _bootstrap raised {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exception(type(e), e, e.__traceback__)
+        # Re-raise so the task is properly marked failed in
+        # asyncio's eyes; PyScript's run mode surfaces it.
+        raise
+
+
+asyncio.ensure_future(_bootstrap_with_logging())
 
 
 def _coord():
@@ -254,6 +292,7 @@ def _install_js_api() -> None:
     js.window.get_current_effect_name = get_current_effect_name
     js.window.get_current_media = get_current_media
     js.window.get_current_message = get_current_message
+    print("[preview-py] _install_js_api: window.tick, get_frame_rgba, get_current_text, get_current_effect_name, get_current_media, get_current_message all installed")
 
 
 def tick():

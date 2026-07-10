@@ -44,7 +44,9 @@ import to read `APP_CONFIG`.
 
 from pyodide_js import loadPackage  # type: ignore[reportGeneralTypeIssues]  # noqa: F401  (top-level await: PyScript 2024.9.x runs via `eval_code_async`)
 
+print("[app-py] module evaluation START (line 45)")
 await loadPackage(["micropip", "tzdata"])  # type: ignore[reportGeneralTypeIssues]  # top-level await — see note above
+print("[app-py] loadPackage complete (line 48)")
 
 import sys
 
@@ -69,6 +71,7 @@ from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]
 from lib_shared.message_manager import MessageManager
 from lib_shared.effects_coordinator import EffectsCoordinator
 from lib_shared.models import Message, SignConfig
+print("[app-py] lib_shared.message_manager / effects_coordinator / models imported")
 
 # The existing JS-side `mqtt_ws_client.js` shim is loaded by `base.html`
 # before this script runs. We import it via the `js` global and wrap it
@@ -233,7 +236,9 @@ async def _seed() -> None:
     if _message_manager is None:
         return
     try:
+        print("[app-py] _seed: calling _message_manager.seed()")
         await _message_manager.seed()
+        print("[app-py] _seed: complete")
     except Exception as e:
         print(f"[app_main] seed failed: {e!r}")
 
@@ -329,10 +334,13 @@ if _mqtt_ws_url:
 # `static/app.js` (plain JS, no PyScript bridge needed) can call it.
 js.window._message_manager = _message_manager
 js.window._coordinator = _coordinator
+print(f"[app-py] exposed window._coordinator (id={id(_coordinator)}); preview_main.py can now bind")
 if _mqtt_ws_client is not None:
     js.window._mqtt_ws_client = _mqtt_ws_client
+    print("[app-py] exposed window._mqtt_ws_client")
 js.window._seed = create_proxy(_seed)
 js.window._hydrate_from_cache = create_proxy(_hydrate_from_cache)
+print("[app-py] module evaluation COMPLETE; all window.* exposed")
 # JS-side read APIs — preserve the `window.App.getMessages` /
 # `getConfig` surface so `testing.html` (and any future per-page
 # hydration path in `preview.js`) can read from the in-memory ring
