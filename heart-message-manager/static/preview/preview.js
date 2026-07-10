@@ -254,6 +254,15 @@
     let lastEffectNameForLog = "";
     let lastEmptyLogAt = 0;
 
+    // Diagnostic flag — set to `false` in devtools or by overriding
+    // `window.__PREVIEW_DEBUG__ = false` to silence the overlay
+    // trace. Logs only fire on STATE CHANGES (effect name swap,
+    // media key swap, overlay hide) and throttled "no media"
+    // notices once per second, so the rAF loop at 30 FPS doesn't
+    // spam the console.
+    const PREVIEW_DEBUG = (typeof window.__PREVIEW_DEBUG__ === "undefined")
+      ? true : !!window.__PREVIEW_DEBUG__;
+
     function applyMedia(media) {
       // Browser-side media overlay (issue #38). `preview_main.py`
       // exposes `BrowserMediaOverlay.current_media_url` /
