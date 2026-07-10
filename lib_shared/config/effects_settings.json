@@ -7,6 +7,7 @@
     {"name": "CoronalMassEjection", "module": "lib_shared.patterns.coronal_mass_ejection", "class_name": "CoronalMassEjection", "enabled": true},
     {"name": "Eyeball", "module": "lib_shared.patterns.eyeball", "class_name": "Eyeball", "enabled": true},
     {"name": "Marble", "module": "lib_shared.patterns.marble", "class_name": "Marble", "enabled": true},
+    {"name": "Metaballs", "module": "lib_shared.patterns.metaballs", "class_name": "Metaballs", "enabled": true},
     {"name": "Fireworks", "module": "lib_shared.patterns.fireworks", "class_name": "Fireworks", "enabled": true},
     {"name": "NightSky", "module": "lib_shared.patterns.nightsky", "class_name": "NightSky", "enabled": true}
   ],

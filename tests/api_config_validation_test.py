@@ -279,7 +279,7 @@ def test_effects_settings_unknown_effect_name_rejected(client, esp32_headers):
 
 
 def test_effects_settings_known_effect_names_accepted(client, esp32_headers):
-    """The 5 non-media canonical effect names are accepted by the
+    """The 9 non-media canonical effect names are accepted by the
     /api/config validation path. PngDisplay/VideoDisplay were removed
     from the registry in #38 — those names are now inner renderers
     consumed by MediaCycler, not user-selectable effects."""
@@ -290,6 +290,7 @@ def test_effects_settings_known_effect_names_accepted(client, esp32_headers):
         "CoronalMassEjection",
         "Eyeball",
         "Marble",
+        "Metaballs",
         "Fireworks",
         "NightSky",
     ]:

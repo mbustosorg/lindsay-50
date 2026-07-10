@@ -43,20 +43,21 @@ def _canonical_entries():
 
 
 def test_default_instantiation_uses_canonical_list():
-    """A no-arg constructor picks up the canonical 8-entry list
+    """A no-arg constructor picks up the canonical 9-entry list
     (PngDisplay/VideoDisplay removed in #38 — those are now inner
     renderers consumed by MediaCycler, not registry entries; Flame
     removed as well)."""
     s = EffectsSettings()
-    assert len(s.effects) == 8
-    # All eight are enabled by default.
+    assert len(s.effects) == 9
+    # All nine are enabled by default.
     enabled = [e["name"] for e in s.effects if e["enabled"]]
-    assert len(enabled) == 8
+    assert len(enabled) == 9
     assert "Hyperspace" in enabled
     assert "WindFire" in enabled
     assert "CoronalMassEjection" in enabled
     assert "Eyeball" in enabled
     assert "Marble" in enabled
+    assert "Metaballs" in enabled
     assert "Fireworks" in enabled
     assert "NightSky" in enabled
     assert "Honeycomb" in enabled
@@ -77,7 +78,7 @@ def test_default_pacing_values():
 
 
 def test_canonical_list_has_known_names():
-    """The canonical list contains exactly the 8 expected effect names
+    """The canonical list contains exactly the 9 expected effect names
     (PngDisplay/VideoDisplay removed in #38; Flame removed)."""
     names = {e["name"] for e in _canonical_entries()}
     assert names == {
@@ -87,6 +88,7 @@ def test_canonical_list_has_known_names():
         "CoronalMassEjection",
         "Eyeball",
         "Marble",
+        "Metaballs",
         "Fireworks",
         "NightSky",
     }
@@ -120,14 +122,14 @@ def test_round_trip_default():
 def test_from_dict_accepts_empty_dict():
     """An empty dict is valid and yields the canonical defaults."""
     s = EffectsSettings.from_dict({})
-    assert len(s.effects) == 8
+    assert len(s.effects) == 9
     assert s.fade_seconds == 2.0
 
 
 def test_from_dict_none_uses_defaults():
     """from_dict(None) yields the canonical defaults."""
     s = EffectsSettings.from_dict(None)
-    assert len(s.effects) == 8
+    assert len(s.effects) == 9
 
 
 def test_from_dict_with_custom_values():

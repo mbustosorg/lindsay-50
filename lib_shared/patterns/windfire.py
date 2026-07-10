@@ -403,7 +403,7 @@ class WindFire(Effect):
         yn = np.arange(self._h) / h1
         self._Xn, self._Yn = np.meshgrid(xn, yn)  # (h, w)
         self._Xp = self._S * (self._Xn - 0.5)
-        self._Yp = self._S * self._Yn - 0.3
+        self._Yp = self._S * self._Yn + .4
 
         self._frame = None
         self._compute()

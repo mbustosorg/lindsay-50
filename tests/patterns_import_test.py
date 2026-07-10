@@ -39,6 +39,7 @@ class _StubDisplay:
         ("lib_shared.patterns.coronal_mass_ejection", "CoronalMassEjection"),
         ("lib_shared.patterns.eyeball", "Eyeball"),
         ("lib_shared.patterns.marble", "Marble"),
+        ("lib_shared.patterns.metaballs", "Metaballs"),
         ("lib_shared.patterns.hyperspace", "Hyperspace"),
         ("lib_shared.patterns.heartbeat", "Heartbeat"),
     ],
@@ -94,6 +95,7 @@ def test_patterns_dont_import_rgb_display():
         honeycomb,
         hyperspace,
         marble,
+        metaballs,
         nightsky,
         windfire,
     )
@@ -106,6 +108,7 @@ def test_patterns_dont_import_rgb_display():
         honeycomb,
         hyperspace,
         marble,
+        metaballs,
         nightsky,
         windfire,
     ):
