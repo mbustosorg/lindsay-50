@@ -19,6 +19,54 @@ from lib_shared.messages import InMemoryMessages
 logger = logging.getLogger(__name__)
 
 
+def _coerce_message_dict(item: object) -> Optional[Message]:
+    """Build a `Message` from a wire/cache dict. Returns None when the
+    entry is malformed (missing or empty required fields) — the caller
+    should skip such entries rather than letting them into the buffer.
+
+    Required fields: `id`, `sender`, `body`, `received_at`. All four must
+    be non-empty strings; `media` is optional (defaults to `[]`).
+
+    Why this matters: previously the construction sites used
+    `item.get("id", "")` (and friends), which silently coerced a
+    missing/empty field into `""`. The Message with empty id/body
+    then sat in the buffer as `entries[0]`, got picked by
+    `get_display_message`, and surfaced in the browser preview as
+    `[preview-modal] picked message: id=(none) body= media_count=0` —
+    the user's diagnosis point. With the validation here, such entries
+    are dropped at ingest so the buffer only holds well-formed
+    messages.
+    """
+    if not isinstance(item, dict):
+        return None
+    msg_id = item.get("id")
+    sender = item.get("sender")
+    body = item.get("body")
+    received_at = item.get("received_at")
+    if not isinstance(msg_id, str) or not msg_id:
+        return None
+    if not isinstance(sender, str) or not sender:
+        return None
+    if not isinstance(body, str) or not body:
+        return None
+    if not isinstance(received_at, str) or not received_at:
+        return None
+    media_raw = item.get("media")
+    if media_raw is None:
+        media: list[dict] = []
+    elif isinstance(media_raw, list):
+        media = [it for it in media_raw if isinstance(it, dict)]
+    else:
+        return None
+    return Message(
+        id=msg_id,
+        sender=sender,
+        body=body,
+        received_at=received_at,
+        media=media,
+    )
+
+
 def _ensure_browser_runtime():
     """Lazily import `js.fetch` — only available inside a browser runtime (Pyodide)."""
     global _js_fetch
@@ -320,21 +368,32 @@ class MessageManager:
             # re-seed path below. `add_many` is single-source
             # for a batch, so we use `add` to preserve the
             # mix of rest + mqtt messages a live cache holds.
+            #
+            # Items with malformed required fields (empty id /
+            # sender / body / received_at) are skipped via
+            # `_coerce_message_dict` — otherwise an entry with
+            # `"id": ""` would silently pollute the rotation
+            # buffer and surface as a picked entry with empty
+            # text in the preview. We count them so the
+            # operator can see the data integrity issue in the
+            # log (one warning per batch, not per row).
+            skipped_malformed = 0
             for item in msgs_raw:
                 if not isinstance(item, dict):
                     return False
                 src = item.get("source")
                 if src not in ("rest", "mqtt"):
                     return False
-                self._messages.add(
-                    Message(
-                        id=item.get("id", ""),
-                        sender=item.get("sender", ""),
-                        body=item.get("body", ""),
-                        received_at=item.get("received_at", ""),
-                        media=item.get("media") or [],
-                    ),
-                    source=src,
+                msg = _coerce_message_dict(item)
+                if msg is None:
+                    skipped_malformed += 1
+                    continue
+                self._messages.add(msg, source=src)
+            if skipped_malformed:
+                logger.warning(
+                    "MessageManager cache hydrate: skipped %d malformed "
+                    "row(s) (empty/missing id or body)",
+                    skipped_malformed,
                 )
             self._config.update_from_dict(cfg_raw)
             # Hydrate enriches the whole buffer in one pass — the
@@ -459,14 +518,22 @@ class MessageManager:
         always emits the field, so consumers can rely on it being
         present.
         """
-        msg = Message(
-            id=payload.get("id", ""),
-            sender=payload.get("sender", ""),
-            body=payload.get("body", ""),
-            received_at=payload.get("received_at", ""),
-            media=payload.get("media") or [],
-        )
-
+        msg = _coerce_message_dict(payload)
+        if msg is None:
+            # Malformed MQTT envelope (e.g. a publish from an
+            # older version of the broker that omitted `id` /
+            # `body`). Drop it rather than pollute the buffer
+            # with a Message(id="", body="") that would surface
+            # as an empty-text pick. Operator sees the WARNING
+            # once per offending envelope; the broker-side
+            # producer is the fix.
+            logger.warning(
+                "MessageManager: dropped malformed MQTT envelope (missing/empty id or body): %s",
+                {k: type(v).__name__ for k, v in payload.items()}
+                if isinstance(payload, dict)
+                else type(payload).__name__,
+            )
+            return
         view = self._messages.add(msg, source="mqtt")
         if view is not None:
             self._messages._enrich_messages([view])
@@ -598,17 +665,27 @@ class MessageManager:
                 data = await self._fetch(self._messages_api_url)
                 if isinstance(data, list):
                     self._messages.clear()
-                    msgs = [
-                        Message(
-                            id=item.get("id", ""),
-                            sender=item.get("sender", ""),
-                            body=item.get("body", ""),
-                            received_at=item.get("received_at", ""),
-                            media=item.get("media") or [],
+                    # Filter malformed rows BEFORE inserting — see
+                    # `_coerce_message_dict`. A /api/messages response
+                    # with a missing-required-field row (corrupt
+                    # upstream? cache left over from a prior schema?)
+                    # used to coerce to "" and pollute the rotation
+                    # buffer with a Message that picked as empty text.
+                    coerced = []
+                    skipped = 0
+                    for item in data[:100]:
+                        msg = _coerce_message_dict(item)
+                        if msg is None:
+                            skipped += 1
+                            continue
+                        coerced.append(msg)
+                    self._messages.add_many(coerced, source="rest")
+                    if skipped:
+                        logger.warning(
+                            "MessageManager REST seed: skipped %d malformed row(s) "
+                            "(missing id / sender / body / received_at)",
+                            skipped,
                         )
-                        for item in data[:100]
-                    ]
-                    self._messages.add_many(msgs, source="rest")
                 logger.info(
                     "MessageManager seeded %d messages",
                     len(data) if isinstance(data, list) else 0,

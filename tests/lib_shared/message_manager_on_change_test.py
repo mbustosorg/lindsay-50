@@ -62,16 +62,20 @@ def test_on_change_fires_on_handle_message():
     which fires on_change exactly once."""
     calls = []
     mgr = _build_manager(on_change=lambda: calls.append("cb"))
-    envelope = {
-        "type": "message",
-        "payload": {
-            "id": "m1",
-            "sender": "+1",
-            "body": "hi",
-            "received_at": "2026-01-01T00:00:00Z",
-        },
+    # _handle_message takes the inner payload dict (what the
+    # dispatcher at message_manager.py:439 extracts from
+    # `envelope.payload`), NOT the wire envelope. Earlier this
+    # test fed the outer wire envelope, and the construction
+    # code silently coerced missing-fields to "" — the
+    # `_coerce_message_dict` validator now rejects that shape
+    # correctly. Update the input to match the dispatch contract.
+    payload = {
+        "id": "m1",
+        "sender": "+1",
+        "body": "hi",
+        "received_at": "2026-01-01T00:00:00Z",
     }
-    mgr._handle_message(envelope)
+    mgr._handle_message(payload)
     assert calls == ["cb"], f"expected exactly one callback, got {calls}"
 
 
