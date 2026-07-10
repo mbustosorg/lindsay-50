@@ -374,8 +374,7 @@
       if (key !== lastMediaKey) {
         if (PREVIEW_DEBUG) {
           console.log(
-            "[preview-media] swapping %s src: key=%s url=%s opacity=%.2f",
-            kind, key, url, opacity,
+            `[preview-media] swapping ${kind} src: key=${key} url=${url} opacity=${Number(opacity || 0).toFixed(2)}`,
           );
         }
         if (kind === "image") {
@@ -562,8 +561,7 @@
               if (media && (media.key || media.url)) {
                 if (media.key !== lastMediaKey) {
                   console.log(
-                    "[preview-media] python returned: key=%s kind=%s url=%s opacity=%.2f",
-                    media.key, media.kind, media.url, media.opacity || 0,
+                    `[preview-media] python returned: key=${media.key} kind=${media.kind} url=${media.url} opacity=${Number(media.opacity || 0).toFixed(2)}`,
                   );
                 }
               } else {

@@ -74,14 +74,14 @@
      binding shim here — the coordinator's render layer is bound
      onto the app-scoped coordinator that `app_main.py` already
      installed. -->
-<py-script src="{{ url_for('static', filename='preview/heart-message-manager/preview_main.py') }}?v=8"></py-script>
+<py-script src="{{ url_for('static', filename='preview/heart-message-manager/preview_main.py') }}?v=9"></py-script>
 
 <!-- App-side main loop. Loaded after PyScript so it can wait for the
      runtime's `py:done` event. base.html's `app.js` (loaded earlier,
      gated by the auth) owns the MQTT-WS connection and the in-browser
      MessageManager; preview.js only registers a per-page callback to
      drive `coordinator.request_message(body)` on each new envelope. -->
-<script src="{{ url_for('static', filename='preview/preview.js') }}?v=10"></script>
+<script src="{{ url_for('static', filename='preview/preview.js') }}?v=11"></script>
 
 {# --- JSON Viewer Modal (mirrors testing.html's #json-modal) --- #}
 <div id="json-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">

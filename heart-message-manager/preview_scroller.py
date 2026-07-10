@@ -72,15 +72,37 @@ class PreviewScroller(ScrollerBase):
         return bbox[2] - bbox[0]
 
     def draw_text(self, canvas, text, x, y, color):
-        """Blit `text` at (x, y) on the canvas (a WebCanvas or Pillow Image).
+        """Blit `text` at (x, y) on the canvas with the RGBA layer made opaque.
 
         The base class passes the WebCanvas instance; the actual Pillow image
-        lives at canvas.image. ImageDraw wraps that image and writes the
-        glyphs in the requested color (a 3-tuple scaled by brightness).
+        lives at canvas.image. Pillow's `ImageDraw.text` on an RGBA image
+        anti-aliases glyph edges as partial-alpha pixels (typically ~226 / 255
+        at the edge), so the text would otherwise look semi-transparent once
+        it's composited on top of the BrowserMediaOverlay's `<img>` / `<video>`
+        background — the image behind shows through the edges and the user
+        reads that as the text "fading out". The two-step approach here bakes
+        Pillow's anti-aliased RGB into a fully-opaque RGBA pixel: render text
+        onto a temporary RGB layer (no alpha, so the AA grayscale is captured
+        in the RGB values themselves), then composite it onto the canvas
+        with a binary "any non-black pixel is opaque text" mask. The browser
+        preview's image layering relies on this invariant — lit pixels
+        alpha=255, gaps alpha=0 — and a partially-transparent text violates
+        it.
         """
         target = canvas.image if hasattr(canvas, "image") else canvas
-        draw = ImageDraw.Draw(target)
-        draw.text((x, y), text, fill=color, font=self.font)
+        # Render text onto a temporary RGB layer so the anti-aliased
+        # coverage is encoded as RGB values rather than alpha.
+        temp = Image.new("RGB", target.size, (0, 0, 0))
+        ImageDraw.Draw(temp).text((x, y), text, fill=color, font=self.font)
+        # Build a binary mask: any non-black pixel in `temp` is part of
+        # the rendered glyph (anti-aliased edges included), so it lands
+        # opaque on the canvas. `Image.eval` on an RGB image returns
+        # RGB (the input mode), but `paste(..., mask=...)` requires an
+        # L-mode mask, so convert explicitly.
+        mask = Image.eval(temp, lambda v: 255 if v > 0 else 0).convert("L")
+        r, g, b = temp.split()
+        opaque = Image.merge("RGBA", (r, g, b, Image.new("L", temp.size, 255)))
+        target.paste(opaque, (0, 0), mask=mask)
 
     def render(self, canvas):
         """Override the base render so the canvas is cleared first.
