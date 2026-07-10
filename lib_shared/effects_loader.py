@@ -195,15 +195,18 @@ def make_effect_class(name: str) -> type | None:
         name: Canonical effect name (e.g. "Fireworks").
 
     Returns:
-        The Effect class, or None when the name is not registered
-        (logged as a warning so the operator can see the drift).
+        The Effect class, or None when the name is not registered.
+        Unknown names are silently ignored — a config snapshot saved
+        before a pattern was removed (e.g. operator's S3 config
+        referencing `Flame` after 410d6bf dropped it) shouldn't spam
+        WARNING every boot. `build_effects` filters Nones and falls
+        back to the first canonical effect when the rotation empties.
         Raises AttributeError when the module imports cleanly but the
         class name is wrong — that's a config bug worth surfacing.
     """
     entries = load_effects_settings().get("effects", [])
     entry = next((e for e in entries if e.get("name") == name), None)
     if entry is None:
-        log.warning("make_effect_class: unknown effect name %r (skipped)", name)
         return None
     module = importlib.import_module(entry["module"])
     return getattr(module, entry["class_name"])

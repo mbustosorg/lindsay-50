@@ -372,12 +372,22 @@ class TestFactory:
             assert cls.__name__ == name
             assert callable(cls)
 
-    def test_returns_none_for_unknown_name(self, caplog):
-        """Unknown names return None (logged as a warning)."""
+    def test_returns_none_for_unknown_name_silently(self, caplog):
+        """Unknown names return None WITHOUT logging.
+
+        A config snapshot saved before a pattern was removed (e.g.
+        operator's S3 config referencing `Flame` after 410d6bf dropped
+        it) shouldn't spam WARNING every boot. The rotation filters
+        Nones and falls back to a canonical effect (see
+        `build_effects`); the operator can see their stale entry in
+        the Settings admin UI and update it there.
+        """
         with caplog.at_level(logging.WARNING, logger="heart"):
             cls = make_effect_class("NotARealEffect")
         assert cls is None
-        assert any("NotARealEffect" in rec.message for rec in caplog.records)
+        assert not any("NotARealEffect" in rec.message for rec in caplog.records), (
+            "unknown name should be silently skipped, not logged"
+        )
 
     def test_repeated_calls_are_idempotent(self):
         """Calling the factory twice returns the same class object."""
