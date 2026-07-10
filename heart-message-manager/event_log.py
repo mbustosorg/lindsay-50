@@ -204,7 +204,7 @@ class IndexedDBEventLog:
                 store.createIndex("timestamp", "timestamp")
 
         try:
-            from js import create_proxy  # type: ignore[import-not-found]
+            from pyodide.ffi import create_proxy  # type: ignore[import-not-found]
 
             req.onsuccess = create_proxy(_on_success)
             req.onerror = create_proxy(_on_error)
@@ -254,7 +254,7 @@ class IndexedDBEventLog:
                 log.warning("IndexedDBEventLog: getAll onsuccess failed: %s", e)
 
         try:
-            from js import create_proxy  # type: ignore[import-not-found]
+            from pyodide.ffi import create_proxy  # type: ignore[import-not-found]
 
             req.onsuccess = create_proxy(_on_get_all)
         except Exception as e:
