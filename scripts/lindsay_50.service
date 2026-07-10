@@ -17,6 +17,17 @@ Description=Lindsay-50 heart matrix display (self-upgrading)
 After=network-online.target
 Wants=network-online.target
 
+# Bound crash loops: after 3 service exits in 2 minutes, systemd
+# stops restarting and the operator must investigate. Defense in
+# depth — if the loader itself has a bug that causes tight crash
+# loops, systemd bounds the damage instead of looping forever.
+# (StartLimit* directives live in [Unit], not [Service] — systemd
+# silently ignores them in [Service], as we found on 2026-07-09
+# when four "Unknown key 'StartLimitIntervalSec' in section [Service]"
+# warnings fired at boot and the guard was effectively a no-op.)
+StartLimitIntervalSec=120
+StartLimitBurst=3
+
 [Service]
 # loader.py queries Flask for the expected SHA, stages any new version
 # into a git worktree, probes its .status.json, atomically swaps `current`,
@@ -28,13 +39,6 @@ StandardOutput=inherit
 StandardError=inherit
 Restart=always
 RestartSec=5
-
-# Bound crash loops: after 3 service exits in 2 minutes, systemd
-# stops restarting and the operator must investigate. Defense in
-# depth — if the loader itself has a bug that causes tight crash
-# loops, systemd bounds the damage instead of looping forever.
-StartLimitIntervalSec=120
-StartLimitBurst=3
 
 User=root
 

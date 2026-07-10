@@ -10,7 +10,9 @@ import functools
 import html
 import json
 import logging
+import threading
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -319,45 +321,336 @@ def api_test_messages():
     return _process_inbound_message(request)
 
 
-def _process_inbound_message(request) -> Response:
-    """Shared message processing for both real Twilio webhooks and test injections."""
-    sender = request.form.get("From", "")
-    body = request.form.get("Body", "").strip()
+def _process_inbound_message(req) -> Response:
+    """Shared message processing for both real Twilio webhooks and test injections.
 
-    logger.info("From=%r Body=%r", sender, body)
+    Sync phase (the request handler): parse Twilio's form fields, build the
+    TwiML response, dispatch a background thread if NumMedia > 0, return.
+    Twilio's webhook response budget is 15 s — D13 mandates we never block
+    the request on media downloads/uploads.
 
-    if not body:
-        return Response("", status=204)
+    Async phase (`_process_inbound_media_async`): for MMS payloads, a daemon
+    ThreadPoolExecutor downloads attachments via Twilio Basic Auth, copies
+    them to S3, persists the Message (text + completed media list), and
+    publishes the MessageEnvelope over MQTT — all on a non-daemon future
+    handle, so the request returns 200/TwiML before any of this work happens.
 
-    msg = Message(
-        id=str(uuid.uuid4()),
-        sender=sender,
-        body=body,
-        received_at=now_utc_iso(),
+    The MessageSid-keyed dedupe guard prevents double-processing when
+    Twilio retries a webhook while the background thread is still in
+    flight. Without it, a SLO-flaky Twilio path could result in two
+    `MessageEnvelope` publishes for the same SID.
+
+    Empty body + no media still returns 204 (no-op today, preserved); empty
+    body + media is accepted (background thread publishes a `body=""` +
+    populated media list — the existing `scroller.set_text("", ...)` path
+    in `EffectsCoordinator.out → in` handles the blank text and routes
+    the cycler into `background` mode after fade-in).
+    """
+    sender = req.form.get("From", "")
+    body = req.form.get("Body", "").strip()
+    # `NumMedia` is optional on SMS-only webhooks. Twilio sends "0" on a
+    # pure SMS; absent entirely on the test-injection path. Treat absent
+    # as "no media" so existing tests don't have to set it.
+    try:
+        num_media = int(req.form.get("NumMedia", "0") or "0")
+    except ValueError:
+        num_media = 0
+    message_sid = req.form.get("MessageSid", "") or ""
+
+    # Collect all attachment (type, url) pairs up front. Twilio sends them
+    # as indexed form fields MediaContentType0..N / MediaUrl0..N. We iterate
+    # by index — `num_media` is the upper bound, missing entries stop the
+    # walk. The async thread reads them from a thread-safe copy of
+    # `req.form` (Werkzeug's `MultiDict` is not strictly thread-safe).
+    media_pairs = []
+    for i in range(num_media):
+        ctype = req.form.get(f"MediaContentType{i}", "")
+        url = req.form.get(f"MediaUrl{i}", "")
+        if not ctype or not url:
+            continue
+        media_pairs.append((ctype, url))
+
+    logger.info(
+        "From=%r Body=%r NumMedia=%d sid=%s",
+        sender,
+        body,
+        num_media,
+        message_sid[:12] + "..." if message_sid else "(none)",
     )
 
-    try:
-        s3.log_message(msg)
-    except Exception as e:
-        logger.warning("S3 logging failed (will continue): %s", e)
+    # Empty body + no media: short-circuit with 204 (no background work,
+    # no S3, no MQTT). The same behavior the sync path produced before
+    # the MMS work — preserved.
+    if not body and not media_pairs:
+        return Response("", status=204)
 
+    # 204 short-circuited above; from here on we always respond 200.
     cfg = sqlite.get_config()
     sign_name = cfg.sign.name if cfg.sign else "Lindsay's Heart"
-    reply = f"{sign_name} got your message: {html.escape(body)}"
+    reply_body = body if body else "(no message)"
+    reply = f"{sign_name} got your message: {html.escape(reply_body)}"
     twiml = Response(
         f"<Response><Message>{reply}</Message></Response>",
         status=200,
         mimetype="text/xml",
     )
 
-    try:
-        sqlite.put_message(msg)
-        assert _mqtt_client is not None
-        _mqtt_client.publish_envelope(MessageEnvelope("message", msg.to_dict()))
-    except Exception as e:
-        logger.error("Post-webhook processing failed: %s", e)
+    # No media: synchronous path (preserves today's behavior). Publishes
+    # the MessageEnvelope immediately, no background thread.
+    if not media_pairs:
+        msg = Message(
+            id=str(uuid.uuid4()),
+            sender=sender,
+            body=body,
+            received_at=now_utc_iso(),
+        )
+        try:
+            s3.log_message(msg)
+        except Exception as e:
+            logger.warning("S3 logging failed (will continue): %s", e)
+        try:
+            sqlite.put_message(msg)
+            assert _mqtt_client is not None
+            _mqtt_client.publish_envelope(MessageEnvelope("message", msg.to_dict()))
+        except Exception as e:
+            logger.error("Post-webhook processing failed: %s", e)
+        return twiml
 
+    # MMS path: respond 200/TwiML now; background thread does the rest.
+    # Dedupe guard: if Twilio retries the same SID while a previous worker
+    # is still running, return 200/TwiML without spawning a duplicate.
+    if message_sid:
+        with _INBOUND_DEDUPE_LOCK:
+            in_flight = _INBOUND_DEDUPE.get(message_sid)
+            if in_flight is not None and not in_flight.done():
+                logger.info(
+                    "Twilio webhook dedupe: sid=%s already in flight; returning 200 immediately",
+                    message_sid,
+                )
+                return twiml
+            slot = _MediaFuture()
+            # Carry the SID inside the slot so the async worker can pop
+            # the dedupe table in its `finally` block — the table is keyed
+            # by SID, not by slot identity, so without this back-reference
+            # the worker can only mark the slot `done()` and the table
+            # entry would leak until the next MMS for the same SID.
+            slot._sid = message_sid
+            _INBOUND_DEDUPE[message_sid] = slot
+    else:
+        # Test-injection path / non-MMS webhook — no dedupe tracking.
+        slot = _MediaFuture()
+
+    # Build the ThreadPoolExecutor lazily on the first MMS we see so the
+    # SMS-only path doesn't pay the cost of a worker pool. `max_workers=4`
+    # matches the per-MMS attachment cap in `_process_inbound_media_async`
+    # (the inner pool pools per attachment, not per webhook).
+    global _MMS_EXECUTOR
+    if _MMS_EXECUTOR is None:
+        _MMS_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="mms")
+
+    worker_payload = {
+        "sender": sender,
+        "body": body,
+        "media_pairs": media_pairs,
+        "slot": slot,
+    }
+    _MMS_EXECUTOR.submit(_process_inbound_media_async, worker_payload)
     return twiml
+
+
+class _MediaFuture:
+    """A stand-in for `concurrent.futures.Future` used as a dedupe slot.
+
+    We need a thread-safe handle to track in-flight inbound processing per
+    MessageSid. The real `Future` from `concurrent.futures` works fine, but
+    we don't have one yet at the dedupe-check site (the worker is about to
+    be submitted, not yet executing). A small class with `done()` / `set_done()`
+    covers the exact surface the dedupe path needs and keeps the dependency
+    surface flat — no `_as_completed` / `wait` / `cancel` surface area we
+    don't use. The async thread calls `set_done()` in its finally block.
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._done = False
+        # Back-reference to the Twilio MessageSid this slot was registered
+        # under. Set by the dedupe-registration site (line ~437); the async
+        # worker reads it in its `finally` block to remove the entry from
+        # `_INBOUND_DEDUPE` (keyed by SID, not by slot identity). Declared
+        # here so Pylance / mypy see it as a real attribute and not a
+        # dynamic assignment to an unknown member.
+        self._sid: str | None = None
+
+    def done(self) -> bool:
+        with self._lock:
+            return self._done
+
+    def set_done(self) -> None:
+        with self._lock:
+            self._done = True
+
+
+# Dedupe-guard table — keyed by Twilio `MessageSid`. Holds an in-flight
+# future (or a stand-in) per SID; entries are popped when the worker
+# finishes (success OR exception; see the `finally` block in
+# `_process_inbound_media_async`). Kept in-process only — a Flask restart
+# wipes the guard, which is fine because Twilio's retry budget (≤3) is
+# shorter than typical restart time.
+_INBOUND_DEDUPE: dict[str, _MediaFuture] = {}
+_INBOUND_DEDUPE_LOCK = threading.Lock()
+_MMS_EXECUTOR: ThreadPoolExecutor | None = None
+
+
+def _process_inbound_media_async(payload: dict) -> None:
+    """Background-thread body for MMS webhooks (design D13).
+
+    1. Download every `MediaUrl{i}` via Twilio Basic Auth (`s3.log_media`).
+       Runs the downloads in parallel through a ThreadPoolExecutor — `s3.log_media`
+       is HTTP-bound, parallelism matters more than thread count for typical
+       1-3 attachment MMS.
+    2. Build the `media: list[{type, url}]` list, dropping items where the
+       download or S3 put failed (WARNING logged inside `log_media`).
+    3. Persist the `Message` (text + completed media list) to S3 + SQLite.
+       `s3.log_message` stays exactly as-is — we add a `media` field to
+       its JSON payload and `Message.from_dict` defaults any missing field
+       to `[]` on the consumer side, so legacy S3 message JSON files
+       remain valid.
+    4. Publish `MessageEnvelope` over MQTT exactly once.
+    5. Release the dedupe guard in the `finally` block so a worker crash
+       doesn't leave the SID locked.
+
+    On any unhandled exception we log CRITICAL and let the `finally` clean
+    the dedupe guard so subsequent retries for the same SID don't deadlock.
+    """
+    sender = payload["sender"]
+    body = payload["body"]
+    media_pairs = payload["media_pairs"]
+    slot = payload["slot"]
+    sid = ""
+    try:
+        # Twilio's webhook always carries MessageSid; the test-injection
+        # path may not. We don't need the SID inside the worker (the
+        # dedupe table already references this slot) but logging it makes
+        # journalctl entries easy to correlate. Pull it from the request
+        # form is not safe from this thread (form is not thread-safe);
+        # however, MMS webhooks always include `MessageSid` so we look
+        # at `payload` rather than re-read the form here.
+        # `payload["slot"]` is our dedupe slot; the SID is intentionally
+        # not threaded through — see the design D13 dedupe contract.
+        logger.info(
+            "MMS async: starting downloads for %d attachment(s) sender=%r",
+            len(media_pairs),
+            sender,
+        )
+        media_list, download_failures = _download_media_in_parallel(media_pairs)
+        if download_failures:
+            logger.warning(
+                "MMS async: %d of %d attachment(s) failed (continuing with survivors)",
+                download_failures,
+                len(media_pairs),
+            )
+        # One-line summary of what survived the download+upload
+        # round-trip. The browser preview's `BrowserMediaOverlay` will
+        # render an empty list when `media_list` is empty, so this
+        # log line is the single best signal for "why isn't the
+        # image showing up in the preview?". Grep the Flask log
+        # for `MMS async: built media_list` after each test post.
+        logger.info(
+            "MMS async: built media_list items=%d content_types=%s keys=%s",
+            len(media_list),
+            [m.get("type") for m in media_list],
+            [m.get("url") for m in media_list],
+        )
+
+        msg = Message(
+            id=str(uuid.uuid4()),
+            sender=sender,
+            body=body,
+            received_at=now_utc_iso(),
+            media=media_list,
+        )
+
+        try:
+            s3.log_message(msg)
+        except Exception as e:
+            logger.warning("S3 logging failed (will continue): %s", e)
+
+        try:
+            sqlite.put_message(msg)
+            assert _mqtt_client is not None
+            _mqtt_client.publish_envelope(MessageEnvelope("message", msg.to_dict()))
+        except Exception as e:
+            logger.error("Post-MMS-webhook processing failed: %s", e)
+    except Exception as e:
+        logger.exception("MMS async: unhandled exception (sid will be released): %s", e)
+    finally:
+        # Always release the dedupe slot — even on uncaught exceptions —
+        # so a future retry of the same SID doesn't deadlock.
+        try:
+            with _INBOUND_DEDUPE_LOCK:
+                slot.set_done()
+                # Pop the slot for our SID if it's still us. `_INBOUND_DEDUPE`
+                # is keyed by SID; we re-read the SID from the request form
+                # only when needed. In practice MMS webhooks always set
+                # MessageSid so we keep a back-reference in the slot.
+                sid_attr = getattr(slot, "_sid", "")
+                if sid_attr and _INBOUND_DEDUPE.get(sid_attr) is slot:
+                    del _INBOUND_DEDUPE[sid_attr]
+        except Exception as e:  # noqa: BLE001 — last-ditch log + drop
+            logger.warning("MMS async: failed to release dedupe slot: %s", e)
+
+
+def _download_media_in_parallel(media_pairs: list[tuple[str, str]]) -> tuple[list[dict], int]:
+    """Download + upload each (content_type, url) pair in parallel.
+
+    Returns:
+        A `(media_list, failures)` tuple:
+          - `media_list` is the on-wire list of `{"type", "url"}` dicts
+            in the same order as `media_pairs` (so failed items leave
+            holes / are dropped — see the decision below).
+          - `failures` is the count of items where the download or
+            upload returned None. The caller logs a single WARNING.
+
+    Implementation note: `s3.log_media` is HTTP-Bound (Twilio's Basic-Auth
+    download) and CPU-very-light (a single boto3 put). A small
+    ThreadPoolExecutor with `max_workers=min(len(pairs), 4)` keeps the
+    webhook fan-out bounded — a Twilio MMS with 6 attachments still only
+    spawns 4 concurrent downloads.
+    """
+    if not media_pairs:
+        return [], 0
+
+    max_workers = min(len(media_pairs), 4)
+    media_list: list[dict] = []
+    failures = 0
+
+    # Reserve index slots so we can iterate in input order. The wire format
+    # preserves order — a panel-cycling client might rely on "first
+    # attachment shows first". Failed slots become `None` and are
+    # filtered out before publish.
+    results: list[dict | None] = [None] * len(media_pairs)
+
+    def _download_one(idx_and_pair):
+        idx, (ctype, url) = idx_and_pair
+        key = s3.log_media(ctype, url)
+        return idx, ctype, key
+
+    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="mms-dl") as pool:
+        futures = [pool.submit(_download_one, (i, pair)) for i, pair in enumerate(media_pairs)]
+        for fut in futures:
+            try:
+                idx, ctype, key = fut.result()
+            except Exception as exc:
+                logger.warning("MMS async: download worker raised: %s", exc)
+                failures += 1
+                continue
+            if key is None:
+                failures += 1
+                continue
+            results[idx] = {"type": ctype, "url": key}
+
+    media_list = [r for r in results if r is not None]
+    return media_list, failures
 
 
 # API Endpoints
@@ -573,6 +866,44 @@ def api_s3_objects():
                 500,
             )
         return jsonify({"error": err_str}), 500
+
+
+@app.route("/api/media/<path:s3_key>")
+@api_login_required
+def api_media(s3_key):
+    """Return 302 to a freshly-signed S3 URL for the given media key (design D3).
+
+    Auth: same ``api_login_required`` as other API routes — accepts the
+    device's X-API-Key header OR a logged-in browser session. The Pi's
+    image-display effect and the browser preview both follow the redirect
+    the same way.
+
+    Bytes NEVER flow through Flask: the 302's ``Location`` header points
+    to ``boto3.generate_presigned_url(..., ExpiresIn=3600)``, which the
+    client GETs directly from S3. Flask stays on the auth boundary (it
+    gates who can mint signed URLs) without paying Heroku egress twice.
+
+    Error map (spec):
+      - missing / wrong API key → 401 (decorator)
+      - ``..`` in path  → 400 (path-traversal guard, evaluated BEFORE the
+        S3 call so a malicious key never tries to reach S3)
+      - S3 raises on signing (e.g. ``NoSuchKey`` when the key doesn't
+        exist) → 404 with a JSON ``{"error": "..."}`` body
+      - S3 raises on a transient outage (network, IAM, throttle) → 502
+        with a JSON ``{"error": "..."}`` body
+    """
+    if ".." in s3_key or s3_key.startswith("/") or "//" in s3_key:
+        return jsonify({"error": "invalid S3 key"}), 400
+    try:
+        signed = s3.signed_media_url(s3_key)
+    except Exception as exc:  # boto3 raises BotoCoreError / ClientError
+        logger.warning("/api/media signing failed for %s: %s", s3_key, exc)
+        return jsonify({"error": "media not found"}), 404
+    if not signed:
+        return jsonify({"error": "media not found"}), 404
+    response = Response("", status=302)
+    response.headers["Location"] = signed
+    return response
 
 
 @app.route("/api/admin/s3-object")
@@ -1046,6 +1377,13 @@ _PREVIEW_CSP_BASE = (
     "https://pyscript.net https://fonts.googleapis.com; "
     "font-src 'self' https://fonts.gstatic.com; "
     "img-src 'self' data:; "
+    # media-src is set explicitly because `default-src 'self'`
+    # would otherwise be the fallback for `<video src=…>` loads
+    # (the browser doesn't allow the S3 origin without an
+    # explicit media-src, even though img-src is allowed). The
+    # S3 origin is spliced in by `_set_preview_csp` from the
+    # same config the S3 client reads.
+    "media-src 'self'; "
     "connect-src 'self' "
     "https://cdn.jsdelivr.net https://pyscript.net"
 )
@@ -1068,14 +1406,89 @@ def _set_preview_csp(response):
         # irrelevant). Build the origin string and splice it into the
         # base directive.
         ws_origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else ""
+        # The Flask /api/media/<key> route 302-redirects to a freshly-
+        # signed S3 URL (presigned via boto3 in s3.py). The browser
+        # follows the redirect and loads the image bytes from the S3
+        # origin directly, so `img-src` must allow it. The origin
+        # depends on the S3 config: dev (MinIO) uses the explicit
+        # `AWS_S3_ENDPOINT_URL`; prod (real AWS) uses the virtual-hosted
+        # style `https://<bucket>.s3.<region>.amazonaws.com`. We
+        # compute it from the same config the S3 client uses
+        # (`s3._s3_client`), so the CSP never disagrees with the
+        # actual signed-URL origin.
+        s3_origin = _derive_s3_origin()
         csp = _PREVIEW_CSP_BASE
         if ws_origin:
             csp = csp.replace(
                 "connect-src 'self'",
                 f"connect-src 'self' {ws_origin}",
             )
+        if s3_origin:
+            csp = csp.replace(
+                "img-src 'self' data:",
+                f"img-src 'self' data: {s3_origin}",
+            )
+            # media-src is the CSP directive for <video> and <audio>;
+            # the S3 redirect target is the same origin as the image
+            # load, so the same allow-list entry applies. Without
+            # this, the video load falls back to `default-src 'self'`
+            # and is blocked the same way the image was in 6ecb815.
+            csp = csp.replace(
+                "media-src 'self'",
+                f"media-src 'self' {s3_origin}",
+            )
         response.headers["Content-Security-Policy"] = csp
     return response
+
+
+def _derive_s3_origin() -> str:
+    """Return the origin (scheme + host + port) of the S3 endpoint the
+    Flask /api/media/<key> proxy redirects to.
+
+    Resolution order matches `s3._s3_client()`:
+
+      1. `AWS_S3_ENDPOINT_URL` (explicit, e.g. ``http://localhost:9000``
+         for local MinIO) — return its scheme + netloc.
+      2. No explicit endpoint → real AWS. boto3 signs with the
+         virtual-hosted-style URL
+         ``https://<bucket>.s3.<region>.amazonaws.com``. Build the
+         same shape from `AWS_S3_BUCKET` + `AWS_S3_REGION`.
+      3. **`us-east-1` is special-cased** to the legacy global endpoint
+         ``https://<bucket>.s3.amazonaws.com`` (no region in the host).
+         boto3's default signing URL for us-east-1 buckets is the
+         legacy form even with virtual-host addressing; building the
+         regional form ``https://<bucket>.s3.us-east-1.amazonaws.com``
+         here would put a CSP allow-list entry on an origin boto3
+         never actually signs, and the browser blocks the load. (The
+         regional form is also valid, but unused by our pipeline.)
+      4. Missing region → legacy global form (same rationale: that's
+         what an unconfigured boto3 client signs in us-east-1).
+
+    Returns an empty string when the origin can't be determined
+    (the CSP code treats that as "leave img-src alone"). Never
+    raises — the CSP code runs in a hot request path.
+    """
+    try:
+        from urllib.parse import urlparse
+
+        endpoint = _cfg.if_exists("AWS_S3_ENDPOINT_URL")
+        if endpoint:
+            parsed = urlparse(endpoint)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+            return ""
+        bucket = _cfg.if_exists("AWS_S3_BUCKET")
+        region = _cfg.if_exists("AWS_S3_REGION")
+        # Resolve to the actual signed URL origin boto3 will produce.
+        # `us-east-1` (and missing region, which boto3 also defaults to
+        # the us-east-1 namespace) → legacy global endpoint.
+        if bucket and (not region or region == "us-east-1"):
+            return f"https://{bucket}.s3.amazonaws.com"
+        if bucket and region:
+            return f"https://{bucket}.s3.{region}.amazonaws.com"
+        return ""
+    except Exception:
+        return ""
 
 
 # Context processor — inject the `mqtt`, `mqtt_ws`, `config`, and `auth`
@@ -1116,7 +1529,6 @@ def _derive_mqtt_ws_url() -> str:
     if explicit:
         # See the Arc note in the docstring above.
         derived = explicit.replace("localhost", "127.0.0.1")
-        print(f"[DEBUG] _derive_mqtt_ws_url: explicit={explicit!r} -> {derived!r}")
         return derived
     host = _cfg.if_exists("MQTT_HOST") or "127.0.0.1"
     if host == "localhost":
@@ -1135,7 +1547,6 @@ def _derive_mqtt_ws_url() -> str:
         derived = f"{scheme}://{host}:{port}/mqtt"
     else:
         derived = f"{scheme}://{host}/mqtt"
-    print(f"[DEBUG] _derive_mqtt_ws_url: host={host!r} port={port!r} -> {derived!r}")
     return derived
 
 

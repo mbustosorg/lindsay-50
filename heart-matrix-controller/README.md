@@ -8,6 +8,143 @@ Runs on a Raspberry Pi with a 64×64 HUB75 LED panel (two stacked 64×32 panels,
 - **Controller**: Raspberry Pi with [hzeller rpi-rgb-led-matrix](https://github.com/hzeller/rpi-rgb-led-matrix) library
 - **Configuration**: `settings.toml` or environment variables
 
+## Local development
+
+Running this code on a laptop (e.g. from PyCharm, VS Code, or a plain
+terminal) is supported and is the fastest way to iterate on patterns,
+effects, and the message pipeline. The Pi deployment section below is
+a production overlay on top of the same code; it adds an upgrade
+manager and a systemd unit, but the render loop is `main.py` either
+way.
+
+### Two entrypoints, two different jobs
+
+| Entrypoint | When to use | What it does |
+|---|---|---|
+| `python3 main.py` | **Laptop dev**, or any manual run | Runs the render loop + MQTT subscriber directly. No upgrade management. Reads `settings.toml` for MQTT/panel/FONT_PATH and that's it. |
+| `python3 loader.py` (or systemd) | **Pi production** | Manages a `current/` symlink pointing at a per-SHA `v-<sha>/` worktree, decides whether to upgrade based on `AUTO_UPDATE`, then `os.execvpe`s into `current/heart-matrix-controller/main.py`. The loader is *not* a dev entrypoint — running it on a laptop won't work unless you've staged a `current/` symlink and have the conventional `/srv/lindsay-50` repo path. |
+
+The `/current/heart-matrix-controller/main.py` path you sometimes see in
+stack traces is the loader-managed symlink. It only resolves under the
+production layout; if you see `FileNotFoundError: .../current/...` on
+your laptop, you're accidentally pointing a debugger or script at the
+loader instead of `main.py` — switch the script path in your IDE and the
+error goes away.
+
+### Running `main.py` directly
+
+From the repo root, with the venv activated and the working directory
+set to `heart-matrix-controller/` (so `settings.toml` and the relative
+`FONT_PATH` resolve):
+
+```bash
+source .venv/bin/activate
+cd heart-matrix-controller
+sudo PYTHONPATH=.. LOG_LEVEL=INFO python3 main.py
+```
+
+`sudo` is required because the hzeller library drives GPIO directly.
+`PYTHONPATH=..` puts the repo root on `sys.path` so `lib_shared.*`
+imports resolve. `LOG_LEVEL=DEBUG` is useful the first time you boot
+locally — it surfaces the `effects_loader: loaded N effects from
+<path>` line so you can see which config won the precedence fight.
+
+What this **does not** do:
+
+- No version upgrade. The loader is not in the process tree.
+- No MQTT-driven `check-for-update` swap. The handler is wired but
+  gates on `AUTO_UPDATE` (see below).
+- No systemd supervision. Stop with Ctrl-C; SIGTERM via `kill` is also
+  caught (the SIGTERM handler turns it into `SystemExit`).
+
+### `AUTO_UPDATE` — what it actually gates
+
+`AUTO_UPDATE` is **only** read by `loader.py` (boot-time upgrade
+decision) and `check_for_update.py` (runtime MQTT envelope handler).
+`main.py` itself does not import it. Concretely:
+
+| Run mode | `AUTO_UPDATE=true` | `AUTO_UPDATE=false` (default) |
+|---|---|---|
+| `python3 main.py` (local) | Runtime `check-for-update` MQTT envelopes will try to `os.execvpe` into `/srv/lindsay-50/.../loader.py`, which **doesn't exist on a laptop** — your process will die the first time Flask publishes one. Set `AUTO_UPDATE=false` for local dev. | MQTT `check-for-update` envelopes are silently logged and dropped. Safe default. |
+| `python3 loader.py` (production) | Loader runs the upgrade flow on boot and on MQTT hints. Production behavior. | Loader skips the upgrade flow and execs the existing `current/` worktree. Pinned-version posture. |
+
+Settings precedence (per `config_reader.py`): env var > `settings.toml`.
+So for a one-off local-dev run you can leave `settings.toml` alone and
+just prefix the command:
+
+```bash
+sudo PYTHONPATH=.. AUTO_UPDATE=false LOG_LEVEL=INFO python3 main.py
+```
+
+### Effects settings — the override mechanism
+
+The canonical effect list lives at
+`lib_shared/config/effects_settings.json` (in git, schema_version=1,
+9 entries — 7 enabled, 2 asset-dependent patterns disabled by default).
+**Editing that file directly is the wrong move for local dev**: any
+local change you commit gets stomped on the next `git pull`, and any
+uncommitted change gets stomped the next time `EffectsSettings()`
+rebuilds from the loader.
+
+The override chain (highest precedence first):
+
+1. `EFFECTS_SETTINGS_OVERRIDE` env var pointing at a JSON file path.
+   Useful for tests and advanced operators.
+2. `config_overrides/effects_settings.json` at the repo root. The
+   directory is **gitignored** (`config_overrides/*` with
+   `!config_overrides/.gitkeep`); the file inside is yours to keep.
+3. The canonical file (read-only from your perspective as a local dev).
+
+Override semantics are **REPLACE**, not merge — your override file
+must contain every field the canonical carries
+(`schema_version`, `effects[]`, `fade_seconds`, `hold_seconds`,
+`intro_seconds`, `idle_seconds`, `recent_count`). Missing fields fall
+back to the constructor's defaults, not to the canonical file's
+values, so be explicit.
+
+A minimal override that swaps one effect for your own and shortens the
+idle cycle:
+
+```json
+{
+  "schema_version": 1,
+  "effects": [
+    {"name": "Hyperspace", "module": "lib_shared.patterns.hyperspace", "class_name": "Hyperspace", "enabled": true},
+    {"name": "Fireworks", "module": "lib_shared.patterns.fireworks", "class_name": "Fireworks", "enabled": true},
+    {"name": "MyPattern", "module": "lib_shared.patterns.my_pattern", "class_name": "MyPattern", "enabled": true}
+  ],
+  "fade_seconds": 1.0,
+  "hold_seconds": 7.0,
+  "intro_seconds": 3.0,
+  "idle_seconds": 30.0,
+  "recent_count": 5
+}
+```
+
+Drop that at `config_overrides/effects_settings.json` and the next
+`main.py` boot will load it. The boot log will print:
+
+```
+effects_loader: loaded 3 effects from <repo>/config_overrides/effects_settings.json (schema_version=1)
+```
+
+…which is your signal that the override won. If you see the canonical
+path instead, the loader fell through to the default — check that the
+override file is valid JSON and matches the schema.
+
+**Custom pattern modules:** drop a `MyPattern(Effect)` subclass into
+`lib_shared/patterns/my_pattern.py`, reference its module + class name
+from the override file as above, and the loader resolves it via
+dynamic import (`importlib.import_module(...)` + `getattr(...)`). The
+override file is the only thing that needs to know your pattern
+exists — `main.py` and the rest of the pipeline pick it up
+transparently.
+
+**Precedence edge case:** if both `EFFECTS_SETTINGS_OVERRIDE` and the
+gitignored override file exist, the env var wins. If the env var
+points at a missing file, the loader logs a warning and falls back to
+the gitignored override (then the canonical).
+
 ## Pi deployment
 
 The Pi needs one operator-provided file: `settings.toml` (MQTT creds,

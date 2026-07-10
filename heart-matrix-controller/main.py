@@ -139,6 +139,23 @@ coordinator = EffectsCoordinator(
     scroller=scroller,
     effects=effects,
     heart=heartbeat,
+    # MediaCycler wiring (issue #38). The coordinator constructs a
+    # MediaCycler at the out→in transition when the picked message
+    # has a non-empty `media` list; the cycler fetches each
+    # attachment via "{MEDIA_API_BASE_URL}/api/media/{s3_key}".
+    # Default to deriving the origin from MESSAGES_API_URL when
+    # MEDIA_API_BASE_URL isn't set (operators usually point all
+    # three URLs at the same Flask host).
+    media_api_base_url=cfg.if_exists("MEDIA_API_BASE_URL") or cfg.MESSAGES_API_URL.rsplit("/api/", 1)[0],
+    media_cache_dir=str(_REPO_DIR / "data" / "media-cache"),
+    # X-API-Key for the MediaCycler's Flask fetcher. Flask's
+    # `/api/media/<key>` route is gated by `@api_login_required`,
+    # which checks `X-API-Key` before falling through to the
+    # browser session — the Pi has no session cookie, so without
+    # this header every media fetch 401s and the cycler drops the
+    # item (D12 codec-failure semantics). Same value the Flask
+    # server reads as `cfg.API_SECRET_KEY` in its auth.py:82 lookup.
+    media_api_key=cfg.API_SECRET_KEY,
 )
 
 # Kick off the boot splash. The coordinator's first pull (every 250 ms)

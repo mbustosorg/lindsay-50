@@ -41,28 +41,47 @@ class _StubDisplay:
         ("lib_shared.patterns.marble", "Marble"),
         ("lib_shared.patterns.hyperspace", "Hyperspace"),
         ("lib_shared.patterns.heartbeat", "Heartbeat"),
-        ("lib_shared.patterns.png_display", "PngDisplay"),
-        ("lib_shared.patterns.video_display", "VideoDisplay"),
     ],
 )
 def test_pattern_module_imports_and_constructs(module_name, class_name):
     mod = importlib.import_module(module_name)
     cls = getattr(mod, class_name)
     assert cls is not None
-    # PngDisplay + VideoDisplay need filesystem assets / OpenCV; the
-    # bare constructor (with defaults) might raise. The other six patterns
-    # just need a canvas with width/height, which our stub satisfies.
-    if class_name in ("PngDisplay", "VideoDisplay"):
-        # We're verifying the module is importable; constructor failure on
-        # missing assets is acceptable here — the surface test is the
-        # import + the class being present.
-        assert callable(cls)
-    else:
-        instance = cls(_StubDisplay())
-        assert instance is not None
-        assert hasattr(instance, "tick")
-        assert hasattr(instance, "render")
-        assert hasattr(instance, "set_brightness")
+    instance = cls(_StubDisplay())
+    assert instance is not None
+    assert hasattr(instance, "tick")
+    assert hasattr(instance, "render")
+    assert hasattr(instance, "set_brightness")
+
+
+def test_image_display_is_importable_but_not_in_registry():
+    """ImageDisplay is an inner renderer consumed by MediaCycler; it
+    is NOT an entry in the effects registry. Verify it can still be
+    imported and instantiated (the bare class surface) without going
+    through the loader."""
+    from lib_shared.patterns.image_display import ImageDisplay
+
+    assert callable(ImageDisplay)
+    # The class must NOT appear in the canonical effects list (its
+    # work is done indirectly via MediaCycler, which the user never
+    # sees in /settings).
+    from lib_shared.effects_loader import load_effects_settings
+
+    canonical_names = {e["name"] for e in load_effects_settings()["effects"]}
+    assert "ImageDisplay" not in canonical_names
+
+
+def test_make_effect_class_returns_none_for_legacy_image_display_names():
+    """Legacy operator-override entries (PngDisplay, ImageDisplay)
+    must land gracefully — make_effect_class returns None + WARNING
+    instead of crashing. Verifies a stale operator override doesn't
+    take the device down."""
+    import lib_shared.effects_loader as effects_loader
+
+    effects_loader.reset_effects_settings()
+    for name in ("PngDisplay", "ImageDisplay", "VideoDisplay"):
+        result = effects_loader.make_effect_class(name)
+        assert result is None, f"make_effect_class({name!r}) returned {result!r}, expected None"
 
 
 def test_patterns_dont_import_rgb_display():
@@ -76,8 +95,6 @@ def test_patterns_dont_import_rgb_display():
         hyperspace,
         marble,
         nightsky,
-        png_display,
-        video_display,
         windfire,
     )
 
@@ -90,8 +107,6 @@ def test_patterns_dont_import_rgb_display():
         hyperspace,
         marble,
         nightsky,
-        png_display,
-        video_display,
         windfire,
     ):
         assert not hasattr(

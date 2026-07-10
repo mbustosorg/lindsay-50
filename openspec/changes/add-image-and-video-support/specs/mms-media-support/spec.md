@@ -1,35 +1,47 @@
 ## ADDED Requirements
 
-### Requirement: Twilio MMS webhook ingests media attachments
-The Flask `/api/messages` POST handler MUST detect `NumMedia > 0` in the inbound Twilio webhook form fields and copy each `MediaUrl{i}` to S3 before the TwiML response is constructed.
+### Requirement: Twilio MMS webhook ingests media attachments asynchronously
+The Flask `/api/messages` POST handler MUST respond to Twilio with 200/TwiML immediately on MMS payloads (no blocking on media downloads), then process media in a background thread. The background thread MUST download each `MediaUrl{i}` via Twilio Basic Auth, upload to S3, persist the resulting `Message` (text + completed `media` list), and publish the `MessageEnvelope` over MQTT exactly once — all before the thread exits.
 
 #### Scenario: Inbound MMS with one image
 - **WHEN** Twilio POSTs to `/api/messages` with `NumMedia=1`, `MediaContentType0=image/jpeg`, and a `MediaUrl0=https://api.twilio.com/...`
-- **THEN** Flask downloads the bytes via Basic Auth (`AccountSid:AuthToken` from the same `TWILIO_AUTH_TOKEN` env var used for signature validation), writes the bytes to S3 under `media/images/{YYYY-MM}/media-{ISO-timestamp}.{ext}`, and attaches a `media: [{"type": "image/jpeg", "url": "media/images/{YYYY-MM}/media-{ISO-timestamp}.jpg"}]` list to the resulting `Message.to_dict()`.
+- **THEN** Flask responds 200/TwiML immediately (no `join()` on the background thread), spawns `_process_inbound_media_async`, and returns. The background thread downloads the bytes via Basic Auth, writes them to S3 under `media/images/{YYYY-MM}/media-{ISO-timestamp}.{ext}`, attaches a `media: [{"type": "image/jpeg", "url": "media/images/{YYYY-MM}/media-{ISO-timestamp}.jpg"}]` list to the resulting `Message.to_dict()`, and publishes the `MessageEnvelope` over MQTT exactly once.
 
 #### Scenario: Inbound SMS without media
 - **WHEN** Twilio POSTs to `/api/messages` with no `NumMedia` field (or `NumMedia=0`)
-- **THEN** Flask proceeds exactly as today — no S3 upload, `Message.to_dict()` `media` field is `[]`.
+- **THEN** Flask proceeds exactly as today — synchronous, no background thread, no S3 upload, `Message.to_dict()` `media` field is `[]`.
 
-#### Scenario: Inbound MMS with mixed content types
+#### Scenario: Inbound MMS with mixed content types (parallel uploads)
 - **WHEN** Twilio POSTs to `/api/messages` with one `image/png` and one `video/mp4` attachment
-- **THEN** Flask writes each to its corresponding prefix (`media/images/...` and `media/videos/...`) and emits a `media` list of two entries with the correct `type` strings.
+- **THEN** Flask spawns the background thread which uses a `ThreadPoolExecutor` to download + upload both attachments in parallel. Each lands under its corresponding prefix (`media/images/...` and `media/videos/...`) and the final `media` list has two entries with the correct `type` strings.
 
 #### Scenario: Twilio MediaUrl returns 410 GONE
 - **WHEN** the inbound `MediaUrl*` HTTP fetch returns a non-2xx status (e.g., 410 because Twilio retention expired) OR fails to download within a configurable timeout (default 10s)
-- **THEN** Flask logs a WARNING, drops that media item from the list, and the TwiML response proceeds with whatever media landed successfully. A message whose media download fully fails MUST still be persisted (text + empty `media` list).
+- **THEN** the background thread logs a WARNING, drops that media item from the list, and the message persists with the remaining items. A message whose media download fully fails still persists (text + empty `media` list) and publishes over MQTT.
 
 #### Scenario: S3 upload fails after a successful Twilio fetch
 - **WHEN** the bytes downloaded successfully but `boto3.put_object` raises (network, IAM, throttle)
-- **THEN** Flask logs a WARNING and the message persists with the affected media item dropped from the `media` list. Other media items in the same webhook still land. The webhook response is still 200 + TwiML.
+- **THEN** the background thread logs a WARNING and the message persists with the affected media item dropped from the `media` list. Other media items in the same webhook still land. The original 200/TwiML response was already sent.
+
+#### Scenario: Webhook response latency
+- **WHEN** Twilio POSTs an MMS with 3 large attachments
+- **THEN** Flask's 200/TwiML response returns in under 200 ms (wall clock) — none of the S3 / Twilio-MediaUrl / upload work blocks the request handler.
+
+#### Scenario: MessageSid dedupe (Twilio retry)
+- **WHEN** Twilio POSTs to `/api/messages` with the same `MessageSid` twice in quick succession (Twilio retry because it didn't see the first 200 fast enough)
+- **THEN** the second call sees the SID in the in-process dedupe guard, returns 200/TwiML immediately without spawning a duplicate background thread. Only one `MessageEnvelope` is published.
+
+#### Scenario: Background-thread crash leaves dedupe-guard released
+- **WHEN** the background thread raises an unhandled exception
+- **THEN** the `finally` block releases the dedupe-guard entry and logs CRITICAL; subsequent webhooks with the same `MessageSid` are processed normally (no deadlock).
 
 #### Scenario: Inbound MMS with no body, only media
 - **WHEN** Twilio POSTs to `/api/messages` with `Body=""` (or absent) and `NumMedia=1`
-- **THEN** Flask accepts the message, persists a `Message` with `body=""` and a populated `media` list, publishes the `MessageEnvelope` over MQTT, and returns 200 + TwiML. The 204 gate fires only when both `body` is empty AND `NumMedia == 0` (or absent).
+- **THEN** Flask accepts the message, responds 200/TwiML immediately, spawns the background thread; the thread persists a `Message` with `body=""` and a populated `media` list, then publishes the `MessageEnvelope` over MQTT. The 204 gate fires only when both `body` is empty AND `NumMedia == 0` (or absent).
 
 #### Scenario: Empty body, no media still returns 204
 - **WHEN** Twilio POSTs to `/api/messages` with `Body=""` and no `NumMedia` field
-- **THEN** Flask returns 204 with no body, no S3 writes, no MQTT publish — the same as today's behavior.
+- **THEN** Flask returns 204 with no body, no background thread, no S3 writes, no MQTT publish — the same as today's behavior.
 
 ### Requirement: Message wire carries a media list
 The `Message` class in `lib_shared/models.py` MUST round-trip a `media: list[{type, url}]` field through `from_dict` / `to_dict`; existing 4-field messages MUST continue to round-trip unchanged.
@@ -69,28 +81,6 @@ The S3 key namespace for media MUST use two new prefixes — `media/images/{YYYY
 - **WHEN** `s3.log_media("image/gif", ...)` is called
 - **THEN** the bytes land under `media/images/{YYYY-MM}/...` (gifs are images by MIME type, regardless of multi-frame semantics).
 
-### Requirement: Flask proxies media fetch over authenticated HTTP
-The Flask process MUST expose `GET /api/media/<path:s3_key>` for authenticated media fetches; the Pi and browser fetch media via this endpoint rather than direct S3 access.
-
-#### Scenario: Authenticated fetch returns media bytes
-- **WHEN** `GET /api/media/media/images/2025-12/media-2025-12-07T15-30-00Z.jpg` is called with the `X-API-Key` header
-- **THEN** Flask returns `200 OK` with the bytes from S3 and `Content-Type=image/jpeg` (the same MIME recorded at upload time).
-
-#### Scenario: Unauthenticated fetch denied
-- **WHEN** `GET /api/media/media/images/...` is called with no API key
-- **THEN** Flask returns `401 Unauthorized`.
-
-#### Scenario: Path traversal blocked
-- **WHEN** `GET /api/media/../messages/foo.json` is called (the path contains `..`)
-- **THEN** Flask returns `400 Bad Request` and does NOT call S3.
-
-#### Scenario: Missing key
-- **WHEN** `GET /api/media/media/images/.../nonexistent.jpg` is called with valid auth
-- **THEN** Flask returns `404 Not Found`.
-
-#### Scenario: S3 outage
-- **WHEN** boto3 raises during the proxy fetch
-- **THEN** Flask returns `502 Bad Gateway` with a JSON body `{ "error": "<message>" }` and logs a WARNING.
 
 ### Requirement: Per-message background effect overrides rotation for media messages
 The `EffectsCoordinator.tick()` MUST construct a per-message `MediaCycler` Effect whenever the message currently being displayed has a non-empty `media` list; the cycler MUST yield back to the normal rotation after the message's display cycle ends.
@@ -107,6 +97,33 @@ The `EffectsCoordinator.tick()` MUST construct a per-message `MediaCycler` Effec
 - **WHEN** `get_display_message()` returns the body of a message with `media == []`
 - **THEN** the coordinator's `out → in` transition uses `self.effects[self.idx]` (no MediaCycler). Behavior is identical to today.
 
+### Requirement: Flask returns a 302 to a signed S3 URL for authenticated media fetches
+The Flask process MUST expose `GET /api/media/<path:s3_key>` for authenticated media fetches; on success the endpoint MUST return a `302 Found` response whose `Location` header points to a freshly-signed S3 URL. Bytes MUST NOT flow through Flask — the Pi and browser follow the redirect to S3 directly.
+
+#### Scenario: Authenticated fetch returns 302 with Location header
+- **WHEN** `GET /api/media/media/images/2025-12/media-2025-12-07T15-30-00Z.jpg` is called with the `X-API-Key` header
+- **THEN** Flask calls `s3.signed_media_url(s3_key)` (which invokes `boto3.client("s3").generate_presigned_url("get_object", Params={"Bucket": bucket, "Key": key}, ExpiresIn=3600)`) and returns `302 Found` with `Location: <signed-s3-url>`. The response body is empty; no S3 bytes are streamed through Flask.
+
+#### Scenario: Pi or browser follows the redirect
+- **WHEN** a client receives the 302 with `Location: https://{bucket}.s3.{region}.amazonaws.com/media/...?X-Amz-...`
+- **THEN** the client issues a `GET` to the signed URL and receives the bytes directly from S3 with `Content-Type=image/jpeg` (the same MIME recorded at upload time). Flask is not on the bytes path.
+
+#### Scenario: Unauthenticated fetch denied
+- **WHEN** `GET /api/media/media/images/...` is called with no API key
+- **THEN** Flask returns `401 Unauthorized` — no S3 signing call is attempted.
+
+#### Scenario: Path traversal blocked
+- **WHEN** `GET /api/media/../messages/foo.json` is called (the path contains `..`)
+- **THEN** Flask returns `400 Bad Request` and does NOT call `s3.signed_media_url`.
+
+#### Scenario: Missing key
+- **WHEN** `GET /api/media/media/images/.../nonexistent.jpg` is called with valid auth and `s3.signed_media_url` raises (key does not exist)
+- **THEN** Flask returns `404 Not Found`.
+
+#### Scenario: S3 outage during signing
+- **WHEN** `boto3.generate_presigned_url` raises (network, IAM, throttle)
+- **THEN** Flask returns `502 Bad Gateway` with a JSON body `{ "error": "<message>" }` and logs a WARNING.
+
 #### Scenario: Message with no body, only media
 - **WHEN** `get_display_message()` returns the body of a message whose `body == ""` and `media` is non-empty
 - **THEN** the coordinator's `out → in` transition constructs the `MediaCycler` (media is non-empty) AND calls `scroller.set_text("", display.width)` with `showing_text=False`. After the fade-in, the mode is `background` (not `hold`) — the cycler renders the media; the panel shows no text. The next transition (text_out is skipped because there's no text to fade) drops straight from `background` when `hold_seconds` elapses or the cycler's cycle ends, then advances to `self.effects[self.idx]` on the next fade.
@@ -122,6 +139,14 @@ The `EffectsCoordinator.tick()` MUST construct a per-message `MediaCycler` Effec
 #### Scenario: MediaCycler item's natural duration read at construction
 - **WHEN** a `MediaCycler` is constructed with a `video/mp4` item
 - **THEN** it reads `cv2.CAP_PROP_FRAME_COUNT / cv2.CAP_PROP_FPS` once (at construction) to compute the item's natural duration; subsequent cycles reuse the cached value.
+
+#### Scenario: Bad-codec item is dropped from the cycler's list
+- **WHEN** the cycler's current item is a `video/mp4` whose inner `VideoDisplay` raises `cv2.error` (codec mismatch, can't read first frame) on `tick()`
+- **THEN** the cycler logs a WARNING (`"MediaCycler: dropping item %r due to decode failure: %s"`), removes the item from its in-memory list, and advances to the next item on the next `tick()`. No black panel; no crash.
+
+#### Scenario: All items bad-codec — fall back to rotation
+- **WHEN** the cycler's only item (or every item) raises a decode failure on its first frame
+- **THEN** the cycler's list becomes empty, and on the next fade the coordinator falls back to `self.effects[self.idx]` (the rotation). The sign continues to display the rotation's default effects (Flame, NightSky, Fireworks, etc.) — no dead black panel for the message's whole `hold_seconds` window.
 
 ### Requirement: MediaCycler Effect integrates with the existing palette and full-frame pipelines
 `MediaCycler` MUST subclass `lib_shared.effect_base.Effect` and dispatch internally to `ImageDisplay` (palette) for image/* items and `VideoDisplay` (full-frame) for video/* items.

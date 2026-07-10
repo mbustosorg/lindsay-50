@@ -78,9 +78,16 @@ class TestSystemdUnit:
         ), f"WorkingDirectory should be repo root, got: {wd!r}"
 
     def test_startlimit_interval_and_burst_set(self, unit):
-        """StartLimitIntervalSec=120 and StartLimitBurst=3 throttle crash loops."""
-        interval = unit.get("Service", "StartLimitIntervalSec", fallback=None)
-        burst = unit.get("Service", "StartLimitBurst", fallback=None)
+        """StartLimitIntervalSec=120 and StartLimitBurst=3 throttle crash loops.
+
+        These directives live under [Unit], not [Service] — systemd
+        silently ignores them under [Service] (we hit "Unknown key
+        'StartLimitIntervalSec' in section [Service]" warnings at
+        boot on 2026-07-09). The unit file has them in [Unit]; the
+        test must follow.
+        """
+        interval = unit.get("Unit", "StartLimitIntervalSec", fallback=None)
+        burst = unit.get("Unit", "StartLimitBurst", fallback=None)
         assert interval == "120", f"StartLimitIntervalSec should be 120, got: {interval!r}"
         assert burst == "3", f"StartLimitBurst should be 3, got: {burst!r}"
 

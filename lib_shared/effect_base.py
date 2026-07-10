@@ -85,10 +85,19 @@ class Effect:
         raise NotImplementedError
 
     def set_brightness(self, b: float) -> None:
+        # Clamp at the 8-bit channel ceiling so callers can pass `b`
+        # slightly above 1.0 to push dark pixels brighter (e.g. the
+        # MediaCycler's brightness boost) without wrapping saturated
+        # channels into corrupted colors. `int()` alone truncates the
+        # fractional component; `min(0xFF, …)` keeps the result on
+        # the panel's 24-bit RGB color wheel. At b=1.0 the clamp is
+        # a no-op for any palette entry already ≤ 0xFF per channel;
+        # at b > 1.0 the clamp holds saturated entries at 0xFF and
+        # only dark entries get pulled brighter.
         for i, c in enumerate(self._original_palette):
-            r = int(((c >> 16) & 0xFF) * b)
-            g = int(((c >> 8) & 0xFF) * b)
-            bl = int((c & 0xFF) * b)
+            r = min(0xFF, int(((c >> 16) & 0xFF) * b))
+            g = min(0xFF, int(((c >> 8) & 0xFF) * b))
+            bl = min(0xFF, int((c & 0xFF) * b))
             self.palette[i] = (r << 16) | (g << 8) | bl
 
     def render(self, canvas) -> None:

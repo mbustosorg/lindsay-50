@@ -221,6 +221,85 @@ class TestSeedServer:
         assert mgr.config.timezone == "US/Pacific"
         assert mgr.config.sign.name == "Test Sign"
 
+    def test_seed_preserves_media_from_rest_payload(self, messages_api_url, config_api_url, api_key):
+        """REST seed must carry `media` through to the in-memory Message.
+
+        Regression for the "fresh MMS includes media, restart Flask
+        and they're gone" symptom. The Flask REST API correctly
+        returns `media` in the JSON (Message.to_dict includes it),
+        but MessageManager.seed() was constructing `Message(...)`
+        with only 4 fields and dropping the list. Manual Refresh on
+        the Testing page takes this path; cold-load via app.js does
+        too. Same shape as the MQTT-envelope fix (1fc1fff).
+        """
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            is_browser=False,
+        )
+        rest_payload = [
+            {
+                "id": "mms1",
+                "sender": "+15553333333",
+                "body": "with attachment",
+                "received_at": "2026-07-01T12:00:00Z",
+                "media": [
+                    {"type": "image/png", "url": "media/images/2026-07/k.png"},
+                ],
+            },
+        ]
+
+        async def mock_fetch(url):
+            return rest_payload if url == messages_api_url else {}
+
+        mgr._fetch = mock_fetch  # type: ignore[assignment]
+        asyncio.run(mgr.seed())
+
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.id == "mms1"
+        assert msgs[0].message.media == [
+            {"type": "image/png", "url": "media/images/2026-07/k.png"},
+        ]
+        # And the top-level MessageView attribute (the JS-side
+        # proxy surface) mirrors it — both reading paths agree.
+        assert msgs[0].media == msgs[0].message.media
+
+    def test_seed_missing_media_defaults_to_empty(self, messages_api_url, config_api_url, api_key):
+        """REST payload without `media` (SMS-only) → `media == []`.
+
+        The `or []` collapse handles both "key absent" and "explicit
+        None" so a malformed payload can't crash the constructor.
+        """
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            is_browser=False,
+        )
+        rest_payload = [
+            {
+                "id": "sms1",
+                "sender": "+15554444444",
+                "body": "no attach",
+                "received_at": "2026-07-01T13:00:00Z",
+                # no media key
+            },
+        ]
+
+        async def mock_fetch(url):
+            return rest_payload if url == messages_api_url else {}
+
+        mgr._fetch = mock_fetch  # type: ignore[assignment]
+        asyncio.run(mgr.seed())
+
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.media == []
+
 
 class TestSeedBrowser:
     def test_seed_calls_fetch_for_messages_then_config_browser(
@@ -449,6 +528,72 @@ class TestDispatchMessage:
         cb_arg = cb.call_args[0]
         assert cb_arg == ()
 
+    def test_dispatch_message_envelope_preserves_media(self, messages_api_url, config_api_url, api_key):
+        """Issue #38: the `media` field on the wire envelope round-trips to
+        the in-memory Message. Without this, the coordinator's
+        `BrowserMediaOverlay` (preview) / `MediaCycler` (Pi) sees
+        `media=[]` on every picked message and the image never
+        renders — even though Flask published the right envelope.
+        Regression test for the `_handle_message` drop."""
+        cb = MagicMock()
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=cb,
+        )
+        env = _make_env(
+            {
+                "id": "m1",
+                "sender": "+15551234567",
+                "body": "mms",
+                "received_at": "2026-06-01T12:00:00Z",
+                "media": [
+                    {"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"},
+                    {"type": "image/png", "url": "media/images/2026-07/b.png"},
+                ],
+            }
+        )
+        mgr.dispatch(env)
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.media == [
+            {"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"},
+            {"type": "image/png", "url": "media/images/2026-07/b.png"},
+        ]
+
+    def test_dispatch_message_envelope_absent_media_defaults_to_empty(
+        self,
+        messages_api_url,
+        config_api_url,
+        api_key,
+    ):
+        """SMS-only envelopes (no `media` key) map to `media=[]` on the
+        Message. The defensive `payload.get("media") or []` collapses
+        both "missing key" and "explicit None" to the same default."""
+        cb = MagicMock()
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            on_change=cb,
+        )
+        env = _make_env(
+            {
+                "id": "m2",
+                "sender": "+15551234567",
+                "body": "sms only",
+                "received_at": "2026-06-01T12:00:00Z",
+                # no `media` key
+            }
+        )
+        mgr.dispatch(env)
+        msgs = mgr.get_messages(limit=10, suppress=False)
+        assert len(msgs) == 1
+        assert msgs[0].message.media == []
+
     def test_dispatch_invokes_on_change_on_config(self, messages_api_url, config_api_url, api_key):
         """A type=config envelope updates the config and on_change IS invoked."""
         cb = MagicMock()
@@ -630,16 +775,40 @@ class TestDispatchCommand:
         mgr.dispatch(env)
         handler.assert_not_called()
 
-    def test_dispatch_command_without_callback_drops_with_warning(self, messages_api_url, config_api_url, api_key):
-        """check-for-update with no callback is dropped (not raised)."""
+    def test_dispatch_command_without_callback_drops_with_debug_log(
+        self, messages_api_url, config_api_url, api_key, caplog
+    ):
+        """check-for-update with no callback is dropped (not raised).
+
+        The log is at DEBUG, not WARNING: the only runtime that registers
+        a handler is the Pi (because `os.execvpe` only makes sense there).
+        Flask publishes this envelope to the shared MQTT topic, so the
+        browser preview's MessageManager sees it too — but the browser
+        has nothing to act on, and a warning on every Flask restart would
+        be pure noise. Pin the log level here so a future regression
+        (e.g., someone re-promotes the log to WARNING) is caught.
+        """
+        import logging
+
         mgr = _mm().MessageManager(
             messages_api_url=messages_api_url,
             config_api_url=config_api_url,
             api_key=api_key,
         )
         env = json.dumps({"type": "command", "payload": {"action": "check-for-update"}})
-        # Must not raise
-        mgr.dispatch(env)
+        with caplog.at_level(logging.DEBUG, logger="lib_shared.message_manager"):
+            # Must not raise
+            mgr.dispatch(env)
+        # Debug-level log fires; nothing at warning or above.
+        debug_records = [
+            r
+            for r in caplog.records
+            if r.name == "lib_shared.message_manager" and "dropped check-for-update" in r.getMessage()
+        ]
+        assert debug_records, "expected a DEBUG log line for the dropped check-for-update"
+        assert all(
+            r.levelno < logging.WARNING for r in debug_records
+        ), "dropped check-for-update must not be at WARNING level"
 
     def test_dispatch_command_handler_exception_is_swallowed(self, messages_api_url, config_api_url, api_key):
         """A handler that raises does not crash the paho network thread."""
@@ -1259,6 +1428,70 @@ class TestSessionCache:
             mm._to_js = None
             mm._js_object_from_entries = None
 
+    def test_hydrate_from_cache_preserves_media(self, messages_api_url, config_api_url, api_key):
+        """Round-trip: cache with `media` → hydrate → media survives.
+
+        Regression for the "after Flask restart, media is gone" symptom.
+        `_write_cache` already serializes `media` via `MessageView.to_dict()`,
+        but `_hydrate_from_cache` was constructing `Message(...)` with only
+        4 fields — silently dropping the list on the read side.
+        """
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        to_js_shim = self._make_to_js_shim()
+        from_entries_shim = self._make_from_entries_shim()
+        # Pre-populate the cache directly with a payload containing media.
+        cache_payload = {
+            "v": 1,
+            "sign_name": "Lindsay's Heart",
+            "messages": [
+                {
+                    "id": "mms-h1",
+                    "sender": "+15551111111",
+                    "body": "with attachment",
+                    "received_at": "2026-07-01T10:00:00Z",
+                    "media": [
+                        {"type": "image/png", "url": "media/images/2026-07/h.png"},
+                    ],
+                    "source": "mqtt",
+                },
+            ],
+            "config": {
+                "sign": {"name": "Lindsay's Heart"},
+                "filters": [],
+                "effects_settings": {},
+                "text_settings": {},
+                "timezone": "US/Pacific",
+            },
+        }
+        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(cache_payload)
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        mm._to_js = to_js_shim
+        mm._js_object_from_entries = from_entries_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+            mgr._config.sign = SignSettings(name="Lindsay's Heart")
+            hit = asyncio.run(mgr.hydrate_from_cache())
+            assert hit is True
+            msgs = mgr.get_messages(limit=10, suppress=False)
+            assert len(msgs) == 1
+            assert msgs[0].message.id == "mms-h1"
+            assert msgs[0].message.media == [
+                {"type": "image/png", "url": "media/images/2026-07/h.png"},
+            ]
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
+
     def test_hydrate_from_cache_fires_on_change(self, messages_api_url, config_api_url, api_key):
         """Cache hit fires on_change exactly once."""
         store, ss_shim = self._make_session_storage_shim()
@@ -1318,7 +1551,13 @@ class TestSessionCache:
             mm._js_object_from_entries = None
 
     def test_handle_message_writes_cache(self, messages_api_url, config_api_url, api_key):
-        """_handle_message on a browser mgr writes the cache via _emit_change."""
+        """_handle_message on a browser mgr writes the cache via _emit_change.
+
+        Also asserts that `media` survives into the sessionStorage payload —
+        the bug fix at 1fc1fff (MQTT envelope path) added `media=...` to
+        the Message constructor and that has to make it through the
+        MessageView.to_dict → JSON round-trip that _write_cache performs.
+        """
         store, ss_shim = self._make_session_storage_shim()
         json_shim = self._make_json_shim()
         mm = _mm()
@@ -1339,11 +1578,91 @@ class TestSessionCache:
                     "sender": "+15551234567",
                     "body": "hi",
                     "received_at": "2026-06-01T12:00:00Z",
+                    "media": [
+                        {"type": "image/png", "url": "media/images/2026-06/m1.png"},
+                    ],
                 }
             )
             assert len(store) == 1
             payload = json.loads(list(store.values())[0])
             assert any(m["id"] == "m1" for m in payload["messages"])
+            cached_m1 = next(m for m in payload["messages"] if m["id"] == "m1")
+            assert cached_m1["media"] == [
+                {"type": "image/png", "url": "media/images/2026-06/m1.png"},
+            ], f"media lost in cache write! got {cached_m1.get('media')!r}"
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
+
+    def test_seed_writes_media_to_cache(self, messages_api_url, config_api_url, api_key):
+        """REST /api/messages → seed() → MessageView.to_dict() → sessionStorage.
+
+        The REST path round-trips through the same Message constructor
+        as MQTT (1fc1fff + f2238a8). This test asserts that when the
+        REST response carries `media`, the cached sessionStorage blob
+        carries the same list — i.e. the user's reported symptom
+        ("seed writes messages but no media shows in sessionStorage")
+        can't recur unnoticed.
+        """
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
+        seed_with_media = [
+            {
+                "id": "rest-1",
+                "sender": "+15551111111",
+                "body": "with pic",
+                "received_at": "2026-07-01T10:00:00Z",
+                "media": [
+                    {"type": "image/png", "url": "media/images/2026-07/rest-1.png"},
+                    {"type": "video/mp4", "url": "media/videos/2026-07/rest-1.mp4"},
+                ],
+            },
+        ]
+        cfg_payload = {
+            "filters": [],
+            "senders": [],
+            "effects_settings": {
+                "effects": [{"name": "Hyperspace", "enabled": True}],
+                "fade_seconds": 2.0,
+                "hold_seconds": 15.0,
+                "intro_seconds": 5.0,
+                "idle_seconds": 300.0,
+                "recent_count": 5,
+            },
+            "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
+            "sign": {"name": "Test Sign"},
+            "timezone": "US/Pacific",
+            "version": 2,
+        }
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+
+            async def mock_fetch(url):
+                return seed_with_media if url == messages_api_url else cfg_payload
+
+            mgr._fetch = mock_fetch  # type: ignore[assignment]
+            asyncio.run(mgr.seed())
+            assert len(store) == 1
+            payload = json.loads(list(store.values())[0])
+            assert len(payload["messages"]) == 1
+            cached = payload["messages"][0]
+            assert cached["id"] == "rest-1"
+            assert cached["media"] == [
+                {"type": "image/png", "url": "media/images/2026-07/rest-1.png"},
+                {"type": "video/mp4", "url": "media/videos/2026-07/rest-1.mp4"},
+            ], f"REST-seed media lost in cache write! got {cached.get('media')!r}"
         finally:
             mm._js_session_storage = None
             mm._js_json = None

@@ -284,8 +284,6 @@ class TestAdminRendersFromLoader:
         body = response.get_data(as_text=True)
         for name in (
             "Hyperspace",
-            "VideoDisplay",
-            "PngDisplay",
             "Honeycomb",
             "WindFire",
             "CoronalMassEjection",
@@ -408,8 +406,8 @@ class TestDeletedCanonicalNameAbsent:
         # `_default_effects_list._cache` per-function cache. The
         # loader's process-lifetime cache reset is enough.
 
-        # Override with Fireworks REMOVED (canonical has 7; this has
-        # 6 — Fireworks dropped).
+        # Override with Fireworks REMOVED (canonical has 5; this has
+        # 4 — Fireworks dropped).
         override_file = tmp_path / "override.json"
         override_file.write_text(
             json.dumps(
@@ -421,18 +419,6 @@ class TestDeletedCanonicalNameAbsent:
                             "enabled": True,
                             "module": "lib_shared.patterns.hyperspace",
                             "class_name": "Hyperspace",
-                        },
-                        {
-                            "name": "VideoDisplay",
-                            "enabled": False,
-                            "module": "lib_shared.patterns.video_display",
-                            "class_name": "VideoDisplay",
-                        },
-                        {
-                            "name": "PngDisplay",
-                            "enabled": False,
-                            "module": "lib_shared.patterns.png_display",
-                            "class_name": "PngDisplay",
                         },
                         {
                             "name": "Honeycomb",

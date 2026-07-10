@@ -17,10 +17,10 @@ lindsay-50/
 ├── heart-message-manager/        # Flask server (SMS receiver + admin UI)
 │   ├── main.py                  # Flask app entrypoint
 │   ├── sqlite.py               # SQLite storage (rebuild-from-S3 on startup)
-│   ├── s3.py                   # S3 backup helpers
+│   ├── s3.py                   # S3 backup helpers (incl. MMS media download)
 │   ├── server_time.py          # Time helpers (zoneinfo-based, avoids stdlib conflict)
 │   ├── auth.py                 # User auth + API-key / Twilio webhook verification
-│   ├── templates/              # Jinja2 templates
+│   ├── templates/              # Jinja2 templates (incl. messages.html media column)
 │   ├── settings.toml           # Local config (gitignored)
 │   └── settings.toml.example
 ├── heart-matrix-controller/      # Raspberry Pi 4 display device
@@ -30,22 +30,28 @@ lindsay-50/
 │   ├── patterns/               # Background patterns (Effect subclasses)
 │   │   ├── fireworks.py
 │   │   ├── nightsky.py
-│   │   ├── png_display.py      # PNG slideshow from design/pngs (crossfade)
-│   │   ├── video_display.py    # Looping video (OpenCV) from design/videos
+│   │   ├── image_display.py    # MMS image slideshow (PNG / JPEG / GIF / WebP)
+│   │   ├── video_display.py    # MMS video clip loop (mp4 via OpenCV)
+│   │   ├── media_cycler.py     # Per-message media cycler (image + video,
+│   │   │                       #   picks randomly; falls back to rotation
+│   │   │                       #   on exhausted)
 │   │   ├── honeycomb.py        # Pixelblaze HSV pattern port (numpy + SetImage)
-│   │   └── hyperspace.py       # Star Wars-style jump: 3D starfield → tunnel of streaks
+│   │   ├── hyperspace.py       # Star Wars-style jump: 3D starfield → tunnel of streaks
+│   │   └── browser_media_overlay.py  # preview-only: drives DOM <img>/<video>
 │   └── settings.toml            # Local config (gitignored)
-├── lib_shared/                  # Shared code (Flask + Pi device)
+├── lib_shared/                  # Shared code (Flask + Pi device + browser preview)
 │   ├── models.py               # Message, SignConfig, FilterRule, RenderingSettings
 │   ├── messages.py             # FilteredMessages, InMemoryMessages
 │   ├── message_manager.py      # MessageManager (dispatch + seed)
+│   ├── effects_coordinator.py  # media-override logic + Pi/browser dispatch
+│   ├── effects_loader.py       # JSON registry of effects (fades, hold, fade-out)
 │   ├── config_reader.py        # TOML + env config loader
 │   ├── log_setup.py            # Shared logging format (Los Angeles timestamps)
 │   ├── mqtt_factory.py         # Selects the adafruit/paho MQTT client
 │   ├── adafruit_mqtt_client.py # Adafruit IO MQTT client (Heroku)
 │   └── paho_mqtt_client.py     # Paho MQTT client (local dev + Pi)
 ├── design/
-│   ├── pngs/                    # artwork for the png_display pattern
+│   ├── pngs/                    # artwork for the image_display pattern
 │   └── videos/                  # clips for the video_display pattern
 ├── scripts/                     # start/stop helpers, Pi systemd service + startup
 ├── requirements-flask.txt       # Flask server deps (Heroku + laptop dev)
@@ -108,6 +114,67 @@ The two `settings.toml` files use different keys because the server and device u
 - `LOG_LEVEL` (DEBUG / INFO / WARNING / ERROR / CRITICAL)
 
 Environment variables always take precedence over `settings.toml` values.
+
+## MMS media pipeline (issue #38 / `add-image-and-video-support`)
+
+When a Twilio webhook carries `NumMedia > 0`, the message is MMS — Twilio
+includes time-limited signed URLs (`MediaUrl0..MediaUrlN`) we must copy to
+our own S3 before downloading. The wire shape on the `Message` model now
+includes `media: list[{type, url, ...}]` so the Pi's
+`EffectsCoordinator` can pick the media-override path on the next fade-in.
+
+**Flow.**
+
+```
+MMS → Twilio → POST /api/messages → Flask (download -> S3)
+                                      │
+                                      ├─→ SQLite media (JSON TEXT)
+                                      ├─→ S3 media/images/<YYYY-MM>/<key>
+                                      │     S3 media/videos/<YYYY-MM>/<key>
+                                      │
+                                      └─→ MQTT envelope {media: [...]} → Pi
+                                                              │
+                              ┌───────────────────────────────┴───────┐
+                              ▼                                       ▼
+                       MediaCycler (Pi)               BrowserMediaOverlay (preview)
+                       PIL/cv2 + sign                 DOM <img>/<video> overlay
+                       fs cache                       over canvas (no PIL)
+```
+
+The same envelope reaches both subscribers, so the preview doesn't need
+a separate fetch. The Pi constructs a `MediaCycler` from the per-message
+media list; the preview constructs a `BrowserMediaOverlay` (DOM-driven,
+no PIL/cv2 needed). Coordinator picks one via the `is_browser=True`
+constructor kwarg — mirrors `MessageManager(is_browser=True)`.
+
+**Media proxy route (`GET /api/media/<key>`).** Flask serves a 302 → freshly-signed S3 URL
+on each request, behind `api_login_required` auth. Both the Pi's
+`requests.get(media.url)` and the browser's `<img src=/api/media/..>`
+follow the same redirect. This means S3 credentials never leak into client
+code, signed URLs are minted per-request (no permanent URL committed),
+and CORS/auth stays server-side.
+
+**Per-effects settings registry (`lib_shared/effects_loader.py`).** The
+canonical effects list is now a JSON document loaded at startup
+(`config/effects.json`); `EFFECTS_SETTINGS_OVERRIDE` env var points at a
+replacement file. The `/settings` admin page iterates the loader's list
+verbatim — never a hardcoded list in `main.py` or in
+`models.py`. Operator-added effects show up the moment the override file
+is in place; canonical removals (e.g. PNG slideshow → image slideshow)
+propagate without code changes.
+
+**Pi/browser dispatch.** `effects_coordinator.py:EffectsCoordinator`
+takes `is_browser: bool = False` and a `media_api_base_url` kwarg. When
+`is_browser=True`, the cycler helper returns a `BrowserMediaOverlay`
+instead of `MediaCycler`. The browser path needs no PIL/cv2 imports — the
+preview's `lib_shared/patterns/browser_media_overlay.py` exposes read-only
+`current_media_url` / `current_media_kind` / `current_opacity` properties;
+`preview.js` swaps the DOM element's `src` each frame.
+
+**Coordination note (issue #38 §11.5).** Pre-caching on receive is OUT OF
+SCOPE for this change — by design, no `/api/prefetch` endpoint, no MEMFS
+warm-up. The Pi's `MediaCycler` lazily fetches each attachment on cycle
+advance. The browser's `<img>` / `<video>` elements fetch on demand.
 
 ## Architecture
 

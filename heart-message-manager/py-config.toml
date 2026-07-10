@@ -39,6 +39,10 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 "lib_shared/patterns/marble.py" = "/static/preview/lib_shared/patterns/marble.py"
 "lib_shared/patterns/hyperspace.py" = "/static/preview/lib_shared/patterns/hyperspace.py"
 "lib_shared/patterns/heartbeat.py" = "/static/preview/lib_shared/patterns/heartbeat.py"
+# `BrowserMediaOverlay` (issue #38) is the preview-side equivalent of
+# MediaCycler: it lets the browser drive the same per-message MMS
+# cycle logic via HTML <img>/<video> elements instead of PIL/cv2.
+"lib_shared/patterns/browser_media_overlay.py" = "/static/preview/lib_shared/patterns/browser_media_overlay.py"
 "heart-message-manager/app_main.py" = "/static/preview/heart-message-manager/app_main.py"
 "heart-message-manager/preview_display.py" = "/static/preview/heart-message-manager/preview_display.py"
 "heart-message-manager/preview_scroller.py" = "/static/preview/heart-message-manager/preview_scroller.py"
