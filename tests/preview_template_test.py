@@ -260,6 +260,78 @@ def test_other_routes_have_no_csp_header():
         assert response.headers.get("Content-Security-Policy", "") == ""
 
 
+def test_preview_csp_allows_s3_endpoint_when_explicit():
+    """Regression: the /preview CSP `img-src` directive must allow the
+    S3 origin so the Flask /api/media/<key> redirect can actually
+    load image bytes in the browser.
+
+    The /api/media/<key> route 302-redirects to a freshly-signed S3
+    URL (presigned via boto3 in s3.py). The browser follows the
+    redirect to the S3 origin and reads the image bytes directly —
+    CSP `img-src` must allow that origin, otherwise the load is
+    blocked with the "violates the following Content Security
+    Policy directive: 'img-src 'self' data:''" error.
+
+    The origin is derived from `AWS_S3_ENDPOINT_URL` (the dev
+    MinIO path) or `AWS_S3_BUCKET + AWS_S3_REGION` (the prod AWS
+    path). Pin both branches here.
+    """
+    from unittest.mock import MagicMock
+
+    auth = _load_test_auth()
+
+    def _cfg_with(extra_if_exists):
+        """Build a mock cfg that returns the given if_exists entries
+        on top of the standard admin/api keys."""
+        cfg = auth._make_mock_cfg()
+        defaults = {
+            "ADMIN_USERNAME": "admin",
+            "ADMIN_PASSWORD": "secret123",
+            "API_SECRET_KEY": "esp32-api-key",
+            "ADMIN_SESSION_TIMEOUT_MINS": "60",
+            "TWILIO_AUTH_TOKEN": "twilio-auth-token",
+        }
+        merged = {**defaults, **extra_if_exists}
+        cfg.if_exists = MagicMock(side_effect=lambda k: merged.get(k))
+        return cfg
+
+    # Dev: AWS_S3_ENDPOINT_URL is set (MinIO).
+    dev_cfg = _cfg_with({"AWS_S3_ENDPOINT_URL": "http://localhost:9000"})
+    snapshot = _snapshot_sys_modules()
+    try:
+        app = auth._load_app_module(dev_cfg)
+        app.config["TESTING"] = True
+        client = app.test_client()
+        client.post("/login", data={"username": "admin", "password": "secret123"})
+        response = client.get("/preview")
+        csp = response.headers.get("Content-Security-Policy", "")
+        img_src = _extract_directive(csp, "img-src")
+        assert "http://localhost:9000" in img_src, (
+            f"img-src must allow the MinIO origin; got: {img_src!r}"
+        )
+    finally:
+        _restore_sys_modules(snapshot)
+
+    # Prod: no AWS_S3_ENDPOINT_URL → virtual-hosted-style AWS URL.
+    prod_cfg = _cfg_with(
+        {"AWS_S3_BUCKET": "test-bucket", "AWS_S3_REGION": "us-east-1"},
+    )
+    snapshot = _snapshot_sys_modules()
+    try:
+        app = auth._load_app_module(prod_cfg)
+        app.config["TESTING"] = True
+        client = app.test_client()
+        client.post("/login", data={"username": "admin", "password": "secret123"})
+        response = client.get("/preview")
+        csp = response.headers.get("Content-Security-Policy", "")
+        img_src = _extract_directive(csp, "img-src")
+        assert "https://test-bucket.s3.us-east-1.amazonaws.com" in img_src, (
+            f"img-src must allow the AWS S3 origin; got: {img_src!r}"
+        )
+    finally:
+        _restore_sys_modules(snapshot)
+
+
 def test_pyscript_declared_files_all_serve_200():
     """Regression: every file declared in py-config.toml [files] must be
     fetchable as a /static/preview/... URL.

@@ -1392,14 +1392,65 @@ def _set_preview_csp(response):
         # irrelevant). Build the origin string and splice it into the
         # base directive.
         ws_origin = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme else ""
+        # The Flask /api/media/<key> route 302-redirects to a freshly-
+        # signed S3 URL (presigned via boto3 in s3.py). The browser
+        # follows the redirect and loads the image bytes from the S3
+        # origin directly, so `img-src` must allow it. The origin
+        # depends on the S3 config: dev (MinIO) uses the explicit
+        # `AWS_S3_ENDPOINT_URL`; prod (real AWS) uses the virtual-hosted
+        # style `https://<bucket>.s3.<region>.amazonaws.com`. We
+        # compute it from the same config the S3 client uses
+        # (`s3._s3_client`), so the CSP never disagrees with the
+        # actual signed-URL origin.
+        s3_origin = _derive_s3_origin()
         csp = _PREVIEW_CSP_BASE
         if ws_origin:
             csp = csp.replace(
                 "connect-src 'self'",
                 f"connect-src 'self' {ws_origin}",
             )
+        if s3_origin:
+            csp = csp.replace(
+                "img-src 'self' data:",
+                f"img-src 'self' data: {s3_origin}",
+            )
         response.headers["Content-Security-Policy"] = csp
     return response
+
+
+def _derive_s3_origin() -> str:
+    """Return the origin (scheme + host + port) of the S3 endpoint the
+    Flask /api/media/<key> proxy redirects to.
+
+    Resolution order matches `s3._s3_client()`:
+
+      1. `AWS_S3_ENDPOINT_URL` (explicit, e.g. ``http://localhost:9000``
+         for local MinIO) — return its scheme + netloc.
+      2. No explicit endpoint → real AWS. boto3 signs with the
+         virtual-hosted-style URL
+         ``https://<bucket>.s3.<region>.amazonaws.com``. Build the
+         same shape from `AWS_S3_BUCKET` + `AWS_S3_REGION`.
+
+    Returns an empty string when the origin can't be determined
+    (the CSP code treats that as "leave img-src alone"). Never
+    raises — the CSP code runs in a hot request path.
+    """
+    try:
+        from urllib.parse import urlparse
+
+        endpoint = _cfg.if_exists("AWS_S3_ENDPOINT_URL")
+        if endpoint:
+            parsed = urlparse(endpoint)
+            if parsed.scheme and parsed.netloc:
+                return f"{parsed.scheme}://{parsed.netloc}"
+            return ""
+        bucket = _cfg.if_exists("AWS_S3_BUCKET")
+        region = _cfg.if_exists("AWS_S3_REGION")
+        if bucket and region:
+            return f"https://{bucket}.s3.{region}.amazonaws.com"
+        return ""
+    except Exception:
+        return ""
 
 
 # Context processor — inject the `mqtt`, `mqtt_ws`, `config`, and `auth`
