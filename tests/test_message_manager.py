@@ -1527,7 +1527,13 @@ class TestSessionCache:
             mm._js_object_from_entries = None
 
     def test_handle_message_writes_cache(self, messages_api_url, config_api_url, api_key):
-        """_handle_message on a browser mgr writes the cache via _emit_change."""
+        """_handle_message on a browser mgr writes the cache via _emit_change.
+
+        Also asserts that `media` survives into the sessionStorage payload —
+        the bug fix at 1fc1fff (MQTT envelope path) added `media=...` to
+        the Message constructor and that has to make it through the
+        MessageView.to_dict → JSON round-trip that _write_cache performs.
+        """
         store, ss_shim = self._make_session_storage_shim()
         json_shim = self._make_json_shim()
         mm = _mm()
@@ -1548,11 +1554,93 @@ class TestSessionCache:
                     "sender": "+15551234567",
                     "body": "hi",
                     "received_at": "2026-06-01T12:00:00Z",
+                    "media": [
+                        {"type": "image/png", "url": "media/images/2026-06/m1.png"},
+                    ],
                 }
             )
             assert len(store) == 1
             payload = json.loads(list(store.values())[0])
             assert any(m["id"] == "m1" for m in payload["messages"])
+            cached_m1 = next(m for m in payload["messages"] if m["id"] == "m1")
+            assert cached_m1["media"] == [
+                {"type": "image/png", "url": "media/images/2026-06/m1.png"},
+            ], f"media lost in cache write! got {cached_m1.get('media')!r}"
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
+
+    def test_seed_writes_media_to_cache(
+        self, messages_api_url, config_api_url, api_key
+    ):
+        """REST /api/messages → seed() → MessageView.to_dict() → sessionStorage.
+
+        The REST path round-trips through the same Message constructor
+        as MQTT (1fc1fff + f2238a8). This test asserts that when the
+        REST response carries `media`, the cached sessionStorage blob
+        carries the same list — i.e. the user's reported symptom
+        ("seed writes messages but no media shows in sessionStorage")
+        can't recur unnoticed.
+        """
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        mm._to_js = self._make_to_js_shim()
+        mm._js_object_from_entries = self._make_from_entries_shim()
+        seed_with_media = [
+            {
+                "id": "rest-1",
+                "sender": "+15551111111",
+                "body": "with pic",
+                "received_at": "2026-07-01T10:00:00Z",
+                "media": [
+                    {"type": "image/png", "url": "media/images/2026-07/rest-1.png"},
+                    {"type": "video/mp4", "url": "media/videos/2026-07/rest-1.mp4"},
+                ],
+            },
+        ]
+        cfg_payload = {
+            "filters": [],
+            "senders": [],
+            "effects_settings": {
+                "effects": [{"name": "Hyperspace", "enabled": True}],
+                "fade_seconds": 2.0,
+                "hold_seconds": 15.0,
+                "intro_seconds": 5.0,
+                "idle_seconds": 300.0,
+                "recent_count": 5,
+            },
+            "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
+            "sign": {"name": "Test Sign"},
+            "timezone": "US/Pacific",
+            "version": 2,
+        }
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+
+            async def mock_fetch(url):
+                return seed_with_media if url == messages_api_url else cfg_payload
+
+            mgr._fetch = mock_fetch  # type: ignore[assignment]
+            asyncio.run(mgr.seed())
+            assert len(store) == 1
+            payload = json.loads(list(store.values())[0])
+            assert len(payload["messages"]) == 1
+            cached = payload["messages"][0]
+            assert cached["id"] == "rest-1"
+            assert cached["media"] == [
+                {"type": "image/png", "url": "media/images/2026-07/rest-1.png"},
+                {"type": "video/mp4", "url": "media/videos/2026-07/rest-1.mp4"},
+            ], f"REST-seed media lost in cache write! got {cached.get('media')!r}"
         finally:
             mm._js_session_storage = None
             mm._js_json = None

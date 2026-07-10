@@ -219,13 +219,11 @@ class MessageManager:
                 "messages": [m.to_dict() for m in self._messages._msgs],
                 "config": self._config.to_dict(),
             }
-            logger.info(
-                "[debug-dispatch] CACHE_WRITE key=%s filter_count=%d filter_ids=%s suppressed_in_buffer=%d buffer_size=%d",
-                key,
-                len(payload["config"].get("filters", [])),
-                [f.get("pattern", "") for f in payload["config"].get("filters", []) if f.get("type") == "message"],
-                sum(1 for m in payload["messages"] if m.get("suppressed")),
-                len(payload["messages"]),
+            print(
+                f"[mm-cache] CACHE_WRITE key={key} buffer_size={len(payload['messages'])} "
+                f"media_total={sum(len(m.get('media') or []) for m in payload['messages'])} "
+                f"sample_media={next((m.get('media') for m in payload['messages'] if m.get('media')), None)!r}",
+                flush=True,
             )
             # `payload` is a Python dict with nested dicts (the
             # `config` value comes from `SignConfig.to_dict()`,
@@ -346,6 +344,12 @@ class MessageManager:
         except Exception as e:
             logger.warning("MessageManager cache hydrate failed: %s", e)
             return False
+        print(
+            f"[mm-cache] CACHE_HYDRATE key={key} buffer_size={len(self._messages._msgs)} "
+            f"media_total={sum(len(getattr(m, 'media', []) or []) for m in self._messages._msgs)} "
+            f"sample_media={next((getattr(m, 'media', None) for m in self._messages._msgs if getattr(m, 'media', None)), None)!r}",
+            flush=True,
+        )
         self._emit_change()
         return True
 
