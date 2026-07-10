@@ -97,13 +97,16 @@
 // Mirrors testing.html's showMessageModal. The link in the preview
 // status bar carries a `data-msg` attribute (base64-encoded JSON)
 // updated by preview.js whenever the picked message changes.
+// Uses `this` (the link element) — same shape as the testing
+// page's row click handler — because `event.currentTarget` is not
+// reliably the inline-handler element across all browsers when
+// the click bubbles from a nested span.
 // Returns `false` to suppress the href="#" navigation.
-function showPreviewMessageModal(event) {
-  const link = event.currentTarget;
+function showPreviewMessageModal() {
+  const link = this;
   const raw = link && link.dataset && link.dataset.msg;
   if (!raw) {
     // No picked message (idle, boot splash) — no-op.
-    event.preventDefault();
     return false;
   }
   // Match the encode site (preview.js): base64 of UTF-8 JSON.
@@ -114,7 +117,6 @@ function showPreviewMessageModal(event) {
     item = JSON.parse(decodeURIComponent(escape(atob(raw))));
   } catch (e) {
     console.warn("[preview-modal] decode failed", e);
-    event.preventDefault();
     return false;
   }
   document.getElementById('json-modal-title').textContent = 'Message ' + item.id;
@@ -122,7 +124,6 @@ function showPreviewMessageModal(event) {
   const modal = document.getElementById('json-modal');
   modal.classList.remove('hidden');
   modal.classList.add('flex');
-  event.preventDefault();
   return false;
 }
 
