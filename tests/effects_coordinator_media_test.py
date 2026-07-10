@@ -758,9 +758,7 @@ def test_background_suppression_log_fires_once_per_fresh_id(tmp_path, caplog):
 
     # First tick (the suppression should log).
     coord.tick()
-    first_count = sum(
-        1 for r in caplog.records if "suppressing fresh-id interrupt" in r.message
-    )
+    first_count = sum(1 for r in caplog.records if "suppressing fresh-id interrupt" in r.message)
     assert first_count == 1, (
         f"first tick should log the suppression once; got {first_count}: "
         f"{[r.message for r in caplog.records if 'suppressing' in r.message]}"
@@ -769,9 +767,7 @@ def test_background_suppression_log_fires_once_per_fresh_id(tmp_path, caplog):
     # Next 10 ticks of the same id — no NEW log lines.
     for _ in range(10):
         coord.tick()
-    repeat_count = sum(
-        1 for r in caplog.records if "suppressing fresh-id interrupt" in r.message
-    )
+    repeat_count = sum(1 for r in caplog.records if "suppressing fresh-id interrupt" in r.message)
     assert repeat_count == 1, (
         f"transition-only gate broken: 10 same-id ticks produced "
         f"{repeat_count} suppression logs (expected 1). "
@@ -785,9 +781,7 @@ def test_background_suppression_log_fires_once_per_fresh_id(tmp_path, caplog):
     )
     mgr._entries.insert(0, msg_b)
     coord.tick()
-    new_count = sum(
-        1 for r in caplog.records if "suppressing fresh-id interrupt" in r.message
-    )
+    new_count = sum(1 for r in caplog.records if "suppressing fresh-id interrupt" in r.message)
     assert new_count == 2, (
         f"newly-suppressed id should produce one more log; got {new_count}: "
         f"{[r.message for r in caplog.records if 'suppressing' in r.message]}"
