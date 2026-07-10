@@ -97,6 +97,7 @@ class MediaCycler(Effect):
         hold_seconds: float = 15.0,
         cache_dir: str | Path | None = None,
         fetcher: Optional[Callable[[str], bytes]] = None,
+        api_key: str = "",
     ) -> None:
         """Initialize the cycler.
 
@@ -122,6 +123,19 @@ class MediaCycler(Effect):
             fetcher: Callable `(url: str) -> bytes` for HTTP fetch.
                 Defaults to a `requests.get` wrapper that follows
                 redirects. None is equivalent to passing the default.
+                Caller-supplied fetchers are NOT given the api_key —
+                they're expected to manage their own auth (tests +
+                the offline pre-cache path that pulls bytes from S3
+                directly without going through Flask).
+            api_key: X-API-Key value to send on the default fetcher's
+                GET to Flask's `/api/media/<key>` route. Flask gates
+                that route with `@api_login_required`, which checks
+                the `X-API-Key` header before falling through to the
+                browser session — the Pi has no session cookie, so
+                without this header every fetch 401s and the cycler
+                drops the item (D12 codec-failure semantics). Same
+                value as `cfg.API_SECRET_KEY` on the Flask server.
+                Empty string disables the header (test/offline path).
         """
         self.message_id = message_id
         self._media = [m for m in (media or []) if isinstance(m, dict)]
@@ -129,7 +143,11 @@ class MediaCycler(Effect):
         self._api_base_url = (api_base_url or "").rstrip("/")
         self._hold_seconds = max(0.0, float(hold_seconds))
         self._cache_dir = Path(cache_dir) if cache_dir is not None else Path(tempfile.gettempdir()) / "lindsay-50-media"
-        self._fetcher = fetcher or _default_fetcher
+        # Bind the api_key into the default fetcher so every fetch to
+        # Flask carries `X-API-Key`. Caller-supplied fetchers are left
+        # untouched — they're test doubles or pre-cache paths that own
+        # their own auth.
+        self._fetcher = fetcher or _build_default_fetcher(api_key)
 
         # `_items` is the mutable working list: each entry is
         # `{"type": str, "url": str, "shown": bool, "path": str | None,
@@ -522,19 +540,42 @@ class MediaCycler(Effect):
 # ---------------------------------------------------------------------------
 
 
-def _default_fetcher(url: str) -> bytes:
+def _default_fetcher(url: str, *, api_key: str = "") -> bytes:
     """Fetch `url` and return the response body bytes.
 
     Uses `requests` with `allow_redirects=True` so the Flask 302 to
     the signed S3 URL is followed transparently — the cycler just
     needs the final bytes. Lazy-imported so host-side tests don't
     pull `requests` into the import graph at module load.
+
+    `api_key` is sent as the `X-API-Key` header when non-empty. The
+    Flask `/api/media/<key>` route is gated by `@api_login_required`,
+    which checks `X-API-Key` before falling back to the browser
+    session — the Pi has no session cookie, so without this header
+    every fetch 401s and the cycler drops the item (D12).
     """
     import requests  # type: ignore[import-not-found]
 
-    resp = requests.get(url, timeout=10)
+    headers = {"X-API-Key": api_key} if api_key else {}
+    resp = requests.get(url, timeout=10, headers=headers)
     resp.raise_for_status()
     return resp.content
+
+
+def _build_default_fetcher(api_key: str) -> Callable[[str], bytes]:
+    """Bind an api_key into the default fetcher.
+
+    Returns a `(url: str) -> bytes` callable that injects the api_key
+    as `X-API-Key` on every request. Used by `MediaCycler.__init__`
+    to construct its default fetcher when the caller didn't supply
+    one. The closure shape matches the `fetcher=` contract so
+    downstream code (`self._fetcher(proxy_url)`) is unchanged.
+    """
+
+    def fetcher(url: str) -> bytes:
+        return _default_fetcher(url, api_key=api_key)
+
+    return fetcher
 
 
 def _ext_for_mime(mime: str) -> str:

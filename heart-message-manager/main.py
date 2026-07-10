@@ -473,6 +473,13 @@ class _MediaFuture:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._done = False
+        # Back-reference to the Twilio MessageSid this slot was registered
+        # under. Set by the dedupe-registration site (line ~437); the async
+        # worker reads it in its `finally` block to remove the entry from
+        # `_INBOUND_DEDUPE` (keyed by SID, not by slot identity). Declared
+        # here so Pylance / mypy see it as a real attribute and not a
+        # dynamic assignment to an unknown member.
+        self._sid: str | None = None
 
     def done(self) -> bool:
         with self._lock:

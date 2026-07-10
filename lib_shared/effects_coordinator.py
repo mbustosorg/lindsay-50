@@ -174,6 +174,7 @@ class EffectsCoordinator:
         *,
         media_api_base_url: str = "",
         media_cache_dir: str = "",
+        media_api_key: str = "",
         is_browser: bool = False,
     ) -> None:
         # Required — no default. Raises TypeError if a caller omits it.
@@ -201,6 +202,12 @@ class EffectsCoordinator:
         # the OS temp dir).
         self._media_api_base_url = media_api_base_url or ""
         self._media_cache_dir = media_cache_dir or ""
+        # X-API-Key for the Pi's MediaCycler fetcher. Sent as a request
+        # header so Flask's `@api_login_required` on `/api/media/<key>`
+        # recognizes the request as a machine client. Same value as
+        # `cfg.API_SECRET_KEY` on the Flask server — the Pi and Flask
+        # share the secret via their respective settings.toml.
+        self._media_api_key = media_api_key or ""
         # `is_browser` toggles between two media render paths:
         # host/Pi builds a `MediaCycler` that decodes each
         # attachment with PIL/cv2 and blits it onto the rgbmatrix
@@ -455,6 +462,7 @@ class EffectsCoordinator:
             api_base_url=self._media_api_base_url,
             hold_seconds=hold_seconds,
             cache_dir=self._media_cache_dir or None,
+            api_key=self._media_api_key,
         )
 
     def _maybe_fall_back_to_rotation(self) -> None:
