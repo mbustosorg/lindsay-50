@@ -162,6 +162,90 @@ def test_preview_template_canvas_is_responsive():
     assert "height: 512px" not in template
 
 
+def test_preview_template_media_overlay_is_capped_and_preserves_aspect():
+    """The <img>/<video> media overlays MUST cap at min(800px, 100%) and
+    preserve the source aspect ratio (`object-contain`) — NOT stretch-fill
+    the dark div with `object-cover`.
+
+    Regression: the previous `absolute inset-0 w-full h-full object-cover`
+    on `#browser-media-image` filled the entire dark div (which is
+    `w-full max-w-full` — no width cap). On a wide monitor the image blew
+    past 800px wide and `object-cover` cropped the image's sides to fit
+    the dark div's aspect ratio. The canvas right above the image is
+    capped at `max-w-[min(800px,100%)] aspect-square`, so the overlay
+    and the LED grid it sits behind ended up at different sizes — the
+    image extended beyond the visible LED panel.
+
+    The fix mirrors the canvas's sizing constraint on the overlay
+    elements and switches `object-cover` → `object-contain` so the
+    image is letterboxed inside an 800x800 (or smaller) square
+    footprint matching the canvas. The lit LEDs still sit on top of
+    the image (canvas z-index 1 > media z-index 0); what changed is
+    only the media's footprint.
+    """
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    # The image overlay must declare the same width cap as the canvas.
+    img_block = _extract_tag(template, "browser-media-image")
+    assert "max-w-[min(800px,100%)]" in img_block, (
+        "browser-media-image must cap at min(800px, 100%) — without this "
+        "it stretches to the full-width dark div on wide viewports"
+    )
+    # The image overlay must declare the same height cap so a tall
+    # portrait image can't blow past 800px on the long edge either.
+    assert "max-h-[min(800px,100%)]" in img_block, (
+        "browser-media-image must cap height at min(800px, 100%) — "
+        "otherwise a tall image stretches beyond the canvas footprint"
+    )
+    # The image overlay must force a square footprint so it stays
+    # aligned with the canvas's `aspect-square`.
+    assert "aspect-square" in img_block, (
+        "browser-media-image must declare aspect-square so its footprint " "tracks the canvas's square shape"
+    )
+    # The image overlay must use `object-contain` (not `object-cover`)
+    # so the source aspect ratio is preserved — wide landscape images
+    # are letterboxed top/bottom, tall portrait images letterboxed
+    # left/right, instead of being cropped to fit.
+    assert "object-contain" in img_block, (
+        "browser-media-image must use object-contain to preserve the "
+        "source aspect ratio — object-cover crops the image to fit the "
+        "overlay box"
+    )
+    # `object-cover` MUST NOT appear on the image overlay anymore.
+    assert "object-cover" not in img_block, (
+        "browser-media-image must NOT use object-cover — that's the " "stretch-to-fill behavior being replaced"
+    )
+
+    # Same constraints apply to the video overlay — videos also need
+    # to fit inside the canvas footprint and preserve aspect ratio.
+    video_block = _extract_tag(template, "browser-media-video")
+    assert "max-w-[min(800px,100%)]" in video_block
+    assert "max-h-[min(800px,100%)]" in video_block
+    assert "aspect-square" in video_block
+    assert "object-contain" in video_block
+    assert "object-cover" not in video_block
+
+
+def _extract_tag(template: str, element_id: str) -> str:
+    """Return the substring of `template` covering the tag with `id=element_id`.
+
+    Helper for the media-overlay tests so the assertions can target
+    the specific element's class list instead of asserting on the
+    whole template (which has two overlays + the canvas, each with
+    their own sizing).
+    """
+    # The id is on the opening tag of an <img> or <video>. Grab from
+    # the previous `<` to the closing `>` of that opening tag.
+    needle = f'id="{element_id}"'
+    start = template.find(needle)
+    if start == -1:
+        return ""
+    open_lt = template.rfind("<", 0, start)
+    close_gt = template.find(">", start)
+    if open_lt == -1 or close_gt == -1:
+        return ""
+    return template[open_lt : close_gt + 1]
+
+
 def test_preview_template_has_status_block():
     """The template shows the current effect name and message body."""
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
