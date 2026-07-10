@@ -75,7 +75,7 @@ class MatrixScroller(ScrollerBase):
 
         # Always one line, centered vertically on the whole display.
         self.single_line = True
-        self.top_y = baseline_for(canvas_height // 2)
+        self.top_y = baseline_for(canvas_height // 2) - 10
         self.bottom_y = self.top_y  # unused
 
     def measure_text(self, text):
