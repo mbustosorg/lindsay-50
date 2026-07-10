@@ -79,13 +79,86 @@ def test_missing_id_rejected():
     assert _coerce_message_dict(item) is None
 
 
-def test_empty_body_rejected():
-    """The other half of the diagnosed symptom: empty body. Without
-    this filter, the picked entry had `body=` and the scroller
-    never got scroller.set_text called."""
+def test_empty_body_no_media_rejected():
+    """Empty body AND no media is malformed — nothing to render.
+
+    Twilio produces empty body ONLY for MMS-only rows (photo/video
+    with no caption), never for plain SMS. A row with both empty
+    body AND no media can't have come from Twilio's webhook; it's
+    a corrupt cache row and should stay rejected."""
     item = _valid_item()
     item["body"] = ""
     assert _coerce_message_dict(item) is None
+
+
+def test_empty_body_with_empty_media_list_rejected():
+    """Empty body AND explicit `media: []` is the same as no media
+    field at all — no content to render, reject it."""
+    item = _valid_item()
+    item["body"] = ""
+    item["media"] = []
+    assert _coerce_message_dict(item) is None
+
+
+def test_empty_body_with_media_accepted():
+    """Empty body AND a non-empty `media` list is a legitimate
+    photo-only or video-only MMS — Twilio sends `Body=""` when
+    `NumMedia>0` and there's no caption. The user-reported symptom
+    was exactly this case: rows like `body="", media=[{image}]`
+    silently dropped from the rotation buffer."""
+    item = _valid_item()
+    item["body"] = ""
+    item["media"] = [{"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"}]
+    msg = _coerce_message_dict(item)
+    assert msg is not None
+    assert msg.body == ""
+    assert len(msg.media) == 1
+    assert msg.media[0]["type"] == "image/jpeg"
+
+
+def test_empty_body_with_none_media_rejected():
+    """`media=None` is treated as no media — defaults to `[]`,
+    then the empty-body+empty-media rule fires."""
+    item = _valid_item()
+    item["body"] = ""
+    item["media"] = None
+    assert _coerce_message_dict(item) is None
+
+
+def test_user_reported_mms_photo_only_row_accepted():
+    """Regression: the exact row shape from the user's heroku DB
+    that was getting dropped pre-fix. If this fails, the validator
+    is back to over-rejecting empty-body MMS rows."""
+    item = {
+        "id": "a7edac79-ae59-44e1-8d28-5bec5f548fa2",
+        "sender": "+14152985015",
+        "body": "",
+        "received_at": "2026-07-10T05:16:44Z",
+        "media": [{"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"}],
+    }
+    msg = _coerce_message_dict(item)
+    assert msg is not None
+    assert msg.id == "a7edac79-ae59-44e1-8d28-5bec5f548fa2"
+    assert msg.body == ""
+    assert len(msg.media) == 1
+
+
+def test_user_reported_mms_video_only_row_accepted():
+    """Regression: same wire shape but `video/3gpp` instead of
+    `image/jpeg`. The rule is media-type-agnostic — any non-empty
+    media list enables empty body."""
+    item = {
+        "id": "2e384b3a-a3c8-4a5d-bda4-64da7a0440d7",
+        "sender": "+14152985015",
+        "body": "",
+        "received_at": "2026-07-10T04:49:38Z",
+        "media": [{"type": "video/3gpp", "url": "media/videos/2026-07/b.bin"}],
+    }
+    msg = _coerce_message_dict(item)
+    assert msg is not None
+    assert msg.id == "2e384b3a-a3c8-4a5d-bda4-64da7a0440d7"
+    assert len(msg.media) == 1
+    assert msg.media[0]["type"] == "video/3gpp"
 
 
 def test_empty_sender_rejected():

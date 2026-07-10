@@ -24,13 +24,25 @@ def _coerce_message_dict(item: object) -> Optional[Message]:
     entry is malformed (missing or empty required fields) — the caller
     should skip such entries rather than letting them into the buffer.
 
-    Required fields: `id`, `sender`, `body`, `received_at`. All four must
-    be non-empty strings; `media` is optional (defaults to `[]`).
+    Required fields: `id`, `sender`, `received_at`. All three must be
+    non-empty strings. `body` is OPTIONAL: empty string is accepted
+    when the message carries `media` (a photo- or video-only MMS with
+    no caption text, which Twilio wires as `Body=""` with `NumMedia>0`).
+    `body` empty AND `media` empty is rejected — there's nothing to
+    render. `media` is optional (defaults to `[]`); when present it must
+    be a list, and non-dict entries are dropped during the filter.
 
-    Why this matters: previously the construction sites used
-    `item.get("id", "")` (and friends), which silently coerced a
-    missing/empty field into `""`. The Message with empty id/body
-    then sat in the buffer as `entries[0]`, got picked by
+    Why the body rule is asymmetric: a display message can render from
+    text alone OR from media alone OR from both. Rejecting empty body
+    regardless of media would silently drop legitimate MMS-only
+    messages (the user-reported symptom: photo-only and video-only MMS
+    sitting in the heroku DB with `body=""` never reaching the
+    rotation buffer). The asymmetric rule reflects the wire shape.
+
+    Why this validator exists at all: previously the construction sites
+    used `item.get("id", "")` (and friends), which silently coerced
+    missing/empty fields into `""`. The Message with empty id then sat
+    in the buffer as `entries[0]`, got picked by
     `get_display_message`, and surfaced in the browser preview as
     `[preview-modal] picked message: id=(none) body= media_count=0` —
     the user's diagnosis point. With the validation here, such entries
@@ -47,9 +59,9 @@ def _coerce_message_dict(item: object) -> Optional[Message]:
         return None
     if not isinstance(sender, str) or not sender:
         return None
-    if not isinstance(body, str) or not body:
-        return None
     if not isinstance(received_at, str) or not received_at:
+        return None
+    if not isinstance(body, str):
         return None
     media_raw = item.get("media")
     if media_raw is None:
@@ -57,6 +69,11 @@ def _coerce_message_dict(item: object) -> Optional[Message]:
     elif isinstance(media_raw, list):
         media = [it for it in media_raw if isinstance(it, dict)]
     else:
+        return None
+    # Body empty is OK iff media is non-empty. MMS-only (photo / video
+    # without caption) is a legitimate Twilio wire shape; rejecting it
+    # silently dropped both MMS-only rows currently in the live DB.
+    if body == "" and not media:
         return None
     return Message(
         id=msg_id,
@@ -392,7 +409,7 @@ class MessageManager:
             if skipped_malformed:
                 logger.warning(
                     "MessageManager cache hydrate: skipped %d malformed "
-                    "row(s) (empty/missing id or body)",
+                    "row(s) (empty/missing id, sender, or received_at)",
                     skipped_malformed,
                 )
             self._config.update_from_dict(cfg_raw)
@@ -528,7 +545,7 @@ class MessageManager:
             # once per offending envelope; the broker-side
             # producer is the fix.
             logger.warning(
-                "MessageManager: dropped malformed MQTT envelope (missing/empty id or body): %s",
+                "MessageManager: dropped malformed MQTT envelope (missing/empty id, sender, or received_at): %s",
                 {k: type(v).__name__ for k, v in payload.items()}
                 if isinstance(payload, dict)
                 else type(payload).__name__,
@@ -683,7 +700,7 @@ class MessageManager:
                     if skipped:
                         logger.warning(
                             "MessageManager REST seed: skipped %d malformed row(s) "
-                            "(missing id / sender / body / received_at)",
+                            "(missing id / sender / received_at)",
                             skipped,
                         )
                 logger.info(
