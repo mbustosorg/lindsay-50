@@ -39,6 +39,7 @@ from lib_shared.boot_config import short_sha
 from lib_shared.paho_mqtt_client import PahoMqttClient
 from lib_shared.effects_coordinator import EffectsCoordinator, build_effects
 from lib_shared.models import EffectsSettings, TextSettings
+from event_log import EventLog
 from status import StatusSnapshot, make_status_writer
 from status_publisher import StatusPublisher
 
@@ -156,6 +157,20 @@ coordinator = EffectsCoordinator(
     # item (D12 codec-failure semantics). Same value the Flask
     # server reads as `cfg.API_SECRET_KEY` in its auth.py:82 lookup.
     media_api_key=cfg.API_SECRET_KEY,
+    # Weighted-selector wiring (issue #26). The coordinator writes
+    # a `text_display` event to the log at the out→in transition
+    # (skipping fresh-id pre-emption) and uses `MessageSelector` in
+    # place of `random.choice` when `USE_WEIGHTED_SELECTOR` is True
+    # (a module-level constant in `lib_shared/selector.py`). The
+    # event_log is always passed; the rollout flag gates the
+    # algorithm swap. `EVENT_LOG_PATH` (default `data/events.jsonl`)
+    # and `EVENT_LOG_MAX_ENTRIES` (default 100) are the only
+    # selector-related settings in settings.toml — everything else
+    # (weights, decay window, eligibility window) lives in code.
+    event_log=EventLog(
+        path=cfg.if_exists("EVENT_LOG_PATH") or "data/events.jsonl",
+        max_entries=int(cfg.if_exists("EVENT_LOG_MAX_ENTRIES") or 100),
+    ),
 )
 
 # Kick off the boot splash. The coordinator's first pull (every 250 ms)

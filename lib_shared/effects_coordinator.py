@@ -48,6 +48,13 @@ from lib_shared.message_manager import MessageManager
 from lib_shared.models import MessageView, EffectsSettings, TextSettings
 from lib_shared.scroller_base import ScrollerBase
 
+# Weighted-selector rollout flag (issue #26). Lives in `lib_shared/selector.py`
+# alongside the rest of the algorithm's behavioral knobs; the local alias
+# `_USE_WEIGHTED_SELECTOR` keeps the coordinator's check site readable.
+# When False, the coordinator uses the historical `random.choice` rotation
+# (the new path is dark-shipped behind this flag).
+from lib_shared.selector import USE_WEIGHTED_SELECTOR as _USE_WEIGHTED_SELECTOR
+
 log = logging.getLogger("heart")
 
 
@@ -178,6 +185,8 @@ class EffectsCoordinator:
         media_cache_dir: str = "",
         media_api_key: str = "",
         is_browser: bool = False,
+        event_log=None,
+        favorites: list | tuple | set | None = None,
     ) -> None:
         # Required — no default. Raises TypeError if a caller omits it.
         # All live config (pacing fields, rotation, text settings) is
@@ -220,6 +229,22 @@ class EffectsCoordinator:
         # don't need OpenCV in Pyodide. Mirrors the existing
         # `MessageManager(is_browser=True)` flag.
         self._is_browser = bool(is_browser)
+        # Weighted-selector wiring (issue #26). When `event_log` is
+        # supplied, the coordinator uses `MessageSelector` (instead of
+        # `random.choice`) for the regular rotation path AND writes a
+        # `text_display` event to the log at the out→in transition.
+        # The selector is gated by `USE_WEIGHTED_SELECTOR` (a module-
+        # level constant in `lib_shared/selector.py`) so the new
+        # algorithm ships dark and the old rotation remains intact.
+        # Pre-emption of new SMS does NOT write a text_display event
+        # (the new message didn't win the weighted competition; it
+        # showed up by virtue of being new). `favorites` is the
+        # optional message-id list consumed by the selector's
+        # favorite boost — kept as a coordinator field (not a
+        # global) so tests and the preview can change it without
+        # reconstructing the coordinator.
+        self._event_log = event_log
+        self._favorites = favorites if favorites is not None else ()
 
         self.idx = -1  # first message shown advances this to 0
         self.current = heart  # effect being rendered right now (may be None)
@@ -242,30 +267,35 @@ class EffectsCoordinator:
         # on every `get_display_message()` call.
         self._last_picked_entry: MessageView | None = None
         self._last_shown_message_id: str | None = None
-        # Operator-debugging visibility (round 6, "selection algorithm
-        # verbose logging"): the existing `_last_shown_message_id` is
-        # the skip-sentinel for the re-roll loop in `_pick_next` /
-        # `get_display_message`. It carries only the id, so when the
-        # operator sees "the same message keeps getting selected", the
-        # journal doesn't tell them which body / sender that id
-        # corresponded to. `_last_selected_message_id` is the same id,
-        # kept in sync at every pick site — just under a clearer
-        # name. `_last_selected_body` / `_last_selected_sender` are
-        # the human-readable companions, set alongside, for grep-
-        # friendly logs (`rg "_last_selected_body=" journal`).
-        self._last_selected_message_id: str | None = None
-        self._last_selected_body: str | None = None
-        self._last_selected_sender: str | None = None
-        # Round 4 (queue redesign): the `_consumed_message_ids` set
-        # is removed entirely. It was a "have we ever shown this id?"
-        # sentinel used by the `hold` and `background` branches to
-        # detect fresh-id arrivals mid-cycle and trigger an immediate
-        # fade-out. With the FIFO queue (`MessageManager._new_messages_queue`),
-        # fresh-id detection happens at the buffer-write site
-        # (`_handle_message`) and the next natural pick drains the
-        # queue — no mid-cycle interrupt, no consumed-id bookkeeping.
-        # The media-cycler-exempt "_last_suppressed_message_id" gate
-        # goes with it: no interrupt, no suppression log to gate.
+        # `_consumed_message_ids` is the set of message ids that have
+        # actually FADED IN on the scroller during this process's
+        # lifetime. Distinct from `_last_shown_message_id`, which
+        # `get_display_message` mutates on every pull (random.choice
+        # included) — too noisy to use as a "is this a genuinely new
+        # SMS?" sentinel because random.choice over a multi-message
+        # pool bounces the comparison and falsely trips every other
+        # pull. We need the full history (a set, not a single id)
+        # because a "fresh" id is one that has never been shown yet;
+        # recency of the *last* consumed id is not enough when there
+        # are N ≥ 2 messages in the recent pool.
+        self._consumed_message_ids: set[str] = set()
+        # Last message id whose fresh-id interrupt was suppressed by
+        # the media-cycler exemption. Gates the "suppressing fresh-id
+        # interrupt" INFO log so it fires once per fresh-id (on the
+        # transition from "no suppression" → "suppressing"), not on
+        # every tick of the same suppressed id. (Without this, every
+        # background-mode tick fired the log because the top entry
+        # stays unconsumed until the cycler completes — ~5ms cadence,
+        # so the log spammed ~200 identical lines/sec.)
+        self._last_suppressed_message_id: str | None = None
+        # `_fresh_id_preemption` is set in the `hold` and `background`
+        # branches when a fresh-SMS interrupt triggers `_begin_out`,
+        # and consumed by the out→in transition to suppress the
+        # `text_display` event write for that fade-in (per Decision 7:
+        # a new SMS pre-empts by virtue of being new, not by winning
+        # the weighted competition, so it must NOT be recorded as a
+        # selector-driven render). Reset to False at every out→in.
+        self._fresh_id_preemption: bool = False
         # Render-layer diff state: structural fingerprints of the
         # rotation list and text settings, used to gate the
         # rotation rebuild and scroller setter calls in `tick()`.
@@ -905,15 +935,21 @@ class EffectsCoordinator:
           2. If the list is empty, return None.
           3. If the head entry's id differs from `self._last_shown_message_id`,
              return its body and update `_last_shown_message_id` (fresh-message
-             priority).
-          4. Otherwise pick uniformly at random from the list and return that
-             entry's body, updating `_last_shown_message_id` to the picked id.
+             priority — bypasses the selector entirely per Decision 7).
+          4. Otherwise:
+               - When `USE_WEIGHTED_SELECTOR` is True AND an `event_log`
+                 is attached, call `MessageSelector.pick(...)` to pick
+                 the next message by score (Decision 1).
+               - Otherwise (the historical code path), pick uniformly at
+                 random from the list.
 
         Side effect: also stores the picked entry on `self._last_picked_entry`
         so callers (e.g. the out→in transition) can read the picked
         message's `media` list and decide whether to construct a
-        `MediaCycler`. The side channel is reset to None at the start
-        of every call so callers always see the most recent pick.
+        `MediaCycler`, and so the event-log writer at the out→in
+        transition knows which message to record. The side channel is
+        reset to None at the start of every call so callers always
+        see the most recent pick.
 
         Returns:
             The body string to show next, or None when the buffer is empty.
@@ -939,6 +975,11 @@ class EffectsCoordinator:
             self._last_selected_message_id,
         )
         if head.message.id != self._last_shown_message_id:
+            # Fresh-id pre-emption: bypass the selector entirely. The
+            # caller (`_pick_next_text` → out→in transition) detects
+            # this path via the `_fresh_id_preemption` flag set in
+            # the `hold` / `background` branches and skips the
+            # text_display event write.
             self._last_shown_message_id = head.message.id
             self._last_picked_entry = head
             self._last_selected_message_id = head.message.id
@@ -953,6 +994,42 @@ class EffectsCoordinator:
                 self._last_shown_message_id,
             )
             return head.message.body
+        # Weighted path (issue #26): when `USE_WEIGHTED_SELECTOR` is
+        # True AND an `event_log` is attached, delegate the pick to
+        # the shared `MessageSelector`. The selector reads the log
+        # to compute `display_recency`, applies the eligibility
+        # filter, and picks by score. Without an event_log attached
+        # (e.g. the unit tests) we fall back to random.choice —
+        # keeps the random path's contract unchanged for callers
+        # that don't wire a log.
+        if self._event_log is not None and _USE_WEIGHTED_SELECTOR:
+            from lib_shared.selector import MessageSelector
+
+            now = time.time()
+            candidate_messages = [e.message for e in entries]
+            selector = MessageSelector(favorites=self._favorites)
+            picked_message = selector.pick(
+                candidate_messages,
+                now=now,
+                event_log=self._event_log,
+            )
+            if picked_message is None:
+                # No eligible message (all outside the eligibility
+                # window). Fall back to random.choice so the sign
+                # still rotates instead of going dark.
+                picked = random.choice(entries)
+                self._last_shown_message_id = picked.message.id
+                self._last_picked_entry = picked
+                return picked.message.body
+            # Map back to MessageView (preserve the wrapping for the
+            # MediaCycler / favorite-flag consumers downstream).
+            for e in entries:
+                if e.message.id == picked_message.id:
+                    self._last_shown_message_id = e.message.id
+                    self._last_picked_entry = e
+                    return e.message.body
+            # Defensive: should be unreachable — picked_message came
+            # from this list. Fall through to random.choice.
         picked = random.choice(entries)
         self._last_shown_message_id = picked.message.id
         self._last_picked_entry = picked
@@ -1205,6 +1282,29 @@ class EffectsCoordinator:
                     self.current_effect_name,
                     self.idx,
                 )
+                # Issue #26 / Decision 7: write a text_display event to
+                # the Pi-local log immediately after the picked message
+                # begins rendering. Skip on fresh-id pre-emption — the
+                # new SMS doesn't win the weighted competition, it shows
+                # up by virtue of being new, so it must NOT be recorded
+                # as a selector-driven render. The flag was set in the
+                # `hold` / `background` branches above; reset here so
+                # the next out→in transition starts with a clean slate.
+                if self._event_log is not None and not self._fresh_id_preemption:
+                    picked = self._last_picked_entry
+                    if picked is not None and self.showing_text:
+                        try:
+                            self._event_log.append(
+                                {
+                                    "event_type": "text_display",
+                                    "message_id": picked.message.id,
+                                    "timestamp": time.time(),
+                                    "sent_at": picked.message.sent_at_epoch(),
+                                }
+                            )
+                        except Exception as exc:
+                            log.warning("Coordinator event-log append failed: %s", exc)
+                self._fresh_id_preemption = False
                 self.mode = "in"
                 self.fade_start = now
                 self.last_step = 0.0
@@ -1232,26 +1332,68 @@ class EffectsCoordinator:
             # effect for the remainder of the hold. No-op when
             # `self.current` is a normal Effect.
             self._maybe_fall_back_to_rotation()
-            # Hold semantics (round 4 / queue redesign):
-            #   - Stay on the current message until `hold_seconds`
-            #     elapses. New SMS arrivals are NOT interrupts —
-            #     they accumulate in the MessageManager FIFO and
-            #     get picked at the natural hold→text_out →
-            #     out→in transition. The previous "fresh-id
-            #     interrupts" + media-cycler exemption + set-of-
-            #     consumed-ids machinery is removed entirely; the
-            #     queue drains at pick sites instead.
-            #   - Random re-picks from already-shown messages do
-            #     NOT interrupt the hold either; they only kick a
-            #     re-roll in the `background` mode below.
-            if now - self.phase_start >= effects_settings.hold_seconds:
-                # Round 4: the `hold→text_out` log is dropped
-                # entirely. Timing detail (`held_for=…`,
-                # `hold_seconds=…`) isn't a sign-state event — the
-                # operator reads the held message from the
-                # selected-log at the START of the cycle, and the
-                # next selected-log fires when the next message
-                # lands. No mid-cycle state event is needed.
+            # Hold semantics (v2):
+            #   - Stay on the current message until `hold_seconds` elapses,
+            #     UNLESS a genuinely *new* SMS arrives — i.e. the head of the
+            #     recent pool has an id we haven't shown yet. Random re-picks
+            #     from already-shown messages do NOT interrupt the hold;
+            #     they only kick a re-roll in the `background` mode below.
+            #   - The previous comparison (`text != self.last_shown_text`)
+            #     compared BODY strings, which meant `random.choice` over a
+            #     5-entry pool could land on a different body every pull and
+            #     effectively keep hold duration clamped to the throttle
+            #     interval (~0.25s). That bug is why `hold_seconds` was
+            #     observed "taking a long time, then disappearing after a
+            #     few seconds" — every random pick interrupted the hold
+            #     instantly. The fix: gate the interrupt on the ID, not the
+            #     body, and idle `hold_seconds` otherwise.
+            #   - **Media cycler exemption** (issue #38 follow-up): when
+            #     the active effect is a MediaCycler / BrowserMediaOverlay
+            #     that hasn't completed its natural duration (10s for
+            #     images, video length for videos), suppress fresh-id
+            #     interrupts. Without this, a 1-second-old image fades
+            #     out the moment a fresh text-only SMS arrives — the
+            #     operator sees the image for ~2 seconds (fade-in + a
+            #     sliver of `hold`) instead of the 10-second window
+            #     the cycler is supposed to deliver. The new SMS queues
+            #     up in the buffer and gets picked at the next
+            #     background→out transition once the cycler completes.
+            fresh_id_landed = (
+                self.current_messages and self.current_messages[0].message.id not in self._consumed_message_ids
+            )
+            if fresh_id_landed and self._current_is_active_media_cycler():
+                fresh_id_landed = False
+                suppressed_id = self.current_messages[0].message.id
+                # Log only on transition (newly suppressed id) — same
+                # id stays suppressed across every tick of the
+                # cycler's natural duration.
+                if suppressed_id != self._last_suppressed_message_id:
+                    self._last_suppressed_message_id = suppressed_id
+                    log.info(
+                        "Coordinator hold: suppressing fresh-id interrupt while media cycler active effect=%s",
+                        self.current_effect_name,
+                    )
+            if fresh_id_landed:
+                log.info(
+                    "Coordinator hold interrupt (new id): pending_text=%r last_shown=%r new_id=%s",
+                    text,
+                    self.last_shown_text,
+                    self.current_messages[0].message.id,
+                )
+                # Issue #26 / Decision 7: a fresh SMS pre-empts the
+                # selector AND does NOT write a text_display event for
+                # the pre-empting message. Set the flag here so the
+                # out→in transition skips the event-log append.
+                self._fresh_id_preemption = True
+                self._begin_out(now)  # new SMS interrupts the hold
+            elif now - self.phase_start >= effects_settings.hold_seconds:
+                log.info(
+                    "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
+                    self.current_effect_name,
+                    self.last_shown_text,
+                    now - self.phase_start,
+                    effects_settings.hold_seconds,
+                )
                 self.mode = "text_out"
                 self.fade_start = now
                 self.last_step = 0.0
@@ -1315,27 +1457,52 @@ class EffectsCoordinator:
             # The fix is to keep the timer (`idle_seconds`) and only
             # call `_pick_next()` here, when we actually have a
             # reason to.
-            idle_elapsed_seconds = now - self.phase_start
-            idle_elapsed = idle_elapsed_seconds >= effects_settings.idle_seconds
-            if idle_elapsed:
-                # Probe the queue + buffer once at the pick site so
-                # the IDLE_ELAPSED log can carry the live state.
-                # Round 7 (live-bug triage): kept here (rather than
-                # at the top of every tick as in round 6) so the
-                # log only fires when the natural pick site fires —
-                # one INFO line per idle cycle, not one per
-                # coordinator frame.
-                queue_depth = getattr(self.message_manager, "new_message_queue_depth", lambda: 0)()
-                buffer_size = len(self.current_messages)
-                # Round 3 (debug-visibility): pick the next message
-                # BEFORE `_begin_out` so the `Coordinator: selected`
-                # log fires first, then the fade-out log. The pick
-                # also tells us whether the buffer has anything to
-                # show — if `_pick_next` returns None, the buffer
-                # is empty (nothing to show even after the idle
-                # wait), and we skip the transition. The background
-                # mode is already "effect only, no text" — there's
-                # no point fading out for nothing.
+            entries_bg = self.current_messages
+            fresh_id_landed = bool(entries_bg and entries_bg[0].message.id not in self._consumed_message_ids)
+            # **Media cycler exemption** (issue #38 follow-up): when
+            # the active effect is a MediaCycler / BrowserMediaOverlay
+            # that hasn't completed its natural duration, suppress
+            # fresh-id interrupts. Mirrors the same exemption in
+            # `hold` mode. Without this, the cycler gets cut off
+            # the moment a new SMS arrives, instead of playing
+            # out its full 10s window. The new SMS queues up in
+            # the buffer and gets picked at the next background→out
+            # transition once the cycler completes.
+            if fresh_id_landed and self._current_is_active_media_cycler():
+                fresh_id_landed = False
+                suppressed_id = entries_bg[0].message.id
+                # Log only on transition (newly suppressed id) — same
+                # id stays suppressed across every tick of the
+                # cycler's natural duration. Without this gate the
+                # INFO log fired every tick (~5ms cadence) and
+                # spammed ~200 identical lines per second.
+                if suppressed_id != self._last_suppressed_message_id:
+                    self._last_suppressed_message_id = suppressed_id
+                    log.info(
+                        "Coordinator background: suppressing fresh-id interrupt while media cycler active effect=%s",
+                        self.current_effect_name,
+                    )
+            idle_elapsed = now - self.phase_start >= effects_settings.idle_seconds
+
+            trigger: str | None = None
+            if fresh_id_landed:
+                trigger = "new_id"
+                # Issue #26 / Decision 7: a fresh SMS pre-empts the
+                # selector AND does NOT write a text_display event for
+                # the pre-empting message. Set the flag here so the
+                # out→in transition skips the event-log append.
+                self._fresh_id_preemption = True
+            elif idle_elapsed:
+                trigger = "idle"
+
+            if trigger is not None:
+                # One pull per transition. `_pick_next_text` re-rolls
+                # internally if `random.choice` happens to land on the
+                # body we just showed (bounded to 5 tries — a
+                # single-message pool can't spin).
+                new_text = self._pick_next_text()
+                if new_text is not None:
+                    self._last_display_message = new_text
                 log.info(
                     "[select-bg] IDLE_ELAPSED — calling _pick_next "
                     "queue_depth=%d buffer_size=%d",

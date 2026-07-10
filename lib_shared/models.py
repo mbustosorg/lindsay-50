@@ -99,6 +99,37 @@ class Message:
             "media": self.media,
         }
 
+    def sent_at_epoch(self) -> float:
+        """Return the message's `sent_at` as epoch seconds (float).
+
+        Used by the weighted message selector (issue #26) to compute
+        the eligibility filter (`now - sent_at <= OFFSET_SECONDS`) and
+        the send-recency normalization. The Message dataclass stores
+        `received_at` as an ISO 8601 UTC string; this method is the
+        canonical conversion to epoch seconds for selectors and event-log
+        writes (the event schema carries `sent_at` as a float, see
+        `heart-matrix-controller/event_log.py`).
+
+        Returns 0.0 on parse failure so a malformed `received_at`
+        causes the message to be filtered out of the eligible set
+        (the rotation pauses on None rather than crashing). Returns
+        a non-negative float on success.
+        """
+        raw = self.received_at
+        if not raw or not isinstance(raw, str):
+            return 0.0
+        try:
+            # `fromisoformat` accepts the trailing "Z" only on 3.11+;
+            # normalize for 3.10 (the project's pinned runtime is 3.12
+            # per `.python-version`, but tests may run elsewhere).
+            normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+            from datetime import datetime
+
+            dt = datetime.fromisoformat(normalized)
+            return dt.timestamp()
+        except (ValueError, TypeError, ImportError):
+            return 0.0
+
 
 class MessageView:
     """Message with source and computed suppression status."""
@@ -317,6 +348,7 @@ class EffectsSettings:
             for n in effects
         ):
             raise ValueError("effects must be a list of {name: str, enabled: bool} objects")
+
         # Pacing fields are passed as `None` when absent so `__init__`
         # can fall through to the loader (canonical or operator
         # override). This way an empty wire envelope (`{}`) on a device
