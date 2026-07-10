@@ -339,7 +339,12 @@ def test_pending_text_consumed_on_out_to_in():
     # The pulled message is shown on the out→in transition.
     _drive(clock, coord, 0.1)
     assert scroller.text == "hello"
-    assert coord.last_shown_text == "hello"
+    # Round 3 (debug-visibility): the `last_shown_text` field is
+    # gone — `_last_display_message` carries the cached body for
+    # the scroller. The selected-log fired at the pick site
+    # upstream (so the body is already in the journal before
+    # `starting fade out`); the fade-out log no longer echoes it.
+    assert coord._last_display_message == "hello"
     monkey.undo()
 
 
@@ -628,11 +633,15 @@ def test_out_to_in_and_in_to_hold_emit_info_logs(caplog):
     assert fade_in, "Expected 'starting fade in' INFO log"
 
     # in → hold fires once the fade-in completes (showing_text was True).
-    # New shape: "Coordinator: fade in done effect=X next_mode=hold text=..."
+    # Round 3 (debug-visibility): the `body=` field is gone from
+    # the fade-in-done log — the selected-log at the pick site
+    # already carried it. Two fields only: effect + next_mode.
     fade_in_done = _info_records(caplog, "fade in done")
     assert fade_in_done, "Expected 'fade in done' INFO log"
     assert "next_mode=hold" in fade_in_done[0].getMessage()
-    assert "hi" in fade_in_done[0].getMessage()
+    assert "hi" not in fade_in_done[0].getMessage(), (
+        f"fade-in-done log should not carry body= (round 3 dropped it); got: {fade_in_done[0].getMessage()!r}"
+    )
     monkey.undo()
 
 
@@ -983,21 +992,29 @@ def test_get_display_message_not_called_every_tick():
     monkey.undo()
 
 
-def test_pick_next_text_re_rolls_when_random_choice_repeats_last_shown(monkeypatch):
-    """`_pick_next_text` re-rolls when random.choice lands on the body
-    we just showed. With a 2-message pool, random.choice returns the
-    same body ~50% of the time, so without re-roll we'd flicker between
-    "show X" and "stay showing X" instead of rotating.
+def test_pick_next_id_skip_when_random_choice_repeats_last_shown(monkeypatch):
+    """Round 3 (debug-visibility): `_pick_next` re-rolls when
+    random.choice lands on the message-id we just showed. With a
+    2-message pool, random.choice returns the same id ~50% of
+    the time; without the skip the coordinator would re-pick the
+    same message and the cycler-complete path would pin the same
+    cycler to the sign forever.
 
-    The stub manager sorts entries by `received_at` descending (newest
-    first), so msg1 must be NEWER than msg2 for msg1 to be the head.
-    We also pre-set `_last_shown_message_id` to msg1's id so the
-    fresh-id branch in `get_display_message` doesn't short-circuit
-    — we want random.choice to fire, every time.
+    The skip is keyed on `_last_shown_message_id`, NOT on a body
+    string. The body-based re-roll depended on
+    `self.last_shown_text`, which leaked stale text into the
+    fade-out log (round-3 bug). An id is a stable identifier;
+    tracking it leaks no body text and survives media-only cycles.
+
+    The stub manager sorts entries by `received_at` descending
+    (newest first), so msg1 must be NEWER than msg2 for msg1 to be
+    the head. We also pre-set `_last_shown_message_id` to msg1's
+    id so the fresh-id branch in `get_display_message` doesn't
+    short-circuit — we want random.choice to fire, every time.
     """
     coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05, idle_seconds=1.0)
-    # Force random.choice to ALWAYS return seq[0] (= "stale" body,
-    # the older of the two). _pick_next_text should re-roll up to 5
+    # Force random.choice to ALWAYS return seq[0] (= "stale" id,
+    # the newer of the two). _pick_next should re-roll up to 4
     # times before giving up.
     import random as _random
 
@@ -1006,7 +1023,7 @@ def test_pick_next_text_re_rolls_when_random_choice_repeats_last_shown(monkeypat
     from lib_shared.models import MessageView, Message
 
     # msg1 is NEWER (so it's the head of current_messages) and is the
-    # "stale" body — the one we just showed. msg2 is older ("fresh")
+    # "stale" id — the one we just showed. msg2 is older ("fresh")
     # but random.choice is forced to never return it.
     msg1 = MessageView(
         Message(id="m1", sender="+1", body="stale", received_at="2026-01-02T00:00:00Z"),
@@ -1022,21 +1039,21 @@ def test_pick_next_text_re_rolls_when_random_choice_repeats_last_shown(monkeypat
     # Pre-arm the fresh-id branch so it short-circuits — random.choice
     # is the only path that can move us off the head.
     coord._last_shown_message_id = msg1.message.id
-    coord.last_shown_text = "stale"
 
     # With random.choice always returning seq[0] (= msg1, body "stale"),
-    # every re-roll still picks "stale". _pick_next_text gives up after
-    # 5 tries and returns "stale". That's the bounded behavior — no spin.
-    result = coord._pick_next_text()
+    # every re-roll still picks "stale". _pick_next gives up after
+    # 4 tries and returns "stale". That's the bounded behavior — no spin.
+    result = coord._pick_next()
     assert result == "stale", (
-        f"After bounded re-rolls, _pick_next_text must give up and return "
+        f"After bounded re-rolls, _pick_next must give up and return "
         f"whatever it got (not None, not raise); got {result!r}"
     )
 
 
-def test_pick_next_text_returns_other_body_when_available(monkeypatch):
-    """When random.choice can land on a body DIFFERENT from last_shown_text,
-    _pick_next_text returns it on the first try (no re-roll needed).
+def test_pick_next_returns_other_id_when_available(monkeypatch):
+    """When random.choice can land on an id DIFFERENT from the
+    last-shown id, _pick_next returns it on the first try (no
+    re-roll needed).
     """
     coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05, idle_seconds=1.0)
     # Force random.choice to ALWAYS return seq[-1] (= "fresh", the
@@ -1059,17 +1076,16 @@ def test_pick_next_text_returns_other_body_when_available(monkeypatch):
     )
     coord.message_manager._entries = [msg1, msg2]
     coord._last_shown_message_id = msg1.message.id  # short-circuit fresh-id
-    coord.last_shown_text = "stale"
 
-    result = coord._pick_next_text()
+    result = coord._pick_next()
     assert result == "fresh"
 
 
-def test_pick_next_text_returns_none_when_buffer_empty():
+def test_pick_next_returns_none_when_buffer_empty():
     """No messages in the pool → return None (no re-roll, no pick)."""
     coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05, idle_seconds=1.0)
     coord.message_manager._entries = []
-    assert coord._pick_next_text() is None
+    assert coord._pick_next() is None
 
 
 def test_pull_runs_exactly_once_at_idle_timeout(monkeypatch):
@@ -1123,12 +1139,319 @@ def test_pull_runs_exactly_once_at_idle_timeout(monkeypatch):
     _drive(clock, coord, 0.5, step=0.01)
 
     # We expect AT LEAST 1 pull (the idle-triggered one) but the exact
-    # count depends on whether _pick_next_text re-rolled. With the
+    # count depends on whether _pick_next re-rolled. With the
     # unseeded random, sometimes 1, sometimes 2, sometimes 3 calls —
-    # all bounded by the 5-try re-roll limit. The key invariant: pull
+    # all bounded by the 4-try re-roll limit. The key invariant: pull
     # happens once per transition, not per tick.
     assert call_count["n"] >= 1, "idle transition must trigger a pull"
     assert call_count["n"] <= 5, (
         f"unexpectedly many pull calls ({call_count['n']}); " f"the re-roll loop should be bounded"
+    )
+    monkey.undo()
+
+
+# --- round 3 (debug-visibility): pick-first at every transition site ------
+
+
+def test_intro_done_picks_before_fade_out(caplog, monkeypatch):
+    """Round 3 contract: at the intro→out transition, the coordinator
+    PICKS a message before kicking the fade-out. The picked body's id
+    ends up in `_last_display_message` and `_last_picked_entry`; the
+    scroller carries it after out→in completes. The selected-log
+    fires before the fade-out log so the operator reads `selected →
+    fade out` rather than `fade out → selected`.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg = MessageView(
+        Message(id="m1", sender="+1", body="first message", received_at="t", media=[]),
+        source="mqtt", suppressed=False,
+    )
+    coord, *_ = _build(
+        intro_seconds=0.0, fade_seconds=0.05,
+        hold_seconds=10.0, idle_seconds=999.0,
+        message_manager=_StubMessageManager(messages=[msg]),
+    )
+    coord.start()
+    caplog.set_level(logging.INFO)
+    # Tick once → intro_done fires → pick fires → fade-out starts.
+    clock.advance(0.001)
+    coord.tick()
+
+    selected = [r for r in caplog.records if "Coordinator: selected" in r.getMessage()]
+    fade_out = [r for r in caplog.records if "starting fade out" in r.getMessage()]
+    assert selected, "intro_done must fire the selected-log before the fade-out"
+    assert fade_out, "intro_done must fire the fade-out log"
+    assert "msg_id=m1" in selected[0].getMessage()
+    assert "first message" in selected[0].getMessage()
+    # The pick site set _last_display_message and _last_picked_entry.
+    assert coord._last_display_message == "first message"
+    assert coord._last_picked_entry is not None
+    assert coord._last_picked_entry.message.id == "m1"
+    monkey.undo()
+
+
+def test_background_idle_picks_before_fade_out(caplog, monkeypatch):
+    """Round 3 contract: at the background→out idle transition, the
+    coordinator PICKS a message before kicking the fade-out. If the
+    pick returns None (empty buffer), the transition is skipped —
+    the coordinator stays in background. This is the asymmetry the
+    user asked for: rotation effects don't get cycled for nothing.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg = MessageView(
+        Message(id="m1", sender="+1", body="buffered", received_at="t", media=[]),
+        source="mqtt", suppressed=False,
+    )
+    coord, *_ = _build(
+        intro_seconds=0.0, fade_seconds=0.05,
+        hold_seconds=0.05, idle_seconds=0.1,
+        message_manager=_StubMessageManager(messages=[msg]),
+    )
+    coord.start()
+    caplog.set_level(logging.INFO)
+    _drive(clock, coord, 0.3)
+    assert coord.mode == "background"
+
+    # Now drive past idle_seconds. The background→out transition
+    # should fire, the selected-log should fire with msg_id=m1,
+    # and the scroller should carry "buffered" after the fade-in.
+    _drive(clock, coord, 0.3)
+    selected = [r for r in caplog.records if "Coordinator: selected" in r.getMessage()]
+    fade_out = [r for r in caplog.records if "starting fade out" in r.getMessage()]
+    idle_fade_outs = [r for r in fade_out if "trigger=idle" in r.getMessage()]
+    assert idle_fade_outs, "idle-triggered fade-out must have fired"
+    assert selected, "selected-log must fire at the idle pick site"
+    assert "msg_id=m1" in selected[0].getMessage()
+    assert "buffered" in selected[0].getMessage()
+    # Drive out → in and check the scroller.
+    _drive(clock, coord, 0.2)
+    assert coord.scroller.text == "buffered"  # type: ignore[attr-defined]
+    monkey.undo()
+
+
+def test_fresh_id_interrupt_picks_before_fade_out(caplog, monkeypatch):
+    """Round 3 contract: at the hold fresh_id_interrupt transition,
+    the coordinator PICKS the fresh id (which is the head of
+    current_messages) before kicking the fade-out. The selected-log
+    fires before the fade-out log; the picked entry survives into
+    out→in so the MediaCycler swap at line ~970 picks up the right
+    media list.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="first", received_at="t", media=[]),
+        source="mqtt", suppressed=False,
+    )
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="second", received_at="t2", media=[]),
+        source="mqtt", suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1])
+    coord, *_ = _build(
+        intro_seconds=0.0, fade_seconds=0.05,
+        hold_seconds=999.0, idle_seconds=999.0,  # long hold, no idle
+        message_manager=mgr,
+    )
+    coord.start()
+    caplog.set_level(logging.INFO)
+    _drive(clock, coord, 0.3)
+    assert coord.mode == "hold"
+
+    # Inject fresh id mid-hold.
+    mgr.add_message(msg2)
+    clock.advance(0.05)
+    coord.tick()
+
+    selected = [r for r in caplog.records if "Coordinator: selected" in r.getMessage()]
+    fresh_id_selected = [r for r in selected if "msg_id=m2" in r.getMessage()]
+    assert fresh_id_selected, (
+        f"fresh_id_interrupt must pick the new id (m2); got: "
+        f"{[r.getMessage() for r in selected]}"
+    )
+    fade_out = [r for r in caplog.records if "starting fade out" in r.getMessage()]
+    fresh_fade_outs = [r for r in fade_out if "trigger=fresh_id_interrupt" in r.getMessage()]
+    assert fresh_fade_outs, "fresh_id_interrupt fade-out must fire"
+    # And the picked entry should be m2.
+    assert coord._last_picked_entry is not None
+    assert coord._last_picked_entry.message.id == "m2"
+    monkey.undo()
+
+
+def test_cycler_complete_picks_new_message(caplog, monkeypatch):
+    """Round 3 contract: at the cycler_complete transition (the
+    MediaCycler's `exhausted` / `complete` flag fires), the
+    coordinator PICKS a NEW message before kicking the fade-out.
+    Previously the cycler-exhaust path explicitly cleared
+    `_last_picked_entry` to fall back to rotation; now it picks.
+    The cycler's bound message is NOT re-picked (the new pick is
+    a different message from the buffer).
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    # First message: has media (so it becomes a MediaCycler that
+    # exhausts quickly). Second message: text-only, the new pick.
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="", received_at="t",
+                media=[{"type": "image/jpeg", "url": "media/x.jpg"}]),
+        source="mqtt", suppressed=False,
+    )
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="new message", received_at="t2", media=[]),
+        source="mqtt", suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1, msg2])
+    coord, *_ = _build(
+        intro_seconds=0.0, fade_seconds=0.05,
+        hold_seconds=0.05, idle_seconds=999.0,
+        message_manager=mgr,
+    )
+    coord.start()
+    caplog.set_level(logging.INFO)
+    # Drive long enough to cycle through: intro → out → in (m1
+    # cycler) → hold → text_out → background → cycler_complete
+    # (cycler exhausted) → out (picks m2).
+    _drive(clock, coord, 2.0)
+
+    selected = [r for r in caplog.records if "Coordinator: selected" in r.getMessage()]
+    m2_selected = [r for r in selected if "msg_id=m2" in r.getMessage()]
+    assert m2_selected, (
+        f"cycler_complete path must pick m2 (a NEW message, not m1's "
+        f"cycler-bound body); got: {[r.getMessage()[:120] for r in selected]}"
+    )
+    monkey.undo()
+
+
+def test_empty_buffer_at_background_does_not_transition(caplog, monkeypatch):
+    """Round 3 contract: when the buffer is empty and idle_seconds
+    elapses, the background→out transition is SKIPPED. The
+    coordinator stays in background — there's no point fading out
+    for nothing. The operator sees no `Coordinator: selected` log
+    (no pick), no `starting fade out trigger=idle` log (no
+    transition).
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    coord, *_ = _build(
+        intro_seconds=0.0, fade_seconds=0.05,
+        hold_seconds=0.05, idle_seconds=0.1,
+        message_manager=_StubMessageManager(messages=[]),
+    )
+    coord.start()
+    caplog.set_level(logging.INFO)
+    _drive(clock, coord, 0.3)
+    assert coord.mode == "background"
+
+    # Now sit idle well past idle_seconds — should NOT transition.
+    _drive(clock, coord, 1.0)
+    assert coord.mode == "background", (
+        f"with empty buffer, idle_seconds must NOT trigger a transition; "
+        f"got mode={coord.mode!r}"
+    )
+    fade_outs = [r for r in caplog.records if "starting fade out" in r.getMessage()]
+    idle_fade_outs = [r for r in fade_outs if "trigger=idle" in r.getMessage()]
+    assert not idle_fade_outs, (
+        f"with empty buffer, no idle-triggered fade-out should fire; "
+        f"got: {[r.getMessage() for r in fade_outs]}"
+    )
+    monkey.undo()
+
+
+def test_empty_buffer_at_intro_done_still_transitions(caplog, monkeypatch):
+    """Round 3 contract: at intro_done with an empty buffer, the
+    fade-out STILL fires (the heart should fade out regardless of
+    buffer state), but no selected-log fires (no pick). The
+    out→in branch's `else` clears the scroller and lands in
+    background with no text.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    coord, *_ = _build(
+        intro_seconds=0.0, fade_seconds=0.05,
+        hold_seconds=0.05, idle_seconds=999.0,
+        message_manager=_StubMessageManager(messages=[]),
+    )
+    coord.start()
+    caplog.set_level(logging.INFO)
+    _drive(clock, coord, 0.4)
+
+    fade_out = [r for r in caplog.records if "starting fade out" in r.getMessage()]
+    intro_fade_out = [r for r in fade_out if "trigger=intro_done" in r.getMessage()]
+    assert intro_fade_out, (
+        f"intro_done fade-out must fire even with empty buffer; "
+        f"got: {[r.getMessage() for r in fade_out]}"
+    )
+    selected = [r for r in caplog.records if "Coordinator: selected" in r.getMessage()]
+    assert not selected, (
+        f"intro_done with empty buffer must NOT emit selected-log "
+        f"(no message was picked); got: {[r.getMessage() for r in selected]}"
+    )
+    monkey.undo()
+
+
+def test_empty_buffer_at_cycler_complete_still_transitions(caplog, monkeypatch):
+    """Round 3 contract: at cycler_complete with an empty buffer,
+    the fade-out STILL fires (the cycler is exhausted; we must
+    transition) and a `cycler_complete, no replacement` log
+    fires instead of the selected-log. The rotation effect runs
+    for the rest of the hold with no scroller text.
+    """
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    # One message with media → cycler. After the cycler binds to m1
+    # via out→in, we drain the buffer so the next pick returns None.
+    msg = MessageView(
+        Message(id="m1", sender="+1", body="", received_at="t",
+                media=[{"type": "image/jpeg", "url": "media/x.jpg"}]),
+        source="mqtt", suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg])
+    coord, *_ = _build(
+        intro_seconds=0.0, fade_seconds=0.05,
+        hold_seconds=0.05, idle_seconds=999.0,
+        message_manager=mgr,
+    )
+    coord.start()
+    caplog.set_level(logging.INFO)
+    # Drive the cycler into place: intro → out → in (cycler binds
+    # to m1) → in → background. The cycler's decode fails (no
+    # api_base_url) so it marks itself exhausted on the first tick.
+    _drive(clock, coord, 0.3)
+    # Now drain the buffer. The cycler is still the active effect,
+    # but the buffer is empty — cycler_complete will fire without
+    # a replacement.
+    mgr._entries.clear()
+    _drive(clock, coord, 0.5)
+
+    no_replacement = [r for r in caplog.records if "no replacement" in r.getMessage()]
+    assert no_replacement, (
+        f"cycler_complete with empty buffer must log 'no replacement'; "
+        f"got: {[r.getMessage()[:120] for r in caplog.records]}"
+    )
+    # And the fade-out itself still fired (cycler_complete trigger).
+    fade_outs = [r for r in caplog.records if "starting fade out" in r.getMessage()]
+    cc_fade_outs = [r for r in fade_outs if "trigger=cycler_complete" in r.getMessage()]
+    assert cc_fade_outs, (
+        f"cycler_complete with empty buffer must still fire the fade-out; "
+        f"got: {[r.getMessage()[:120] for r in fade_outs]}"
     )
     monkey.undo()

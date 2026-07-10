@@ -142,10 +142,13 @@ def _build_coord(*, intro_seconds=0.0, fade_seconds=0.05, hold_seconds=10.0,
 
 
 def test_selection_log_dumps_full_picked_message(caplog, monkeypatch):
-    """A single INFO line at the out→in transition carries the picked
-    message's id, sender, body, and media count alongside the chosen
-    effect. Operators get the full context without cross-referencing
-    multiple log lines.
+    """Round 3 (debug-visibility): the `Coordinator: selected` log
+    fires at the pick site (before fade-out) and carries the
+    picked message's id, sender, body, and media count. The
+    `effect=` field moved to the `starting fade in` log because
+    we don't know which rotation effect will be active until
+    out→in (where idx advances). Operators get the full message
+    context from one log record.
     """
     picked_msg = Message(
         id="a7edac79-uuid-1",
@@ -160,7 +163,6 @@ def test_selection_log_dumps_full_picked_message(caplog, monkeypatch):
         messages=[view], monkey=monkeypatch,
     )
 
-    # Drive intro→out→in (selection fires at out→in).
     with caplog.at_level(logging.INFO):
         coord.start()
         for _ in range(400):
@@ -174,14 +176,14 @@ def test_selection_log_dumps_full_picked_message(caplog, monkeypatch):
     assert "+14152985015" in line, f"selected line missing sender: {line}"
     assert "hello world" in line, f"selected line missing body: {line}"
     assert "media=1" in line, f"selected line missing media count: {line}"
-    # effect= is present — the actual effect name depends on whether
-    # the coordinator picks MediaCycler (when media is non-empty) or
-    # one of the rotation effects. We just need a non-empty token
-    # after `effect=`.
+    # The effect name is in the `starting fade in` log, not the
+    # selected-log (effect resolves at out→in when idx advances).
+    fade_in = [r for r in caplog.records if "starting fade in" in r.getMessage()]
+    assert fade_in, "expected a 'starting fade in' INFO log"
     import re as _re
-    m = _re.search(r"effect=(\S+)", line)
-    assert m is not None, f"selected line missing effect= field: {line}"
-    assert m.group(1), f"selected line had empty effect name: {line}"
+    m = _re.search(r"effect=(\S+)", fade_in[0].getMessage())
+    assert m is not None, f"fade-in log missing effect= field: {fade_in[0].getMessage()}"
+    assert m.group(1), f"fade-in log had empty effect name: {fade_in[0].getMessage()}"
 
 
 def test_selection_log_emitted_once_per_transition(caplog, monkeypatch):
@@ -375,22 +377,18 @@ def test_selection_log_includes_media_types_in_summary(caplog, monkeypatch):
     assert "image/jpeg" in line, f"missing image type in summary: {line}"
 
 
-def test_fade_in_done_uses_picked_body_not_stale_last_shown(caplog, monkeypatch):
-    """ISC-21: when a new MMS arrives with body='' (caption-less
-    media), the `if text:` branch at line 893 is skipped, so
-    `self.last_shown_text` keeps its value from the prior message.
-    The fade-in-done log must read the actual picked body
-    (`picked.message.body`) — not the stale `last_shown_text`. The
-    live journal showed `text='With a pic!'` for an empty-body
-    MMS because the scroller fallback was leaking into the log.
+def test_fade_in_done_log_has_no_body(caplog, monkeypatch):
+    """Round 3 (debug-visibility): the `body=` field is gone from
+    the `fade in done` log entirely — the selected-log at the pick
+    site already carried the body, so re-logging it at fade-in-done
+    just duplicates. This replaces the round-2 ISC-21 test (which
+    pinned the `body=` field's value to be non-stale); the underlying
+    bug is fixed by removing the field, not by correcting the read.
     """
-    # First message: text-only, body='heya'. This sets
-    # `last_shown_text='heya'` on the first cycle.
     first_msg = Message(
         id="m1", sender="+1", body="heya",
         received_at="2026-01-01T00:00:00Z", media=[],
     )
-    # Second message: MMS with body='' (caption-less).
     second_msg = Message(
         id="m2", sender="+1", body="",
         received_at="2026-07-10T03:36:08Z",
@@ -402,41 +400,24 @@ def test_fade_in_done_uses_picked_body_not_stale_last_shown(caplog, monkeypatch)
         intro_seconds=0.0, fade_seconds=0.02, hold_seconds=0.05, idle_seconds=0.1,
         messages=[first_view], monkey=monkeypatch,
     )
-    # Add the second message so the next fade picks it.
     mgr.add_message(second_view)
 
     with caplog.at_level(logging.INFO):
         coord.start()
-        # Drive long enough to cycle through: intro → out → in
-        # (m1) → hold (hold_seconds=0.05) → text_out → background
-        # → idle (idle_seconds=0.1) → out → in (m2).
         for _ in range(1000):
             clock.advance(0.005)
             coord.tick()
 
-    # Anchor on the m2 SELECTION log: find the index of the
-    # selection record that mentions msg_id='m2', then take the
-    # NEXT fade-in-done record. That's the m2 fade-in-done — not
-    # the m1 re-roll that may come after m2 exhausts.
-    records = list(caplog.records)
-    m2_select_idx = next(
-        (i for i, r in enumerate(records)
-         if "Coordinator: selected" in r.getMessage() and "msg_id=m2" in r.getMessage()),
-        None,
-    )
-    assert m2_select_idx is not None, "expected a selection log for m2"
-    m2_fade_in_done = next(
-        (r for r in records[m2_select_idx:] if "fade in done" in r.getMessage()),
-        None,
-    )
-    assert m2_fade_in_done is not None, "expected a fade-in-done AFTER the m2 selection"
-    line = m2_fade_in_done.getMessage()
-    assert "body=''" in line, (
-        f"expected body='' for the empty-body MMS, got stale value: {line!r}"
-    )
-    assert "heya" not in line, (
-        f"stale 'heya' from the prior message leaked into the log: {line!r}"
-    )
+    fade_in_done_records = [r for r in caplog.records if "fade in done" in r.getMessage()]
+    assert fade_in_done_records, "expected at least one fade-in-done log"
+    for r in fade_in_done_records:
+        msg = r.getMessage()
+        assert "body=" not in msg, (
+            f"fade-in-done log should not carry body= (round 3 dropped it); got: {msg!r}"
+        )
+        assert "heya" not in msg, (
+            f"fade-in-done log leaked 'heya' from prior cycle; got: {msg!r}"
+        )
 
 
 def test_cycler_fallback_info_lines_dropped(caplog, monkeypatch):
@@ -474,11 +455,15 @@ def test_cycler_fallback_info_lines_dropped(caplog, monkeypatch):
         )
 
 
-def test_fade_out_log_shows_last_shown_text(caplog, monkeypatch):
-    """ISC-23: the `starting fade out` log shows
-    `self.last_shown_text` (what was on the sign just before the
-    fade-out), not `self.scroller.text` (which is the cleared
-    scroller, always `''` at this point).
+def test_fade_out_log_has_no_last_text(caplog, monkeypatch):
+    """Round 3 (debug-visibility): the `last_text=` field is gone
+    from the `starting fade out` log entirely. The body of the
+    message that was on the sign is the job of the previous
+    cycle's `Coordinator: selected` log; the fade-out log carries
+    effect + trigger only. This replaces the round-2 ISC-23 test
+    (which pinned the `last_text=` field's value to be non-stale);
+    the underlying bug is fixed by removing the field, not by
+    correcting the read.
     """
     view = MessageView(
         Message(
@@ -493,22 +478,69 @@ def test_fade_out_log_shows_last_shown_text(caplog, monkeypatch):
     )
     with caplog.at_level(logging.INFO):
         coord.start()
-        # Drive past intro→out→in→hold→text_out→background→idle
-        # →out (this is the fade-out we want to inspect — the
-        # initial intro fade-out is `last_text=''` by definition).
         for _ in range(800):
             clock.advance(0.005)
             coord.tick()
-    fade_out = [
-        r for r in caplog.records
-        if "starting fade out" in r.getMessage()
-    ]
+    fade_out = [r for r in caplog.records if "starting fade out" in r.getMessage()]
     assert fade_out, "expected at least one 'starting fade out' INFO line"
-    # The fade-out emitted AFTER the message was shown (so
-    # `last_shown_text` is populated) must carry the actual body,
-    # not `last_text=''`.
-    last_shown = [r for r in fade_out if "last_text='goodbye world'" in r.getMessage()]
-    assert last_shown, (
-        f"expected a fade-out with last_text='goodbye world' — "
-        f"got: {[r.getMessage() for r in fade_out]}"
+    for r in fade_out:
+        msg = r.getMessage()
+        assert "last_text=" not in msg, (
+            f"fade-out log should not carry last_text= (round 3 dropped it); got: {msg!r}"
+        )
+        assert "goodbye world" not in msg, (
+            f"fade-out log leaked 'goodbye world' from the prior cycle; got: {msg!r}"
+        )
+
+
+# --- round 3: ordering — selected fires BEFORE fade-out ---------------------
+
+
+def test_selected_log_fires_before_fade_out_log(caplog, monkeypatch):
+    """Round 3 contract: the `Coordinator: selected` log fires BEFORE
+    the `starting fade out` log in the same transition. The operator
+    reading a journal tail sees the picked message context FIRST, then
+    the fade-out event — not the reverse. This is the order the user
+    asked for: 'the first thing that appears should be the selected
+    message.'
+    """
+    view = MessageView(
+        Message(id="order-test", sender="+1", body="first appearance",
+                received_at="t", media=[]),
+        source="mqtt", suppressed=False,
+    )
+    coord, clock, _monkey, _mgr = _build_coord(
+        intro_seconds=0.0, fade_seconds=0.02, idle_seconds=1e9,
+        messages=[view], monkey=monkeypatch,
+    )
+    with caplog.at_level(logging.INFO):
+        coord.start()
+        for _ in range(400):
+            clock.advance(0.005)
+            coord.tick()
+
+    # Find the indices of the first 'Coordinator: selected' and the
+    # first 'starting fade out' log records. The selected one must
+    # come first.
+    selected_idx = None
+    fade_out_idx = None
+    for i, r in enumerate(caplog.records):
+        msg = r.getMessage()
+        if selected_idx is None and "Coordinator: selected" in msg:
+            selected_idx = i
+        if fade_out_idx is None and "starting fade out" in msg:
+            fade_out_idx = i
+    assert selected_idx is not None, (
+        f"expected a 'Coordinator: selected' log; got: "
+        f"{[r.getMessage()[:80] for r in caplog.records[:5]]}"
+    )
+    assert fade_out_idx is not None, (
+        f"expected a 'starting fade out' log; got: "
+        f"{[r.getMessage()[:80] for r in caplog.records[:5]]}"
+    )
+    assert selected_idx < fade_out_idx, (
+        f"'Coordinator: selected' must fire BEFORE 'starting fade out' "
+        f"in the same transition; got selected_idx={selected_idx} "
+        f"fade_out_idx={fade_out_idx}. Records in order: "
+        f"{[r.getMessage()[:80] for r in caplog.records[:selected_idx + 3]]}"
     )
