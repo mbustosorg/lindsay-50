@@ -441,18 +441,32 @@ def get_current_media():
     # is the "falling back to a regular effect" path the user is
     # trying to diagnose. `coord._last_picked_entry` is a private
     # field but the only signal we have here.
+    #
+    # Skip during `coord.mode == "out"`: this is a transient phase
+    # where `current` is still the previous rotation effect (e.g.
+    # Honeycomb) but the picked media message has already been
+    # selected. The out→in transition will construct a
+    # BrowserMediaOverlay for the picked message in a few frames;
+    # the "image will NOT render in preview" assertion would be
+    # inaccurate during this brief window. (During `in` / `hold`
+    # / `text_out` `current` IS the overlay, so the diagnostic
+    # wouldn't fire anyway — `out` is the only fade phase where
+    # `current != overlay && picked has media` is healthy
+    # transient state.)
     try:
         picked = getattr(coord, "_last_picked_entry", None)
-        if picked is not None:
-            media = getattr(picked.message, "media", None) or []
-            if media:
-                effect_name = type(current).__name__ if current is not None else "None"
-                _preview_media_warn(
-                    "picked message has %d media item(s) but current effect is %s (not BrowserMediaOverlay); "
-                    "image will NOT render in preview",
-                    len(media),
-                    effect_name,
-                )
+        if (
+            picked is not None
+            and (media := getattr(picked.message, "media", None) or [])
+            and getattr(coord, "mode", None) != "out"
+        ):
+            effect_name = type(current).__name__ if current is not None else "None"
+            _preview_media_warn(
+                "picked message has %d media item(s) but current effect is %s (not BrowserMediaOverlay); "
+                "image will NOT render in preview",
+                len(media),
+                effect_name,
+            )
     except Exception:
         pass
     return to_js(
