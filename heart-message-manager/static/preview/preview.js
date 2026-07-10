@@ -309,7 +309,6 @@
       console.error("[preview-js] #preview-message-link element not found");
     }
     let lastMediaKey = "";
-    let frameCount = 0;
     let lastEffectNameForLog = "";
     // Tracks the id of the message currently bound to the status
     // link. The link's `data-msg` is rewritten only when this
@@ -519,10 +518,6 @@
         // — installed by preview_main.py when the <py-script> body runs.
         try {
           if (typeof window.tick === "function") window.tick();
-          frameCount++;
-          if (frameCount === 1 || frameCount === 30 || frameCount % 300 === 0) {
-            console.log(`[preview-js] frame ${frameCount}: tick() returned; window.tick=${typeof window.tick}, window.get_frame_rgba=${typeof window.get_frame_rgba}`);
-          }
           const effectName = typeof window.get_current_effect_name === "function"
             ? window.get_current_effect_name() : "";
           const text = typeof window.get_current_text === "function"
