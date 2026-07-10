@@ -34,20 +34,28 @@
     <div class="relative bg-slate-900 rounded-xl p-4 shadow-2xl w-full max-w-full">
       <canvas id="sign-canvas" width="768" height="768"
               class="block w-full max-w-[min(800px,100%)] h-auto aspect-square mx-auto"
-              style="image-rendering: auto;"></canvas>
-      {# Browser-side media overlay (issue #38). Positioned over the
-         LED-fuzzy canvas; `preview.js` swaps `src=` / `style.opacity`
-         each frame from `BrowserMediaOverlay`'s read-only
-         properties. Hidden when the picked message has no media —
-         the LED look is preserved. The `<video>` is muted/looped/
-         autoplayed to satisfy browser autoplay policies for silent
-         looping clips. #}
+              style="image-rendering: auto; z-index: 1;"></canvas>
+      {# Browser-side media overlay (issue #38). Positioned BEHIND the
+         LED-fuzzy canvas (z-index 0 vs the canvas's z-index 1) so the
+         scroller text and lit LED pixels drawn to the canvas overlay
+         the image. The Pillow WebCanvas is RGBA-transparent — pixels
+         the effect explicitly paints (lit LEDs, scroller text) become
+         opaque, gaps stay transparent, and the image DOM element
+         shows through those gaps. Without this, the opaque canvas
+         would hide the media for the lifetime of its fade-in (since
+         the BrowserMediaOverlay's `render()` is a no-op and the
+         canvas's transparent gaps would otherwise not exist).
+         `preview.js` swaps `src=` / `style.opacity` each frame from
+         `BrowserMediaOverlay`'s read-only properties. Hidden when the
+         picked message has no media — the LED look is preserved.
+         The `<video>` is muted/looped/ autoplayed to satisfy browser
+         autoplay policies for silent looping clips. #}
       <img id="browser-media-image" alt="" hidden
            class="absolute inset-0 w-full h-full object-cover pointer-events-none"
-           style="z-index: 2; opacity: 0;">
+           style="z-index: 0; opacity: 0;">
       <video id="browser-media-video" muted loop autoplay playsinline hidden
              class="absolute inset-0 w-full h-full object-cover pointer-events-none"
-             style="z-index: 2; opacity: 0;"></video>
+             style="z-index: 0; opacity: 0;"></video>
       <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
         Loading preview…
       </div>
@@ -66,7 +74,7 @@
      binding shim here — the coordinator's render layer is bound
      onto the app-scoped coordinator that `app_main.py` already
      installed. -->
-<py-script src="{{ url_for('static', filename='preview/heart-message-manager/preview_main.py') }}?v=7"></py-script>
+<py-script src="{{ url_for('static', filename='preview/heart-message-manager/preview_main.py') }}?v=8"></py-script>
 
 <!-- App-side main loop. Loaded after PyScript so it can wait for the
      runtime's `py:done` event. base.html's `app.js` (loaded earlier,

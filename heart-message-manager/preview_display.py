@@ -31,6 +31,24 @@ class WebCanvas:
     """Pillow-backed canvas exposing the rgbmatrix Canvas subset the
     effects use. Lives in the browser; blits to <canvas> once per frame.
 
+    The underlying Pillow image is RGBA with a transparent default
+    (alpha=0). Lit pixels (those the effects explicitly write via
+    SetPixel or SetImage) become opaque (alpha=255); pixels the
+    effect skips (e.g. palette index 0 in the background patterns)
+    stay transparent. The preview blits this RGBA buffer onto the
+    HTML5 <canvas> each frame, so the gaps between lit pixels show
+    whatever is layered behind the canvas in the DOM (the
+    BrowserMediaOverlay's `<img>` / `<video>` element when the
+    picked message has an attachment, the parent div's `bg-slate-900`
+    band around the panel otherwise).
+
+    Without this, an opaque black canvas would hide the scroller
+    text drawn over it whenever a media-active effect (the
+    BrowserMediaOverlay, whose `render()` is a no-op) was the
+    current effect — the canvas would have to be visually re-mixed
+    on top of the image, but DOM stacking alone can't show two
+    opaque layers interleaved.
+
     Attributes:
         width, height: panel dimensions in pixels (set at construction).
         image: the Pillow Image frame buffer the effects paint into. The
@@ -41,20 +59,41 @@ class WebCanvas:
     def __init__(self, width, height):
         self.width = width
         self.height = height
-        self.image = Image.new("RGB", (width, height))
+        self.image = Image.new("RGBA", (width, height), (0, 0, 0, 0))
 
     def SetPixel(self, x, y, r, g, b):
-        """Set one pixel to (r, g, b). Out-of-bounds writes are silently dropped."""
+        """Set one pixel to (r, g, b) at full alpha. Out-of-bounds writes are silently dropped."""
         if 0 <= x < self.width and 0 <= y < self.height:
-            self.image.putpixel((x, y), (r, g, b))
+            self.image.putpixel((x, y), (r, g, b, 255))
 
     def SetImage(self, pil_image, x=0, y=0):
-        """Paste a full-color PIL image into the frame buffer at (x, y).
+        """Paste a full-color PIL image into the frame buffer at (x, y) opaque.
 
         Matches the rgbmatrix canvas.SetImage signature the device's
-        full-color effects (honeycomb, video_display) rely on.
+        full-color effects (honeycomb, video_display) rely on. The
+        pasted region always lands alpha=255 — the canvas's transparent
+        default would otherwise leak through when the source has alpha
+        0 or the destination alpha is preserved on a transparent canvas.
         """
-        self.image.paste(pil_image, (x, y))
+        src = pil_image if pil_image.mode in ("RGB", "RGBA") else pil_image.convert("RGB")
+        src_rgb = src.convert("RGB")
+        w, h = src_rgb.size
+        # Clip the paste region to the canvas so getpixel / crop don't OOB.
+        x0 = max(0, x)
+        y0 = max(0, y)
+        x1 = min(self.width, x + w)
+        y1 = min(self.height, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return
+        # Paste RGB into the destination (destination alpha stays at
+        # its cleared transparent default — 0).
+        self.image.paste(src_rgb, (x, y))
+        # Lift the pasted region's alpha to 255 by re-pasting it
+        # through an opaque-alpha mask. Uses Pillow batch ops so it
+        # stays cheaper than a per-pixel putpixel loop.
+        opaque = Image.new("RGBA", src_rgb.size, (0, 0, 0, 255))
+        opaque.paste(src_rgb, (0, 0))
+        self.image.paste(opaque, (x, y))
 
     def to_imagedata(self):
         """Convert the frame buffer to a JS ImageData-compatible object.
@@ -75,7 +114,7 @@ class WebCanvas:
             return raw_bytes
 
     def clear(self):
-        """Reset the frame buffer to black (RGB 0,0,0).
+        """Reset the frame buffer to fully transparent.
 
         The device's display.Clear() is called per frame; the preview's
         effect render() typically overwrites every pixel it cares about
@@ -83,7 +122,7 @@ class WebCanvas:
         clear is not always required — but it is used by the
         EffectsCoordinator's `display.render` between frames.
         """
-        self.image = Image.new("RGB", (self.width, self.height))
+        self.image = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
 
 
 class WebDisplay(DisplayBase):
