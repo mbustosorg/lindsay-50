@@ -1,0 +1,1 @@
+../../../../../lib_shared/patterns/coronal_mass_ejection.py

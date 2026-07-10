@@ -286,7 +286,10 @@ def test_effects_settings_known_effect_names_accepted(client, esp32_headers):
     for name in [
         "Hyperspace",
         "Honeycomb",
-        "Flame",
+        "WindFire",
+        "CoronalMassEjection",
+        "Eyeball",
+        "Marble",
         "Fireworks",
         "NightSky",
     ]:

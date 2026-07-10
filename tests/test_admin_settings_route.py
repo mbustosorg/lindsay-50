@@ -268,7 +268,7 @@ class TestAdminRendersFromLoader:
     Pin the contract: the Effects section's checkboxes derive from
     `load_effects_settings()["effects"]`, not from a hardcoded list
     in `main.py` or a deleted module-level constant. The canonical
-    file has 7 effects (5 enabled, 2 disabled) — all 7 names must
+    file has 9 effects (7 enabled, 2 disabled) — all 9 names must
     appear in the rendered HTML, in the order the JSON declares.
     """
 
@@ -285,7 +285,9 @@ class TestAdminRendersFromLoader:
         for name in (
             "Hyperspace",
             "Honeycomb",
-            "Flame",
+            "WindFire",
+            "CoronalMassEjection",
+            "Eyeball",
             "Fireworks",
             "NightSky",
         ):

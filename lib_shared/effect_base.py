@@ -55,7 +55,7 @@ def arrayblit(bitmap, buf):
     """Copy a flat index buffer into a Bitmap in one shot (full-frame only).
 
     Mirrors bitmaptools.arrayblit for the at-origin, whole-bitmap case the
-    flame/nightsky effects rely on.
+    nightsky effect relies on.
     """
     if len(buf) != len(bitmap._buf):
         raise ValueError("arrayblit expects a full-frame buffer")

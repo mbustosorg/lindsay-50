@@ -1,7 +1,7 @@
 """Tests for lib_shared.models.EffectsSettings (v2 config block).
 
 Covers:
-- Default values (5 enabled + 2 disabled canonical effects) read via
+- Default values (7 enabled + 2 disabled canonical effects) read via
   the loader
 - Round-trip via from_dict / to_dict
 - Validation (out-of-range pacing, bad recent_count, malformed entries)
@@ -43,16 +43,20 @@ def _canonical_entries():
 
 
 def test_default_instantiation_uses_canonical_list():
-    """A no-arg constructor picks up the canonical 5-entry list
+    """A no-arg constructor picks up the canonical 8-entry list
     (PngDisplay/VideoDisplay removed in #38 — those are now inner
-    renderers consumed by MediaCycler, not registry entries)."""
+    renderers consumed by MediaCycler, not registry entries; Flame
+    removed as well)."""
     s = EffectsSettings()
-    assert len(s.effects) == 5
-    # All five are enabled by default.
+    assert len(s.effects) == 8
+    # All eight are enabled by default.
     enabled = [e["name"] for e in s.effects if e["enabled"]]
-    assert len(enabled) == 5
+    assert len(enabled) == 8
     assert "Hyperspace" in enabled
-    assert "Flame" in enabled
+    assert "WindFire" in enabled
+    assert "CoronalMassEjection" in enabled
+    assert "Eyeball" in enabled
+    assert "Marble" in enabled
     assert "Fireworks" in enabled
     assert "NightSky" in enabled
     assert "Honeycomb" in enabled
@@ -73,13 +77,16 @@ def test_default_pacing_values():
 
 
 def test_canonical_list_has_known_names():
-    """The canonical list contains exactly the 5 expected effect names
-    (the 2 asset-dependent display classes were removed in #38)."""
+    """The canonical list contains exactly the 8 expected effect names
+    (PngDisplay/VideoDisplay removed in #38; Flame removed)."""
     names = {e["name"] for e in _canonical_entries()}
     assert names == {
         "Hyperspace",
         "Honeycomb",
-        "Flame",
+        "WindFire",
+        "CoronalMassEjection",
+        "Eyeball",
+        "Marble",
         "Fireworks",
         "NightSky",
     }
@@ -113,14 +120,14 @@ def test_round_trip_default():
 def test_from_dict_accepts_empty_dict():
     """An empty dict is valid and yields the canonical defaults."""
     s = EffectsSettings.from_dict({})
-    assert len(s.effects) == 5
+    assert len(s.effects) == 8
     assert s.fade_seconds == 2.0
 
 
 def test_from_dict_none_uses_defaults():
     """from_dict(None) yields the canonical defaults."""
     s = EffectsSettings.from_dict(None)
-    assert len(s.effects) == 5
+    assert len(s.effects) == 8
 
 
 def test_from_dict_with_custom_values():

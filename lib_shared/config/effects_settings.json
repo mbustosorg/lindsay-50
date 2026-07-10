@@ -3,7 +3,10 @@
   "effects": [
     {"name": "Hyperspace", "module": "lib_shared.patterns.hyperspace", "class_name": "Hyperspace", "enabled": true},
     {"name": "Honeycomb", "module": "lib_shared.patterns.honeycomb", "class_name": "Honeycomb", "enabled": true},
-    {"name": "Flame", "module": "lib_shared.patterns.flame", "class_name": "Flame", "enabled": true},
+    {"name": "WindFire", "module": "lib_shared.patterns.windfire", "class_name": "WindFire", "enabled": true},
+    {"name": "CoronalMassEjection", "module": "lib_shared.patterns.coronal_mass_ejection", "class_name": "CoronalMassEjection", "enabled": true},
+    {"name": "Eyeball", "module": "lib_shared.patterns.eyeball", "class_name": "Eyeball", "enabled": true},
+    {"name": "Marble", "module": "lib_shared.patterns.marble", "class_name": "Marble", "enabled": true},
     {"name": "Fireworks", "module": "lib_shared.patterns.fireworks", "class_name": "Fireworks", "enabled": true},
     {"name": "NightSky", "module": "lib_shared.patterns.nightsky", "class_name": "NightSky", "enabled": true}
   ],

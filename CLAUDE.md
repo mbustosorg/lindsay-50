@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this project does
 
-SMS → display bridge. A Twilio webhook posts an incoming SMS to a Flask server (`heart-message-manager/main.py`), which publishes the body to an Adafruit IO feed via MQTT. A Raspberry Pi 4 (`heart-matrix-controller/main.py`) subscribes to that feed over MQTT and renders the message as scrolling text on a 64×64 HUB75 LED panel (two stacked 64×32 panels, serpentine wired) over a night-sky / fireworks / flame background that cycles on each new message.
+SMS → display bridge. A Twilio webhook posts an incoming SMS to a Flask server (`heart-message-manager/main.py`), which publishes the body to an Adafruit IO feed via MQTT. A Raspberry Pi 4 (`heart-matrix-controller/main.py`) subscribes to that feed over MQTT and renders the message as scrolling text on a 64×64 HUB75 LED panel (two stacked 64×32 panels, serpentine wired) over a night-sky / fireworks / honeycomb background that cycles on each new message.
 
 The display device was originally an ESP32 running CircuitPython and was migrated to a Raspberry Pi 4: native `logging` replaces `adafruit_logging`, `paho-mqtt` replaces the CircuitPython `adafruit_io` MQTT client, and the rendering layer was ported from displayio (retained scene graph, auto-refresh) to the immediate-mode hzeller `rpi-rgb-led-matrix` API (`rgb_display.py` blits an offscreen canvas each frame and `SwapOnVSync`es it).
 
@@ -29,7 +29,6 @@ lindsay-50/
 │   ├── scroller.py             # Scrolling text via rgbmatrix graphics + BDF font
 │   ├── patterns/               # Background patterns (Effect subclasses)
 │   │   ├── fireworks.py
-│   │   ├── flame.py
 │   │   ├── nightsky.py
 │   │   ├── image_display.py    # MMS image slideshow (PNG / JPEG / GIF / WebP)
 │   │   ├── video_display.py    # MMS video clip loop (mp4 via OpenCV)
@@ -287,5 +286,5 @@ The scroller adapts to panel height: a 64×64 stack shows two scrolling lines (o
 
 To add a new visual pattern, drop a module in `heart-matrix-controller/patterns/` that subclasses `Effect` (from `rgb_display.py`) and append an instance to the list passed to `EffectCoordinator` in `main.py`. Two flavors:
 
-- **Palette-based** (e.g. `fireworks`, `flame`, `nightsky`, `hyperspace`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` (fades by scaling the palette) and the default `render(canvas)`. Note: `self.scale` is reserved — `Effect.render()` reads it as an integer pixel-doubling factor (each lit pixel becomes a `scale × scale` block, default 1), so don't reuse the name for an unrelated "scale" of your own (give it a distinct name like `proj_scale`).
+- **Palette-based** (e.g. `fireworks`, `nightsky`, `hyperspace`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` (fades by scaling the palette) and the default `render(canvas)`. Note: `self.scale` is reserved — `Effect.render()` reads it as an integer pixel-doubling factor (each lit pixel becomes a `scale × scale` block, default 1), so don't reuse the name for an unrelated "scale" of your own (give it a distinct name like `proj_scale`).
 - **Full-color** (e.g. `video_display`, `honeycomb`): override `render(canvas)` to blit a whole RGB frame with `canvas.SetImage(pil_image)` — far faster than per-pixel `SetPixel` and not limited to 256 colors. Override `set_brightness(b)` to store a factor and apply it when blitting (the palette pipeline is bypassed). `png_display` is a hybrid: palette-based but overrides `render` to draw every pixel.

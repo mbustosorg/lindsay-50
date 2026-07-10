@@ -1,8 +1,11 @@
 """Plain Python models shared between the Flask app and the Raspberry Pi display."""
 
 import json
+import logging
 import threading
 from typing import List, Optional
+
+log = logging.getLogger("heart")
 
 
 class MessageEnvelope:
@@ -610,6 +613,16 @@ class SignConfig:
         Runs the migration registry at the top so older wire shapes (a v1
         payload arriving over MQTT, for example) are transparently brought
         up to CURRENT_VERSION before the field-by-field update runs.
+
+        If an `effects_settings` override is active on this process
+        (`config_overrides/effects_settings.json` or
+        `EFFECTS_SETTINGS_OVERRIDE` env var), the wire's `effects_settings`
+        block is dropped here so EVERY entry point (seed fetch, MQTT
+        dispatch, future callers) respects the override. The override owns
+        the entire `EffectsSettings` — both the effects list AND the pacing
+        fields. `MessageManager._handle_config` also strips defensively;
+        that path stays (defense in depth, no-op when this layer has
+        already stripped).
         """
         from lib_shared.config_migrations import migrate
 
@@ -617,6 +630,22 @@ class SignConfig:
             data = migrate(data, current_version=self.CURRENT_VERSION)
         else:
             data = {}
+
+        # Strip wire `effects_settings` when an override is active. The
+        # override lives in the loader (canonical repo-root JSON or
+        # `EFFECTS_SETTINGS_OVERRIDE` env var) and is the single source of
+        # truth for this block. We must not mutate the caller's dict, so
+        # shallow-copy before pop.
+        from lib_shared.effects_loader import is_effects_settings_override_active
+
+        if (
+            is_effects_settings_override_active()
+            and isinstance(data, dict)
+            and "effects_settings" in data
+        ):
+            data = dict(data)
+            data.pop("effects_settings", None)
+            log.debug("SignConfig.update_from_dict: dropped wire effects_settings (override active)")
 
         def _do():
             self.filters = [FilterRule.from_dict(f) for f in data.get("filters", [])]

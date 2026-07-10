@@ -171,8 +171,8 @@ class TestPrecedence:
         reset_effects_settings()
         assert is_effects_settings_override_active() is False
         cfg = load_effects_settings()
-        # Canonical: 5 effects (PngDisplay/VideoDisplay removed in #38), recent_count=5.
-        assert len(cfg["effects"]) == 5
+        # Canonical: 8 effects (PngDisplay/VideoDisplay/Flame removed), recent_count=5.
+        assert len(cfg["effects"]) == 8
         assert cfg["recent_count"] == 5
 
     def test_env_var_pointing_to_missing_file_falls_back(self, monkeypatch, tmp_path):
@@ -182,7 +182,7 @@ class TestPrecedence:
         reset_effects_settings()
         # Should not raise; loader logs a warning and uses canonical.
         cfg = load_effects_settings()
-        assert len(cfg["effects"]) == 5
+        assert len(cfg["effects"]) == 8
         assert cfg["recent_count"] == 5
 
 
@@ -217,13 +217,14 @@ class TestOverrideActive:
 
 
 class TestSchema:
-    def test_canonical_has_schema_version_and_five_effects(self):
-        """The canonical JSON declares schema_version=1 + 5 effects
+    def test_canonical_has_schema_version_and_eight_effects(self):
+        """The canonical JSON declares schema_version=1 + 8 effects
         (PngDisplay/VideoDisplay removed in #38 — those are now inner
-        renderers consumed by MediaCycler, not registry entries)."""
+        renderers consumed by MediaCycler, not registry entries; Flame
+        removed as well)."""
         cfg = load_effects_settings()
         assert cfg["schema_version"] == 1
-        assert len(cfg["effects"]) == 5
+        assert len(cfg["effects"]) == 8
 
     def test_every_effect_entry_has_required_keys(self):
         """Each effects entry has name, enabled, module, class_name."""
@@ -358,9 +359,14 @@ class TestFactory:
         assert cls.__module__ == "lib_shared.patterns.fireworks"
 
     def test_resolves_all_browser_safe_effects(self):
-        """Fireworks, Flame, Hyperspace, NightSky have no heavy top-level
-        deps and resolve cleanly without numpy / cv2 / PIL installed."""
-        for name in ("Fireworks", "Flame", "Hyperspace", "NightSky"):
+        """Fireworks, Hyperspace, NightSky have no heavy top-level
+        deps and resolve cleanly without numpy / cv2 / PIL installed.
+
+        Flame was removed (refactor(patterns): remove the Flame effect);
+        the new patterns (WindFire, CoronalMassEjection, Eyeball) all
+        import `numpy` at module top-level, so they don't qualify here.
+        """
+        for name in ("Fireworks", "Hyperspace", "NightSky"):
             cls = make_effect_class(name)
             assert cls is not None, f"{name!r} did not resolve"
             assert cls.__name__ == name

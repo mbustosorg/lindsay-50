@@ -1,1 +1,0 @@
-../../../../../lib_shared/patterns/flame.py

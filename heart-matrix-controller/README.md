@@ -407,9 +407,12 @@ Each effect subclass of `Effect` (rgb_display.py) maintains its own `bitmap` and
 | Effect | Description |
 |--------|-------------|
 | `Fireworks` | Particles with gravity, random burst colors from a pre-shuffled palette |
-| `Flame` | Cell automaton: each cell averages neighbors and drifts upward |
 | `NightSky` | Twinkling stars with occasional meteor streaks |
 | `Honeycomb` | Hexagonal tiling with shifting neighbor-averaged colors |
+| `WindFire` | Perlin-turbulence fire bent sideways by a drifting wind (numpy + SetImage) |
+| `CoronalMassEjection` | Radial star throwing off Perlin-turbulence flares (numpy + SetImage) |
+| `Eyeball` | Wandering-gaze eye with a soft-edged iris (numpy + SetImage) |
+| `Marble` | Tumbling 3D ridged-Perlin volume sliced by a rotating plane (numpy + SetImage) |
 | `PngDisplay` | Static or animated PNG rendered from flash |
 | `VideoDisplay` | Frame sequence from flash, same blitting approach |
 
@@ -423,7 +426,7 @@ Draws scrolling text using the hzeller library's `graphics.DrawText` with a BDF 
 
 Manages the idle cycle and message transitions:
 
-- **Idle**: cycles through effects `[video, png, honeycomb, flame, fireworks, nightsky]` on each new message
+- **Idle**: cycles through the enabled effects (e.g. `[honeycomb, windfire, fireworks, nightsky, …]`) on each new message
 - **Message arrival**: fades out current effect (`fade_seconds=4`), switches effect, fades in text
 - **Gamma correction**: `b = linear ** gamma` where gamma=2.2 applies perceptual brightness (human vision is nonlinear)
 
@@ -449,7 +452,6 @@ Receives MQTT envelopes (`type="message"` or `type="config"`). On a new message,
 | `Scroller` | scroller.py | BDF font text rendering, scrolling, brightness |
 | `EffectCoordinator` | main.py | Idle cycling, fade transitions, main loop |
 | `Fireworks` | patterns/fireworks.py | Particle burst animation |
-| `Flame` | patterns/flame.py | Cellular automaton fire |
 | `NightSky` | patterns/nightsky.py | Star field with meteors |
 
 ## Display Geometry

@@ -33,9 +33,12 @@ class _StubDisplay:
     "module_name,class_name",
     [
         ("lib_shared.patterns.fireworks", "Fireworks"),
-        ("lib_shared.patterns.flame", "Flame"),
         ("lib_shared.patterns.nightsky", "NightSky"),
         ("lib_shared.patterns.honeycomb", "Honeycomb"),
+        ("lib_shared.patterns.windfire", "WindFire"),
+        ("lib_shared.patterns.coronal_mass_ejection", "CoronalMassEjection"),
+        ("lib_shared.patterns.eyeball", "Eyeball"),
+        ("lib_shared.patterns.marble", "Marble"),
         ("lib_shared.patterns.hyperspace", "Hyperspace"),
         ("lib_shared.patterns.heartbeat", "Heartbeat"),
     ],
@@ -84,15 +87,28 @@ def test_make_effect_class_returns_none_for_legacy_image_display_names():
 def test_patterns_dont_import_rgb_display():
     """None of the moved pattern modules imports from rgb_display anymore."""
     from lib_shared.patterns import (
+        coronal_mass_ejection,
+        eyeball,
         fireworks,
-        flame,
         heartbeat,
         honeycomb,
         hyperspace,
+        marble,
         nightsky,
+        windfire,
     )
 
-    for mod in (fireworks, flame, heartbeat, honeycomb, hyperspace, nightsky):
+    for mod in (
+        coronal_mass_ejection,
+        eyeball,
+        fireworks,
+        heartbeat,
+        honeycomb,
+        hyperspace,
+        marble,
+        nightsky,
+        windfire,
+    ):
         assert not hasattr(
             mod, "rgb_display"
         ), f"{mod.__name__} still references rgb_display — should be lib_shared.effect_base"
