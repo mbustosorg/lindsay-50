@@ -39,6 +39,7 @@ from lib_shared.boot_config import short_sha
 from lib_shared.paho_mqtt_client import PahoMqttClient
 from lib_shared.effects_coordinator import EffectsCoordinator, build_effects
 from lib_shared.models import EffectsSettings, TextSettings
+from lib_shared.selector import USE_WEIGHTED_SELECTOR, WeightedSelector, RandomSelector
 from event_log import EventLog
 from status import StatusSnapshot, make_status_writer
 from status_publisher import StatusPublisher
@@ -159,14 +160,17 @@ coordinator = EffectsCoordinator(
     media_api_key=cfg.API_SECRET_KEY,
     # Weighted-selector wiring (issue #26). The coordinator writes
     # a `text_display` event to the log at the out→in transition
-    # (skipping fresh-id pre-emption) and uses `MessageSelector` in
-    # place of `random.choice` when `USE_WEIGHTED_SELECTOR` is True
-    # (a module-level constant in `lib_shared/selector.py`). The
-    # event_log is always passed; the rollout flag gates the
-    # algorithm swap. `EVENT_LOG_PATH` (default `data/events.jsonl`)
-    # and `EVENT_LOG_MAX_ENTRIES` (default 100) are the only
+    # (skipping fresh-id pre-emption) and uses the chosen selector
+    # (default `RandomSelector` — the historical rotation; flip
+    # `USE_WEIGHTED_SELECTOR = True` to swap in `WeightedSelector`).
+    # The coordinator is selector-agnostic — passing an explicit
+    # `selector=...` instance overrides the default. The event_log
+    # is always passed; the rollout flag gates the algorithm swap.
+    # `EVENT_LOG_PATH` (default `data/events.jsonl`) and
+    # `EVENT_LOG_MAX_ENTRIES` (default 100) are the only
     # selector-related settings in settings.toml — everything else
     # (weights, decay window, eligibility window) lives in code.
+    selector=WeightedSelector() if USE_WEIGHTED_SELECTOR else RandomSelector(),
     event_log=EventLog(
         path=cfg.if_exists("EVENT_LOG_PATH") or "data/events.jsonl",
         max_entries=int(cfg.if_exists("EVENT_LOG_MAX_ENTRIES") or 100),

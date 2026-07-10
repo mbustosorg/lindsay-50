@@ -1,8 +1,15 @@
-"""Tests for `lib_shared.selector.MessageSelector` (issue #26).
+"""Tests for `lib_shared.selector` (issue #26).
 
-Covers tasks 6.6-6.13, 6.18, plus 6.15 (renderer+selector integration).
+Covers the `WeightedSelector` (tasks 6.6-6.13, 6.18, 6.15), the
+`RandomSelector` (regression coverage that the historical behavior still
+works), and 6.19 (browser preview shares the same selector class).
 Event-log unit tests live in `test_event_log.py`; the coordinator-level
 pre-emption test lives in `test_event_log_integration.py`.
+
+The previous `MessageSelector()` direct instantiation is gone — the base
+class is abstract. Tests now exercise `WeightedSelector()` (the
+production algorithm) and `RandomSelector()` (the historical rotation)
+explicitly.
 """
 
 from __future__ import annotations
@@ -15,23 +22,27 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.path.insert(0, str(Path(__file__).parent.parent / "heart-matrix-controller"))
 
+import pytest  # noqa: E402
+
 from lib_shared.models import Message  # noqa: E402
 from lib_shared.selector import (  # noqa: E402
-    MessageSelector,
     OFFSET_SECONDS,
     SATURATION_SECONDS,
     USE_WEIGHTED_SELECTOR,
     W_DISPLAY,
     W_FAVORITE,
     W_SEND,
+    MessageSelector,
+    RandomSelector,
+    WeightedSelector,
 )
 
 # --- helpers ---
 
 
-def _msg(message_id: str, sent_at_iso: str, body: str = "hello") -> Message:
+def _msg(message_id: str, received_at_iso: str, body: str = "hello") -> Message:
     """Build a Message with the given id and ISO 8601 received_at."""
-    return Message(id=message_id, sender="+15551234567", body=body, received_at=sent_at_iso)
+    return Message(id=message_id, sender="+15551234567", body=body, received_at=received_at_iso)
 
 
 class _FakeEventLog:
@@ -90,10 +101,10 @@ def test_display_recency_is_one_for_never_shown_message():
             "event_type": "text_display",
             "message_id": "shown",
             "timestamp": now - 60.0,  # shown 60s ago
-            "sent_at": shown.sent_at_epoch(),
+            "received_at": shown.received_at_epoch(),
         }
     )
-    picked = MessageSelector().pick([shown, fresh], now=now, event_log=event_log)
+    picked = WeightedSelector().pick([shown, fresh], now=now, event_log=event_log)
     assert picked is not None
     # `fresh` has display_recency=1.0, `shown` has display_recency < 1.0;
     # even with `shown` slightly newer on send_recency, `fresh` wins
@@ -103,12 +114,12 @@ def test_display_recency_is_one_for_never_shown_message():
 
 
 def test_two_never_shown_messages_have_identical_display_recency():
-    """Two never-shown messages with different sent_at: send_recency decides."""
+    """Two never-shown messages with different received_at: send_recency decides."""
     event_log = _FakeEventLog()
     now = 1_000_000.0
     older = _msg("older", "2026-07-04T10:00:00Z")
     newer = _msg("newer", "2026-07-05T10:00:00Z")
-    picked = MessageSelector().pick([older, newer], now=now, event_log=event_log)
+    picked = WeightedSelector().pick([older, newer], now=now, event_log=event_log)
     assert picked is not None
     # Both have display_recency = 1.0; newer wins on send_recency.
     assert picked.id == "newer"
@@ -120,23 +131,23 @@ def test_two_never_shown_messages_have_identical_display_recency():
 def test_display_recency_reduces_for_recently_shown():
     """6.7: a recently-shown message has display_recency < 1.0.
 
-    Same sent_at on both messages ties send_recency; the never-shown
+    Same received_at on both messages ties send_recency; the never-shown
     message wins on display_recency.
     """
     now = 1_000_000.0
     a = _msg("a", "2026-07-05T10:00:00Z")
-    b = _msg("b", "2026-07-05T10:00:00Z")  # same sent_at
+    b = _msg("b", "2026-07-05T10:00:00Z")  # same received_at
     event_log = _FakeEventLog(
         [
             {
                 "event_type": "text_display",
                 "message_id": "a",
                 "timestamp": now - 60.0,
-                "sent_at": a.sent_at_epoch(),
+                "received_at": a.received_at_epoch(),
             }
         ]
     )
-    picked = MessageSelector().pick([a, b], now=now, event_log=event_log)
+    picked = WeightedSelector().pick([a, b], now=now, event_log=event_log)
     assert picked is not None
     assert picked.id == "b"
 
@@ -160,11 +171,11 @@ def test_display_recency_value_at_known_age():
                 "event_type": "text_display",
                 "message_id": "shown",
                 "timestamp": now - 3600.0,  # shown 1 hour ago
-                "sent_at": shown.sent_at_epoch(),
+                "received_at": shown.received_at_epoch(),
             }
         ]
     )
-    picked = MessageSelector().pick([shown, fresh2], now=now, event_log=event_log)
+    picked = WeightedSelector().pick([shown, fresh2], now=now, event_log=event_log)
     assert picked is not None
     # fresh2: display_recency=1.0, send_recency=1.0
     # shown: display_recency=1-3600/86400≈0.958, send_recency=0.0
@@ -186,24 +197,24 @@ def test_display_recency_is_per_event_type():
                 "event_type": "text_display",
                 "message_id": "a",
                 "timestamp": now - 60.0,
-                "sent_at": a.sent_at_epoch(),
+                "received_at": a.received_at_epoch(),
             }
         ]
     )
 
-    selector = MessageSelector()
+    selector = WeightedSelector(event_type="text_display")
 
     # For `image_display`: message `a` has NO matching event →
     # display_recency = 1.0 → both tied on display_recency,
-    # tied on sent_at → tie-breaker by id (lower first).
-    image_pick = selector.pick([a, b], now=now, event_log=event_log, current_event_type="image_display")
+    # tied on received_at → tie-breaker by id (lower first).
+    image_pick = selector.pick([a, b], now=now, event_log=event_log, event_type="image_display")
     assert image_pick is not None
     assert image_pick.id == "a"
 
     # For `text_display`: message `a` was shown 60s ago →
     # display_recency < 1.0; `b` is never-shown → display_recency = 1.0.
     # `b` wins on display_recency alone.
-    text_pick = selector.pick([a, b], now=now, event_log=event_log, current_event_type="text_display")
+    text_pick = selector.pick([a, b], now=now, event_log=event_log, event_type="text_display")
     assert text_pick is not None
     assert text_pick.id == "b"
 
@@ -222,13 +233,14 @@ def test_image_display_isolated_from_text_display_log():
                 "event_type": "text_display",
                 "message_id": "a",
                 "timestamp": now - 60.0,
-                "sent_at": a.sent_at_epoch(),
+                "received_at": a.received_at_epoch(),
             }
         ]
     )
-    picked = MessageSelector().pick([a, b], now=now, event_log=event_log, current_event_type="image_display")
+    selector = WeightedSelector(event_type="image_display")
+    picked = selector.pick([a, b], now=now, event_log=event_log)
     assert picked is not None
-    # Tied on display_recency and sent_at → tie-breaker by id.
+    # Tied on display_recency and received_at → tie-breaker by id.
     assert picked.id == "a"
 
 
@@ -245,7 +257,7 @@ def test_send_recency_endpoints():
     now = 1_000_000.0
     older = _msg("older", "2026-07-04T10:00:00Z")
     newer = _msg("newer", "2026-07-05T10:00:00Z")
-    picked = MessageSelector().pick([older, newer], now=now, event_log=event_log)
+    picked = WeightedSelector().pick([older, newer], now=now, event_log=event_log)
     assert picked is not None
     assert picked.id == "newer"
 
@@ -255,7 +267,7 @@ def test_send_recency_normalizes_over_eligible_set():
     event_log = _FakeEventLog()
     now = 1_000_000.0
     msgs = [_msg(f"m{i}", f"2026-07-0{i + 1}T10:00:00Z") for i in range(5)]
-    picked = MessageSelector().pick(msgs, now=now, event_log=event_log)
+    picked = WeightedSelector().pick(msgs, now=now, event_log=event_log)
     assert picked is not None
     assert picked.id == "m4"  # newest
 
@@ -268,14 +280,9 @@ def test_eligibility_excludes_old_messages(monkeypatch):
 
     Patch OFFSET_SECONDS to 60s for the test so we don't need real-world durations.
 
-    Reimports `lib_shared.selector` and rebinds `MessageSelector` to the
+    Reimports `lib_shared.selector` and rebinds `WeightedSelector` to the
     current module instance before monkeypatching, so the patch hits the
-    same module dict the function reads from. (Earlier tests in this
-    suite, including `test_auth.py`'s `app` fixture, swap `lib_shared.*`
-    in `sys.modules` for mocks; conftest's `_restore_lib_shared` autouse
-    fixture reimports them when they go Mock, leaving the `MessageSelector`
-    captured at this test module's import time bound to a stale module
-    dict. Re-resolving here makes the test robust against that cycle.)
+    same module dict the function reads from.
     """
     import importlib
 
@@ -293,7 +300,7 @@ def test_eligibility_excludes_old_messages(monkeypatch):
     eligible = _msg("m1", eligible_dt.isoformat().replace("+00:00", "Z"))
     too_old = _msg("m2", too_old_dt.isoformat().replace("+00:00", "Z"))
 
-    picked = selector_mod.MessageSelector().pick([eligible, too_old], now=now, event_log=event_log)
+    picked = selector_mod.WeightedSelector().pick([eligible, too_old], now=now, event_log=event_log)
     assert picked is not None
     assert picked.id == "m1"
 
@@ -301,9 +308,7 @@ def test_eligibility_excludes_old_messages(monkeypatch):
 def test_empty_eligible_set_returns_none(monkeypatch):
     """When no message is eligible, pick() returns None.
 
-    See `test_eligibility_excludes_old_messages` for why we reimport the
-    module here — sibling tests can leave the captured `MessageSelector`
-    bound to a stale module dict.
+    Reimports `lib_shared.selector` so monkeypatch hits the live module.
     """
     import importlib
 
@@ -319,7 +324,7 @@ def test_empty_eligible_set_returns_none(monkeypatch):
     too_old_dt = now_dt - timedelta(seconds=120)
     too_old = _msg("m1", too_old_dt.isoformat().replace("+00:00", "Z"))
 
-    picked = selector_mod.MessageSelector().pick([too_old], now=now, event_log=event_log)
+    picked = selector_mod.WeightedSelector().pick([too_old], now=now, event_log=event_log)
     assert picked is None
 
 
@@ -332,7 +337,7 @@ def test_messages_within_offset_are_eligible():
     now_dt = datetime.fromtimestamp(now, tz=timezone.utc)
     seven_days_ago = (now_dt - timedelta(days=7)).isoformat().replace("+00:00", "Z")
     m = _msg("m1", seven_days_ago)
-    picked = MessageSelector().pick([m], now=now, event_log=event_log)
+    picked = WeightedSelector().pick([m], now=now, event_log=event_log)
     assert picked is not None
     assert picked.id == "m1"
 
@@ -344,11 +349,11 @@ def test_favorite_with_same_recency_beats_non_favorite():
     """6.11: a favorite beats a non-favorite at identical recency."""
     event_log = _FakeEventLog()
     now = 1_000_000.0
-    # Same sent_at → tied on send_recency.
+    # Same received_at → tied on send_recency.
     # Empty log → both have display_recency = 1.0.
     fav = _msg("fav", "2026-07-05T10:00:00Z")
     non_fav = _msg("non_fav", "2026-07-05T10:00:00Z")
-    selector = MessageSelector(favorites=["fav"])
+    selector = WeightedSelector(favorites=["fav"])
     picked = selector.pick([non_fav, fav], now=now, event_log=event_log)
     assert picked is not None
     assert picked.id == "fav"
@@ -360,7 +365,7 @@ def test_per_call_favorites_override_constructor():
     now = 1_000_000.0
     fav = _msg("fav", "2026-07-05T10:00:00Z")
     other = _msg("other", "2026-07-05T10:00:00Z")
-    selector = MessageSelector(favorites=["fav"])
+    selector = WeightedSelector(favorites=["fav"])
     # Override: call with `favorites=["other"]` → other wins.
     picked = selector.pick([fav, other], now=now, event_log=event_log, favorites=["other"])
     assert picked is not None
@@ -378,7 +383,7 @@ def test_favorite_boost_dominates_recency_gap_at_edge():
     # favorite is older than non_favorite — favorite boost dominates.
     fav = _msg("fav", "2026-07-04T10:00:00Z")  # older, send_recency = 0.0
     non_fav = _msg("non_fav", "2026-07-05T10:00:00Z")  # newer, send_recency = 1.0
-    selector = MessageSelector(favorites=["fav"])
+    selector = WeightedSelector(favorites=["fav"])
     picked = selector.pick([fav, non_fav], now=now, event_log=event_log)
     assert picked is not None
     # fav: 0.6 * 1.0 + 0.3 * 0.0 + 0.4 * 1.0 = 1.0
@@ -397,14 +402,14 @@ def test_deterministic_pick_with_fixed_inputs():
                 "event_type": "text_display",
                 "message_id": "m1",
                 "timestamp": 999_900.0,
-                "sent_at": 999_000.0,
+                "received_at": 999_000.0,
             }
         ]
     )
     messages = [_msg(f"m{i}", f"2026-07-0{i + 1}T10:00:00Z") for i in range(5)]
     now = 1_000_000.0
 
-    selector = MessageSelector()
+    selector = WeightedSelector()
     first = selector.pick(messages, now=now, event_log=event_log)
     second = selector.pick(messages, now=now, event_log=event_log)
     third = selector.pick(messages, now=now, event_log=event_log)
@@ -416,32 +421,32 @@ def test_deterministic_pick_with_fixed_inputs():
 
 def test_pick_returns_none_for_empty_input():
     """Empty message list returns None."""
-    picked = MessageSelector().pick([], now=1_000_000.0, event_log=_FakeEventLog())
+    picked = WeightedSelector().pick([], now=1_000_000.0, event_log=_FakeEventLog())
     assert picked is None
 
 
-# --- 6.13 Unit test: stable tie-breaker — identical scores resolve by (sent_at, id) ---
+# --- 6.13 Unit test: stable tie-breaker — identical scores resolve by (received_at, id) ---
 
 
-def test_tie_breaker_uses_sent_at_then_id():
-    """6.13: identical scores → tie-breaker by (-score, sent_at, id).
+def test_tie_breaker_uses_received_at_then_id():
+    """6.13: identical scores → tie-breaker by (-score, received_at, id).
 
-    Two messages with identical sent_at + display_recency → tied on
+    Two messages with identical received_at + display_recency → tied on
     score → tie-breaker on id (lower first).
     """
     event_log = _FakeEventLog()
     now = 1_000_000.0
     a = _msg("aaa", "2026-07-05T10:00:00Z")
     z = _msg("zzz", "2026-07-05T10:00:00Z")
-    picked = MessageSelector().pick([z, a], now=now, event_log=event_log)
+    picked = WeightedSelector().pick([z, a], now=now, event_log=event_log)
     assert picked is not None
-    # Tied on score, tied on sent_at → tie-breaker on id → "aaa" wins.
+    # Tied on score, tied on received_at → tie-breaker on id → "aaa" wins.
     assert picked.id == "aaa"
 
 
 def test_tie_breaker_only_kicks_in_on_identical_score():
     """When display_recency differs, the higher display_recency wins
-    regardless of sent_at. The tie-breaker only kicks in on identical scores.
+    regardless of received_at. The tie-breaker only kicks in on identical scores.
     """
     event_log = _FakeEventLog(
         [
@@ -449,14 +454,14 @@ def test_tie_breaker_only_kicks_in_on_identical_score():
                 "event_type": "text_display",
                 "message_id": "old",
                 "timestamp": 999_900.0,
-                "sent_at": 999_000.0,
+                "received_at": 999_000.0,
             }
         ]
     )
     now = 1_000_000.0
     old = _msg("old", "2026-07-05T10:00:00Z")  # shown recently → low display_recency
     fresh = _msg("fresh", "2026-07-05T11:00:00Z")  # never shown → display_recency = 1.0
-    picked = MessageSelector().pick([old, fresh], now=now, event_log=event_log)
+    picked = WeightedSelector().pick([old, fresh], now=now, event_log=event_log)
     assert picked is not None
     assert picked.id == "fresh"
 
@@ -474,7 +479,7 @@ def test_integration_renderer_writes_event_then_selector_observes_it(tmp_path):
     enough to flip the pick: the first message is shown 12 hours
     ago (display_recency ≈ 0.5); the second message is never
     shown (display_recency = 1.0). With W_DISPLAY=0.6 and
-    W_SEND=0.3 and identical sent_at, the never-shown message's
+    W_SEND=0.3 and identical received_at, the never-shown message's
     score advantage (0.6 * (1.0 - 0.5) = 0.3) dominates the
     send_recency tie.
     """
@@ -496,14 +501,14 @@ def test_integration_renderer_writes_event_then_selector_observes_it(tmp_path):
             "event_type": "text_display",
             "message_id": "a",
             "timestamp": now - 43_200.0,  # 12 hours ago → display_recency ≈ 0.5
-            "sent_at": a.sent_at_epoch(),
+            "received_at": a.received_at_epoch(),
         }
     )
 
     # Pick — `b` is never-shown (display_recency = 1.0); `a` has
-    # display_recency ≈ 0.5. With identical sent_at, send_recency
+    # display_recency ≈ 0.5. With identical received_at, send_recency
     # is tied. b wins on display_recency alone.
-    picked = MessageSelector().pick([a, b], now=now, event_log=event_log)
+    picked = WeightedSelector().pick([a, b], now=now, event_log=event_log)
     assert picked is not None
     assert picked.id == "b"
 
@@ -514,10 +519,10 @@ def test_integration_renderer_writes_event_then_selector_observes_it(tmp_path):
             "event_type": "text_display",
             "message_id": "b",
             "timestamp": now - 43_200.0,  # 12 hours ago
-            "sent_at": b.sent_at_epoch(),
+            "received_at": b.received_at_epoch(),
         }
     )
-    second = MessageSelector().pick([a, b], now=now, event_log=event_log)
+    second = WeightedSelector().pick([a, b], now=now, event_log=event_log)
     assert second is not None
     assert second.id == "a"
 
@@ -555,7 +560,9 @@ def test_browser_preview_uses_same_selector_class():
     constants to be importable without side effects)."""
     import lib_shared.selector as _selector_mod
 
-    # The class is named MessageSelector — that's the contract.
+    # The selector module exports the abstract base + both concrete
+    # implementations. The base class is named MessageSelector — that's
+    # the contract.
     assert hasattr(_selector_mod, "MessageSelector")
     assert _selector_mod.MessageSelector.__module__ == "lib_shared.selector"
 
@@ -564,3 +571,122 @@ def test_browser_preview_uses_same_selector_class():
     assert _selector_mod.W_SEND == 0.3
     assert _selector_mod.W_FAVORITE == 0.4
     assert _selector_mod.USE_WEIGHTED_SELECTOR is False
+
+
+# --- MessageSelector ABC is abstract ---
+
+
+def test_message_selector_base_cannot_be_instantiated_directly():
+    """The ABC raises on direct construction — callers must pick a
+    concrete subclass."""
+    with pytest.raises(TypeError):
+        MessageSelector()  # type: ignore[abstract]
+
+
+def test_random_selector_is_a_message_selector_subclass():
+    """Both subclasses register under the ABC's isinstance contract."""
+    assert isinstance(RandomSelector(), MessageSelector)
+    assert isinstance(WeightedSelector(), MessageSelector)
+
+
+# --- RandomSelector: historical rotation behavior preserved ---
+
+
+def test_random_selector_returns_none_for_empty_pool():
+    """Empty input → None, matches the historical rotation contract."""
+    assert RandomSelector().pick([], now=1_000_000.0) is None
+
+
+def test_random_selector_returns_a_member_of_the_pool():
+    """`random.choice` semantics — return only what's in the pool."""
+    import random as _random
+
+    _random.seed(42)
+    msgs = [_msg(f"m{i}", "2026-07-05T10:00:00Z") for i in range(3)]
+    for _ in range(20):
+        picked = RandomSelector().pick(msgs, now=1_000_000.0)
+        assert picked is not None
+        assert picked in msgs
+
+
+def test_random_selector_ignores_event_log_and_favorites():
+    """`RandomSelector` advertises non-determinism; it does NOT honor
+    display_recency or favorite boost. Verify it ignores them by
+    pinning `random.seed` and asserting the pick is purely random.
+    """
+    import random as _random
+
+    _random.seed(0)
+    # Non-empty log + favorites should NOT influence the pick — both
+    # are documented as ignored by `RandomSelector`.
+    msgs = [_msg("a", "2026-07-05T10:00:00Z"), _msg("b", "2026-07-05T10:00:00Z")]
+    selector = RandomSelector()
+    picked_with_events = selector.pick(
+        msgs,
+        now=1_000_000.0,
+        event_log=_FakeEventLog(
+            [
+                {
+                    "event_type": "text_display",
+                    "message_id": "a",
+                    "timestamp": 999_999.0,
+                    "received_at": 999_000.0,
+                }
+            ]
+        ),
+        favorites=["a"],
+    )
+    _random.seed(0)
+    picked_without = selector.pick(msgs, now=1_000_000.0)
+    # Same seed → same `random.choice([a, b])` → same pick.
+    assert picked_with_events is not None
+    assert picked_without is not None
+    assert picked_with_events.id == picked_without.id
+
+
+# --- Co-existence: EffectsCoordinator is selector-agnostic ---
+
+
+def test_effects_coordinator_accepts_weighted_and_random_via_kwarg():
+    """The coordinator's `selector` kwarg accepts any `MessageSelector`
+    subclass. Both concrete classes round-trip.
+
+    Mirrors the `_StubManager` pattern used by
+    `test_event_log_integration.py`. We only verify that the constructor
+    accepts both selector types — coordinator behavior is covered by
+    the integration tests, not by selector tests.
+    """
+    from types import SimpleNamespace
+
+    from lib_shared.effects_coordinator import EffectsCoordinator
+    from lib_shared.models import EffectsSettings, TextSettings
+
+    class _StubManager:
+        """Minimal MessageManager-shaped stub for selector wiring tests."""
+
+        config = SimpleNamespace(
+            effects_settings=EffectsSettings(),
+            text_settings=TextSettings(),
+        )
+
+        def get_messages(self, limit: int = 10, suppress: bool = True) -> list:
+            del limit, suppress
+            return []
+
+        def get_effects_settings(self) -> EffectsSettings:
+            return self.config.effects_settings
+
+        def get_text_settings(self) -> TextSettings:
+            return self.config.text_settings
+
+    manager = _StubManager()
+    EffectsCoordinator(
+        message_manager=manager,  # type: ignore[reportArgumentType]  # _StubManager is duck-typed MessageManager
+        selector=WeightedSelector(),
+        event_log=_FakeEventLog(),
+    )
+    EffectsCoordinator(
+        message_manager=manager,  # type: ignore[reportArgumentType]  # _StubManager is duck-typed MessageManager
+        selector=RandomSelector(),
+        event_log=_FakeEventLog(),
+    )

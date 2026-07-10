@@ -48,12 +48,14 @@ from lib_shared.message_manager import MessageManager
 from lib_shared.models import MessageView, EffectsSettings, TextSettings
 from lib_shared.scroller_base import ScrollerBase
 
-# Weighted-selector rollout flag (issue #26). Lives in `lib_shared/selector.py`
-# alongside the rest of the algorithm's behavioral knobs; the local alias
-# `_USE_WEIGHTED_SELECTOR` keeps the coordinator's check site readable.
-# When False, the coordinator uses the historical `random.choice` rotation
-# (the new path is dark-shipped behind this flag).
-from lib_shared.selector import USE_WEIGHTED_SELECTOR as _USE_WEIGHTED_SELECTOR
+# Pluggable message-selection (issue #26). The coordinator is
+# selector-agnostic — it accepts any `MessageSelector` subclass via its
+# `selector` kwarg and delegates the pick to `selector.pick(...)`. The
+# default is `RandomSelector` (the historical `random.choice`
+# rotation); callers wanting the new weighted algorithm pass
+# `WeightedSelector()` explicitly, or flip `USE_WEIGHTED_SELECTOR` in
+# `lib_shared/selector.py` and let the call site pick the default.
+from lib_shared.selector import MessageSelector, RandomSelector
 
 log = logging.getLogger("heart")
 
@@ -186,6 +188,7 @@ class EffectsCoordinator:
         media_api_key: str = "",
         is_browser: bool = False,
         event_log=None,
+        selector: MessageSelector | None = None,
         favorites: list | tuple | set | None = None,
     ) -> None:
         # Required — no default. Raises TypeError if a caller omits it.
@@ -229,21 +232,21 @@ class EffectsCoordinator:
         # don't need OpenCV in Pyodide. Mirrors the existing
         # `MessageManager(is_browser=True)` flag.
         self._is_browser = bool(is_browser)
-        # Weighted-selector wiring (issue #26). When `event_log` is
-        # supplied, the coordinator uses `MessageSelector` (instead of
-        # `random.choice`) for the regular rotation path AND writes a
-        # `text_display` event to the log at the out→in transition.
-        # The selector is gated by `USE_WEIGHTED_SELECTOR` (a module-
-        # level constant in `lib_shared/selector.py`) so the new
-        # algorithm ships dark and the old rotation remains intact.
-        # Pre-emption of new SMS does NOT write a text_display event
-        # (the new message didn't win the weighted competition; it
-        # showed up by virtue of being new). `favorites` is the
-        # optional message-id list consumed by the selector's
-        # favorite boost — kept as a coordinator field (not a
-        # global) so tests and the preview can change it without
-        # reconstructing the coordinator.
+        # Pluggable selector wiring (issue #26). The coordinator is
+        # selector-agnostic — it accepts any `MessageSelector` subclass
+        # and delegates the pick to `selector.pick(...)`. The default
+        # is `RandomSelector()` (the historical `random.choice`
+        # rotation); callers wanting the weighted algorithm pass an
+        # explicit `WeightedSelector()`. When `event_log` is supplied,
+        # the coordinator also writes a `text_display` event to the
+        # log at the out→in transition (skipping fresh-id
+        # pre-emption — see `_fresh_id_preemption` flag). `favorites`
+        # is the optional message-id list consumed by the
+        # selector's favorite boost — kept as a coordinator field
+        # (not a global) so tests and the preview can change it
+        # without reconstructing the coordinator.
         self._event_log = event_log
+        self._selector = selector if selector is not None else RandomSelector()
         self._favorites = favorites if favorites is not None else ()
 
         self.idx = -1  # first message shown advances this to 0
@@ -936,12 +939,10 @@ class EffectsCoordinator:
           3. If the head entry's id differs from `self._last_shown_message_id`,
              return its body and update `_last_shown_message_id` (fresh-message
              priority — bypasses the selector entirely per Decision 7).
-          4. Otherwise:
-               - When `USE_WEIGHTED_SELECTOR` is True AND an `event_log`
-                 is attached, call `MessageSelector.pick(...)` to pick
-                 the next message by score (Decision 1).
-               - Otherwise (the historical code path), pick uniformly at
-                 random from the list.
+          4. Otherwise, delegate to `self._selector.pick(...)` to choose
+             the next message. The selector is whichever instance was
+             passed at construction (default `RandomSelector`); the
+             coordinator is selector-agnostic.
 
         Side effect: also stores the picked entry on `self._last_picked_entry`
         so callers (e.g. the out→in transition) can read the picked
@@ -994,33 +995,22 @@ class EffectsCoordinator:
                 self._last_shown_message_id,
             )
             return head.message.body
-        # Weighted path (issue #26): when `USE_WEIGHTED_SELECTOR` is
-        # True AND an `event_log` is attached, delegate the pick to
-        # the shared `MessageSelector`. The selector reads the log
-        # to compute `display_recency`, applies the eligibility
-        # filter, and picks by score. Without an event_log attached
-        # (e.g. the unit tests) we fall back to random.choice —
-        # keeps the random path's contract unchanged for callers
-        # that don't wire a log.
-        if self._event_log is not None and _USE_WEIGHTED_SELECTOR:
-            from lib_shared.selector import MessageSelector
-
-            now = time.time()
-            candidate_messages = [e.message for e in entries]
-            selector = MessageSelector(favorites=self._favorites)
-            picked_message = selector.pick(
-                candidate_messages,
-                now=now,
-                event_log=self._event_log,
-            )
-            if picked_message is None:
-                # No eligible message (all outside the eligibility
-                # window). Fall back to random.choice so the sign
-                # still rotates instead of going dark.
-                picked = random.choice(entries)
-                self._last_shown_message_id = picked.message.id
-                self._last_picked_entry = picked
-                return picked.message.body
+        # Selector-driven pick (issue #26). The selector reads the
+        # event log (if any) and applies its algorithm — `RandomSelector`
+        # ignores the log and picks uniformly at random; `WeightedSelector`
+        # reads the log for `display_recency`. When the selector
+        # returns None (e.g. nothing is eligible for the weighted
+        # path), fall back to a uniform random pick so the sign still
+        # rotates instead of going dark.
+        now = time.time()
+        candidate_messages = [e.message for e in entries]
+        picked_message = self._selector.pick(
+            candidate_messages,
+            now=now,
+            event_log=self._event_log,
+            favorites=self._favorites,
+        )
+        if picked_message is not None:
             # Map back to MessageView (preserve the wrapping for the
             # MediaCycler / favorite-flag consumers downstream).
             for e in entries:
@@ -1029,7 +1019,7 @@ class EffectsCoordinator:
                     self._last_picked_entry = e
                     return e.message.body
             # Defensive: should be unreachable — picked_message came
-            # from this list. Fall through to random.choice.
+            # from this list. Fall through to the random fallback.
         picked = random.choice(entries)
         self._last_shown_message_id = picked.message.id
         self._last_picked_entry = picked
@@ -1299,7 +1289,7 @@ class EffectsCoordinator:
                                     "event_type": "text_display",
                                     "message_id": picked.message.id,
                                     "timestamp": time.time(),
-                                    "sent_at": picked.message.sent_at_epoch(),
+                                    "received_at": picked.message.received_at_epoch(),
                                 }
                             )
                         except Exception as exc:

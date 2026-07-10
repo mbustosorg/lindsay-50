@@ -145,7 +145,15 @@ def test_get_display_message_returns_head_when_fresh():
 
 
 def test_get_display_message_samples_uniformly_when_head_already_shown():
-    """When the head has already been shown, pick uniformly at random from the list."""
+    """When the head has already been shown, delegate to the selector.
+
+    With the refactor to pluggable selectors (issue #26 follow-up), the
+    coordinator no longer calls `random.choice(entries)` directly — it
+    delegates the algorithm to `self._selector.pick(...)`. The default
+    selector is `RandomSelector` (uniform random). This test patches
+    the selector to verify the coordinator passes the right candidate
+    set (the recent-N Message objects, not the wrapping MessageViews).
+    """
     random.seed(0)
     mgr = _StubMessageManager(
         messages=[
@@ -158,17 +166,19 @@ def test_get_display_message_samples_uniformly_when_head_already_shown():
     # Prime: first pull returns the head ("a") and updates _last_shown_message_id.
     coord.get_display_message()
     assert coord._last_shown_message_id == "a"
-    # Patch random.choice to assert the call site + return value.
-    with patch("lib_shared.effects_coordinator.random.choice", wraps=random.choice) as choice_spy:
+    # Patch the coordinator's selector to assert the call site + return value.
+    expected_ids = {"a": "body-a", "b": "body-b", "c": "body-c"}
+    expected_message_ids = list(expected_ids.keys())
+    with patch.object(coord._selector, "pick", wraps=coord._selector.pick) as pick_spy:
         body = coord.get_display_message()
-    # random.choice was called with the 3 entries.
-    assert choice_spy.call_count == 1
-    args, _ = choice_spy.call_args
-    assert list(args[0]) == mgr._get_messages(limit=3, suppress=True)
+    # Selector.pick was called with the 3 messages (as Message, not MessageView).
+    assert pick_spy.call_count == 1
+    args, _ = pick_spy.call_args
+    candidate_messages = list(args[0])
+    assert [m.id for m in candidate_messages] == expected_message_ids
     # The returned body must be one of the three known bodies.
     assert body in {"body-a", "body-b", "body-c"}
     # _last_shown_message_id is the picked message's id.
-    expected_ids = {"a": "body-a", "b": "body-b", "c": "body-c"}
     assert coord._last_shown_message_id in expected_ids
     assert expected_ids[coord._last_shown_message_id] == body
 

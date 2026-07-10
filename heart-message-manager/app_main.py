@@ -71,6 +71,7 @@ from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]
 from lib_shared.message_manager import MessageManager
 from lib_shared.effects_coordinator import EffectsCoordinator
 from lib_shared.models import Message, SignConfig
+from lib_shared.selector import USE_WEIGHTED_SELECTOR, WeightedSelector, RandomSelector
 from event_log import IndexedDBEventLog
 
 print("[app-py] lib_shared.message_manager / effects_coordinator / models imported")
@@ -299,15 +300,18 @@ _coordinator = EffectsCoordinator(
     is_browser=True,
     # Weighted-selector wiring (issue #26). The browser preview
     # maintains its own IndexedDB-backed event log so the preview
-    # is self-consistent (the same `MessageSelector` class produces
+    # is self-consistent (the same `WeightedSelector` class produces
     # the same pick for the same `(messages, now, event_log)`
     # triple, regardless of which runtime is asking). The preview
     # does NOT replicate the Pi's log — each browser has its own
     # IDB. Per the spec's "preview is illustrative" contract.
-    # `USE_WEIGHTED_SELECTOR` is a module-level constant in
-    # `lib_shared/selector.py` and ships False (dark) on both
-    # runtimes; flipping it to True in code enables the new
-    # selector on both the Pi and the browser preview.
+    # The coordinator is selector-agnostic; pass `WeightedSelector()`
+    # to enable the new algorithm, `RandomSelector()` (default) for
+    # the historical random.rotation. `USE_WEIGHTED_SELECTOR` is a
+    # module-level constant in `lib_shared/selector.py` and ships
+    # False (dark) on both runtimes; flipping it to True enables
+    # the new selector on both the Pi and the browser preview.
+    selector=WeightedSelector() if USE_WEIGHTED_SELECTOR else RandomSelector(),
     event_log=IndexedDBEventLog(max_entries=100),
 )
 
