@@ -260,3 +260,54 @@ def test_preview_fallback_skips_when_media_cycler_module_missing(monkeypatch):
 
     # The `current` was untouched.
     assert coord.current is sentinel
+
+
+def test_preview_fallback_swaps_when_browser_overlay_exhausted():
+    """Browser-side fallback (issue #38, debug-2026-07-09).
+
+    Regression for the "preview isn't falling back to a standard
+    background effect" symptom. The browser preview constructs a
+    `BrowserMediaOverlay` instead of a `MediaCycler` at the out→in
+    transition (PIL/cv2 aren't in the PyScript bundle). If every
+    attachment's URL 404s, the overlay flips `exhausted=True` and
+    the canvas should swap back to a rotation effect — otherwise the
+    preview sits on an empty overlay for the rest of the hold (the
+    user-visible symptom: "image isn't rendering, and the canvas
+    stays black underneath").
+
+    Pin the contract: with `coord.current` set to a
+    `BrowserMediaOverlay` whose `exhausted=True`, calling
+    `_maybe_fall_back_to_rotation()` swaps `coord.current` back to
+    `coord.effects[coord.idx]` — same as the host-side
+    MediaCycler branch.
+    """
+    from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+    coord = _build_preview_coord(messages=[])
+    # Stand-in rotation effect — a real Effect with `set_brightness`
+    # so the fallback's post-swap `set_brightness(self._current_brightness)`
+    # call doesn't AttributeError. Distinct identity, so we can
+    # assert the swap rather than a no-op.
+    from tests.preview_wiring_test import _make_effect
+
+    rotation_effect = _make_effect("Rotation")()
+    coord.effects = [rotation_effect]  # type: ignore[assignment]
+    coord.idx = 0
+    # Construct a `BrowserMediaOverlay` directly (we don't need a
+    # real out→in transition here; we're testing the fallback
+    # branch in isolation).
+    overlay = BrowserMediaOverlay(
+        message_id="m1",
+        media=[{"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"}],
+        api_base_url="http://preview.test",
+        hold_seconds=15.0,
+    )
+    overlay.exhausted = True  # simulate "every item dropped at runtime"
+    coord.current = overlay  # type: ignore[assignment]
+
+    coord._maybe_fall_back_to_rotation()
+
+    # The swapped-in current IS the rotation effect.
+    assert (
+        coord.current is rotation_effect
+    ), "BrowserMediaOverlay exhausted should fall back to " "coord.effects[coord.idx]; got %r" % (coord.current,)

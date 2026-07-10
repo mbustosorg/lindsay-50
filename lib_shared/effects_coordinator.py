@@ -458,43 +458,65 @@ class EffectsCoordinator:
         )
 
     def _maybe_fall_back_to_rotation(self) -> None:
-        """If `self.current` is a `MediaCycler` that's exhausted, swap
-        it back to `self.effects[self.idx]`.
+        """If `self.current` is a `MediaCycler` or `BrowserMediaOverlay`
+        that's exhausted, swap it back to `self.effects[self.idx]`.
 
         Called at every `hold` and `text_out` tick. Idempotent: when
-        `self.current` is not a `MediaCycler` (the typical case), this
-        is a no-op. When it IS a `MediaCycler` and still has items,
-        the cycler keeps running — the coordinator's existing
+        `self.current` is not one of the media effects (the typical
+        case), this is a no-op. When it IS and still has items, the
+        cycler keeps running — the coordinator's existing
         `hold_seconds` clock decides when to transition out.
+
+        The cycler classes extend `Effect` and add `exhausted: bool`.
+        On the host path we test `isinstance(current, MediaCycler)`;
+        on the browser path the cycler helper returned a
+        `BrowserMediaOverlay` instead (PIL/cv2 aren't in the PyScript
+        bundle). Both classes share the same `exhausted` contract
+        (D12), so the same fallback logic applies — duck-type on
+        `exhausted` rather than `isinstance`, so the browser preview
+        ALSO gets a fallback when an attachment's URL 404s / the
+        DOM overlay had every item rejected. Without this, a browser
+        preview with no playable media sits on the boot `<img>` /
+        `<video>` and never returns to a rotation effect — the
+        canvas below the overlay is black for the rest of the hold.
 
         The `MediaCycler` import is guarded: the browser preview's
         PyScript bundle does NOT include `lib_shared.patterns.media_cycler`
         (the cycler pulls in PIL + cv2 + a filesystem cache — none of
-        which Pyodide can satisfy). On the browser path the
-        cycler helper returns a `BrowserMediaOverlay` instead, so
-        `self.current` is never a `MediaCycler` and the isinstance
-        check below is a no-op — but only IF we can resolve the
-        class without a hard ImportError. `try/except ImportError`
-        around the import turns "module missing in bundle" into
-        "skip the fallback entirely", which is the correct behavior
-        when the cycler isn't a constructible option anyway.
+        which Pyodide can satisfy). `try/except ImportError` around
+        the import turns "module missing in bundle" into "only the
+        browser side of the isinstance check", which is the right
+        behavior — the duck-typed `exhausted` branch still works.
         """
         try:
-            from lib_shared.patterns.media_cycler import MediaCycler
+            from lib_shared.patterns.media_cycler import MediaCycler as _MediaCycler
         except ImportError:
-            # MediaCycler isn't loadable in this environment (browser
-            # preview, or a future build that drops the PIL/cv2 deps).
-            # We can't construct one anyway, so the "fall back when
-            # exhausted" path has nothing to fall back from.
-            return
+            # Pi-style cycler isn't loadable here (browser preview
+            # bundle). The BrowserMediaOverlay path below still
+            # handles the browser side of the fallback.
+            _MediaCycler = None  # type: ignore[assignment]
+
+        # Same lazy-import dance for the browser-side overlay. The
+        # CPython host test suite doesn't have the browser_media_overlay
+        # module on its path the way PyScript does — module isn't
+        # bundled in the host package. When that's the case, fall
+        # back to `object` so the isinstance check is False and the
+        # branch is just skipped (mirrors MediaCycler's behavior).
+        try:
+            from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay as _BrowserOverlay
+        except ImportError:
+            _BrowserOverlay = object  # type: ignore[assignment,misc]
 
         current = self.current
         if current is None:
             return
-        if not isinstance(current, MediaCycler):
+        is_media_cycler = _MediaCycler is not None and isinstance(current, _MediaCycler)
+        is_browser_overlay = isinstance(current, _BrowserOverlay)
+        if not (is_media_cycler or is_browser_overlay):
             return
-        # `MediaCycler` extends `Effect` but adds `exhausted` —
-        # pyright can't see it through the `isinstance` narrowing.
+        # Both cyclers extend `Effect` and add `exhausted` —
+        # pyright can't see it through `isinstance` narrowing, so
+        # the attribute access is annotated.
         if not current.exhausted:  # type: ignore[attr-defined]
             return
         effects = self.effects
@@ -503,7 +525,8 @@ class EffectsCoordinator:
         self.current = effects[self.idx]
         self.current.set_brightness(self._current_brightness)
         log.info(
-            "Coordinator media-cycler exhausted: falling back to rotation effect=%s",
+            "Coordinator media-cycler exhausted (%s): falling back to rotation effect=%s",
+            "BrowserMediaOverlay" if is_browser_overlay else "MediaCycler",
             self.current_effect_name,
         )
 
