@@ -581,6 +581,26 @@ class MessageManager:
             # `add()` returned None for duplicates (re-deliveries),
             # so `view is not None` already gates the enqueue.
             self._new_messages_queue.append(view)
+            logger.info(
+                "[select-mq] ENQUEUED msg_id=%s sender=%s body=%r "
+                "buffer_size=%d queue_depth_after=%d "
+                "(queued for next natural pick site — NOT mid-cycle interrupt)",
+                msg.id,
+                msg.sender,
+                (msg.body or "")[:80],
+                len(self._messages._msgs),
+                len(self._new_messages_queue),
+            )
+        else:
+            logger.info(
+                "[select-mq] DUPLICATE_DROPPED msg_id=%s body=%r "
+                "buffer_size=%d queue_depth=%d "
+                "(seen-ids set rejected re-delivery)",
+                msg.id,
+                (msg.body or "")[:80],
+                len(self._messages._msgs),
+                len(self._new_messages_queue),
+            )
         logger.info("MessageManager routed message id=%s body=%r", msg.id, msg.body[:40])
         self._emit_change()
 
@@ -601,6 +621,18 @@ class MessageManager:
             return self._new_messages_queue.popleft()
         except IndexError:
             return None
+
+    def new_message_queue_depth(self) -> int:
+        """How many fresh arrivals are pending in the FIFO queue.
+
+        Round 6 (operator debug): used by the coordinator's `[select]`
+        log to expose "queue depth at this pick site" — operators
+        reading the journal can see exactly how many SMS/MMS
+        arrivals are waiting to drain. Non-destructive (does NOT pop),
+        safe to call from logging paths. Underlying `deque.__len__`
+        is O(1) and atomic under CPython's GIL.
+        """
+        return len(self._new_messages_queue)
 
     def _handle_config(self, payload: dict) -> None:
         """Apply a SignConfig dict to the in-memory config and re-enrich buffered messages.

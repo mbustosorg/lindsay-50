@@ -242,6 +242,20 @@ class EffectsCoordinator:
         # on every `get_display_message()` call.
         self._last_picked_entry: MessageView | None = None
         self._last_shown_message_id: str | None = None
+        # Operator-debugging visibility (round 6, "selection algorithm
+        # verbose logging"): the existing `_last_shown_message_id` is
+        # the skip-sentinel for the re-roll loop in `_pick_next` /
+        # `get_display_message`. It carries only the id, so when the
+        # operator sees "the same message keeps getting selected", the
+        # journal doesn't tell them which body / sender that id
+        # corresponded to. `_last_selected_message_id` is the same id,
+        # kept in sync at every pick site — just under a clearer
+        # name. `_last_selected_body` / `_last_selected_sender` are
+        # the human-readable companions, set alongside, for grep-
+        # friendly logs (`rg "_last_selected_body=" journal`).
+        self._last_selected_message_id: str | None = None
+        self._last_selected_body: str | None = None
+        self._last_selected_sender: str | None = None
         # Round 4 (queue redesign): the `_consumed_message_ids` set
         # is removed entirely. It was a "have we ever shown this id?"
         # sentinel used by the `hold` and `background` branches to
@@ -495,7 +509,30 @@ class EffectsCoordinator:
         Side effects: writes `self._last_display_message` to the
         picked body, and `self._last_picked_entry` to the picked
         `MessageView`.
+
+        Round 6 (verbose logging): every branch emits a `[select]`
+        log line that names the picked id, body, sender, the queue
+        depth before and after, the buffer size, the re-roll count,
+        and the prior `_last_selected_message_id`. Operators can
+        grep `journalctl -u lindsay_50 | grep '[select]'` to see
+        the full pick decision tree without enabling DEBUG.
         """
+        mm = self.message_manager
+        # `getattr` with a 0 default keeps legacy test stubs (which
+        # only shim `take_next_new_message`) from blowing up on
+        # this new logging probe. The real `MessageManager` exposes
+        # `new_message_queue_depth()` (added round 6) — stubs that
+        # predate that addition only need the queue-drain entry
+        # point to satisfy the contract.
+        queue_depth_before = getattr(mm, "new_message_queue_depth", lambda: 0)()
+        buffer_size = len(self.current_messages)
+        log.info(
+            "[select] _pick_next ENTRY queue_depth=%d buffer_size=%d last_selected_id=%s",
+            queue_depth_before,
+            buffer_size,
+            self._last_selected_message_id,
+        )
+
         # Round 4 (queue redesign): drain one entry off the FIFO
         # before the recent-pool random pick. The picked entry
         # already came from the live MQTT envelope, so its
@@ -505,16 +542,33 @@ class EffectsCoordinator:
         # scroller.set_text on `_last_display_message`, no-immediate-
         # re-pick on `_last_shown_message_id`). Writing them here
         # keeps the rest of the state machine unchanged.
-        queue_msg = self.message_manager.take_next_new_message()
+        queue_msg = mm.take_next_new_message()
         if queue_msg is not None:
             self._last_picked_entry = queue_msg
             self._last_shown_message_id = queue_msg.message.id
+            self._last_selected_message_id = queue_msg.message.id
+            self._last_selected_body = queue_msg.message.body
+            self._last_selected_sender = queue_msg.message.sender
             body = queue_msg.message.body
             self._last_display_message = body
+            log.info(
+                "[select] QUEUE_DRAIN source=queue msg_id=%s sender=%s body=%r "
+                "queue_depth_before=%d queue_depth_after=%d",
+                queue_msg.message.id,
+                queue_msg.message.sender,
+                (body or "")[:80],
+                queue_depth_before,
+                getattr(mm, "new_message_queue_depth", lambda: 0)(),
+            )
             return body
         # Fall through to the recent-pool random pick (unchanged).
         body = self.get_display_message()
         if body is None:
+            log.info(
+                "[select] BUFFER_EMPTY returning=None queue_depth=%d buffer_size=%d",
+                getattr(mm, "new_message_queue_depth", lambda: 0)(),
+                len(self.current_messages),
+            )
             return None
         picked = self._last_picked_entry
         # Only re-roll if the buffer has more than one entry to choose
@@ -525,6 +579,13 @@ class EffectsCoordinator:
         distinct_ids_in_buffer = len({e.message.id for e in self.current_messages})
         if distinct_ids_in_buffer <= 1:
             self._last_display_message = body
+            log.info(
+                "[select] SINGLE_ENTRY_BUFFER short-circuit picked_id=%s body=%r "
+                "(no re-roll possible; buffer has %d distinct ids)",
+                picked.message.id if picked else None,
+                (body or "")[:80],
+                distinct_ids_in_buffer,
+            )
             return body
         tries = 0
         while (
@@ -537,6 +598,21 @@ class EffectsCoordinator:
             picked = self._last_picked_entry
             tries += 1
         self._last_display_message = body
+        log.info(
+            "[select] RANDOM_PICK source=buffer msg_id=%s sender=%s body=%r "
+            "distinct_ids=%d rerolls=%d last_selected_id_was=%s",
+            picked.message.id if picked else None,
+            picked.message.sender if picked else None,
+            (body or "")[:80],
+            distinct_ids_in_buffer,
+            tries,
+            self._last_selected_message_id,
+        )
+        # Keep the human-readable companions in sync with the id.
+        if picked is not None:
+            self._last_selected_message_id = picked.message.id
+            self._last_selected_body = picked.message.body
+            self._last_selected_sender = picked.message.sender
         return body
 
     def _resolve_next_effect_name(self) -> str:
@@ -822,19 +898,57 @@ class EffectsCoordinator:
 
         Returns:
             The body string to show next, or None when the buffer is empty.
+
+        Round 6 (verbose logging): emits `[select-get]` lines that name
+        the buffer size, head id, last-shown id, the chosen branch
+        (HEAD_PRIORITY vs RANDOM), and the picked entry. Operators
+        grep `journalctl -u lindsay_50 | grep '[select-get]'` to
+        follow the recent-pool pick site decisions in real time.
         """
         self._last_picked_entry = None
         entries = self.current_messages
         if len(entries) == 0:
+            log.info("[select-get] BUFFER_EMPTY returning=None")
             return None
         head = entries[0]
+        log.info(
+            "[select-get] ENTRY buffer_size=%d head_id=%s head_body=%r "
+            "last_selected_id=%s",
+            len(entries),
+            head.message.id,
+            (head.message.body or "")[:80],
+            self._last_selected_message_id,
+        )
         if head.message.id != self._last_shown_message_id:
             self._last_shown_message_id = head.message.id
             self._last_picked_entry = head
+            self._last_selected_message_id = head.message.id
+            self._last_selected_body = head.message.body
+            self._last_selected_sender = head.message.sender
+            log.info(
+                "[select-get] HEAD_PRIORITY picked_id=%s sender=%s body=%r "
+                "(head differs from last_selected_id=%s)",
+                head.message.id,
+                head.message.sender,
+                (head.message.body or "")[:80],
+                self._last_shown_message_id,
+            )
             return head.message.body
         picked = random.choice(entries)
         self._last_shown_message_id = picked.message.id
         self._last_picked_entry = picked
+        self._last_selected_message_id = picked.message.id
+        self._last_selected_body = picked.message.body
+        self._last_selected_sender = picked.message.sender
+        log.info(
+            "[select-get] RANDOM branch=picked_id=%s sender=%s body=%r "
+            "from %d entries (head matched last_selected_id=%s)",
+            picked.message.id,
+            picked.message.sender,
+            (picked.message.body or "")[:80],
+            len(entries),
+            self._last_shown_message_id,
+        )
         return picked.message.body
 
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
@@ -1182,7 +1296,29 @@ class EffectsCoordinator:
             # The fix is to keep the timer (`idle_seconds`) and only
             # call `_pick_next()` here, when we actually have a
             # reason to.
-            idle_elapsed = now - self.phase_start >= effects_settings.idle_seconds
+            idle_elapsed_seconds = now - self.phase_start
+            idle_elapsed = idle_elapsed_seconds >= effects_settings.idle_seconds
+            # Round 6 (operator debug): log the idle wait state on
+            # every background tick so the operator can SEE why a
+            # freshly-texted SMS isn't playing "right now". When
+            # `queue_depth > 0` but `idle_remaining > 0`, the SMS is
+            # correctly queued but waiting for the natural pick site.
+            # This is the most likely root cause of "I texted a new
+            # message to the Pi and it didn't play next" — the
+            # operator texts at second 0, the queue drains at second
+            # ~75 (hold/text_out/idle elapsed).
+            queue_depth = getattr(self.message_manager, "new_message_queue_depth", lambda: 0)()
+            buffer_size = len(self.current_messages)
+            idle_remaining = max(0.0, effects_settings.idle_seconds - idle_elapsed_seconds)
+            log.info(
+                "[select-bg] BACKGROUND_TICK idle_remaining=%.1fs idle_seconds=%.1fs "
+                "queue_depth=%d buffer_size=%d last_selected_id=%s",
+                idle_remaining,
+                effects_settings.idle_seconds,
+                queue_depth,
+                buffer_size,
+                self._last_selected_message_id,
+            )
             if idle_elapsed:
                 # Round 3 (debug-visibility): pick the next message
                 # BEFORE `_begin_out` so the `Coordinator: selected`
@@ -1193,6 +1329,12 @@ class EffectsCoordinator:
                 # wait), and we skip the transition. The background
                 # mode is already "effect only, no text" — there's
                 # no point fading out for nothing.
+                log.info(
+                    "[select-bg] IDLE_ELAPSED — calling _pick_next "
+                    "queue_depth=%d buffer_size=%d",
+                    queue_depth,
+                    buffer_size,
+                )
                 picked_body = self._pick_next()
                 if picked_body is not None:
                     # Round 4: include the effect name so the
@@ -1200,6 +1342,13 @@ class EffectsCoordinator:
                     self._emit_selected_log(self._resolve_next_effect_name())
                     self._begin_out_trigger = "idle"
                     self._begin_out(now)  # show the queued message
+                else:
+                    log.info(
+                        "[select-bg] PICK_RETURNED_NONE — staying in background "
+                        "queue_depth=%d buffer_size=%d",
+                        queue_depth,
+                        buffer_size,
+                    )
                 # else: no message to show — stay in background.
                 # The idle wait elapsed but there's no message to
                 # fade to, so we silently keep rendering the current
