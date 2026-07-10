@@ -149,6 +149,20 @@ class BrowserMediaOverlay(Effect):
                 "BrowserMediaOverlay: empty at construction message_id=%s; signaling exhausted",
                 message_id,
             )
+        else:
+            # Diagnostic — every active item's S3 key is logged at
+            # INFO so the browser devtools / Flask logs show what
+            # the overlay picked up from the wire. The keys are
+            # not sensitive (S3 keys under our own bucket) and the
+            # log fires once per message transition, not per frame.
+            keys = [it["key"] for it in self._items]
+            logger.info(
+                "BrowserMediaOverlay: constructed message_id=%s items=%d api_base_url=%r keys=%s",
+                message_id,
+                len(self._items),
+                self._api_base_url,
+                keys,
+            )
 
     # -- read-only surface (consumed by preview.js) ------------------------
 
@@ -266,3 +280,13 @@ class BrowserMediaOverlay(Effect):
         self._active = chosen
         self._phase_start = time.monotonic()
         chosen["shown"] = True
+        if not initial:
+            # Initial picks fire on the first `tick()`; logging them
+            # is noisy because every overlay construction triggers
+            # one. The cycle-advance path is what we care about.
+            logger.info(
+                "BrowserMediaOverlay: cycled to key=%s kind=%s message_id=%s",
+                chosen["key"],
+                chosen["kind"],
+                self.message_id,
+            )

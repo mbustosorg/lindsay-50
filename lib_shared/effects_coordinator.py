@@ -411,11 +411,25 @@ class EffectsCoordinator:
         """
         picked = self._last_picked_entry
         if picked is None:
+            log.info(
+                "Coordinator media-cycler: no picked entry; rotation effect will run instead",
+            )
             return None
         media = getattr(picked.message, "media", None) or []
         if not media:
+            log.info(
+                "Coordinator media-cycler: picked message has empty media; "
+                "rotation effect will run (message_id=%s body=%r)",
+                picked.message.id,
+                picked.message.body,
+            )
             return None
         if self.display is None:
+            log.info(
+                "Coordinator media-cycler: no display bound (browser preview, no canvas); "
+                "skipping media override message_id=%s",
+                picked.message.id,
+            )
             return None
         hold_seconds = self.message_manager.get_effects_settings().hold_seconds
         if self._is_browser:

@@ -251,6 +251,8 @@
     const mediaImg = document.getElementById("browser-media-image");
     const mediaVideo = document.getElementById("browser-media-video");
     let lastMediaKey = "";
+    let lastEffectNameForLog = "";
+    let lastEmptyLogAt = 0;
 
     function applyMedia(media) {
       // Browser-side media overlay (issue #38). `preview_main.py`
@@ -271,7 +273,19 @@
         // No active media — hide both, leave the canvas alone.
         if (!mediaImg.hidden) mediaImg.hidden = true;
         if (!mediaVideo.hidden) mediaVideo.hidden = true;
-        if (key !== lastMediaKey) lastMediaKey = "";
+        if (key !== lastMediaKey) {
+          if (PREVIEW_DEBUG) {
+            const now = Date.now();
+            if (now - lastEmptyLogAt > 1000) {
+              console.log(
+                "[preview-media] hiding overlay: url=%r kind=%r key=%r (exhausted or no picked media)",
+                url, kind, key,
+              );
+              lastEmptyLogAt = now;
+            }
+          }
+          lastMediaKey = "";
+        }
         return;
       }
 
@@ -279,12 +293,28 @@
       // the same URL forces a re-decode in some browsers and creates
       // a flash. The S3 key (`media.key`) is the stable identifier.
       if (key !== lastMediaKey) {
+        if (PREVIEW_DEBUG) {
+          console.log(
+            "[preview-media] swapping %s src: key=%r url=%r opacity=%.2f",
+            kind, key, url, opacity,
+          );
+        }
         if (kind === "image") {
           if (!mediaImg.hidden) mediaImg.hidden = true;
           mediaImg.src = url;
           mediaVideo.removeAttribute("src");
           mediaVideo.load();
           mediaImg.hidden = false;
+          // Surface load failures in the console — the most common
+          // cause is a 4xx from the Flask `/api/media/<key>` proxy
+          // (S3 key mismatch, missing auth, CORS, etc.).
+          mediaImg.addEventListener("error", function onErr() {
+            mediaImg.removeEventListener("error", onErr);
+            console.error(
+              "[preview-media] <img> failed to load url=%r key=%r — check the Flask /api/media/<key> response and the S3 object exists",
+              url, key,
+            );
+          }, { once: true });
         } else if (kind === "video") {
           if (!mediaVideo.hidden) mediaVideo.hidden = true;
           mediaImg.removeAttribute("src");
@@ -294,8 +324,20 @@
           // calling play() resumes after the load promise resolves.
           const playPromise = mediaVideo.play();
           if (playPromise && typeof playPromise.then === "function") {
-            playPromise.catch(() => { /* user-gesture required — visible to user */ });
+            playPromise.catch((err) => {
+              console.warn(
+                "[preview-media] <video> play() rejected url=%r key=%r (often: autoplay without user gesture): %s",
+                url, key, err && err.message ? err.message : err,
+              );
+            });
           }
+          mediaVideo.addEventListener("error", function onErr() {
+            mediaVideo.removeEventListener("error", onErr);
+            console.error(
+              "[preview-media] <video> failed to load url=%r key=%r — check codec, Flask proxy response, and S3 object",
+              url, key,
+            );
+          }, { once: true });
           mediaVideo.hidden = false;
         }
         lastMediaKey = key;
@@ -323,6 +365,10 @@
           const text = typeof window.get_current_text === "function"
             ? window.get_current_text() : "";
           updateStatus(effectName, text);
+          if (PREVIEW_DEBUG && effectName !== lastEffectNameForLog) {
+            console.log("[preview-effect] now=%r (was=%r)", effectName || "—", lastEffectNameForLog || "—");
+            lastEffectNameForLog = effectName;
+          }
 
           // Pull the active media attachment (issue #38). When the
           // picked message has MMS attachments, the coordinator's
@@ -330,7 +376,20 @@
           // swaps the DOM `<img>` / `<video>` element's `src` to
           // match. No-ops cleanly for SMS-only messages.
           if (typeof window.get_current_media === "function") {
-            applyMedia(window.get_current_media());
+            const media = window.get_current_media();
+            if (PREVIEW_DEBUG && media && (media.key || media.url)) {
+              // Throttle: only log when the active key changes (so
+              // the rAF loop at 30 FPS doesn't spam). applyMedia
+              // logs the actual swap; this just confirms Python
+              // returned a non-empty payload.
+              if (media.key !== lastMediaKey) {
+                console.log(
+                  "[preview-media] python returned: key=%r kind=%r url=%r opacity=%.2f",
+                  media.key, media.kind, media.url, media.opacity || 0,
+                );
+              }
+            }
+            applyMedia(media);
           }
 
           if (typeof window.get_frame_rgba === "function") {

@@ -309,4 +309,61 @@ def get_current_media():
             "opacity": current.current_opacity,
             "key": current.current_media_key,
         }
+    # Throttled diagnostic: log when the current effect is NOT a
+    # BrowserMediaOverlay but the picked message has media — this
+    # is the "falling back to a regular effect" path the user is
+    # trying to diagnose. `coord._last_picked_entry` is a private
+    # field but the only signal we have here.
+    try:
+        picked = getattr(coord, "_last_picked_entry", None)
+        if picked is not None:
+            media = getattr(picked.message, "media", None) or []
+            if media:
+                effect_name = type(current).__name__ if current is not None else "None"
+                _preview_media_warn(
+                    "picked message has %d media item(s) but current effect is %s (not BrowserMediaOverlay); "
+                    "image will NOT render in preview",
+                    len(media),
+                    effect_name,
+                )
+    except Exception:
+        pass
     return {"url": "", "kind": "", "opacity": 0.0, "key": ""}
+
+
+# Throttled logger — fires at most once per second so the rAF loop
+# at 30 FPS doesn't flood the browser devtools console. Tracks the
+# last (effect_name, n_media) tuple it logged so a stable state
+# produces zero output, but a state change emits one line.
+import time as _time  # noqa: E402  (local import keeps module top tidy)
+
+_preview_media_warn_last: dict = {"ts": 0.0, "key": None}
+
+
+def _preview_media_warn(fmt: str, *args: object) -> None:
+    """Throttled `console.warn` for preview-media diagnostics.
+
+    The 1-item case in `BrowserMediaOverlay` keeps `exhausted=False`
+    forever, so a perfectly healthy state — current is a
+    `BrowserMediaOverlay` — is silent. This helper only fires when
+    something is wrong (a picked message has media but the current
+    effect is not the overlay), and at most once per second per
+    `(effect_name, n_media)` key.
+    """
+    try:
+        import js  # type: ignore[import-not-found]
+
+        effect_name = args[1] if len(args) > 1 else "?"
+        n_media = args[0] if args else 0
+        key = (effect_name, n_media)
+        now = _time.monotonic()
+        if key == _preview_media_warn_last["key"] and now - _preview_media_warn_last["ts"] < 1.0:
+            return
+        _preview_media_warn_last["ts"] = now
+        _preview_media_warn_last["key"] = key
+        js.console.warn("[preview-media] " + fmt % args)
+    except Exception:
+        # `js` may be unavailable in non-browser contexts; the test
+        # suite imports this module via CPython and exercises the
+        # return-value path, never the warning path. Silent skip.
+        pass
