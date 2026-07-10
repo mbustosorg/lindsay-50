@@ -250,8 +250,15 @@
     const ctx = canvas.getContext("2d");
     const mediaImg = document.getElementById("browser-media-image");
     const mediaVideo = document.getElementById("browser-media-video");
+    const messageLink = document.getElementById("preview-message-link");
     let lastMediaKey = "";
     let lastEffectNameForLog = "";
+    // Tracks the id of the message currently bound to the status
+    // link. The link's `data-msg` is rewritten only when this
+    // changes — the rAF loop at 30 FPS would otherwise base64-
+    // encode the full Message dict every frame even when the
+    // coordinator is sitting on the same message for 15+ seconds.
+    let lastLinkMessageId = "";
     let lastEmptyLogAt = 0;
 
     // Diagnostic flag — set to `false` in devtools or by overriding
@@ -357,6 +364,69 @@
       mediaVideo.style.opacity = String(opacity);
     }
 
+    function updateMessageLink() {
+      // Bind the preview status text to a clickable link that
+      // opens the Testing page's #json-modal showing the full
+      // Message dict (id, sender, body, received_at, media).
+      //
+      // Cheap path: the rAF loop is 30 FPS but a typical
+      // `hold_seconds` is 15s, so the picked message is
+      // stable for ~450 frames in a row. We only re-encode
+      // the base64 JSON when the id changes — and we cache
+      // the id in `lastLinkMessageId` so the hot path is a
+      // single integer compare.
+      if (!messageLink) return;
+      if (typeof window.get_current_message !== "function") return;
+      let msg = null;
+      try {
+        msg = window.get_current_message();
+      } catch (e) {
+        if (PREVIEW_DEBUG) console.warn("[preview-modal] get_current_message failed:", e);
+        return;
+      }
+      // Convert a Pyodide `JsProxy` dict to a plain JS object
+      // so JSON.stringify works (Pyodide proxies stringify but
+      // produce `{}` for nested objects; explicit conversion
+      // preserves the structure).
+      let plain = null;
+      if (msg != null) {
+        try {
+          plain = msg && typeof msg.to_py === "function" ? msg.to_py() : msg;
+        } catch (e) {
+          plain = msg;
+        }
+      }
+      const id = (plain && plain.id) || "";
+      if (id === lastLinkMessageId) return;
+      lastLinkMessageId = id;
+      if (!plain || !id) {
+        // Idle / no picked entry — drop the data-msg so the
+        // click handler is a no-op and revert the link to plain-
+        // text styling so "Now displaying: Idle" doesn't read as
+        // a link to nowhere.
+        delete messageLink.dataset.msg;
+        messageLink.className = "text-slate-500";
+        return;
+      }
+      // Match the encode/decode in preview.html:
+      //   encode: btoa(unescape(encodeURIComponent(JSON.stringify(item))))
+      //   decode: JSON.parse(decodeURIComponent(escape(atob(raw))))
+      // — the unescape/escape dance round-trips UTF-8 safely.
+      try {
+        const json = JSON.stringify(plain);
+        const b64 = btoa(unescape(encodeURIComponent(json)));
+        messageLink.dataset.msg = b64;
+        // Switch the link to the indigo/underline treatment so
+        // the user can see it's clickable. Set as the full
+        // className so the previous `text-slate-500` is dropped.
+        messageLink.className = "text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer";
+      } catch (e) {
+        if (PREVIEW_DEBUG) console.warn("[preview-modal] encode failed:", e);
+        delete messageLink.dataset.msg;
+        messageLink.className = "text-slate-500";
+      }
+    }
+
     function frame(now) {
       if (now - lastTick >= FRAME_MS) {
         // Call Python: advance the coordinator, then pull the frame buffer.
@@ -374,6 +444,7 @@
           const text = typeof window.get_current_text === "function"
             ? window.get_current_text() : "";
           updateStatus(effectName, text);
+          updateMessageLink();
           if (PREVIEW_DEBUG && effectName !== lastEffectNameForLog) {
             console.log("[preview-effect] now=%r (was=%r)", effectName || "—", lastEffectNameForLog || "—");
             lastEffectNameForLog = effectName;

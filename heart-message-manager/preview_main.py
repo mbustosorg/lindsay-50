@@ -31,6 +31,10 @@ expects:
   - `window.get_frame_rgba`       — read the current frame buffer
   - `window.get_current_text`     — read the active message body
   - `window.get_current_effect_name` — read the active effect class
+  - `window.get_current_message`  — read the active Message dict
+                                    (issue #38) — used to bind the
+                                    preview status text to the
+                                    Testing page's JSON modal.
 
 The actual main loop lives in `static/preview/preview.js`, which
 drives `tick()` via requestAnimationFrame (capped at 30 FPS). The
@@ -249,6 +253,7 @@ def _install_js_api() -> None:
     js.window.get_current_text = get_current_text
     js.window.get_current_effect_name = get_current_effect_name
     js.window.get_current_media = get_current_media
+    js.window.get_current_message = get_current_message
 
 
 def tick():
@@ -278,6 +283,31 @@ def get_current_text():
     """Return the body of the message currently being scrolled."""
     coord = _coord()
     return coord.current_text if coord is not None else ""
+
+
+def get_current_message():
+    """Return the full wire shape of the message currently being shown.
+
+    Used by `preview.js` to bind the `#preview-message` text to a
+    click handler that opens the same JSON modal the Testing page
+    uses. The dict shape matches `Message.to_dict()` exactly
+    (`id`, `sender`, `body`, `received_at`, `media`) so the
+    serialized JSON in the modal is byte-identical to what the
+    broker would publish — useful for confirming the coordinator
+    picked up the same `media` list the wire carried.
+
+    Returns `None` when the coordinator is idle (no picked entry —
+    boot splash, SMS-only background, or post-`_last_picked_entry`
+    reset). `preview.js` treats `None` as "no link target", so
+    clicking the text in idle state is a no-op.
+    """
+    coord = _coord()
+    if coord is None:
+        return None
+    picked = getattr(coord, "_last_picked_entry", None)
+    if picked is None:
+        return None
+    return picked.message.to_dict()
 
 
 def get_current_media():

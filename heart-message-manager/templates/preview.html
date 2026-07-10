@@ -13,7 +13,24 @@
     <div class="text-slate-500 text-sm">
       <span class="font-semibold">Effect:</span> <span id="preview-effect">—</span>
       <span class="mx-3 text-slate-300">|</span>
-      <span class="font-semibold">Now displaying:</span> <span id="preview-message">Idle</span>
+      <span class="font-semibold">Now displaying:</span>
+      {# Clickable preview-message: when the coordinator is showing
+         a message, `preview.js` writes the full Message dict to
+         `data-msg` (base64-encoded JSON, matching the Testing
+         page's wire shape) and toggles a clickable style. Clicking
+         opens the same #json-modal the Testing page uses. When
+         the coordinator is idle (no picked entry), `data-msg` is
+         empty and the link looks like plain text. #}
+      <a id="preview-message-link" href="#" role="button"
+         class="text-slate-500"
+         onclick="return showPreviewMessageModal(event)">
+        <span id="preview-message">Idle</span>
+      </a>
+      {# The link looks like plain text (text-slate-500) until
+         `preview.js` swaps className to the indigo/underline
+         treatment on the first picked message. That keeps
+         "Now displaying: Idle" reading like a status, not a link
+         to nowhere. #}
     </div>
     <div class="relative bg-slate-900 rounded-xl p-4 shadow-2xl w-full max-w-full">
       <canvas id="sign-canvas" width="768" height="768"
@@ -58,4 +75,78 @@
      MessageManager; preview.js only registers a per-page callback to
      drive `coordinator.request_message(body)` on each new envelope. -->
 <script src="{{ url_for('static', filename='preview/preview.js') }}"></script>
+
+{# --- JSON Viewer Modal (mirrors testing.html's #json-modal) --- #}
+<div id="json-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between p-6 border-b border-indigo-100">
+      <h3 id="json-modal-title" class="font-semibold font-heading text-dark">Message</h3>
+      <button onclick="closeJsonModal()" class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center cursor-pointer">
+        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-auto p-6">
+      <pre id="json-modal-body" class="text-xs text-slate-600 bg-slate-50 rounded-xl p-4 overflow-auto whitespace-pre-wrap break-all"></pre>
+    </div>
+  </div>
+</div>
+
+<script>
+// Mirrors testing.html's showMessageModal. The link in the preview
+// status bar carries a `data-msg` attribute (base64-encoded JSON)
+// updated by preview.js whenever the picked message changes.
+// Returns `false` to suppress the href="#" navigation.
+function showPreviewMessageModal(event) {
+  const link = event.currentTarget;
+  const raw = link && link.dataset && link.dataset.msg;
+  if (!raw) {
+    // No picked message (idle, boot splash) — no-op.
+    event.preventDefault();
+    return false;
+  }
+  // Match the encode site (preview.js): base64 of UTF-8 JSON.
+  // Reverse with decodeURIComponent(escape(atob(...))) to recover
+  // the original UTF-8 string before parsing.
+  let item;
+  try {
+    item = JSON.parse(decodeURIComponent(escape(atob(raw))));
+  } catch (e) {
+    console.warn("[preview-modal] decode failed", e);
+    event.preventDefault();
+    return false;
+  }
+  document.getElementById('json-modal-title').textContent = 'Message ' + item.id;
+  document.getElementById('json-modal-body').textContent = JSON.stringify(item, null, 2);
+  const modal = document.getElementById('json-modal');
+  modal.classList.remove('hidden');
+  modal.classList.add('flex');
+  event.preventDefault();
+  return false;
+}
+
+function closeJsonModal() {
+  const modal = document.getElementById('json-modal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  modal.classList.remove('flex');
+}
+
+// Close modal on background click (same shape as testing.html).
+(function() {
+  const modal = document.getElementById('json-modal');
+  if (modal) {
+    modal.addEventListener('click', function(e) {
+      if (e.target === this) closeJsonModal();
+    });
+  }
+  // Esc key closes the modal too — the close button works for mouse
+  // users, but a keyboard shortcut matches the testing page
+  // behavior and costs nothing.
+  document.addEventListener('keydown', function(e) {
+    if (e.key === 'Escape') closeJsonModal();
+  });
+})();
+</script>
 {% endblock %}
