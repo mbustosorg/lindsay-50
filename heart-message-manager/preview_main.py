@@ -66,7 +66,7 @@ imports (Pillow + numpy are pulled in via the
 py-config.toml declared packages).
 """
 
-from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]  (used by `_install_js_api`, `get_current_message`; Pyodide FFI for JS interop)
+from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]  (used by `_install_js_api`, `get_current_message`, `get_current_media`; Pyodide FFI for JS interop)
 from pyodide_js import loadPackage  # type: ignore[reportGeneralTypeIssues]  # noqa: F401  (top-level await: PyScript 2024.9.x runs via `eval_code_async`)
 
 print("[preview-py] module evaluation START (line 69)")
@@ -390,22 +390,43 @@ def get_current_media():
     The `key` is the bare S3 key; the JS uses it as the cache key
     for `<source>` element swapping (changing the URL on the same
     element doesn't always trigger a `load` event for video).
+
+    Conversion note (issue #38 debug-2026-07-10): the dict is wrapped
+    in `to_js(..., dict_converter=Object.fromEntries)` for the same
+    reason `get_current_message` is — Pyodide's default conversion
+    of a returned Python dict is a JS `Map`, not a plain `Object`,
+    so `media.url` / `media.kind` / `media.key` were all `undefined`
+    on the JS side. The diagnostic log
+    `[preview-media] python returned empty: {key=undefined url=undefined
+    kind=undefined opacity=undefined}` was the smoking gun — the
+    overlay was producing a real URL but the JS never saw it. Pinning
+    the `to_js` wrap here so the same bug class doesn't recur when
+    a new field is added.
     """
     coord = _coord()
     if coord is None:
-        return {"url": "", "kind": "", "opacity": 0.0, "key": ""}
+        return to_js(
+            {"url": "", "kind": "", "opacity": 0.0, "key": ""},
+            dict_converter=js.Object.fromEntries,
+        )
     current = coord.current
     try:
         from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
     except ImportError:
-        return {"url": "", "kind": "", "opacity": 0.0, "key": ""}
+        return to_js(
+            {"url": "", "kind": "", "opacity": 0.0, "key": ""},
+            dict_converter=js.Object.fromEntries,
+        )
     if isinstance(current, BrowserMediaOverlay):
-        return {
-            "url": current.current_media_url,
-            "kind": current.current_media_kind,
-            "opacity": current.current_opacity,
-            "key": current.current_media_key,
-        }
+        return to_js(
+            {
+                "url": current.current_media_url,
+                "kind": current.current_media_kind,
+                "opacity": current.current_opacity,
+                "key": current.current_media_key,
+            },
+            dict_converter=js.Object.fromEntries,
+        )
     # Throttled diagnostic: log when the current effect is NOT a
     # BrowserMediaOverlay but the picked message has media — this
     # is the "falling back to a regular effect" path the user is
@@ -425,7 +446,10 @@ def get_current_media():
                 )
     except Exception:
         pass
-    return {"url": "", "kind": "", "opacity": 0.0, "key": ""}
+    return to_js(
+        {"url": "", "kind": "", "opacity": 0.0, "key": ""},
+        dict_converter=js.Object.fromEntries,
+    )
 
 
 # Throttled logger — fires at most once per second so the rAF loop
