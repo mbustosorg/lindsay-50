@@ -49,6 +49,10 @@ def make_effect_class(name: str) -> type | None:
         from lib_shared.patterns.eyeball import Eyeball
 
         return Eyeball
+    if name == "Marble":
+        from lib_shared.patterns.marble import Marble
+
+        return Marble
     if name == "Fireworks":
         from lib_shared.patterns.fireworks import Fireworks
 

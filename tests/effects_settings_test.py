@@ -43,16 +43,17 @@ def _canonical_entries():
 
 
 def test_default_instantiation_uses_canonical_list():
-    """A no-arg constructor picks up the canonical 9-entry list."""
+    """A no-arg constructor picks up the canonical 10-entry list."""
     s = EffectsSettings()
-    assert len(s.effects) == 9
-    # Seven enabled by default; the two asset-dependent patterns are disabled.
+    assert len(s.effects) == 10
+    # Eight enabled by default; the two asset-dependent patterns are disabled.
     enabled = [e["name"] for e in s.effects if e["enabled"]]
-    assert len(enabled) == 7
+    assert len(enabled) == 8
     assert "Hyperspace" in enabled
     assert "WindFire" in enabled
     assert "CoronalMassEjection" in enabled
     assert "Eyeball" in enabled
+    assert "Marble" in enabled
     assert "Fireworks" in enabled
     assert "NightSky" in enabled
     assert "Honeycomb" in enabled
@@ -72,7 +73,7 @@ def test_default_pacing_values():
 
 
 def test_canonical_list_has_known_names():
-    """The canonical list contains exactly the 9 expected effect names."""
+    """The canonical list contains exactly the 10 expected effect names."""
     names = {e["name"] for e in _canonical_entries()}
     assert names == {
         "Hyperspace",
@@ -82,6 +83,7 @@ def test_canonical_list_has_known_names():
         "WindFire",
         "CoronalMassEjection",
         "Eyeball",
+        "Marble",
         "Fireworks",
         "NightSky",
     }
@@ -115,14 +117,14 @@ def test_round_trip_default():
 def test_from_dict_accepts_empty_dict():
     """An empty dict is valid and yields the canonical defaults."""
     s = EffectsSettings.from_dict({})
-    assert len(s.effects) == 9
+    assert len(s.effects) == 10
     assert s.fade_seconds == 2.0
 
 
 def test_from_dict_none_uses_defaults():
     """from_dict(None) yields the canonical defaults."""
     s = EffectsSettings.from_dict(None)
-    assert len(s.effects) == 9
+    assert len(s.effects) == 10
 
 
 def test_from_dict_with_custom_values():

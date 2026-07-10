@@ -287,6 +287,7 @@ def test_effects_settings_known_effect_names_accepted(client, esp32_headers):
         "WindFire",
         "CoronalMassEjection",
         "Eyeball",
+        "Marble",
         "Fireworks",
         "NightSky",
     ]:
