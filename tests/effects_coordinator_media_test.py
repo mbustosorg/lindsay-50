@@ -707,3 +707,181 @@ def test_out_to_in_picks_up_cycler_for_mms_message(tmp_path):
         monkey.undo()
 
 
+# ---------------------------------------------------------------------------
+# Suppression log: transition-only (regression for 2026-07-10 per-tick spam)
+# ---------------------------------------------------------------------------
+
+
+def test_background_suppression_log_fires_once_per_fresh_id(tmp_path, caplog):
+    """Regression for heroku flood: `Coordinator background: suppressing
+    fresh-id interrupt while media cycler active` was firing every tick
+    (~5ms cadence), spamming identical lines as long as the top message
+    stayed unconsumed and the cycler was active.
+
+    Now the log fires only on the TRANSITION between suppressed ids.
+    First tick suppresses → log. Next 10 ticks of the same id → no log.
+    New id arrives → log fires once.
+    """
+    import logging
+
+    from lib_shared.models import EffectsSettings, Message, MessageView
+    from lib_shared.patterns.media_cycler import MediaCycler
+
+    msg_a = MessageView(
+        message=Message(id="mA", sender="+15551234567", body="a", received_at="2026-07-09T00:00:00Z"),
+        suppressed=False,
+    )
+    # idle_seconds=10**9 keeps the coordinator in `background` mode for
+    # the whole test (otherwise the `idle_elapsed` branch triggers an
+    # out→in transition on the first tick and we leave background
+    # before the suppression gate can be exercised across ticks).
+    mgr = _StubMessageManager(
+        messages=[msg_a],
+        effects_settings=EffectsSettings(idle_seconds=1e9),
+    )
+    coord = _build_coord(message_manager=mgr)
+
+    # Install a real cycler (not a stub) so the exemption path runs.
+    cache_dir = tmp_path / "media-cache"
+    cached = _prep_cache_for_jpeg(cache_dir, "key/spam-a.jpg")
+    cycler = MediaCycler(
+        "mA",
+        [{"type": "image/jpeg", "url": "key/spam-a.jpg", "path": str(cached)}],
+        display=coord.display,  # type: ignore[arg-type]
+        cache_dir=str(cache_dir),
+    )
+    coord.current = cycler
+    coord.mode = "background"
+    coord.phase_start = 0.0  # irrelevant — idle_seconds is huge
+
+    caplog.set_level(logging.INFO, logger="heart")
+
+    # First tick (the suppression should log).
+    coord.tick()
+    first_count = sum(
+        1 for r in caplog.records if "suppressing fresh-id interrupt" in r.message
+    )
+    assert first_count == 1, (
+        f"first tick should log the suppression once; got {first_count}: "
+        f"{[r.message for r in caplog.records if 'suppressing' in r.message]}"
+    )
+
+    # Next 10 ticks of the same id — no NEW log lines.
+    for _ in range(10):
+        coord.tick()
+    repeat_count = sum(
+        1 for r in caplog.records if "suppressing fresh-id interrupt" in r.message
+    )
+    assert repeat_count == 1, (
+        f"transition-only gate broken: 10 same-id ticks produced "
+        f"{repeat_count} suppression logs (expected 1). "
+        f"Records: {[r.message for r in caplog.records if 'suppressing' in r.message]}"
+    )
+
+    # A new unconsumed ID arrives — the next tick logs the suppression.
+    msg_b = MessageView(
+        message=Message(id="mB", sender="+15551234567", body="b", received_at="2026-07-09T00:01:00Z"),
+        suppressed=False,
+    )
+    mgr._entries.insert(0, msg_b)
+    coord.tick()
+    new_count = sum(
+        1 for r in caplog.records if "suppressing fresh-id interrupt" in r.message
+    )
+    assert new_count == 2, (
+        f"newly-suppressed id should produce one more log; got {new_count}: "
+        f"{[r.message for r in caplog.records if 'suppressing' in r.message]}"
+    )
+
+
+def test_hold_interrupt_by_new_mms_refreshes_picked_entry_for_out_to_in(tmp_path):
+    """Bug guard (issue #26/#38): when an MMS arrives during `hold`,
+    the fresh-id interrupt path must pull the new message's body AND
+    media metadata BEFORE kicking the fade-out, so the subsequent
+    out→in transition can swap in a `MediaCycler` for the new image.
+
+    Background: prior to this fix, the hold→out fresh-id path called
+    `_begin_out(now)` without re-pulling — `_last_display_message`
+    and `_last_picked_entry` stayed at the previous message. The next
+    out→in landed on the *old* body with *no* media-override, so a
+    second MMS (after a first MMS cycler had cycled out) appeared as
+    plain text on a rotation effect while the diagnostic log warned
+    "picked message has N media item(s) but current effect is X".
+    Background→out already pulls (line 1184); this test pins the
+    matching behavior at hold→out (line 1081).
+    """
+    from lib_shared.models import EffectsSettings, Message, MessageView
+
+    # First message: text-only SMS that quickly lands us in hold.
+    msg1 = MessageView(
+        message=Message(
+            id="m1",
+            sender="+15551234567",
+            body="first",
+            received_at="2026-01-02T00:00:00Z",
+        ),
+        suppressed=False,
+    )
+    cache_dir = tmp_path / "media-cache"
+    _prep_cache_for_jpeg(cache_dir, "media/images/2026-07/b.jpg")
+
+    mgr = _StubMessageManager(
+        messages=[msg1],
+        effects_settings=EffectsSettings(
+            intro_seconds=0.0,
+            fade_seconds=0.01,
+            hold_seconds=999.0,  # never elapses on its own
+            idle_seconds=999.0,
+        ),
+    )
+    coord = _build_coord(
+        message_manager=mgr,
+        media_api_base_url="http://test",
+        media_cache_dir=str(cache_dir),
+    )
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+
+    try:
+        # Drive through intro → out → in → hold on the SMS.
+        coord.start()
+        clock.advance(0.001)
+        coord.tick()  # intro → out
+        clock.advance(0.02)
+        coord.tick()  # out fade finishes → in
+        clock.advance(0.02)
+        coord.tick()  # in fade finishes → hold
+        assert coord.mode == "hold"
+        assert coord.last_shown_text == "first"
+
+        # Second message — an MMS — arrives while we're in hold.
+        msg2 = MessageView(
+            message=Message(
+                id="m2",
+                sender="+15551234567",
+                body="with photo",
+                received_at="2026-07-09T00:00:00Z",
+                media=[{"type": "image/jpeg", "url": "media/images/2026-07/b.jpg"}],
+            ),
+            suppressed=False,
+        )
+        mgr.add_message(msg2)
+        clock.advance(0.01)
+        coord.tick()
+        # The hold→out interrupt should have fired.
+        assert coord.mode == "out", "hold→out fresh-id interrupt did not fire; " f"mode={coord.mode!r}"
+
+        # The pull must have refreshed both the cached body and the
+        # picked entry — these are the two fields the out→in
+        # transition reads when it builds the media-override cycler.
+        assert coord._last_display_message == "with photo", (
+            "hold→out fresh-id interrupt did not pull the new message body; "
+            f"_last_display_message={coord._last_display_message!r}"
+        )
+        picked = coord._last_picked_entry
+        assert picked is not None, "hold→out fresh-id interrupt did not set _last_picked_entry"
+        assert picked.message.id == "m2", "hold→out pulled the wrong message: " f"got id={picked.message.id!r}"
+        assert picked.message.media, "pulled entry has empty media list; cycler won't be built"
+    finally:
+        monkey.undo()

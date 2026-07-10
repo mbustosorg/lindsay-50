@@ -1375,6 +1375,20 @@ class EffectsCoordinator:
                 # the pre-empting message. Set the flag here so the
                 # out→in transition skips the event-log append.
                 self._fresh_id_preemption = True
+                # Pull the new message NOW so the out→in transition
+                # has a fresh `_last_display_message` body AND a fresh
+                # `_last_picked_entry`. Without this pull, `_last_display_message`
+                # stays at the previous message's body and
+                # `_last_picked_entry` stays at the previous entry —
+                # so the subsequent out→in fades into the OLD text
+                # and the media-override check sees the OLD media
+                # list (or stale `None`), and the new MMS image
+                # never gets swapped in. Mirrors the `background→out`
+                # pull at lines 1184-1186 so the two
+                # fresh-id interrupt paths behave consistently.
+                new_text = self._pick_next_text()
+                if new_text is not None:
+                    self._last_display_message = new_text
                 self._begin_out(now)  # new SMS interrupts the hold
             elif now - self.phase_start >= effects_settings.hold_seconds:
                 log.info(
