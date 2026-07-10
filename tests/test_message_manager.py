@@ -221,9 +221,7 @@ class TestSeedServer:
         assert mgr.config.timezone == "US/Pacific"
         assert mgr.config.sign.name == "Test Sign"
 
-    def test_seed_preserves_media_from_rest_payload(
-        self, messages_api_url, config_api_url, api_key
-    ):
+    def test_seed_preserves_media_from_rest_payload(self, messages_api_url, config_api_url, api_key):
         """REST seed must carry `media` through to the in-memory Message.
 
         Regression for the "fresh MMS includes media, restart Flask
@@ -269,9 +267,7 @@ class TestSeedServer:
         # proxy surface) mirrors it — both reading paths agree.
         assert msgs[0].media == msgs[0].message.media
 
-    def test_seed_missing_media_defaults_to_empty(
-        self, messages_api_url, config_api_url, api_key
-    ):
+    def test_seed_missing_media_defaults_to_empty(self, messages_api_url, config_api_url, api_key):
         """REST payload without `media` (SMS-only) → `media == []`.
 
         The `or []` collapse handles both "key absent" and "explicit
@@ -1402,6 +1398,70 @@ class TestSessionCache:
             assert {m.message.id for m in msgs} == {"m1", "m2"}
             assert mgr2.config.sign.name == "Test Sign"
             assert mgr2.config.timezone == "US/Pacific"
+        finally:
+            mm._js_session_storage = None
+            mm._js_json = None
+            mm._to_js = None
+            mm._js_object_from_entries = None
+
+    def test_hydrate_from_cache_preserves_media(self, messages_api_url, config_api_url, api_key):
+        """Round-trip: cache with `media` → hydrate → media survives.
+
+        Regression for the "after Flask restart, media is gone" symptom.
+        `_write_cache` already serializes `media` via `MessageView.to_dict()`,
+        but `_hydrate_from_cache` was constructing `Message(...)` with only
+        4 fields — silently dropping the list on the read side.
+        """
+        store, ss_shim = self._make_session_storage_shim()
+        json_shim = self._make_json_shim()
+        to_js_shim = self._make_to_js_shim()
+        from_entries_shim = self._make_from_entries_shim()
+        # Pre-populate the cache directly with a payload containing media.
+        cache_payload = {
+            "v": 1,
+            "sign_name": "Lindsay's Heart",
+            "messages": [
+                {
+                    "id": "mms-h1",
+                    "sender": "+15551111111",
+                    "body": "with attachment",
+                    "received_at": "2026-07-01T10:00:00Z",
+                    "media": [
+                        {"type": "image/png", "url": "media/images/2026-07/h.png"},
+                    ],
+                    "source": "mqtt",
+                },
+            ],
+            "config": {
+                "sign": {"name": "Lindsay's Heart"},
+                "filters": [],
+                "effects_settings": {},
+                "text_settings": {},
+                "timezone": "US/Pacific",
+            },
+        }
+        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(cache_payload)
+        mm = _mm()
+        mm._js_session_storage = ss_shim
+        mm._js_json = json_shim
+        mm._to_js = to_js_shim
+        mm._js_object_from_entries = from_entries_shim
+        try:
+            mgr = mm.MessageManager(
+                messages_api_url=messages_api_url,
+                config_api_url=config_api_url,
+                api_key=api_key,
+                is_browser=True,
+            )
+            mgr._config.sign = SignSettings(name="Lindsay's Heart")
+            hit = asyncio.run(mgr.hydrate_from_cache())
+            assert hit is True
+            msgs = mgr.get_messages(limit=10, suppress=False)
+            assert len(msgs) == 1
+            assert msgs[0].message.id == "mms-h1"
+            assert msgs[0].message.media == [
+                {"type": "image/png", "url": "media/images/2026-07/h.png"},
+            ]
         finally:
             mm._js_session_storage = None
             mm._js_json = None

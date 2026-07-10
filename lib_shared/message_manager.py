@@ -334,6 +334,7 @@ class MessageManager:
                         sender=item.get("sender", ""),
                         body=item.get("body", ""),
                         received_at=item.get("received_at", ""),
+                        media=item.get("media") or [],
                     ),
                     source=src,
                 )
