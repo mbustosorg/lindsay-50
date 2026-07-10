@@ -448,7 +448,30 @@
       // etc. all work. Pyodide's default Python-dict-to-JS conversion produces
       // a Map, which is why we wrap on the Python side instead.
       const id = (msg && msg.id) || "";
-      if (id === lastLinkMessageId) return;
+      if (id === lastLinkMessageId) {
+        // Hot path: same id as last frame, do nothing. This is the
+        // 99% case during a 15s hold.
+        return;
+      }
+      if (PREVIEW_DEBUG) {
+        // Log the picked message so we can see in the console what
+        // the wire shape looks like — specifically the `media` list,
+        // which is the field the image render path depends on. If
+        // `media` is empty, the image can never load (the coordinator
+        // won't construct a `BrowserMediaOverlay`); if `media` has
+        // entries but the image still doesn't render, the issue is
+        // downstream in `applyMedia` / the Flask `/api/media/<key>`
+        // proxy.
+        const media = (msg && Array.isArray(msg.media)) ? msg.media : [];
+        const mediaUrls = media.map((m) => m && m.url).filter(Boolean);
+        console.log(
+          "[preview-modal] picked message: id=%r body=%r media_count=%d media_urls=%s",
+          id || "(none)",
+          ((msg && msg.body) || "").slice(0, 40),
+          media.length,
+          JSON.stringify(mediaUrls),
+        );
+      }
       lastLinkMessageId = id;
       if (!msg || !id) {
         // Idle / no picked entry — drop the data-msg so the
@@ -512,16 +535,32 @@
           // match. No-ops cleanly for SMS-only messages.
           if (typeof window.get_current_media === "function") {
             const media = window.get_current_media();
-            if (PREVIEW_DEBUG && media && (media.key || media.url)) {
-              // Throttle: only log when the active key changes (so
-              // the rAF loop at 30 FPS doesn't spam). applyMedia
-              // logs the actual swap; this just confirms Python
-              // returned a non-empty payload.
-              if (media.key !== lastMediaKey) {
-                console.log(
-                  "[preview-media] python returned: key=%r kind=%r url=%r opacity=%.2f",
-                  media.key, media.kind, media.url, media.opacity || 0,
-                );
+            if (PREVIEW_DEBUG) {
+              // Verbose: log on every key change, including the
+              // empty/null case. The earlier gate (media.key ||
+              // media.url) suppressed the "Python returned empty"
+              // case — which is exactly what we need to see when
+              // the image isn't loading. applyMedia logs the
+              // actual <img> swap; this just confirms what Python
+              // returned.
+              const mediaKey = (media && media.key) || "";
+              if (mediaKey !== lastMediaKey) {
+                if (media && (media.key || media.url)) {
+                  console.log(
+                    "[preview-media] python returned: key=%r kind=%r url=%r opacity=%.2f",
+                    media.key, media.kind, media.url, media.opacity || 0,
+                  );
+                } else {
+                  const shape = media === null
+                    ? "null"
+                    : media === undefined
+                      ? "undefined"
+                      : `{key=${JSON.stringify(media.key)} url=${JSON.stringify(media.url)} kind=${JSON.stringify(media.kind)} opacity=${media.opacity}}`;
+                  console.log(
+                    "[preview-media] python returned empty: %s — image will NOT render this frame (no BrowserMediaOverlay active)",
+                    shape,
+                  );
+                }
               }
             }
             applyMedia(media);
