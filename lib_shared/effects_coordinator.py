@@ -252,6 +252,15 @@ class EffectsCoordinator:
         # recency of the *last* consumed id is not enough when there
         # are N ≥ 2 messages in the recent pool.
         self._consumed_message_ids: set[str] = set()
+        # Last message id whose fresh-id interrupt was suppressed by
+        # the media-cycler exemption. Gates the "suppressing fresh-id
+        # interrupt" INFO log so it fires once per fresh-id (on the
+        # transition from "no suppression" → "suppressing"), not on
+        # every tick of the same suppressed id. (Without this, every
+        # background-mode tick fired the log because the top entry
+        # stays unconsumed until the cycler completes — ~5ms cadence,
+        # so the log spammed ~200 identical lines/sec.)
+        self._last_suppressed_message_id: str | None = None
         # Render-layer diff state: structural fingerprints of the
         # rotation list and text settings, used to gate the
         # rotation rebuild and scroller setter calls in `tick()`.
@@ -969,10 +978,16 @@ class EffectsCoordinator:
             )
             if fresh_id_landed and self._current_is_active_media_cycler():
                 fresh_id_landed = False
-                log.info(
-                    "Coordinator hold: suppressing fresh-id interrupt while media cycler active effect=%s",
-                    self.current_effect_name,
-                )
+                suppressed_id = self.current_messages[0].message.id
+                # Log only on transition (newly suppressed id) — same
+                # id stays suppressed across every tick of the
+                # cycler's natural duration.
+                if suppressed_id != self._last_suppressed_message_id:
+                    self._last_suppressed_message_id = suppressed_id
+                    log.info(
+                        "Coordinator hold: suppressing fresh-id interrupt while media cycler active effect=%s",
+                        self.current_effect_name,
+                    )
             if fresh_id_landed:
                 log.info(
                     "Coordinator hold interrupt (new id): pending_text=%r last_shown=%r new_id=%s",
@@ -1061,10 +1076,18 @@ class EffectsCoordinator:
             # transition once the cycler completes.
             if fresh_id_landed and self._current_is_active_media_cycler():
                 fresh_id_landed = False
-                log.info(
-                    "Coordinator background: suppressing fresh-id interrupt while media cycler active effect=%s",
-                    self.current_effect_name,
-                )
+                suppressed_id = entries_bg[0].message.id
+                # Log only on transition (newly suppressed id) — same
+                # id stays suppressed across every tick of the
+                # cycler's natural duration. Without this gate the
+                # INFO log fired every tick (~5ms cadence) and
+                # spammed ~200 identical lines per second.
+                if suppressed_id != self._last_suppressed_message_id:
+                    self._last_suppressed_message_id = suppressed_id
+                    log.info(
+                        "Coordinator background: suppressing fresh-id interrupt while media cycler active effect=%s",
+                        self.current_effect_name,
+                    )
             idle_elapsed = now - self.phase_start >= effects_settings.idle_seconds
 
             trigger: str | None = None
