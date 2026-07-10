@@ -118,12 +118,21 @@ PANEL_HEIGHT = 64
 _coord_ref: dict = {}
 
 
-def _coordinator():
+def _get_app_coordinator():
     """Return the app-scoped `EffectsCoordinator` set by `app_main.py`.
 
     `app_main.py` runs as its own async PyScript task and assigns
     `window._coordinator`. By the time `_bootstrap()` calls this,
     the wait above has already confirmed the property is set.
+
+    Renamed from `_coordinator` to avoid shadowing in PyScript's
+    shared-globals namespace: `app_main.py` binds the bare name
+    `_coordinator` to the EffectsCoordinator instance, so this
+    function would get clobbered when `app_main.py` runs in the
+    same globals dict — then `_coordinator()` would raise
+    `'EffectsCoordinator' object is not callable`. Use the JS
+    property (`js.window._coordinator`) as the source of truth
+    instead.
     """
     coord = getattr(js.window, "_coordinator", None)
     if coord is None:
@@ -214,7 +223,7 @@ async def _bootstrap() -> None:
     # layer. The coordinator's first tick after `bind()` will
     # call `_sync_render_layer()` and read the manager's
     # current config into the rotation + scroller.
-    coord = _coordinator()
+    coord = _get_app_coordinator()
     print(f"[preview-py] _bootstrap: got coordinator id={id(coord)}; calling coord.bind()")
     coord.bind(
         display=_display,
