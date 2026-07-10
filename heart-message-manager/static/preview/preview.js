@@ -442,19 +442,12 @@
         if (PREVIEW_DEBUG) console.warn("[preview-modal] get_current_message failed:", e);
         return;
       }
-      // Convert a Pyodide `JsProxy` dict to a plain JS object
-      // so JSON.stringify works (Pyodide proxies stringify but
-      // produce `{}` for nested objects; explicit conversion
-      // preserves the structure).
-      let plain = null;
-      if (msg != null) {
-        try {
-          plain = msg && typeof msg.to_py === "function" ? msg.to_py() : msg;
-        } catch (e) {
-          plain = msg;
-        }
-      }
-      const id = (plain && plain.id) || "";
+      // `get_current_message` is wrapped in `to_js(dict_converter=Object.fromEntries)`
+      // on the Python side (preview_main.py), so what arrives here is a plain
+      // JS `Object` with property accessors — `msg.id`, `JSON.stringify(msg)`,
+      // etc. all work. Pyodide's default Python-dict-to-JS conversion produces
+      // a Map, which is why we wrap on the Python side instead.
+      const id = (msg && msg.id) || "";
       if (id === lastLinkMessageId) return;
       lastLinkMessageId = id;
       if (!plain || !id) {

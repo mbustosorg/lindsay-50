@@ -66,6 +66,7 @@ imports (Pillow + numpy are pulled in via the
 py-config.toml declared packages).
 """
 
+from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]  (used by `_install_js_api`, `get_current_message`; Pyodide FFI for JS interop)
 from pyodide_js import loadPackage  # type: ignore[reportGeneralTypeIssues]  # noqa: F401  (top-level await: PyScript 2024.9.x runs via `eval_code_async`)
 
 print("[preview-py] module evaluation START (line 69)")
@@ -96,12 +97,14 @@ from preview_display import WebCanvas, WebDisplay  # noqa: E402
 from preview_scroller import PreviewScroller  # noqa: E402
 from lib_shared.effects_coordinator import build_effects  # noqa: E402
 from lib_shared.models import EffectsSettings, TextSettings  # noqa: E402
+
 print("[preview-py] preview_display/preview_scroller/effects_coordinator/models imported")
 
 # Standard bitmap patterns the browser preview can run (no filesystem
 # assets, no OpenCV). PngDisplay / VideoDisplay stay Pi-only; the
 # shared `build_effects` factory filters them out by name.
 from lib_shared.patterns.heartbeat import Heartbeat  # noqa: E402
+
 print("[preview-py] heartbeat pattern imported")
 
 # The 64x64 logical panel — source of truth matches the device.
@@ -264,6 +267,7 @@ async def _bootstrap_with_logging():
     except Exception as e:
         print(f"[preview-py] FATAL: _bootstrap raised {type(e).__name__}: {e}")
         import traceback
+
         traceback.print_exception(type(e), e, e.__traceback__)
         # Re-raise so the task is properly marked failed in
         # asyncio's eyes; PyScript's run mode surfaces it.
@@ -301,7 +305,9 @@ def _install_js_api() -> None:
     js.window.get_current_effect_name = get_current_effect_name
     js.window.get_current_media = get_current_media
     js.window.get_current_message = get_current_message
-    print("[preview-py] _install_js_api: window.tick, get_frame_rgba, get_current_text, get_current_effect_name, get_current_media, get_current_message all installed")
+    print(
+        "[preview-py] _install_js_api: window.tick, get_frame_rgba, get_current_text, get_current_effect_name, get_current_media, get_current_message all installed"
+    )
 
 
 def tick():
@@ -348,6 +354,18 @@ def get_current_message():
     boot splash, SMS-only background, or post-`_last_picked_entry`
     reset). `preview.js` treats `None` as "no link target", so
     clicking the text in idle state is a no-op.
+
+    Conversion note (issue #38 debug-2026-07-09): Pyodide's default
+    conversion of a returned Python dict is a JS `Map`, not a plain
+    `Object` — so `proxy.id` was always `undefined`, the link's
+    `data-msg` was always deleted, and the click handler always
+    fired the "no data-msg; idle state?" warning. We wrap the
+    return in `to_js(..., dict_converter=Object.fromEntries)` so
+    the JS side gets a real object whose property accessors work,
+    `JSON.stringify` walks every field, and `btoa(...)` produces a
+    matching base64 payload for the modal. The modal decode path
+    stays as-is since it already works from the plain `Object`
+    shape (`JSON.parse(decodeURIComponent(escape(atob(raw))))`).
     """
     coord = _coord()
     if coord is None:
@@ -355,7 +373,8 @@ def get_current_message():
     picked = getattr(coord, "_last_picked_entry", None)
     if picked is None:
         return None
-    return picked.message.to_dict()
+    raw = picked.message.to_dict()
+    return to_js(raw, dict_converter=js.Object.fromEntries)
 
 
 def get_current_media():
