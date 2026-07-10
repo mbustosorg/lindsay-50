@@ -164,7 +164,8 @@ def test_build_effects_returns_only_enabled():
 
 def test_build_effects_skips_unknown_names():
     """Unknown effect names are filtered (not raised) so the preview's
-    factory can ingest a v2 payload that mentions PngDisplay/VideoDisplay."""
+    factory can ingest a v2 payload that mentions a stale/removed
+    effect name (e.g. PngDisplay/ImageDisplay) without crashing."""
     settings = EffectsSettings(
         effects=[
             {"name": "A", "enabled": True},

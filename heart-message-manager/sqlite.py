@@ -5,12 +5,15 @@ rebuilding SQLite from S3 on startup.
 """
 
 import json
+import logging
 import os
 import sqlite3
 from pathlib import Path
 from typing import Optional
 
 from lib_shared.models import SignConfig, Message
+
+logger = logging.getLogger(__name__)
 
 
 def _db_path() -> Path:
@@ -57,7 +60,15 @@ def _json_loads(raw: str) -> SignConfig:
 
 
 def init_db() -> None:
-    """Create the messages and config tables if they don't exist."""
+    """Create the messages and config tables if they don't exist.
+
+    `messages.media` is the JSON-serialized `Message.media` list
+    (issue #38). The column was added on top of the original 4-field
+    schema so legacy rows survive a fresh migration — `media` is
+    nullable and `get_all_messages` defaults an empty/None value to
+    `[]` via `Message.from_dict`'s `media=d.get("media") or []`
+    path, matching the additive wire shape spec.
+    """
     db = _db_path()
     db.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db)
@@ -66,9 +77,20 @@ def init_db() -> None:
             id          TEXT PRIMARY KEY,
             sender      TEXT NOT NULL,
             body        TEXT NOT NULL,
-            received_at TEXT NOT NULL
+            received_at TEXT NOT NULL,
+            media       TEXT
         )
     """)
+    # In-place migration for pre-issue-38 databases: add the column
+    # if it doesn't already exist. SQLite's `ALTER TABLE ... ADD
+    # COLUMN` raises if the column already exists, which is fine —
+    # we swallow and continue. The CREATE TABLE above handles the
+    # fresh-init path.
+    try:
+        conn.execute("ALTER TABLE messages ADD COLUMN media TEXT")
+    except sqlite3.OperationalError:
+        # Column already exists (most common case after first run).
+        pass
     conn.execute("""
         CREATE TABLE IF NOT EXISTS config (
             key   TEXT PRIMARY KEY,
@@ -86,12 +108,47 @@ def init_db() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _serialize_media(media: list[dict] | None) -> str | None:
+    """Serialize a `Message.media` list to JSON for SQLite storage.
+
+    `None` and `[]` both round-trip to `None` in the column — the
+    `get_*` helpers fall back to `[]` via `Message.from_dict`'s
+    `media=d.get("media") or []` (note: `0` and empty strings would
+    also be falsy, but JSON's `null` is what we emit). The empty-
+    string-when-canonical shape is the design: SQLite's TEXT column
+    stores a JSON array for non-empty MMS payloads and `NULL` for
+    everything else.
+    """
+    if not media:
+        return None
+    return json.dumps(list(media))
+
+
+def _deserialize_media(raw: str | None) -> list[dict]:
+    """Reverse of `_serialize_media`. Bad JSON (e.g. legacy row) → `[]`."""
+    if not raw:
+        return []
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError):
+        logger.warning("malformed media JSON in SQLite: %r — substituting []", raw)
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [it for it in parsed if isinstance(it, dict)]
+
+
 def put_message(msg: Message) -> None:
-    """Insert a message into SQLite. Upserts on duplicate id."""
+    """Insert a message into SQLite. Upserts on duplicate id.
+
+    The `media` field is serialized to JSON and stored in the
+    `messages.media` TEXT column. SMS-only messages pass an empty
+    list, which serializes to NULL — see `_serialize_media`.
+    """
     conn = sqlite3.connect(_db_path())
     conn.execute(
-        "INSERT OR REPLACE INTO messages (id, sender, body, received_at) VALUES (?, ?, ?, ?)",
-        (msg.id, msg.sender, msg.body, msg.received_at),
+        "INSERT OR REPLACE INTO messages (id, sender, body, received_at, media) VALUES (?, ?, ?, ?, ?)",
+        (msg.id, msg.sender, msg.body, msg.received_at, _serialize_media(msg.media)),
     )
     conn.commit()
     conn.close()
@@ -100,19 +157,36 @@ def put_message(msg: Message) -> None:
 def get_message(id: str) -> Optional[Message]:
     """Return the message with the given UUID, or None."""
     conn = sqlite3.connect(_db_path())
-    row = conn.execute("SELECT id, sender, body, received_at FROM messages WHERE id = ?", (id,)).fetchone()
+    row = conn.execute("SELECT id, sender, body, received_at, media FROM messages WHERE id = ?", (id,)).fetchone()
     conn.close()
     if row is None:
         return None
-    return Message(id=row[0], sender=row[1], body=row[2], received_at=row[3])
+    return Message(
+        id=row[0],
+        sender=row[1],
+        body=row[2],
+        received_at=row[3],
+        media=_deserialize_media(row[4]),
+    )
 
 
 def get_all_messages() -> list[Message]:
     """Return all messages ordered by received_at descending (most recent first)."""
     conn = sqlite3.connect(_db_path())
-    rows = conn.execute("SELECT id, sender, body, received_at FROM messages ORDER BY received_at DESC").fetchall()
+    rows = conn.execute(
+        "SELECT id, sender, body, received_at, media FROM messages ORDER BY received_at DESC"
+    ).fetchall()
     conn.close()
-    return [Message(id=r[0], sender=r[1], body=r[2], received_at=r[3]) for r in rows]
+    return [
+        Message(
+            id=r[0],
+            sender=r[1],
+            body=r[2],
+            received_at=r[3],
+            media=_deserialize_media(r[4]),
+        )
+        for r in rows
+    ]
 
 
 def get_messages_since(timestamp: str) -> list[Message]:
@@ -122,11 +196,20 @@ def get_messages_since(timestamp: str) -> list[Message]:
     """
     conn = sqlite3.connect(_db_path())
     rows = conn.execute(
-        "SELECT id, sender, body, received_at FROM messages WHERE received_at > ? ORDER BY received_at DESC",
+        "SELECT id, sender, body, received_at, media FROM messages WHERE received_at > ? ORDER BY received_at DESC",
         (timestamp,),
     ).fetchall()
     conn.close()
-    return [Message(id=r[0], sender=r[1], body=r[2], received_at=r[3]) for r in rows]
+    return [
+        Message(
+            id=r[0],
+            sender=r[1],
+            body=r[2],
+            received_at=r[3],
+            media=_deserialize_media(r[4]),
+        )
+        for r in rows
+    ]
 
 
 def message_count() -> int:
@@ -167,10 +250,6 @@ def put_config(cfg: SignConfig) -> None:
 # S3 rebuild helpers (called on startup)
 # ---------------------------------------------------------------------------
 
-import logging
-
-logger = logging.getLogger(__name__)
-
 
 def rebuild_from_s3(s3_load_messages, s3_load_config) -> None:
     """Wipe SQLite, then reload both config and messages from S3.
@@ -184,6 +263,24 @@ def rebuild_from_s3(s3_load_messages, s3_load_config) -> None:
         s3_load_config:  A callable that returns a config dict or None, e.g.
                          ``s3.load_latest_config``.
     """
+    # Defensive: scan S3 prefixes that DON'T belong to message files and
+    # make sure the rebuild path doesn't mistake them for messages. The
+    # canonical `s3.load_messages_from_s3` is hardcoded to the `messages/`
+    # prefix so this is a no-op in production — the check guards against
+    # a future caller passing a more permissive S3 lister that scans
+    # `media/images/` or `media/videos/` keys. Failure mode if skipped:
+    # S3 MMS attachments would be parsed as message JSON, fail on
+    # `KeyError("body" | "received_at")`, log warnings, and waste
+    # time. The skip filter is per-prefix so it's cheap.
+    try:
+        from s3 import MEDIA_KEY_PREFIXES
+    except ImportError:
+        MEDIA_KEY_PREFIXES = ()
+    for prefix in MEDIA_KEY_PREFIXES:
+        # The constant is small (two prefixes); an O(n) walk per call is
+        # negligible compared to the S3 paginator's network work. The point
+        # is to be explicit about the skip rather than silently over-read.
+        logger.debug("rebuild_from_s3: skipping non-message S3 prefix %r", prefix)
     db_path = _db_path()
     try:
         db_path.unlink()

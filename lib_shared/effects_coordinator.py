@@ -171,6 +171,10 @@ class EffectsCoordinator:
         heart: Effect | None = None,
         fade_step: float = 0.04,
         gamma: float = 2.2,
+        *,
+        media_api_base_url: str = "",
+        media_cache_dir: str = "",
+        is_browser: bool = False,
     ) -> None:
         # Required — no default. Raises TypeError if a caller omits it.
         # All live config (pacing fields, rotation, text settings) is
@@ -187,6 +191,26 @@ class EffectsCoordinator:
         self.fade_step = fade_step
         # Gamma correction: linear time → perceptually linear brightness.
         self.gamma = gamma
+        # MediaCycler wiring (issue #38). The coordinator constructs
+        # one when the picked message has a non-empty `media` list;
+        # the cycler replaces `self.effects[self.idx]` for the hold.
+        # `media_api_base_url` is the Flask server origin (e.g.
+        # "http://localhost:3100") — the cycler builds
+        # "{api_base_url}/api/media/{s3_key}" URLs. `media_cache_dir`
+        # is the local directory for downloaded bytes (None / "" means
+        # the OS temp dir).
+        self._media_api_base_url = media_api_base_url or ""
+        self._media_cache_dir = media_cache_dir or ""
+        # `is_browser` toggles between two media render paths:
+        # host/Pi builds a `MediaCycler` that decodes each
+        # attachment with PIL/cv2 and blits it onto the rgbmatrix
+        # canvas (real-display fidelity); preview/browser builds a
+        # `BrowserMediaOverlay` that hands the same Flask proxy URL
+        # to the DOM `<img>` / `<video>` elements that `preview.js`
+        # drives — the browser handles decoding natively so we
+        # don't need OpenCV in Pyodide. Mirrors the existing
+        # `MessageManager(is_browser=True)` flag.
+        self._is_browser = bool(is_browser)
 
         self.idx = -1  # first message shown advances this to 0
         self.current = heart  # effect being rendered right now (may be None)
@@ -202,6 +226,12 @@ class EffectsCoordinator:
         # pull — `get_display_message()` (which does random.choice)
         # is only called at the two transition paths below.
         self._last_display_message: str | None = None
+        # `_last_picked_entry` is set by `get_display_message()` to
+        # the `MessageView` it picked, so callers (e.g. the out→in
+        # transition) can read the picked message's `media` list and
+        # decide whether to construct a `MediaCycler`. Reset to None
+        # on every `get_display_message()` call.
+        self._last_picked_entry: MessageView | None = None
         self._last_shown_message_id: str | None = None
         # `_consumed_message_ids` is the set of message ids that have
         # actually FADED IN on the scroller during this process's
@@ -351,6 +381,173 @@ class EffectsCoordinator:
                 return entry.message.id
         return None
 
+    def _maybe_build_media_cycler(self) -> Effect | None:
+        """Construct a `MediaCycler` (Pi) or `BrowserMediaOverlay`
+        (preview) for the picked message's MMS media.
+
+        Called at the out→in transition. Returns:
+          - A media effect if the picked message has a non-empty
+            `media` list AND we have a display to construct it
+            against. The effect takes over `self.current` for the
+            hold.
+          - None otherwise (SMS-only messages, no display, or no
+            picked entry — e.g. the intro→out path that didn't
+            actually pick a message).
+
+        Which effect gets constructed depends on `is_browser`:
+          - Host (Pi): `MediaCycler` decodes with PIL/cv2 and blits
+            through the `Bitmap`/`Palette` pipeline (real-display
+            fidelity — every LED pixel is driven by Python).
+          - Preview: `BrowserMediaOverlay` carries the same cycle
+            logic but exposes the active attachment to the JS-side
+            DOM `<img>` / `<video>` elements via three read-only
+            properties. The browser handles decoding natively — no
+            OpenCV in Pyodide, no PyScript bytes round-trip.
+
+        Both paths handle codec failures (D12): if the working list
+        becomes empty, `exhausted` is True at construction and the
+        coordinator's `hold` branch falls back to the rotation
+        effect via `_maybe_fall_back_to_rotation`.
+        """
+        picked = self._last_picked_entry
+        if picked is None:
+            log.info(
+                "Coordinator media-cycler: no picked entry; rotation effect will run instead",
+            )
+            return None
+        media = getattr(picked.message, "media", None) or []
+        if not media:
+            log.info(
+                "Coordinator media-cycler: picked message has empty media; "
+                "rotation effect will run (message_id=%s body=%r)",
+                picked.message.id,
+                picked.message.body,
+            )
+            return None
+        if self.display is None:
+            log.info(
+                "Coordinator media-cycler: no display bound (browser preview, no canvas); "
+                "skipping media override message_id=%s",
+                picked.message.id,
+            )
+            return None
+        hold_seconds = self.message_manager.get_effects_settings().hold_seconds
+        if self._is_browser:
+            # Lazy import — same rationale as the host branch.
+            from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+            return BrowserMediaOverlay(
+                picked.message.id,
+                media,
+                api_base_url=self._media_api_base_url,
+                hold_seconds=hold_seconds,
+            )
+        # Lazy import — MediaCycler pulls in Pillow (ImageDisplay) and
+        # optionally cv2 (VideoDisplay). The host test suite has Pillow
+        # but not cv2; keeping the import here avoids loading it at
+        # coordinator-import time.
+        from lib_shared.patterns.media_cycler import MediaCycler
+
+        return MediaCycler(
+            picked.message.id,
+            media,
+            display=self.display,
+            api_base_url=self._media_api_base_url,
+            hold_seconds=hold_seconds,
+            cache_dir=self._media_cache_dir or None,
+        )
+
+    def _maybe_fall_back_to_rotation(self) -> None:
+        """If `self.current` is a `MediaCycler` or `BrowserMediaOverlay`
+        that's exhausted, swap it back to `self.effects[self.idx]`.
+
+        Called at every `hold` and `text_out` tick. Idempotent: when
+        `self.current` is not one of the media effects (the typical
+        case), this is a no-op. When it IS and still has items, the
+        cycler keeps running — the coordinator's existing
+        `hold_seconds` clock decides when to transition out.
+
+        The cycler classes extend `Effect` and add `exhausted: bool`.
+        On the host path we test `isinstance(current, MediaCycler)`;
+        on the browser path the cycler helper returned a
+        `BrowserMediaOverlay` instead (PIL/cv2 aren't in the PyScript
+        bundle). Both classes share the same `exhausted` contract
+        (D12), so the same fallback logic applies — duck-type on
+        `exhausted` rather than `isinstance`, so the browser preview
+        ALSO gets a fallback when an attachment's URL 404s / the
+        DOM overlay had every item rejected. Without this, a browser
+        preview with no playable media sits on the boot `<img>` /
+        `<video>` and never returns to a rotation effect — the
+        canvas below the overlay is black for the rest of the hold.
+
+        The `MediaCycler` import is guarded: the browser preview's
+        PyScript bundle does NOT include `lib_shared.patterns.media_cycler`
+        (the cycler pulls in PIL + cv2 + a filesystem cache — none of
+        which Pyodide can satisfy). `try/except ImportError` around
+        the import turns "module missing in bundle" into "only the
+        browser side of the isinstance check", which is the right
+        behavior — the duck-typed `exhausted` branch still works.
+        """
+        try:
+            from lib_shared.patterns.media_cycler import MediaCycler as _MediaCycler
+        except ImportError:
+            # Pi-style cycler isn't loadable here (browser preview
+            # bundle). The BrowserMediaOverlay path below still
+            # handles the browser side of the fallback.
+            _MediaCycler = None  # type: ignore[assignment]
+
+        # Same lazy-import dance for the browser-side overlay. The
+        # CPython host test suite doesn't have the browser_media_overlay
+        # module on its path the way PyScript does — module isn't
+        # bundled in the host package. When that's the case, fall
+        # back to `object` so the isinstance check is False and the
+        # branch is just skipped (mirrors MediaCycler's behavior).
+        try:
+            from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay as _BrowserOverlay
+        except ImportError:
+            _BrowserOverlay = object  # type: ignore[assignment,misc]
+
+        current = self.current
+        if current is None:
+            return
+        is_media_cycler = _MediaCycler is not None and isinstance(current, _MediaCycler)
+        is_browser_overlay = isinstance(current, _BrowserOverlay)
+        if not (is_media_cycler or is_browser_overlay):
+            return
+        # Both cyclers extend `Effect` and add `exhausted` —
+        # pyright can't see it through `isinstance` narrowing, so
+        # the attribute access is annotated.
+        if not current.exhausted:  # type: ignore[attr-defined]
+            return
+        effects = self.effects
+        if not effects:
+            return
+        self.current = effects[self.idx]
+        self.current.set_brightness(self._current_brightness)
+        log.info(
+            "Coordinator media-cycler exhausted (%s): falling back to rotation effect=%s",
+            "BrowserMediaOverlay" if is_browser_overlay else "MediaCycler",
+            self.current_effect_name,
+        )
+
+    @property
+    def _current_brightness(self) -> float:
+        """Best-effort read of the current brightness scalar from the
+        fade ramp. Used by `_maybe_fall_back_to_rotation` so the
+        rotation effect resumes at the same brightness the cycler was
+        running at (avoids a visible flash when the cycler
+        transitions out mid-fade)."""
+        # The coordinator doesn't cache the ramp value — the
+        # `tick()` flow applies it via `set_brightness(b)` on every
+        # step. We approximate the current brightness as fully-on
+        # (1.0) in `hold` and `background`; the ramped value during
+        # `out` / `in` is held in the cycler's own `_brightness`
+        # field, which it inherits from the coordinator's last
+        # `set_brightness` call. 1.0 is the correct value for the
+        # cycler's normal "fully visible" state and the typical
+        # fallback target.
+        return 1.0
+
     def get_display_message(self) -> str | None:
         """Pick the body to display next, from the manager's buffered messages.
 
@@ -364,18 +561,27 @@ class EffectsCoordinator:
           4. Otherwise pick uniformly at random from the list and return that
              entry's body, updating `_last_shown_message_id` to the picked id.
 
+        Side effect: also stores the picked entry on `self._last_picked_entry`
+        so callers (e.g. the out→in transition) can read the picked
+        message's `media` list and decide whether to construct a
+        `MediaCycler`. The side channel is reset to None at the start
+        of every call so callers always see the most recent pick.
+
         Returns:
             The body string to show next, or None when the buffer is empty.
         """
+        self._last_picked_entry = None
         entries = self.current_messages
         if len(entries) == 0:
             return None
         head = entries[0]
         if head.message.id != self._last_shown_message_id:
             self._last_shown_message_id = head.message.id
+            self._last_picked_entry = head
             return head.message.body
         picked = random.choice(entries)
         self._last_shown_message_id = picked.message.id
+        self._last_picked_entry = picked
         return picked.message.body
 
     def _pick_next_text(self) -> str | None:
@@ -568,6 +774,18 @@ class EffectsCoordinator:
                 self.idx = (self.idx + 1) % len(effects)
                 self.current = effects[self.idx]
                 self.current.set_brightness(0.0)
+                # MMS media override (issue #38): if the picked
+                # message has a non-empty `media` list, swap a
+                # `MediaCycler` in place of the rotation effect. The
+                # cycler takes over `self.current` for the duration of
+                # the hold, cycling through the attachments
+                # (D4/D5/D12). On `exhausted` the coordinator falls
+                # back to `self.effects[self.idx]` (the rotation entry
+                # we just selected) for the remainder of the hold.
+                media_override = self._maybe_build_media_cycler()
+                if media_override is not None:
+                    self.current = media_override
+                    self.current.set_brightness(0.0)
                 if text:
                     scroller.set_text(text, display.width)
                     scroller.set_brightness(0.0)
@@ -601,11 +819,12 @@ class EffectsCoordinator:
                     scroller.set_text("", display.width)
                     self.showing_text = False
                 log.info(
-                    "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s",
+                    "Coordinator out→in: idx=%d effect=%s text=%r showing_text=%s media_override=%s",
                     self.idx,
                     self.current_effect_name,
                     text if text else "",
                     self.showing_text,
+                    "yes" if media_override is not None else "no",
                 )
                 self.mode = "in"
                 self.fade_start = now
@@ -627,6 +846,12 @@ class EffectsCoordinator:
                 self.mode = next_mode
 
         elif mode == "hold":
+            # MediaCycler fall-back (issue #38): if the cycler is
+            # exhausted (every attachment failed to decode or the
+            # list is now empty), swap it back to the rotation
+            # effect for the remainder of the hold. No-op when
+            # `self.current` is a normal Effect.
+            self._maybe_fall_back_to_rotation()
             # Hold semantics (v2):
             #   - Stay on the current message until `hold_seconds` elapses,
             #     UNLESS a genuinely *new* SMS arrives — i.e. the head of the

@@ -33,16 +33,70 @@
         <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Time</th>
         <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Sender</th>
         <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Body</th>
+        <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Media</th>
         <th class="text-left px-6 py-4 font-heading font-semibold text-dark text-sm">Actions</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-indigo-50">
       {% for msg in messages %}
       {% set is_suppressed = cfg.filters|selectattr('type', 'equalto', 'message')|selectattr('pattern', 'equalto', msg.id)|list %}
+      {% set msg_media = msg.media if msg.media is defined and msg.media else [] %}
       <tr class="hover:bg-indigo-50/30 transition-colors {% if is_suppressed %}opacity-50{% endif %}">
         <td class="px-6 py-4 text-sm text-slate-500 font-mono whitespace-nowrap">{{ format_from_iso(msg.received_at, cfg.timezone) }}</td>
         <td class="px-6 py-4 text-sm text-dark font-medium">{{ msg.sender }}</td>
         <td class="px-6 py-4 text-sm text-slate-600 truncate max-w-md">{{ msg.body }}</td>
+        <td class="px-6 py-4">
+          {% if msg_media %}
+          <div class="flex items-center gap-2">
+            {% for item in msg_media %}
+              {# Each thumbnail links to the Flask /api/media/<key>
+                 route (issue #38 / openspec `mms-media-support`).
+                 The route 302-redirects to a freshly-signed S3 URL;
+                 the link target is the signed URL when the user
+                 clicks "view full" in a new tab. Image attachment:
+                 thumb renders the bytes inline via the same proxy
+                 (the browser follows the 302). Video attachment:
+                 show a play badge that links to the same proxy
+                 (browsers fetch the bytes and play them via
+                 createObjectURL on a <video> overlay if the user
+                 follows the link). #}
+              {% if item.type.startswith('image/') %}
+              <a href="{{ url_for('api_media', s3_key=item.url) }}"
+                 target="_blank"
+                 rel="noopener"
+                 title="{{ item.type }}: {{ item.url }}"
+                 data-testid="media-thumb"
+                 class="block w-12 h-12 rounded-lg overflow-hidden bg-indigo-50 border border-indigo-100 hover:border-primary transition-all cursor-pointer">
+                <img src="{{ url_for('api_media', s3_key=item.url) }}"
+                     alt="{{ item.url }}"
+                     class="w-full h-full object-cover"
+                     loading="lazy">
+              </a>
+              {% elif item.type.startswith('video/') %}
+              <a href="{{ url_for('api_media', s3_key=item.url) }}"
+                 target="_blank"
+                 rel="noopener"
+                 title="{{ item.type }}: {{ item.url }}"
+                 data-testid="media-thumb-video"
+                 class="flex items-center justify-center w-12 h-12 rounded-lg bg-indigo-50 border border-indigo-100 hover:border-primary transition-all cursor-pointer text-primary">
+                <span class="text-xl">▶</span>
+              </a>
+              {% else %}
+              <a href="{{ url_for('api_media', s3_key=item.url) }}"
+                 target="_blank"
+                 rel="noopener"
+                 title="{{ item.type }}: {{ item.url }}"
+                 data-testid="media-thumb-other"
+                 class="flex items-center justify-center w-12 h-12 rounded-lg bg-indigo-50 border border-indigo-100 hover:border-primary transition-all cursor-pointer text-slate-500 text-xs font-mono">
+                📎
+              </a>
+              {% endif %}
+            {% endfor %}
+          </div>
+          {% else %}
+          <span class="text-xs text-slate-400">—</span>
+          {% endif %}
+        </td>
         <td class="px-6 py-4">
           {% if is_suppressed %}
           <form method="POST" action="{{ url_for('web_unsuppress', msg_id=msg.id) }}" class="inline">
@@ -57,7 +111,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="4" class="px-6 py-12 text-center text-slate-500">
+        <td colspan="5" class="px-6 py-12 text-center text-slate-500">
           <span class="text-4xl">📭</span>
           <p class="mt-2">No messages yet.</p>
         </td>
@@ -66,4 +120,41 @@
     </tbody>
   </table>
 </div>
+
+{# Lightbox modal (issue #38 §10.2). Click any image thumb to open
+   the full-size image in a centered overlay; click the overlay
+   (or press Escape) to close. The thumbnail's `data-full-url`
+   attribute is populated by JS at click time so the modal layer
+   stays out of the SSR template — keeps the template readable
+   and sidesteps Jinja quoting for nested quotes. #}
+<div id="media-lightbox" data-testid="media-lightbox"
+     class="fixed inset-0 z-50 hidden bg-black/80 items-center justify-center cursor-pointer"
+     role="dialog" aria-modal="true" aria-label="Image preview">
+  <img id="media-lightbox-image" alt=""
+       class="max-w-[90vw] max-h-[90vh] object-contain rounded-lg shadow-2xl">
+</div>
+<script>
+  // Tiny progressive-enhancement layer for the lightbox. Falls
+  // back to `target="_blank"` if JS is disabled. Reads
+  // `data-full-url` we attach at click time (set from the
+  // thumbnail's `href`).
+  document.addEventListener("DOMContentLoaded", () => {
+    const overlay = document.getElementById("media-lightbox");
+    const overlayImg = document.getElementById("media-lightbox-image");
+    if (!overlay || !overlayImg) return;
+    const close = () => overlay.classList.add("hidden");
+    overlay.addEventListener("click", close);
+    document.addEventListener("keydown", (ev) => {
+      if (ev.key === "Escape") close();
+    });
+    document.querySelectorAll("[data-testid='media-thumb']").forEach((el) => {
+      el.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        overlayImg.src = el.getAttribute("href") || "";
+        overlay.classList.remove("hidden");
+        overlay.classList.add("flex");
+      });
+    });
+  });
+</script>
 {% endblock %}

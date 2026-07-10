@@ -2,8 +2,6 @@
   "schema_version": 1,
   "effects": [
     {"name": "Hyperspace", "module": "lib_shared.patterns.hyperspace", "class_name": "Hyperspace", "enabled": true},
-    {"name": "VideoDisplay", "module": "lib_shared.patterns.video_display", "class_name": "VideoDisplay", "enabled": false},
-    {"name": "PngDisplay", "module": "lib_shared.patterns.png_display", "class_name": "PngDisplay", "enabled": false},
     {"name": "Honeycomb", "module": "lib_shared.patterns.honeycomb", "class_name": "Honeycomb", "enabled": true},
     {"name": "Flame", "module": "lib_shared.patterns.flame", "class_name": "Flame", "enabled": true},
     {"name": "Fireworks", "module": "lib_shared.patterns.fireworks", "class_name": "Fireworks", "enabled": true},

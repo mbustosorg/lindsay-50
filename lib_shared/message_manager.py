@@ -219,13 +219,11 @@ class MessageManager:
                 "messages": [m.to_dict() for m in self._messages._msgs],
                 "config": self._config.to_dict(),
             }
-            logger.info(
-                "[debug-dispatch] CACHE_WRITE key=%s filter_count=%d filter_ids=%s suppressed_in_buffer=%d buffer_size=%d",
-                key,
-                len(payload["config"].get("filters", [])),
-                [f.get("pattern", "") for f in payload["config"].get("filters", []) if f.get("type") == "message"],
-                sum(1 for m in payload["messages"] if m.get("suppressed")),
-                len(payload["messages"]),
+            print(
+                f"[mm-cache] CACHE_WRITE key={key} buffer_size={len(payload['messages'])} "
+                f"media_total={sum(len(m.get('media') or []) for m in payload['messages'])} "
+                f"sample_media={next((m.get('media') for m in payload['messages'] if m.get('media')), None)!r}",
+                flush=True,
             )
             # `payload` is a Python dict with nested dicts (the
             # `config` value comes from `SignConfig.to_dict()`,
@@ -334,6 +332,7 @@ class MessageManager:
                         sender=item.get("sender", ""),
                         body=item.get("body", ""),
                         received_at=item.get("received_at", ""),
+                        media=item.get("media") or [],
                     ),
                     source=src,
                 )
@@ -345,6 +344,12 @@ class MessageManager:
         except Exception as e:
             logger.warning("MessageManager cache hydrate failed: %s", e)
             return False
+        print(
+            f"[mm-cache] CACHE_HYDRATE key={key} buffer_size={len(self._messages._msgs)} "
+            f"media_total={sum(len(getattr(m, 'media', []) or []) for m in self._messages._msgs)} "
+            f"sample_media={next((getattr(m, 'media', None) for m in self._messages._msgs if getattr(m, 'media', None)), None)!r}",
+            flush=True,
+        )
         self._emit_change()
         return True
 
@@ -418,7 +423,16 @@ class MessageManager:
         if action == "check-for-update":
             callback = self._on_check_for_update
             if callback is None:
-                logger.warning("MessageManager dropped check-for-update: no handler registered")
+                # Debug-level, not warning: the only runtime that registers
+                # a handler is the Pi (`heart-matrix-controller/main.py`),
+                # because `os.execvpe` into the loader only makes sense
+                # there. Flask publishes this envelope at startup to the
+                # shared MQTT topic, so the browser preview's MessageManager
+                # sees it too — but the browser has nothing to act on, and
+                # warning-level logs on every Flask restart would be pure
+                # noise. Developers who want to verify the dispatch
+                # contract can enable debug logging.
+                logger.debug("MessageManager dropped check-for-update: no handler registered")
                 return
             try:
                 callback()
@@ -435,12 +449,22 @@ class MessageManager:
         Enrichment of the new view runs here at event time so the
         next read sees up-to-date derived fields without paying the
         filter / formatter cost on the read path.
+
+        `media` is read off the wire envelope so MMS attachments
+        (issue #38) round-trip to the in-memory buffer + the
+        coordinator's `BrowserMediaOverlay` / `MediaCycler`. An
+        empty list on the wire (the SMS-only case) maps to
+        `media=[]` via the `Message` dataclass default; an absent
+        key behaves the same. The publish side (`Message.to_dict`)
+        always emits the field, so consumers can rely on it being
+        present.
         """
         msg = Message(
             id=payload.get("id", ""),
             sender=payload.get("sender", ""),
             body=payload.get("body", ""),
             received_at=payload.get("received_at", ""),
+            media=payload.get("media") or [],
         )
 
         view = self._messages.add(msg, source="mqtt")
@@ -580,6 +604,7 @@ class MessageManager:
                             sender=item.get("sender", ""),
                             body=item.get("body", ""),
                             received_at=item.get("received_at", ""),
+                            media=item.get("media") or [],
                         )
                         for item in data[:100]
                     ]

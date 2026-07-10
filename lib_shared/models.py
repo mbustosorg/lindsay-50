@@ -36,9 +36,25 @@ class Message:
     """Represents an incoming SMS message.
 
     Stored to S3 as JSON and published over MQTT as part of a MessageEnvelope.
+
+    `media` carries the optional list of MMS attachments that landed alongside
+    the text. Each entry is `{"type": str, "url": str}` — `type` is the MIME
+    type (e.g. ``"image/jpeg"``) and `url` is the S3 key under our bucket
+    (e.g. ``"media/images/2026-07/media-2026-07-09T15-30-00Z.jpg"``). SMS-only
+    messages carry ``media == []``. S3 keys are the wire format
+    (design D2) — never a Twilio MediaUrl, never a pre-signed URL. The 1-hour
+    signed URL is regenerated on every Flask 302 (see
+    ``GET /api/media/<path:key>``).
     """
 
-    def __init__(self, id: str, sender: str, body: str, received_at: str) -> None:
+    def __init__(
+        self,
+        id: str,
+        sender: str,
+        body: str,
+        received_at: str,
+        media: Optional[list[dict]] = None,
+    ) -> None:
         """Initialize a Message.
 
         Args:
@@ -46,15 +62,30 @@ class Message:
             sender: Phone number of the sender.
             body: Text content of the message.
             received_at: ISO 8601 UTC timestamp when received.
+            media: Optional list of ``{"type": str, "url": str}`` entries
+                representing MMS attachments already copied to OUR S3.
+                Defaults to an empty list (legacy 4-field wire shape
+                round-trips unchanged).
         """
         self.id = id
         self.sender = sender
         self.body = body
         self.received_at = received_at
+        # `media` MUST always round-trip through to_dict/from_dict with the
+        # exact list the caller passes in — empty for SMS, populated for MMS.
+        # Defensive copy via list(...) keeps mutating `d["media"]` after
+        # construction from leaking into self.media.
+        self.media: list[dict] = list(media) if media is not None else []
 
     @classmethod
     def from_dict(cls, d):
-        return cls(id=d["id"], sender=d["sender"], body=d["body"], received_at=d["received_at"])
+        return cls(
+            id=d["id"],
+            sender=d["sender"],
+            body=d["body"],
+            received_at=d["received_at"],
+            media=d.get("media", []),
+        )
 
     def to_dict(self):
         return {
@@ -62,6 +93,7 @@ class Message:
             "sender": self.sender,
             "body": self.body,
             "received_at": self.received_at,
+            "media": self.media,
         }
 
 
@@ -76,6 +108,7 @@ class MessageView:
         rules: list["FilterRule"] | None = None,
         sender_name: str = "",
         display_time: str | None = None,
+        media: list | None = None,
     ) -> None:
         """Initialize a MessageView.
 
@@ -86,6 +119,14 @@ class MessageView:
             rules: List of FilterRule objects that suppressed the message.
             sender_name: Display name for the sender (from the senders allowlist).
             display_time: Pre-formatted local time string, or None (set by _enrich_messages).
+            media: Optional MMS attachments list. Defaults to
+                ``message.media`` if not supplied — surface it as a
+                flat top-level attribute so the JS-side Pyodide
+                proxy exposes ``entry.media`` alongside ``source`` /
+                ``display_time``. Without this, the testing page's
+                modal (which ``JSON.stringify``s the entry) sees
+                ``media`` nested under ``entry.message.media`` and
+                the inline row click / the modal popup disagree.
         """
         self.message = message
         self.source = source
@@ -93,6 +134,12 @@ class MessageView:
         self.rules = list(rules) if rules is not None else []
         self.sender_name = sender_name
         self.display_time = display_time
+        # Mirror the wrapped Message's `media` so it's a flat field on
+        # the view — JS-side Pyodide proxies only expose instance
+        # attributes set in __init__, not @property accessors, so this
+        # has to be a real attribute for `item.media` and
+        # `JSON.stringify(item).media` to work on the testing page.
+        self.media = list(media) if media is not None else list(message.media)
 
     def to_dict(self):
         return {
@@ -100,6 +147,7 @@ class MessageView:
             "sender": self.message.sender,
             "body": self.message.body,
             "received_at": self.message.received_at,
+            "media": self.message.media,
             "source": self.source,
             "suppressed": self.suppressed,
             "rules": self.rules,
