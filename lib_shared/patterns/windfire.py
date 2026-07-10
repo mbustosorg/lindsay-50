@@ -381,11 +381,15 @@ class WindFire(Effect):
     # Coordinate zoom from the Pixelblaze scale(s, s).
     _S = 2.0
 
-    def __init__(self, display, tf=1.0, max_brightness=0.7):
+    def __init__(self, display, tf=1.0, size=1.6, max_brightness=0.7):
         self._w = display.canvas.width
         self._h = display.canvas.height
         # tf scales the animation clock: <1 slows it down, >1 speeds it up.
         self._tf = tf
+        # size >1 makes the flame bigger: it widens the horizontal band and
+        # lets the flame climb higher up the panel (see _compute). It keeps the
+        # noise feature scale and brightness, so the fire just fills more room.
+        self._size = size
         self._max_brightness = max_brightness
         self._brightness = 1.0
         self._t0 = time.monotonic()
@@ -399,7 +403,7 @@ class WindFire(Effect):
         yn = np.arange(self._h) / h1
         self._Xn, self._Yn = np.meshgrid(xn, yn)  # (h, w)
         self._Xp = self._S * (self._Xn - 0.5)
-        self._Yp = self._S * self._Yn
+        self._Yp = self._S * self._Yn - 0.3
 
         self._frame = None
         self._compute()
@@ -426,11 +430,14 @@ class WindFire(Effect):
         wobble = np.sin(((Yp - 0.5) / s + t2 + _wave(t3)) * PI2) * 0.15 * (s - Yp)
         xw = Xp + wobble
 
+        size = self._size
         v = _perlin_turbulence(xw, Yp / 2.0 + noise_y_time, noise_time, 2.0, 0.5, 3) * 2.0
         # Horizontal window (bright center, dark edges) + taper to the base.
-        v *= _triangle(0.5 + xw / s)
+        # Dividing the window arg by `size` widens the bright band; scaling the
+        # base ramp by `size` saturates it lower down so the flame climbs higher.
+        v *= _triangle(0.5 + xw / (s * size))
         v = np.maximum(0.0, v)
-        v *= Yp / s
+        v *= np.minimum(1.0, (Yp / s) * size)
         v = np.minimum(v, 1.0)  # keep the palette from wrapping
 
         # paint(v, v*v): palette color at position v, brightness v*v.
