@@ -775,16 +775,40 @@ class TestDispatchCommand:
         mgr.dispatch(env)
         handler.assert_not_called()
 
-    def test_dispatch_command_without_callback_drops_with_warning(self, messages_api_url, config_api_url, api_key):
-        """check-for-update with no callback is dropped (not raised)."""
+    def test_dispatch_command_without_callback_drops_with_debug_log(
+        self, messages_api_url, config_api_url, api_key, caplog
+    ):
+        """check-for-update with no callback is dropped (not raised).
+
+        The log is at DEBUG, not WARNING: the only runtime that registers
+        a handler is the Pi (because `os.execvpe` only makes sense there).
+        Flask publishes this envelope to the shared MQTT topic, so the
+        browser preview's MessageManager sees it too — but the browser
+        has nothing to act on, and a warning on every Flask restart would
+        be pure noise. Pin the log level here so a future regression
+        (e.g., someone re-promotes the log to WARNING) is caught.
+        """
+        import logging
+
         mgr = _mm().MessageManager(
             messages_api_url=messages_api_url,
             config_api_url=config_api_url,
             api_key=api_key,
         )
         env = json.dumps({"type": "command", "payload": {"action": "check-for-update"}})
-        # Must not raise
-        mgr.dispatch(env)
+        with caplog.at_level(logging.DEBUG, logger="lib_shared.message_manager"):
+            # Must not raise
+            mgr.dispatch(env)
+        # Debug-level log fires; nothing at warning or above.
+        debug_records = [
+            r
+            for r in caplog.records
+            if r.name == "lib_shared.message_manager" and "dropped check-for-update" in r.getMessage()
+        ]
+        assert debug_records, "expected a DEBUG log line for the dropped check-for-update"
+        assert all(
+            r.levelno < logging.WARNING for r in debug_records
+        ), "dropped check-for-update must not be at WARNING level"
 
     def test_dispatch_command_handler_exception_is_swallowed(self, messages_api_url, config_api_url, api_key):
         """A handler that raises does not crash the paho network thread."""
@@ -1572,9 +1596,7 @@ class TestSessionCache:
             mm._to_js = None
             mm._js_object_from_entries = None
 
-    def test_seed_writes_media_to_cache(
-        self, messages_api_url, config_api_url, api_key
-    ):
+    def test_seed_writes_media_to_cache(self, messages_api_url, config_api_url, api_key):
         """REST /api/messages → seed() → MessageView.to_dict() → sessionStorage.
 
         The REST path round-trips through the same Message constructor

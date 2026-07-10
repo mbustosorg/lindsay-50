@@ -423,7 +423,16 @@ class MessageManager:
         if action == "check-for-update":
             callback = self._on_check_for_update
             if callback is None:
-                logger.warning("MessageManager dropped check-for-update: no handler registered")
+                # Debug-level, not warning: the only runtime that registers
+                # a handler is the Pi (`heart-matrix-controller/main.py`),
+                # because `os.execvpe` into the loader only makes sense
+                # there. Flask publishes this envelope at startup to the
+                # shared MQTT topic, so the browser preview's MessageManager
+                # sees it too — but the browser has nothing to act on, and
+                # warning-level logs on every Flask restart would be pure
+                # noise. Developers who want to verify the dispatch
+                # contract can enable debug logging.
+                logger.debug("MessageManager dropped check-for-update: no handler registered")
                 return
             try:
                 callback()
