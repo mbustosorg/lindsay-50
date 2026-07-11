@@ -466,6 +466,29 @@ class MessageManager:
         if envelope.type == "message":
             payload = envelope.payload
             if isinstance(payload, dict):
+                # Round 7 (live-bug triage): one emphatic
+                # arrival line the operator can grep for with a
+                # single keyword. Existing
+                # `[debug-dispatch] ENVELOPE_RECEIVED` +
+                # `[select-mq] ENQUEUED` lines are scattered
+                # across two modules; this consolidates the
+                # "yes, this message reached the Pi" signal into
+                # one obvious record. Fires once per inbound
+                # envelope, AFTER JSON parse succeeds, BEFORE
+                # validation/duplicate-checks — so the operator
+                # sees every arrival even if downstream code
+                # rejects it. The exact same id + sender + body
+                # appears in `[select-mq] ENQUEUED` if the
+                # message is accepted, or `[select-mq]
+                # DUPLICATE_DROPPED` if not; the two lines
+                # together give the operator a complete
+                # arrival→outcome trace.
+                logger.info(
+                    "[MESSAGE_ARRIVED] id=%s sender=%s body=%r",
+                    payload.get("id", ""),
+                    payload.get("sender", ""),
+                    (payload.get("body", "") or "")[:80],
+                )
                 logger.info(
                     "[debug-dispatch] ENVELOPE_RECEIVED type=message id=%s body=%r",
                     payload.get("id", ""),
