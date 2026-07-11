@@ -144,7 +144,32 @@ class PahoMqttClient:
             add-sign-status-reports/design.md). We achieve isolation by
             wrapping each callback invocation in its own try/except so
             an exception in one does not propagate to the other.
+
+            Round 7b (live-bug triage, "are the logs upstream?"):
+            every inbound MQTT message fires two INFO records at
+            the broker→app boundary BEFORE any envelope parsing
+            or Python dispatch logic runs:
+              - `[MQTT_INCOMING]` — single keyword grep target
+                carrying topic + payload byte count + first 200
+                bytes. Operator can verify "did the broker
+                deliver this message?" without parsing the
+                paho internals.
+              - `PahoMqttClient received:` — the long-standing
+                record carrying `topic=` and `payload=%r` for
+                backward-compatible log scrapers.
+            Both lines are deterministic per inbound message —
+            same byte count, same first-200 preview — so a
+            network replay or duplicate-deliver detection is
+            possible by inspecting consecutive lines.
             """
+            payload_bytes = len(msg.payload)
+            preview = msg.payload[:200]
+            logger.info(
+                "[MQTT_INCOMING] topic=%s bytes=%d preview=%r",
+                msg.topic,
+                payload_bytes,
+                preview,
+            )
             logger.info(
                 "PahoMqttClient received: topic=%s payload=%r",
                 msg.topic,
