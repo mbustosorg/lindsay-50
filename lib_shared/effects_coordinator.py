@@ -1298,28 +1298,16 @@ class EffectsCoordinator:
             # reason to.
             idle_elapsed_seconds = now - self.phase_start
             idle_elapsed = idle_elapsed_seconds >= effects_settings.idle_seconds
-            # Round 6 (operator debug): log the idle wait state on
-            # every background tick so the operator can SEE why a
-            # freshly-texted SMS isn't playing "right now". When
-            # `queue_depth > 0` but `idle_remaining > 0`, the SMS is
-            # correctly queued but waiting for the natural pick site.
-            # This is the most likely root cause of "I texted a new
-            # message to the Pi and it didn't play next" — the
-            # operator texts at second 0, the queue drains at second
-            # ~75 (hold/text_out/idle elapsed).
-            queue_depth = getattr(self.message_manager, "new_message_queue_depth", lambda: 0)()
-            buffer_size = len(self.current_messages)
-            idle_remaining = max(0.0, effects_settings.idle_seconds - idle_elapsed_seconds)
-            log.info(
-                "[select-bg] BACKGROUND_TICK idle_remaining=%.1fs idle_seconds=%.1fs "
-                "queue_depth=%d buffer_size=%d last_selected_id=%s",
-                idle_remaining,
-                effects_settings.idle_seconds,
-                queue_depth,
-                buffer_size,
-                self._last_selected_message_id,
-            )
             if idle_elapsed:
+                # Probe the queue + buffer once at the pick site so
+                # the IDLE_ELAPSED log can carry the live state.
+                # Round 7 (live-bug triage): kept here (rather than
+                # at the top of every tick as in round 6) so the
+                # log only fires when the natural pick site fires —
+                # one INFO line per idle cycle, not one per
+                # coordinator frame.
+                queue_depth = getattr(self.message_manager, "new_message_queue_depth", lambda: 0)()
+                buffer_size = len(self.current_messages)
                 # Round 3 (debug-visibility): pick the next message
                 # BEFORE `_begin_out` so the `Coordinator: selected`
                 # log fires first, then the fade-out log. The pick
@@ -1349,6 +1337,19 @@ class EffectsCoordinator:
                         queue_depth,
                         buffer_size,
                     )
+                    # Round 7 (live-bug triage, "BACKGROUND_TICK
+                    # flood" / "IDLE_ELAPSED on every tick"): reset
+                    # `phase_start` so the NEXT attempt to pick
+                    # fires after another `idle_seconds` rather
+                    # than every single tick. The intent of the
+                    # background loop is "fire one pick attempt
+                    # per idle_seconds"; resetting on the empty-
+                    # path turns the loop into that cadence.
+                    # Without it, an empty queue + empty buffer
+                    # would log `[select-bg] IDLE_ELAPSED` and
+                    # `[select-bg] PICK_RETURNED_NONE` at 60 Hz
+                    # indefinitely until a message arrives.
+                    self.phase_start = now
                 # else: no message to show — stay in background.
                 # The idle wait elapsed but there's no message to
                 # fade to, so we silently keep rendering the current
