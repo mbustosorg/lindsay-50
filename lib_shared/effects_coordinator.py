@@ -561,6 +561,25 @@ class EffectsCoordinator:
                 getattr(mm, "new_message_queue_depth", lambda: 0)(),
             )
             return body
+        # Round 7 (re-roll loop bug fix): capture the "already
+        # shown" id BEFORE the first `get_display_message()`
+        # call, so the re-roll loop has a stable comparison
+        # target. `get_display_message()` updates
+        # `_last_shown_message_id` on EVERY call (HEAD_PRIORITY
+        # and RANDOM both set it to the freshly-picked id), so
+        # referencing the live field inside the loop makes the
+        # check `picked.message.id == self._last_shown_message_id`
+        # always TRUE after the first iteration — the loop
+        # always ran all 4 iterations, oscillating between
+        # HEAD_PRIORITY and RANDOM (operator-visible as the
+        # round 7 live trace). The intended round-3 semantics
+        # — "don't repeat a message that was on the sign
+        # before this pick attempt" — now actually fires.
+        # `None` skip_id is the boot state (no message has been
+        # shown yet); the loop body's `skip_id is not None`
+        # guard handles that — no re-roll possible anyway
+        # because the first pick can't equal None.
+        skip_id = self._last_shown_message_id
         # Fall through to the recent-pool random pick (unchanged).
         body = self.get_display_message()
         if body is None:
@@ -590,8 +609,8 @@ class EffectsCoordinator:
         tries = 0
         while (
             picked is not None
-            and picked.message.id == self._last_shown_message_id
-            and self._last_shown_message_id is not None
+            and picked.message.id == skip_id
+            and skip_id is not None
             and tries < 4
         ):
             body = self.get_display_message()
@@ -600,13 +619,13 @@ class EffectsCoordinator:
         self._last_display_message = body
         log.info(
             "[select] RANDOM_PICK source=buffer msg_id=%s sender=%s body=%r "
-            "distinct_ids=%d rerolls=%d last_selected_id_was=%s",
+            "distinct_ids=%d rerolls=%d skip_id_was=%s",
             picked.message.id if picked else None,
             picked.message.sender if picked else None,
             (body or "")[:80],
             distinct_ids_in_buffer,
             tries,
-            self._last_selected_message_id,
+            skip_id,
         )
         # Keep the human-readable companions in sync with the id.
         if picked is not None:
