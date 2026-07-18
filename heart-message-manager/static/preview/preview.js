@@ -309,6 +309,12 @@
       console.error("[preview-js] #preview-message-link element not found");
     }
     let lastMediaKey = "";
+    // Throttle variable for the "python returned" diagnostic log.
+    // Distinct from `lastMediaKey` (which `applyMedia` owns and
+    // updates AFTER the src swap) — updating `lastMediaKey` from
+    // the diagnostic path would race the swap check and silently
+    // skip the first media of every cycle.
+    let lastLoggedMediaKey = "";
     let lastEffectNameForLog = "";
     // Tracks the id of the message currently bound to the status
     // link. The link's `data-msg` is rewritten only when this
@@ -577,11 +583,20 @@
               //      was useful for diagnosing one specific bug
               //      but is just noise for everyday operation.
               if (media && (media.key || media.url)) {
-                if (media.key !== lastMediaKey) {
+                if (media.key !== lastLoggedMediaKey) {
                   console.log(
                     `[preview-media] python returned: key=${media.key} kind=${media.kind} url=${media.url} opacity=${Number(media.opacity || 0).toFixed(2)}`,
                   );
-                  lastMediaKey = media.key;
+                  // Throttle the log via `lastLoggedMediaKey`
+                  // (distinct from `lastMediaKey`, which `applyMedia`
+                  // owns and updates AFTER the src swap). Updating
+                  // `lastMediaKey` from this diagnostic path would
+                  // race the swap check inside `applyMedia` and
+                  // silently skip the very first media of every
+                  // cycle (key was `""`, becomes the S3 key, then
+                  // `applyMedia` sees them equal and returns
+                  // without swapping).
+                  lastLoggedMediaKey = media.key;
                 }
                 lastMediaWasEmpty = false;
               } else if (!lastMediaWasEmpty) {
@@ -595,6 +610,11 @@
                   shape,
                 );
                 lastMediaWasEmpty = true;
+                // Reset the throttle so the next non-empty key
+                // produces a "python returned" line even if it
+                // happens to match the key we logged before the
+                // empty window.
+                lastLoggedMediaKey = "";
               }
             }
             applyMedia(media);

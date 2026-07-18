@@ -623,12 +623,12 @@ def _preview_media_info(key: str, url: str, kind: str, opacity: float) -> None:
         _preview_media_info_last["key"] = key
         source = "browser-proxy" if url else "<empty url — overlay not bound>"
         js.console.log(
-            "[preview-media-source] key=%s source=%s url=%s kind=%s opacity=%.2f",
+            "[preview-media-source] key=%s source=%s url=%s kind=%s opacity=%s",
             key,
             source,
             url,
             kind,
-            opacity,
+            f"{opacity:.2f}",
         )
     except Exception:
         pass
