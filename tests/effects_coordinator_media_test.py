@@ -276,6 +276,109 @@ def test_maybe_build_media_cycler_constructs_browser_overlay_when_is_browser():
     assert cycler.current_media_kind == "image"
 
 
+def test_out_to_in_installs_browser_overlay_during_tick():
+    """End-to-end: drive the full lifecycle through `tick()` with
+    `is_browser=True` and an MMS message in the buffer. The out→in
+    transition should install a `BrowserMediaOverlay` as
+    `coord.current` — pinned against the on-deck + cycle-boundary
+    refactor, which previously had no host-side coverage of the
+    browser path.
+
+    This is the integration test that catches the "cycler never
+    builds during the real lifecycle" case: `_maybe_build_media_cycler`
+    in isolation may return a valid `BrowserMediaOverlay`, but the
+    actual `tick()` path could still bail out (e.g. `_suppress_media_override`
+    stuck, `display` cleared between bind and tick, etc.). Drives
+    the state machine through intro → out → in, then asserts the
+    rotation effect was swapped for the overlay.
+    """
+    import sys as _sys
+    import time as _time
+
+    from lib_shared.effects_coordinator import EffectsCoordinator
+    from lib_shared.models import EffectsSettings, Message, MessageView
+
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
+    # A controllable clock so the state machine advances deterministically.
+    clock = _Clock()
+
+    msg = Message(
+        id="m1",
+        sender="+15551234567",
+        body="test mms",
+        received_at="2026-07-10T01:06:37Z",
+        media=[{"type": "image/jpeg", "url": "media/images/2026-07/media-2026-07-10T01-06-37Z.jpg"}],
+    )
+    msg_view = MessageView(message=msg, source="rest", suppressed=False, rules=[])
+
+    mgr = _StubMessageManager(messages=[msg_view])
+    # Tight pacing — intro=0, fade=0.05, hold=15 (default enough).
+    mgr.config.effects_settings = EffectsSettings(
+        fade_seconds=0.05,
+        intro_seconds=0.0,
+        hold_seconds=15.0,
+        idle_seconds=300.0,
+    )
+
+    display = _StubDisplay()
+    scroller = _StubScroller()
+    fx_a = _make_effect("A")()
+    heart = _make_effect("Heart")()
+    coord = EffectsCoordinator(
+        message_manager=mgr,
+        display=display,  # type: ignore[arg-type]
+        scroller=scroller,  # type: ignore[arg-type]
+        effects=[fx_a],  # type: ignore[arg-type]
+        heart=heart,  # type: ignore[arg-type]
+        media_api_base_url="http://preview.test",
+        is_browser=True,
+    )
+
+    import pytest as _pytest
+
+    monkey = _pytest.MonkeyPatch()
+    monkey.setattr(_time, "monotonic", clock)
+    try:
+        coord.start()
+        # intro → out → in. Drive `out` long enough for the fade
+        # to complete.
+        clock.advance(0.001)
+        coord.tick()
+        assert coord.mode == "out", f"expected out, got {coord.mode}"
+        # Drive the fade to completion; fade_seconds=0.05, so 0.1s
+        # in 0.01 steps is plenty.
+        elapsed = 0.0
+        while elapsed < 0.1:
+            clock.advance(0.01)
+            coord.tick()
+            elapsed += 0.01
+            if coord.mode == "in":
+                break
+        # At out→in, the MMS message should have been picked and
+        # a BrowserMediaOverlay should have replaced the rotation
+        # effect for the upcoming hold.
+        assert coord.mode == "in", f"expected in after out, got {coord.mode}"
+        assert coord.current_message is not None
+        assert coord.current_message.id == "m1"
+        from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+        assert isinstance(coord.current, BrowserMediaOverlay), (
+            f"expected BrowserMediaOverlay at out→in for MMS, got "
+            f"{type(coord.current).__name__} — cycler did NOT install"
+        )
+        # The overlay's current_media_url should be non-empty AFTER
+        # `tick()` has run on it (the first tick populates `_active`).
+        # By the time we get here, `coord.tick()` has already called
+        # `current.tick()` in the render path, so `_active` is set.
+        assert coord.current.current_media_url == (
+            "http://preview.test/api/media/media/images/2026-07/media-2026-07-10T01-06-37Z.jpg"
+        ), f"got {coord.current.current_media_url!r}"
+        assert coord.current.current_media_kind == "image"
+    finally:
+        monkey.undo()
+
+
 # ---------------------------------------------------------------------------
 # _maybe_build_media_cycler: MMS messages → cycler
 # ---------------------------------------------------------------------------
