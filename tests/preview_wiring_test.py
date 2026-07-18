@@ -393,14 +393,84 @@ def test_preview_scroller_set_speed_rejects_invalid():
 # --- apply_config (preview_main.py live rebind) ----------------------------
 
 
-def test_config_update_live_applies_to_render_layer():
-    """The full rebind path is now: change `message_manager.config`,
-    call `coord.tick()`. The coordinator's per-tick
-    `_sync_render_layer` reads the new config and updates the
-    rotation + scroller color/speed. Pacing changes are visible on
-    the next transition (the coordinator reads pacing from the
-    manager at every decision point, no cached copy).
+def test_config_update_applies_at_cycle_boundary():
+    """The live-rebind path is now: change `message_manager.config`,
+    wait for the next `out→in` cycle boundary. The coordinator's
+    `_refresh_render_layer_from_settings` reads the new config
+    and rebuilds the rotation + applies the scroller color/speed.
+
+    Pacing fields (fade_seconds, hold_seconds, etc.) are read
+    live from the manager at every decision point — no cached
+    copy. Tick itself is a pure render — it does NOT apply
+    settings, even when the config has changed since the last
+    cycle. The user's architectural split: "tick should just
+    update the panel with what's currently rendering. Settings
+    should refresh on the next cycle."
+
+    We invoke `_refresh_render_layer_from_settings` directly to
+    pin its contract; the coordinator's tick path calls it at
+    every out→in transition (the only call site).
     """
+    scroller = _StubScroller()
+    fx_a = _make_effect("A")()
+    heart = _make_effect("Heart")()
+    display = _StubDisplay()
+    mgr = SimpleNamespace(
+        messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
+        config=SimpleNamespace(
+            effects_settings=EffectsSettings(),
+            text_settings=TextSettings(),
+        ),
+    )
+    mgr.get_effects_settings = lambda: mgr.config.effects_settings
+    mgr.get_text_settings = lambda: mgr.config.text_settings
+    mgr.get_messages = lambda limit=100, suppress=True: []
+    coord = EffectsCoordinator(
+        message_manager=mgr,
+        display=display,
+        scroller=scroller,
+        effects=[fx_a],
+        heart=heart,
+    )
+
+    # Update the manager's config to a non-default SignConfig BEFORE
+    # the cycle-boundary refresh runs.
+    cfg = SignConfig(
+        text_settings=TextSettings(speed=5, color=0x00FF00),
+        effects_settings=EffectsSettings(
+            effects=[{"name": "Fireworks", "enabled": True}],
+            fade_seconds=0.5,
+            hold_seconds=10.0,
+        ),
+    )
+    mgr.config.effects_settings = cfg.effects_settings
+    mgr.config.text_settings = cfg.text_settings
+
+    # Tick alone does NOT apply settings (the architectural split).
+    # Without messages, we never reach out→in naturally; the helper
+    # is only invoked at cycle boundaries. Pin the no-op contract.
+    coord.tick()
+    # Scroller setter calls haven't fired — tick is a pure render.
+    assert scroller.set_color_calls == [], "tick should not call set_color — that's a cycle-boundary concern"
+    assert scroller.set_speed_calls == [], "tick should not call set_speed — that's a cycle-boundary concern"
+    # Rotation unchanged.
+    assert all(type(fx).__name__ != "Fireworks" for fx in coord.effects)
+
+    # Now invoke the cycle-boundary refresh directly. This is the
+    # contract callers rely on: at the next out→in the coordinator
+    # rebuilds the rotation and applies scroller color/speed.
+    coord._refresh_render_layer_from_settings(display, scroller)
+    assert scroller._color == 0x00FF00
+    assert scroller.frame_delay == 0.020
+    assert scroller.offset_seconds == 0.5
+    # The Fireworks effect was built and added to the rotation.
+    assert any(type(fx).__name__ == "Fireworks" for fx in coord.effects)
+
+
+def test_tick_does_not_reapply_settings_when_config_changes():
+    """Pin the architectural split: tick is pure render, no
+    settings application. Even after the manager's config changes,
+    subsequent ticks leave the scroller setters untouched."""
     scroller = _StubScroller()
     fx_a = _make_effect("A")()
     heart = _make_effect("Heart")()
@@ -424,30 +494,16 @@ def test_config_update_live_applies_to_render_layer():
         heart=heart,
     )
 
-    # First tick refreshes the render layer from the current (default) config.
-    coord.tick()
-    assert scroller._color == 0xFF6400  # default TextSettings().color
-    assert scroller.frame_delay == 0.040  # default TextSettings().speed = 3
-
-    # Now update the manager's config to a non-default SignConfig.
-    cfg = SignConfig(
-        text_settings=TextSettings(speed=5, color=0x00FF00),
-        effects_settings=EffectsSettings(
-            effects=[{"name": "Fireworks", "enabled": True}],
-            fade_seconds=0.5,
-            hold_seconds=10.0,
-        ),
+    # Change config.
+    mgr.config.effects_settings = EffectsSettings(
+        effects=[{"name": "Fireworks", "enabled": True}],
     )
-    mgr.config.effects_settings = cfg.effects_settings
-    mgr.config.text_settings = cfg.text_settings
+    mgr.config.text_settings = TextSettings(speed=5, color=0x00FF00)
 
-    # Next tick: rotation hash differs, scroller color/speed differ.
-    coord.tick()
-    assert scroller._color == 0x00FF00
-    assert scroller.frame_delay == 0.020
-    assert scroller.offset_seconds == 0.5
-    # Pacing lives on the manager; the coordinator has no copy.
-    assert mgr.config.effects_settings.fade_seconds == 0.5
-    assert mgr.config.effects_settings.hold_seconds == 10.0
-    # The Fireworks effect was built and added to the rotation.
-    assert any(type(fx).__name__ == "Fireworks" for fx in coord.effects)
+    # 20 ticks — none should apply the new settings.
+    for _ in range(20):
+        coord.tick()
+
+    assert scroller.set_color_calls == []
+    assert scroller.set_speed_calls == []
+    assert all(type(fx).__name__ != "Fireworks" for fx in coord.effects)
