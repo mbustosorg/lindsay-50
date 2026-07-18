@@ -352,9 +352,9 @@ def get_current_message():
     picked up the same `media` list the wire carried.
 
     Returns `None` when the coordinator is idle (no picked entry —
-    boot splash, SMS-only background, or post-`_last_picked_entry`
-    reset). `preview.js` treats `None` as "no link target", so
-    clicking the text in idle state is a no-op.
+    boot splash, SMS-only background, or post-`on_deck` consume).
+    `preview.js` treats `None` as "no link target", so clicking
+    the text in idle state is a no-op.
 
     Conversion note (issue #38 debug-2026-07-09): Pyodide's default
     conversion of a returned Python dict is a JS `Map`, not a plain
@@ -371,10 +371,10 @@ def get_current_message():
     coord = _coord()
     if coord is None:
         return None
-    picked = getattr(coord, "_last_picked_entry", None)
-    if picked is None:
+    current = coord.current_message
+    if current is None:
         return None
-    raw = picked.message.to_dict()
+    raw = current.to_dict()
     return to_js(raw, dict_converter=js.Object.fromEntries)
 
 
@@ -437,10 +437,11 @@ def get_current_media():
             dict_converter=js.Object.fromEntries,
         )
     # Throttled diagnostic: log when the current effect is NOT a
-    # BrowserMediaOverlay but the picked message has media — this
+    # BrowserMediaOverlay but the current message has media — this
     # is the "falling back to a regular effect" path the user is
-    # trying to diagnose. `coord._last_picked_entry` is a private
-    # field but the only signal we have here.
+    # trying to diagnose. `coord.current_message` is the slot the
+    # `out→in` transition populates from `on_deck`, so it's the
+    # authoritative read of "what message is being staged."
     #
     # Skip during `coord.mode == "out"`: this is a transient phase
     # where `current` is still the previous rotation effect (e.g.
@@ -454,10 +455,10 @@ def get_current_media():
     # `current != overlay && picked has media` is healthy
     # transient state.)
     try:
-        picked = getattr(coord, "_last_picked_entry", None)
+        current_msg = coord.current_message
         if (
-            picked is not None
-            and (media := getattr(picked.message, "media", None) or [])
+            current_msg is not None
+            and (media := getattr(current_msg, "media", None) or [])
             and getattr(coord, "mode", None) != "out"
         ):
             effect_name = type(current).__name__ if current is not None else "None"

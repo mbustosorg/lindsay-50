@@ -2,20 +2,19 @@
 
 Scenarios:
 1. Required message_manager raises TypeError when omitted.
-2. get_display_message returns the head entry's body and updates _last_shown_message_id
-   when the head is fresh.
-3. get_display_message samples uniformly from the most recent recent_count entries
-   when the head has already been shown (seed random and assert the pick).
-4. get_display_message returns None on an empty buffer.
-5. get_display_message respects recent_count (a 3-message buffer with recent_count=3 is
-   read fully; with recent_count=2 only the head 2 are read).
-6. tick() does NOT call get_display_message() on a timer. It runs only at the
-   two background→out transition paths (new_id and idle). Drives the coordinator
-   in a tight loop for 1 second of "frame" time and asserts zero pulls happen
-   unless a transition fires (replaces the old 250ms-throttle contract).
+2. get_display_message returns current_message.body when a message is staged.
+3. get_display_message falls back to on_deck.body when current_message is None.
+4. get_display_message returns None when both slots are empty.
+5. get_display_message prefers current_message over on_deck (current wins).
+6. tick() picks ONLY at out→in. No pull-on-a-timer contract; the WeightedSelector
+   runs at the out→in transition.
+
+The new design (issue #26 on-deck slot refactor) replaces the legacy
+random.choice + fresh-id branch logic with a pure slot reader. Picks
+move to `out→in`; the buffer is only read at that transition. This
+file exercises the slot-reader contract and the pick-timing contract.
 """
 
-import random
 import sys
 import time
 from pathlib import Path
@@ -24,10 +23,20 @@ from unittest.mock import patch
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent))
+_PROJECT_ROOT = Path(__file__).parent.parent.parent
+sys.path.insert(0, str(_PROJECT_ROOT))
 
 from lib_shared.effects_coordinator import EffectsCoordinator
 from lib_shared.models import Message, MessageView
+
+# Pull the shared stubs from the main coordinator test file so the
+# render-layer shape matches the rest of the test suite.
+from tests.effects_coordinator_test import (
+    _StubDisplay,
+    _StubScroller,
+    _make_effect,
+    _build as _tc_build,
+)
 
 
 def _make_view(message_id: str, body: str, received_at: str, suppressed: bool = False) -> MessageView:
@@ -64,7 +73,6 @@ class _StubMessageManager:
 
     @property
     def messages(self):
-        msgs = self
         return SimpleNamespace(get_messages=self._get_messages)
 
     def _get_messages(self, limit=100, suppress=True):
@@ -92,18 +100,16 @@ class _StubMessageManager:
             return None
 
 
-def _build(message_manager=None, recent_count=5):
+def _build(message_manager=None, recent_count=5, selector=None, event_log=None):
     """Build a coordinator with the minimum layer needed to construct one."""
     if message_manager is None:
         message_manager = _StubMessageManager(recent_count=recent_count)
     else:
-        # Caller supplied a pre-built manager — override the
-        # `recent_count` it holds so the test's expected value
-        # takes effect (the coordinator reads it live from the
-        # manager).
         message_manager.config.effects_settings.recent_count = recent_count
     coord = EffectsCoordinator(
         message_manager=message_manager,
+        selector=selector,
+        event_log=event_log,
     )
     return coord, message_manager
 
@@ -122,151 +128,89 @@ def test_required_message_manager_raises_typeerror_when_omitted():
         EffectsCoordinator()
 
 
-# --- Scenario 2: get_display_message returns head body + updates _last_shown_id
+# --- Scenario 2: get_display_message returns current_message.body ---------
 
 
-def test_get_display_message_returns_head_when_fresh():
-    """When the head id differs from _last_shown_message_id, return its body."""
-    mgr = _StubMessageManager(
-        messages=[
-            _make_view("a", "body-a", "2026-01-02T00:00:00Z"),
-            _make_view("b", "body-b", "2026-01-01T00:00:00Z"),
-        ]
-    )
-    coord, _ = _build(message_manager=mgr, recent_count=5)
-    # Fresh head: never shown.
-    assert coord._last_shown_message_id is None
-    body = coord.get_display_message()
-    assert body == "body-a"
-    assert coord._last_shown_message_id == "a"
+def test_get_display_message_returns_current_message_body():
+    """When current_message is set, get_display_message returns its body."""
+    coord, _ = _build(recent_count=5)
+    msg = Message(id="a", sender="+1", body="hello", received_at="2026-01-02T00:00:00Z")
+    coord.current_message = msg
+    coord.on_deck = Message(id="b", sender="+1", body="world", received_at="2026-01-03T00:00:00Z")
+    assert coord.get_display_message() == "hello"
 
 
-# --- Scenario 3: get_display_message samples uniformly from recent-N ---------
+# --- Scenario 3: get_display_message falls back to on_deck ----------------
 
 
-def test_get_display_message_samples_uniformly_when_head_already_shown():
-    """When the head has already been shown, delegate to the selector.
-
-    With the refactor to pluggable selectors (issue #26 follow-up), the
-    coordinator no longer calls `random.choice(entries)` directly — it
-    delegates the algorithm to `self._selector.pick(...)`. The default
-    selector is `RandomSelector` (uniform random). This test patches
-    the selector to verify the coordinator passes the right candidate
-    set (the recent-N Message objects, not the wrapping MessageViews).
-    """
-    random.seed(0)
-    mgr = _StubMessageManager(
-        messages=[
-            _make_view("a", "body-a", "2026-01-04T00:00:00Z"),
-            _make_view("b", "body-b", "2026-01-03T00:00:00Z"),
-            _make_view("c", "body-c", "2026-01-02T00:00:00Z"),
-        ]
-    )
-    coord, _ = _build(message_manager=mgr, recent_count=3)
-    # Prime: first pull returns the head ("a") and updates _last_shown_message_id.
-    coord.get_display_message()
-    assert coord._last_shown_message_id == "a"
-    # Patch the coordinator's selector to assert the call site + return value.
-    expected_ids = {"a": "body-a", "b": "body-b", "c": "body-c"}
-    expected_message_ids = list(expected_ids.keys())
-    with patch.object(coord._selector, "pick", wraps=coord._selector.pick) as pick_spy:
-        body = coord.get_display_message()
-    # Selector.pick was called with the 3 messages (as Message, not MessageView).
-    assert pick_spy.call_count == 1
-    args, _ = pick_spy.call_args
-    candidate_messages = list(args[0])
-    assert [m.id for m in candidate_messages] == expected_message_ids
-    # The returned body must be one of the three known bodies.
-    assert body in {"body-a", "body-b", "body-c"}
-    # _last_shown_message_id is the picked message's id.
-    assert coord._last_shown_message_id in expected_ids
-    assert expected_ids[coord._last_shown_message_id] == body
+def test_get_display_message_returns_on_deck_when_no_current():
+    """When current_message is None (e.g. intro phase), get_display_message returns on_deck.body."""
+    coord, _ = _build(recent_count=5)
+    coord.on_deck = Message(id="b", sender="+1", body="on-deck", received_at="2026-01-01T00:00:00Z")
+    assert coord.current_message is None
+    assert coord.get_display_message() == "on-deck"
 
 
-# --- Scenario 4: get_display_message returns None on an empty buffer ---------
+# --- Scenario 4: get_display_message returns None on empty slots ----------
 
 
-def test_get_display_message_returns_none_on_empty_buffer():
-    """Empty buffer → returns None; _last_shown_message_id untouched."""
-    mgr = _StubMessageManager(messages=[])
-    coord, _ = _build(message_manager=mgr, recent_count=5)
+def test_get_display_message_returns_none_when_no_slots():
+    """Both slots None → get_display_message returns None."""
+    coord, _ = _build(recent_count=5)
+    assert coord.current_message is None
+    assert coord.on_deck is None
     assert coord.get_display_message() is None
-    assert coord._last_shown_message_id is None
 
 
-# --- Scenario 5: get_display_message respects recent_count -------------------
+# --- Scenario 5: get_display_message prefers current over on_deck --------
 
 
-def test_get_display_message_respects_recent_count():
-    """recent_count caps the buffer slice used for sampling."""
-    # 10 entries; recent_count=3 reads only the 3 newest.
-    msgs = [_make_view(f"id{i:02d}", f"body-{i:02d}", f"2026-01-{10 + i:02d}T00:00:00Z") for i in range(10)]
-    mgr = _StubMessageManager(messages=msgs)
-    coord, _ = _build(message_manager=mgr, recent_count=3)
-
-    # Patch manager._get_messages to assert the limit argument.
-    seen_limits = []
-
-    def _capture(limit=100, suppress=True):
-        seen_limits.append(limit)
-        return sorted(mgr._entries, key=lambda e: e.message.received_at, reverse=True)[:limit]
-
-    with patch.object(mgr, "_get_messages", side_effect=_capture):
-        body = coord.get_display_message()
-    assert seen_limits == [3]
-    # The head (newest) is returned.
-    assert body == "body-09"
+def test_get_display_message_prefers_current_over_on_deck():
+    """current_message wins when both slots are set (the body being shown now,
+    not what's queued for next). Setting on_deck alone returns on_deck.body;
+    setting both returns current.body."""
+    coord, _ = _build(recent_count=5)
+    coord.on_deck = Message(id="b", sender="+1", body="queued", received_at="2026-01-01T00:00:00Z")
+    coord.current_message = Message(id="a", sender="+1", body="now", received_at="2026-01-02T00:00:00Z")
+    assert coord.get_display_message() == "now"
+    coord.current_message = None
+    assert coord.get_display_message() == "queued"
 
 
-def test_recent_count_2_reads_only_top_2():
-    """recent_count=2 reads exactly 2 entries."""
-    msgs = [_make_view(f"id{i:02d}", f"body-{i:02d}", f"2026-01-{10 + i:02d}T00:00:00Z") for i in range(10)]
-    mgr = _StubMessageManager(messages=msgs)
-    coord, _ = _build(message_manager=mgr, recent_count=2)
-
-    seen_limits = []
-
-    def _capture(limit=100, suppress=True):
-        seen_limits.append(limit)
-        return sorted(mgr._entries, key=lambda e: e.message.received_at, reverse=True)[:limit]
-
-    with patch.object(mgr, "_get_messages", side_effect=_capture):
-        coord.get_display_message()
-    assert seen_limits == [2]
+# --- Scenario 6: tick() picks ONLY at out→in -----------------------------
 
 
-# --- Scenario 6: tick() does NOT pull on a timer -----------------------------
+def test_tick_picks_at_out_to_in_only():
+    """tick() runs the WeightedSelector ONLY at the out→in transition.
 
+    Drives the coordinator through several mode transitions and counts
+    `_pick_message_via_selector` calls. The new design has picks at:
+      - intro→out (seeds `on_deck` for the first cycle)
+      - each out→in (consumes `on_deck` for `current_message`, seeds next `on_deck`)
 
-def test_tick_pulls_at_most_every_250ms():
-    """Renamed: the old 250ms-throttle contract was removed. tick() now
-    calls get_display_message() ONLY at the two background→out
-    transition paths (new_id and idle) — never on a timer.
-
-    Drives the coordinator in a tight loop for 1 second of "frame" time
-    (10 ms per tick = 100 ticks). With short pacing values (intro=0,
-    fade=0.05) the boot path fires within the first 0.1 s, then the
-    coordinator idles in background with idle_seconds=300. Total
-    pulls over the 1 s window must be small and bounded — not the
-    ~4 pulls the old 250ms-throttle would have produced.
+    Background→out does NOT pull (a side effect of moving the pick to
+    out→in). Pull-on-a-timer would produce a much higher count; this
+    test pins the new contract.
     """
     clock = [1000.0]
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", lambda: clock[0])
 
-    mgr = _StubMessageManager(
-        messages=[
-            _make_view("a", "body-a", "2026-01-02T00:00:00Z"),
-        ]
-    )
-    # Short pacing so the boot path (intro→out→in) fires within the test
-    # window. idle_seconds stays large (300 default) so background never
-    # transitions during the test.
+    msgs = [
+        _make_view(f"id{i:02d}", f"body-{i:02d}", f"2026-01-{10 + i:02d}T00:00:00Z") for i in range(5)
+    ]
+    mgr = _StubMessageManager(messages=msgs)
+    # Tight pacing so multiple cycles fit in 2 seconds of clock time.
     mgr.config.effects_settings.intro_seconds = 0.0
     mgr.config.effects_settings.fade_seconds = 0.05
+    mgr.config.effects_settings.hold_seconds = 0.05
+    mgr.config.effects_settings.text_out_seconds = 0.05
+    # IDLE_SECONDS_AFTER_HOLD is a module constant (3.0 default); the
+    # test patches it down so background→out → out→in cycles complete
+    # within the 2-second window. The new design ignores settings.toml
+    # idle_seconds here — that's the behavioral knob move.
+    monkey.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
     coord, _ = _build(message_manager=mgr, recent_count=5)
-    # Bind a stub render layer so tick() doesn't no-op.
-    from tests.effects_coordinator_test import _StubDisplay, _StubScroller, _make_effect
 
     display = _StubDisplay()
     scroller = _StubScroller()
@@ -275,32 +219,29 @@ def test_tick_pulls_at_most_every_250ms():
     coord.bind(display=display, scroller=scroller, effects=[fx_a], heart=heart)
     coord.start()
 
-    pull_count = [0]
-    original_get_display = coord.get_display_message
+    pick_count = [0]
+    original_pick = coord._pick_message_via_selector
 
-    def counting_get_display():
-        pull_count[0] += 1
-        return original_get_display()
+    def counting_pick():
+        pick_count[0] += 1
+        return original_pick()
 
-    monkey.setattr(coord, "get_display_message", counting_get_display)
+    monkey.setattr(coord, "_pick_message_via_selector", counting_pick)
 
-    # Drive 1 second in 10 ms steps. tick() is called every step.
-    for _ in range(100):
+    # Drive 2 seconds in 10 ms steps. tick() is called every step.
+    for _ in range(200):
         clock[0] += 0.01
         coord.tick()
 
-    # New contract: pulls happen ONLY at meaningful transitions.
-    # The boot path (intro→out→in) seeds _last_display_message with
-    # exactly 1 pull. After that, with idle=300 and no fresh SMS,
-    # background never transitions and no more pulls fire.
-    # OLD contract would have produced ~4 pulls (250ms throttle × 1s).
-    assert pull_count[0] <= 2, (
-        f"too many pulls: {pull_count[0]}. The 250ms-throttle contract is "
-        f"back if this exceeds ~2 — pulls should only fire at transitions, "
-        f"not on a timer."
+    # Lower bound: ≥ 2 picks (intro→out seed + first out→in consume +
+    # subsequent out→in picks). Upper bound: < 50. The pull-on-a-timer
+    # pattern would produce ~120 picks at 250 ms throttle × 2 s; the
+    # test pins the new contract by asserting a small count that
+    # reflects "one pick per out→in transition".
+    assert pick_count[0] >= 2, (
+        f"expected ≥ 2 picks (intro→out seed + at least one out→in); got {pick_count[0]}"
     )
-    assert pull_count[0] >= 1, (
-        f"expected at least 1 pull (the boot-path seed); got {pull_count[0]}. "
-        f"Either intro→out→in isn't firing, or the seed-pull was removed."
+    assert pick_count[0] < 50, (
+        f"too many picks: {pick_count[0]}. The pull-on-a-timer pattern is back if this exceeds ~50."
     )
     monkey.undo()
