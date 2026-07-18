@@ -132,7 +132,9 @@ def test_display_recency_reduces_for_recently_shown():
     """6.7: a recently-shown message has display_recency < 1.0.
 
     Same received_at on both messages ties send_recency; the never-shown
-    message wins on display_recency.
+    message wins on display_recency. (display_recency for a just-shown
+    message is now ~0.0; never-shown is 1.0 — the inversion means the
+    freshness arm favors long-ago or never-shown.)
     """
     now = 1_000_000.0
     a = _msg("a", "2026-07-05T10:00:00Z")
@@ -153,14 +155,14 @@ def test_display_recency_reduces_for_recently_shown():
 
 
 def test_display_recency_value_at_known_age():
-    """Spec scenario: 1h-ago show + 24h saturation → ~0.958.
+    """Spec scenario: 1h-ago show + 24h saturation → ~0.042.
 
     Construct a scenario where the gap matters: the shown message
     has been shown 1 hour ago, the fresh message was sent very
     recently. With W_DISPLAY=0.6 and W_SEND=0.3, the fresh
     message's display_recency of 1.0 combined with its high
-    send_recency beats the shown message's display_recency of
-    ~0.958 even though the shown message is also recent.
+    send_recency beats the shown message's low display_recency
+    even though the shown message is also recent.
     """
     now = 1_000_000.0
     shown = _msg("shown", "2026-07-05T09:00:00Z")  # older, but shown
@@ -178,9 +180,85 @@ def test_display_recency_value_at_known_age():
     picked = WeightedSelector().pick([shown, fresh2], now=now, event_log=event_log)
     assert picked is not None
     # fresh2: display_recency=1.0, send_recency=1.0
-    # shown: display_recency=1-3600/86400≈0.958, send_recency=0.0
-    # fresh2 wins clearly: 0.6*1.0 + 0.3*1.0 = 0.9 vs 0.6*0.958 + 0.3*0.0 = 0.575
+    # shown: display_recency=3600/86400≈0.042, send_recency=0.0
+    # fresh2 wins clearly: 0.6*1.0 + 0.3*1.0 = 0.9 vs 0.6*0.042 + 0.3*0.0 = 0.025
     assert picked.id == "fresh2"
+
+
+def test_just_shown_message_sits_out():
+    """A message shown at `now` (age ≈ 0) has display_recency ≈ 0.0 —
+    it sits out, and the never-shown message wins on the freshness arm.
+
+    This pins the inversion: a just-shown message must NOT tie with a
+    never-shown message on display_recency (the old formula returned
+    1.0 for both, which let the just-shown message win on send_recency
+    and re-pick itself).
+    """
+    now = 1_000_000.0
+    just_shown = _msg("just_shown", "2026-07-05T10:00:00Z")
+    never_shown = _msg("never_shown", "2026-07-05T10:00:01Z")  # same received_at, 1s later
+    event_log = _FakeEventLog(
+        [
+            {
+                "event_type": "text_display",
+                "message_id": "just_shown",
+                "timestamp": now,  # shown EXACTLY now
+                "received_at": just_shown.received_at_epoch(),
+            }
+        ]
+    )
+    picked = WeightedSelector().pick([just_shown, never_shown], now=now, event_log=event_log)
+    assert picked is not None
+    # just_shown: display_recency=0.0, send_recency=0.0
+    # never_shown: display_recency=1.0, send_recency=1.0
+    # never_shown wins: 0.6*1.0 + 0.3*1.0 = 0.9 vs 0.6*0.0 + 0.3*0.0 = 0.0
+    assert picked.id == "never_shown"
+
+
+def test_display_recency_is_zero_for_age_zero():
+    """Pin the edge case: a message with age=0 has display_recency=0.0.
+
+    Direct unit probe (not via the full pick) — exercises the formula
+    boundary explicitly so future regressions trip loudly.
+    """
+    now = 1_000_000.0
+    msg = _msg("msg", "2026-07-05T10:00:00Z")
+    event_log = _FakeEventLog(
+        [
+            {
+                "event_type": "text_display",
+                "message_id": "msg",
+                "timestamp": now,
+                "received_at": msg.received_at_epoch(),
+            }
+        ]
+    )
+    recency = WeightedSelector._display_recency(msg, now, event_log, "text_display")
+    assert recency == 0.0
+
+
+def test_display_recency_is_one_at_saturation():
+    """Pin the other edge: a message at SATURATION has display_recency=1.0.
+
+    Once the gap hits the saturation window, the message is "as
+    pickable" as a never-shown one — ready to surface.
+    """
+    from lib_shared.selector import SATURATION_SECONDS
+
+    now = 1_000_000.0
+    msg = _msg("msg", "2026-07-05T10:00:00Z")
+    event_log = _FakeEventLog(
+        [
+            {
+                "event_type": "text_display",
+                "message_id": "msg",
+                "timestamp": now - SATURATION_SECONDS,
+                "received_at": msg.received_at_epoch(),
+            }
+        ]
+    )
+    recency = WeightedSelector._display_recency(msg, now, event_log, "text_display")
+    assert recency == 1.0
 
 
 # --- 6.8 Unit test: display_recency is per-event-type ---

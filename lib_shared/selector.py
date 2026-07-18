@@ -48,8 +48,13 @@ Algorithm design notes (the `WeightedSelector`):
 
   - Display-recency (per event_type): for the most recent event in
     the log matching `(message.id, current_event_type)`, `display_recency`
-    is `1.0` if none, else `max(0.0, 1.0 - (now - last_event.timestamp) /
-    SATURATION_SECONDS)`. A `text_display` event does NOT reduce the
+    is `1.0` if none, else `min(1.0, (now - last_event.timestamp) /
+    SATURATION_SECONDS)` — i.e. a just-shown message (age ≈ 0) sits
+    out with `display_recency ≈ 0.0`, and `display_recency` grows
+    linearly toward `1.0` as the message ages toward
+    `SATURATION_SECONDS`. The semantic is "freshness FOR picking":
+    long-ago or never-shown messages surface, recently-shown messages
+    wait their turn. A `text_display` event does NOT reduce the
     `image_display` selector's display-recency for the same message.
 
   - Send-recency: normalized over the eligible set. Newest eligible
@@ -347,12 +352,14 @@ class WeightedSelector(MessageSelector):
         event_log,
         current_event_type: str,
     ) -> float:
-        """Compute the display-recency component (0..1, 1 = never shown).
+        """Compute the display-recency component (0..1, 1 = never shown or long ago).
 
         Reads the most recent event in the log matching `(message.id,
         current_event_type)`. A never-shown message gets 1.0. A message
-        shown recently gets a low value that decays toward 0.0 over
-        `SATURATION_SECONDS`.
+        shown recently gets a low value that grows toward 1.0 as the
+        message ages toward `SATURATION_SECONDS` — the semantic is
+        "freshness FOR picking" (never-shown or long-ago surfaces;
+        just-shown sits out).
 
         A `text_display` event does NOT reduce the `image_display`
         selector's display-recency for the same message — we filter
@@ -384,10 +391,10 @@ class WeightedSelector(MessageSelector):
             return 1.0
         age = now - last_ts
         if age <= 0.0:
-            return 1.0
-        if age >= SATURATION_SECONDS:
             return 0.0
-        return max(0.0, 1.0 - (age / SATURATION_SECONDS))
+        if age >= SATURATION_SECONDS:
+            return 1.0
+        return min(1.0, age / SATURATION_SECONDS)
 
     @staticmethod
     def _send_recency(message: Message, oldest_received: float, span: float) -> float:
