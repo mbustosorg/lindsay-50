@@ -288,7 +288,21 @@ class EffectsCoordinator:
         # sufficient: the cycler is exhausted, so re-arming the
         # flag doesn't recur until a NEW cycler is staged and
         # later exhausts.
+        #
+        # `_suppress_for_message_id` carries the cycler's
+        # `message_id` so the next out→in can distinguish "still
+        # staging the same message whose cycler just exhausted"
+        # (suppress) from "a fresh message with its own media"
+        # (build a new cycler). Without the id sidecar the flag
+        # leaks across message boundaries and a NEW MMS picked
+        # during the next cycle would silently fall through to
+        # the rotation effect instead of getting its own
+        # cycler — observed in the browser preview's console
+        # as `effect=Hyperspace` immediately after a
+        # `BrowserMediaOverlay` for the previous message had
+        # completed.
         self._suppress_media_override: bool = False
+        self._suppress_for_message_id: str | None = None
 
     def is_bound(self) -> bool:
         """True when the coordinator has a render layer (display + scroller + effects + heart).
@@ -576,18 +590,45 @@ class EffectsCoordinator:
         # window, and the flag resets. Without this guard the cycler
         # would simply rebuild for the same message and immediately
         # exhaust again on its second playback.
-        if self._suppress_media_override:
-            self._suppress_media_override = False
-            log.info(
-                "Coordinator media-cycler: suppressed by cycler fall-back; rotation effect will run instead",
-            )
-            return None
+        #
+        # The flag is scoped to the cycler's own message_id via
+        # `_suppress_for_message_id` — see the id compare below.
+        # If the picked message at this out→in transition has a
+        # different id, the flag is for a different (already-
+        # finished) cycler and a NEW cycler is the right answer.
         picked = self.current_message
         if picked is None:
             log.info(
                 "Coordinator media-cycler: no current message; rotation effect will run instead",
             )
             return None
+        if self._suppress_media_override:
+            suppressed_for = self._suppress_for_message_id
+            picked_id = getattr(picked, "id", None)
+            if suppressed_for is None or suppressed_for == picked_id:
+                # Same message whose cycler just exhausted — the
+                # rebuild guard fires. Clear the flag and skip.
+                self._suppress_media_override = False
+                self._suppress_for_message_id = None
+                log.info(
+                    "Coordinator media-cycler: suppressed by cycler fall-back (message_id=%s); rotation effect will run instead",
+                    picked_id,
+                )
+                return None
+            # Different message — the cycler that exhausted was for
+            # an earlier message whose fade-out is now complete.
+            # Clear the stale flag and fall through to build a new
+            # cycler for THIS message's media. Without this branch,
+            # a fresh MMS picked during the next cycle would
+            # silently fall through to the rotation effect instead
+            # of getting its own cycler.
+            log.info(
+                "Coordinator media-cycler: stale suppression flag cleared (suppressed_for=%s picked=%s); building new cycler",
+                suppressed_for,
+                picked_id,
+            )
+            self._suppress_media_override = False
+            self._suppress_for_message_id = None
         media = getattr(picked, "media", None) or []
         if not media:
             log.info(
@@ -985,7 +1026,16 @@ class EffectsCoordinator:
         # `current_message` set (NOT nulling it) is intentional: the
         # out→in staging reads its `.body` for the scroller's text
         # during the post-fade-out window.
+        #
+        # `_suppress_for_message_id` carries the cycler's
+        # `message_id` so the suppress guard only fires for the
+        # SAME message whose cycler just finished. A NEW message
+        # picked at the next out→in has a different id and gets
+        # a fresh cycler (the stale flag is cleared in
+        # `_maybe_build_media_cycler`).
+        cycler_message_id = getattr(current, "message_id", None)
         self._suppress_media_override = True
+        self._suppress_for_message_id = cycler_message_id
         self._begin_out(time.monotonic())
 
     def _current_is_active_media_cycler(self) -> bool:

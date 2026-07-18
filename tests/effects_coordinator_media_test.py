@@ -1112,3 +1112,247 @@ def test_hold_replaces_on_deck_for_new_mms(tmp_path):
         )
     finally:
         monkey.undo()
+
+
+def test_cycler_complete_does_not_leak_suppress_flag_to_next_mms(tmp_path):
+    """Regression: when message 1's cycler completes (or exhausts)
+    mid-hold, `_maybe_fall_back_to_rotation` arms
+    `_suppress_media_override` so the next out→in doesn't rebuild a
+    cycler for the same message. The previous implementation
+    persisted the flag into the next cycle without checking the
+    picked message's id — a NEW message picked during the next
+    cycle silently fell through to the rotation effect even when
+    the new message had its own media.
+
+    Observed in the browser preview as
+    `effect=Hyperspace (was=BrowserMediaOverlay)` immediately after
+    a `BrowserMediaOverlay` had completed for the previous message
+    — see the user console log captured 2026-07-18.
+
+    Pins the correct behavior: the suppression guard is scoped to
+    the cycler's own `message_id`. A new message with a different
+    id gets a fresh cycler at the next out→in.
+    """
+    import sys as _sys
+
+    from lib_shared.effects_coordinator import EffectsCoordinator
+    from lib_shared.models import EffectsSettings, Message, MessageView
+
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
+    clock = _Clock()
+    cache_dir = tmp_path / "media-cache"
+
+    # Pre-populate cache for both MMS images so the cycler's lazy
+    # fetcher resolves immediately (no real network).
+    _prep_cache_for_jpeg(cache_dir, "media/images/2026-07/a.jpg")
+    _prep_cache_for_jpeg(cache_dir, "media/images/2026-07/b.jpg")
+
+    msg1 = Message(
+        id="m1",
+        sender="+15551234567",
+        body="first mms",
+        received_at="2026-07-10T01:06:37Z",
+        media=[{"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"}],
+    )
+    msg2 = Message(
+        id="m2",
+        sender="+15551234567",
+        body="second mms",
+        # Later received_at so the stub's "latest first" sort picks
+        # m2 over m1 once both are in the buffer (after m1 is
+        # cycled-out and the next out→in consumes on_deck).
+        received_at="2026-07-10T01:09:29Z",
+        media=[{"type": "image/jpeg", "url": "media/images/2026-07/b.jpg"}],
+    )
+    msg_view_1 = MessageView(message=msg1, source="rest", suppressed=False, rules=[])
+    msg_view_2 = MessageView(message=msg2, source="rest", suppressed=False, rules=[])
+
+    # Start the buffer with m1 only — the random picker can't
+    # accidentally pick m2 first. m2 is added later (during
+    # hold / background) so the natural hold → text_out → background
+    # → out → in flow stages it as the next message.
+    mgr = _StubMessageManager(messages=[msg_view_1])
+    mgr.config.effects_settings = EffectsSettings(
+        fade_seconds=0.05,
+        intro_seconds=0.0,
+        hold_seconds=0.1,
+        idle_seconds=0.1,
+    )
+
+    display = _StubDisplay()
+    scroller = _StubScroller()
+    fx_a = _make_effect("A")()
+    heart = _make_effect("Heart")()
+    coord = EffectsCoordinator(
+        message_manager=mgr,
+        display=display,  # type: ignore[arg-type]
+        scroller=scroller,  # type: ignore[arg-type]
+        effects=[fx_a],  # type: ignore[arg-type]
+        heart=heart,  # type: ignore[arg-type]
+        is_browser=False,
+        media_api_base_url="http://test",
+        media_cache_dir=str(cache_dir),
+    )
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    try:
+        # Lifecycle for message 1: intro → out → in → hold.
+        coord.start()
+        clock.advance(0.001)
+        coord.tick()  # intro → out
+        clock.advance(0.06)
+        coord.tick()  # out fade completes → in (cycler built for m1)
+        assert coord.current_message is not None
+        assert coord.current_message.id == "m1"
+        from lib_shared.patterns.media_cycler import MediaCycler
+
+        assert isinstance(
+            coord.current, MediaCycler
+        ), f"first MMS should have built a MediaCycler; got {type(coord.current).__name__}"
+        # Mark the cycler complete (this is what naturally happens
+        # after `hold_seconds` elapses for the 1-item case) and run
+        # the next tick. We must advance through `in` → `hold`
+        # first — `_maybe_fall_back_to_rotation` early-returns
+        # during `in` to avoid oscillation with the fade-in ramp.
+        coord.current.complete = True  # type: ignore[attr-defined]
+        clock.advance(0.06)
+        coord.tick()  # in fade completes → hold
+        assert coord.mode == "hold", f"expected hold after in fade; got {coord.mode!r}"
+        # Add m2 to the buffer now, simulating a fresh MMS arrival
+        # during hold. The fresh-id path replaces `on_deck` silently
+        # — the next out→in will consume it.
+        mgr.add_message(msg_view_2)
+        clock.advance(0.01)
+        coord.tick()  # hold: cycler complete → fall-back arms suppress, fades out
+        # After fall-back the rotation effect is current and the
+        # flag is set for m1.
+        assert coord._suppress_media_override is True
+        assert coord._suppress_for_message_id == "m1"
+        assert (
+            coord.mode == "out"
+        ), f"after fall-back should be in out mode fading the cycler to black; got {coord.mode!r}"
+        # After fall-back the rotation effect is current and the
+        # flag is set for m1.
+        assert coord._suppress_media_override is True
+        assert coord._suppress_for_message_id == "m1"
+        assert (
+            coord.mode == "out"
+        ), f"after fall-back should be in out mode fading the cycler to black; got {coord.mode!r}"
+        # Drive through out fade to in. The picked current_message
+        # is now m2 (different from m1).
+        clock.advance(0.06)
+        coord.tick()  # out fade completes → in (consume on_deck → m2)
+        assert coord.current_message is not None
+        assert (
+            coord.current_message.id == "m2"
+        ), f"expected m2 to be current_message after out→in; got {coord.current_message.id!r}"
+        assert coord.current_message.media, "m2 picked with empty media list"
+        # The bug: without the id-scoped guard, _maybe_build_media_cycler
+        # returned None and a rotation effect was installed in place
+        # of a new cycler. With the fix, the new cycler is built.
+        assert isinstance(coord.current, MediaCycler), (
+            f"second MMS should have built a fresh MediaCycler "
+            f"(the suppress flag was scoped to m1, not m2); "
+            f"got {type(coord.current).__name__}"
+        )
+        assert coord.current.message_id == "m2"  # type: ignore[attr-defined]
+        # Sanity: the suppression flag was cleared during the rebuild.
+        assert coord._suppress_media_override is False
+        assert coord._suppress_for_message_id is None
+    finally:
+        monkey.undo()
+
+
+def test_cycler_complete_suppress_flag_still_fires_for_same_message(tmp_path):
+    """Companion to the regression above: when the SAME message is
+    restaged at the next out→in (which shouldn't normally happen but
+    is the case `_suppress_media_override` was originally designed
+    for), the flag still prevents a second cycler build for the
+    same id. Without this branch, the cycler would rebuild and
+    immediately re-complete on its second playback, producing an
+    infinite fade-out/fade-in oscillation.
+    """
+    import sys as _sys
+
+    from lib_shared.effects_coordinator import EffectsCoordinator
+    from lib_shared.models import EffectsSettings, Message, MessageView
+
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+
+    clock = _Clock()
+    cache_dir = tmp_path / "media-cache"
+    _prep_cache_for_jpeg(cache_dir, "media/images/2026-07/a.jpg")
+
+    msg1 = Message(
+        id="m1",
+        sender="+15551234567",
+        body="single mms",
+        received_at="2026-07-10T01:06:37Z",
+        media=[{"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"}],
+    )
+    msg_view_1 = MessageView(message=msg1, source="rest", suppressed=False, rules=[])
+
+    mgr = _StubMessageManager(messages=[msg_view_1])
+    mgr.config.effects_settings = EffectsSettings(
+        fade_seconds=0.05,
+        intro_seconds=0.0,
+        hold_seconds=0.1,
+        idle_seconds=0.1,
+    )
+
+    display = _StubDisplay()
+    scroller = _StubScroller()
+    fx_a = _make_effect("A")()
+    heart = _make_effect("Heart")()
+    coord = EffectsCoordinator(
+        message_manager=mgr,
+        display=display,  # type: ignore[arg-type]
+        scroller=scroller,  # type: ignore[arg-type]
+        effects=[fx_a],  # type: ignore[arg-type]
+        heart=heart,  # type: ignore[arg-type]
+        is_browser=False,
+        media_api_base_url="http://test",
+        media_cache_dir=str(cache_dir),
+    )
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    try:
+        coord.start()
+        clock.advance(0.001)
+        coord.tick()  # intro → out
+        clock.advance(0.06)
+        coord.tick()  # out → in (cycler for m1)
+        from lib_shared.patterns.media_cycler import MediaCycler
+
+        assert isinstance(coord.current, MediaCycler)
+        assert coord.current.message_id == "m1"  # type: ignore[attr-defined]
+        # Manually arm the suppress flag for m1 — simulates the
+        # cycler-exhausted fall-back path — then re-bind current_message
+        # to m1 to simulate the same-message restage.
+        coord._suppress_media_override = True
+        coord._suppress_for_message_id = "m1"
+        # Now drive another out→in (the cycler is still playing so
+        # we mark it complete to trigger the natural fall-back path).
+        coord.current.complete = True  # type: ignore[attr-defined]
+        # in → hold (fade-in completes after fade_seconds=0.05)
+        clock.advance(0.06)
+        coord.tick()
+        assert coord.mode == "hold"
+        # hold → out (fall-back fires because complete=True; flag already armed)
+        coord.tick()
+        assert coord.mode == "out"
+        # out → in — picked is still m1 (same message); suppress guard fires
+        clock.advance(0.06)
+        coord.tick()
+        # The suppress guard fires because picked.id == suppressed_for.
+        # A rotation effect is installed; current is NOT a cycler.
+        assert coord.current_message is not None
+        assert coord.current_message.id == "m1"
+        assert not isinstance(coord.current, MediaCycler), "same-message restage should still suppress cycler rebuild"
+        assert coord._suppress_media_override is False
+        assert coord._suppress_for_message_id is None
+    finally:
+        monkey.undo()
