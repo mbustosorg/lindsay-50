@@ -210,7 +210,7 @@ def _build_status_snapshot() -> StatusSnapshot:
 
 
 # Derive the MQTT status topic from MQTT_TOPIC if not set explicitly.
-# Default rule (Decision 2 in openspec/changes/add-sign-status-reports/
+# Default rule (Decision 2 in openspec/changes/archive/2026-07-09-add-sign-status-reports/
 # design.md): "{MQTT_TOPIC}-status". Operators can override either via
 # settings.toml or the `MQTT_STATUS_TOPIC` env var (env wins via
 # config_reader.get_raw). Adafruit IO requires an explicit feed

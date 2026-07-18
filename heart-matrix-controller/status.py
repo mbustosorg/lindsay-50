@@ -10,7 +10,7 @@ called once per render-loop iteration; the `StatusWriter.tick()`
 method is self-throttling (default 5 seconds — unified with the
 MQTT publish cadence so a single throttle constant drives both
 the file write and the MQTT publish; see Decision 1 in
-openspec/changes/add-sign-status-reports/design.md).
+openspec/changes/archive/2026-07-09-add-sign-status-reports/design.md).
 
 The file uses atomic rename (`os.replace` over a `.tmp` sibling)
 so a reader (the loader) never sees a half-written file. The
@@ -20,7 +20,7 @@ change can be detected.
 The same `StatusSnapshot.to_dict()` serializer is the single
 serializer for both the `.status.json` file write and the MQTT
 wire payload — there is no separate `to_mqtt_dict()` asymmetry
-(see Decision 10 in openspec/changes/add-sign-status-reports/
+(see Decision 10 in openspec/changes/archive/2026-07-09-add-sign-status-reports/
 design.md).
 
 The defensive `read_status()` helper is the loader's read side —

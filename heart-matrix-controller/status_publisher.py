@@ -3,7 +3,7 @@
 The Pi publishes `StatusSnapshot` JSON to MQTT_STATUS_TOPIC every 5s. A
 fresh-client-per-publish approach would burn 17,280 TCP+TLS handshakes per
 day per sign at 5s cadence — long-lived is the right pattern for a regular
-heartbeat (Decision 9 in openspec/changes/add-sign-status-reports/
+heartbeat (Decision 9 in openspec/changes/archive/2026-07-09-add-sign-status-reports/
 design.md).
 
 `StatusPublisher` wraps a single paho `mqtt.Client`:

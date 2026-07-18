@@ -13,7 +13,7 @@ SMS → Twilio → POST /api/messages → Flask
                                       ├─→ S3 (source of truth backup)
                                       │
                                       └─→ MQTT broker ──→ Raspberry Pi 4 subscribes
-                                                   ↑
+                                                   ↑             (renders to LED panel)
                                           Flask also subscribes (ring buffer)
 ```
 
@@ -21,6 +21,39 @@ The Raspberry Pi 4 subscribes to a feed on the MQTT broker and renders incoming
 messages on a 64×64 HUB75 LED panel (two stacked 64×32 panels) using the hzeller
 `rpi-rgb-led-matrix` library. Flask also subscribes to the same feed to populate
 its live message ring buffer.
+
+A second MQTT topic (`MQTT_STATUS_TOPIC`) carries the Pi's health back to
+Flask so the admin UI can show a live Dashboard pill and a Sign Health
+panel on the Settings page:
+
+```
+Pi 4 → StatusWriter.tick() ─┬─→ .status.json (loader probe signal)
+                            └─→ StatusPublisher.publish() → MQTT_STATUS_TOPIC
+                                                              │
+                                                              ▼
+                                                     Flask subscribes
+                                                              │
+                                                              ▼
+                                                    LatestSignStatus
+                                                    (in-memory, RLock)
+                                                              │
+                                                              ▼
+                                                GET /api/sign-status (one-shot
+                                                  load-time fetch by browser)
+                                                              │
+                                                              ▼
+                                                Browser WS subscription on
+                                                MQTT_STATUS_TOPIC → live updates
+                                                              │
+                                                              ▼
+                                                Dashboard pill + Settings page
+```
+
+Snapshots are published every 5 seconds (8-key shape: `schema_version`,
+`active_sha`, `short_sha`, `started_at`, `updated_at`, `uptime_seconds`,
+`mqtt_connected`, `last_error`). The Dashboard pill has four states
+(live-healthy / live-degraded / unknown / offline) driven by snapshot
+age and contents. See [CHANGELOG.md](CHANGELOG.md) for the full spec.
 
 ## Setup
 
@@ -150,9 +183,9 @@ Flask serves an admin UI at:
 
 | Page | Route | Purpose |
 |------|-------|---------|
-| Dashboard | `/` | Recent messages, counts |
+| Dashboard | `/` | Recent messages, counts, **live sign status pill** (4 states) |
 | Messages | `/messages` | Paginated list with suppress/unsuppress |
-| Settings | `/settings` | Allowed senders, rendering defaults, sign name, filter rules |
+| Settings | `/settings` | Allowed senders, rendering defaults, sign name, filter rules, **Sign Health panel** (Pi status snapshot) |
 | Preview | `/preview` | Shows filtered display output |
 | Testing | `/testing` | Inject test messages, live MQTT feed, config viewer |
 
@@ -192,12 +225,15 @@ lindsay-50/
 │   ├── sqlite.py                # SQLite storage (rebuild-from-S3 on startup)
 │   ├── s3.py                    # S3 backup helpers
 │   ├── server_time.py           # Time helpers (zoneinfo-based)
-│   ├── templates/               # Jinja2 templates
+│   ├── templates/               # Jinja2 templates (Dashboard pill, Settings Sign Health)
+│   ├── static/                  # sign_status.js — browser-side status UI driver
 │   └── settings.toml.example
 ├── heart-matrix-controller/      # Raspberry Pi 4 display device
 │   ├── main.py                  # Entrypoint: builds Display + patterns, runs the loop
 │   ├── rgb_display.py           # hzeller rgbmatrix wrapper + Bitmap/Palette/Effect
 │   ├── scroller.py              # Scrolling text via rgbmatrix graphics + BDF font
+│   ├── status.py                # StatusSnapshot + StatusWriter (.status.json + MQTT publish)
+│   ├── status_publisher.py      # Long-lived paho publisher for MQTT_STATUS_TOPIC
 │   ├── patterns/                # Background patterns (Effect subclasses)
 │   │   ├── fireworks.py
 │   │   ├── nightsky.py
@@ -210,11 +246,12 @@ lindsay-50/
 │   ├── models.py                # Message, SignConfig, FilterRule, RenderingSettings
 │   ├── messages.py              # FilteredMessages, InMemoryMessages
 │   ├── message_manager.py       # MessageManager (dispatch + seed)
+│   ├── sign_status.py           # LatestSignStatus (Flask-side RLock-guarded snapshot)
 │   ├── config_reader.py         # TOML + env config loader
 │   ├── log_setup.py             # Shared logging format (Los Angeles timestamps)
 │   ├── mqtt_factory.py          # Selects the adafruit/paho MQTT client
 │   ├── adafruit_mqtt_client.py  # Adafruit IO MQTT client (Heroku)
-│   └── paho_mqtt_client.py      # Paho MQTT client (local dev + Pi)
+│   └── paho_mqtt_client.py      # Paho MQTT client (local dev + Pi; dual-topic)
 ├── scripts/                      # start/stop helpers, Pi systemd service + startup
 ├── requirements-flask.txt        # Flask server deps (Heroku + laptop dev)
 ├── requirements-pi.txt           # Pi display device deps (setup-pi.sh)

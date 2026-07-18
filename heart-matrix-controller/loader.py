@@ -65,7 +65,7 @@ DEFAULT_STATUS_PATH = ".status.json"
 
 # Pre-swap boot hold. The hold lets the staged main.py write a few
 # healthy `.status.json` files before we trust it as a swap target.
-# Derivation (Decision 1 + 4 in openspec/changes/add-sign-status-reports/
+# Derivation (Decision 1 + 4 in openspec/changes/archive/2026-07-09-add-sign-status-reports/
 # design.md): 3× status.json writes (5s each) + 2s slack = 17s. Aligned
 # with the dashboard pill's 15s `live` window so the loader and the UI
 # read the same "3 missed writes" signal at the same scale. The 5s

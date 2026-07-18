@@ -30,7 +30,7 @@ from typing import Any, Optional
 # status.py:StatusSnapshot. Both the .status.json file write and the MQTT
 # wire payload use the same shape; this constant is the canonical list
 # for any consumer that wants to validate against the schema.
-# (Decision 10 in openspec/changes/add-sign-status-reports/design.md.)
+# (Decision 10 in openspec/changes/archive/2026-07-09-add-sign-status-reports/design.md.)
 REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "schema_version",
     "active_sha",

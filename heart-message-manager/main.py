@@ -793,7 +793,7 @@ def api_sign_boot_config():
 def api_sign_status():
     """GET /api/sign-status — return the most recent snapshot Flask has.
 
-    Decision 4 + Decision 7 in openspec/changes/add-sign-status-reports/
+    Decision 4 + Decision 7 in openspec/changes/archive/2026-07-09-add-sign-status-reports/
     design.md: the browser does a single load-time fetch against this
     endpoint for hydration; the browser does NOT call this on a timer.
     Always returns HTTP 200 — even when the in-memory store is empty

@@ -2,6 +2,105 @@
 
 All notable changes to lindsay-50 are documented in this file.
 
+## [Unreleased] — 2026-07-09
+
+### Added — Sign status reports over MQTT (issue #15, `openspec_change_name: add-sign-status-reports`)
+
+The Pi now publishes a `StatusSnapshot` to a dedicated `MQTT_STATUS_TOPIC`
+on a 5-second cadence, unified with the existing `.status.json` file
+write — both happen in the same `StatusWriter.tick()` call. One
+throttle constant, one code path, one cadence. The wire payload is the
+8-key `StatusSnapshot` shape (`schema_version`, `active_sha`,
+`short_sha`, `started_at`, `updated_at`, `uptime_seconds`,
+`mqtt_connected`, `last_error`); the `pid`, `messages_rendered`, and
+`last_tick_age_ms` fields were dropped — they had no consumer.
+
+**MQTT path.** A long-lived paho publisher
+(`heart-matrix-controller/status_publisher.py:StatusPublisher`)
+handles the network on a background thread (`connect_async` +
+`loop_start`); `client.publish()` is thread-safe and non-blocking. QoS
+0 fire-and-forget means a flaky broker can't stall the render loop.
+A 5s reconnect timer fires when `publish()` returns a non-`SUCCESS`,
+non-`NO_CONN` rc; `MQTT_ERR_NO_CONN` is treated as transient (paho's
+loop thread handles CONNACK retries on its own, the timer would just
+pile up redundant reconnects).
+
+**Flask side.** `lib_shared/sign_status.py:LatestSignStatus` holds the
+most recent snapshot in a `threading.RLock`-guarded in-memory store
+(defensive-copy semantics, ISO-8601 `received_at_wallclock()`
+timestamp). A new Flask route `GET /api/sign-status` returns the
+latest snapshot (always 200; the snapshot field is `null` when none
+has been received yet) — used by the browser for load-time hydration.
+Flask subscribes to `MQTT_STATUS_TOPIC` via the dual-topic
+`PahoMqttClient` extension (`status_topic` + `status_dispatch_callback`
+kwargs); the envelope subscription on `MQTT_TOPIC` is independent.
+
+**Browser side.** A single load-time `fetch('/api/sign-status')`
+hydrates the UI; a second `createMqttWsClient` instance scoped to
+`MQTT_STATUS_TOPIC` carries live updates after load. A 5s `setInterval`
+re-evaluates the pill state even when no new snapshot arrives. The
+Dashboard's hardcoded green "Live" pill became a dynamic 4-state
+element driven by snapshot age AND snapshot contents:
+
+| State | Trigger |
+|---|---|
+| **Live (healthy)** — green pulse | Snapshot < 15s old AND `mqtt_connected === true` AND `last_error` empty |
+| **Live (degraded)** — amber | Snapshot < 15s old AND (`mqtt_connected === false` OR `last_error` non-empty) |
+| **Unknown** — amber | Snapshot 15–30s old |
+| **Offline** — grey | Snapshot > 30s old OR never received |
+
+The Settings page gained a **Sign Health** section above "Sign Name"
+showing all 8 snapshot fields plus the browser receive timestamp;
+when `health=degraded`, a warning banner names the failing check
+("MQTT disconnected", "Last error: <message>"). The script is a
+no-op on pages with neither `#sign-live-pill` nor
+`[data-sign-status-field]`.
+
+**Topic derivation.** Default rule: `MQTT_STATUS_TOPIC` is empty in
+`settings.toml` and resolves to `f"{MQTT_TOPIC}-status"`. Operators
+override by setting `MQTT_STATUS_TOPIC` in `settings.toml` or via
+the env var (env wins). On Adafruit IO the operator MUST create the
+derived feed in the AIO dashboard before the first publish — the
+broker silently drops publishes to non-existent feeds. The resolved
+topic is exposed via `window.APP_CONFIG.mqttStatusTopic` in
+`base.html` so `sign_status.js` can find it without re-parsing the
+URL.
+
+**New files.**
+
+- `heart-matrix-controller/status_publisher.py` — `StatusPublisher`
+  (long-lived paho, single client + `connect_async` + `loop_start`,
+  thread-safe `publish()` at QoS 0, defensive reconnect on
+  non-`SUCCESS` rc, idempotent `close()`).
+- `lib_shared/sign_status.py` — `LatestSignStatus` (Flask-side
+  in-memory holder, RLock-guarded, defensive-copy semantics, ISO-8601
+  `received_at_wallclock()` timestamp).
+- `heart-message-manager/static/sign_status.js` — Browser module
+  (load-time fetch + WS subscription + 5s re-render timer, renders
+  Dashboard pill and Settings-page Sign Health section).
+
+**Modified files.**
+
+- `heart-message-manager/main.py` — added dual-topic subscribe on
+  `PahoMqttClient`, `GET /api/sign-status` route, `mqttStatusTopic`
+  injection into `APP_CONFIG`.
+- `heart-matrix-controller/main.py` — `StatusPublisher` instantiated
+  and handed to `StatusWriter` via `status_publisher=`.
+- `heart-matrix-controller/status.py` — `StatusSnapshot` field set
+  frozen to 8 keys (the `pid`/`messages_rendered`/`last_tick_age_ms`
+  fields were dropped across the whole system).
+- `heart-matrix-controller/loader.py` — `BOOT_HOLD_S` updated from
+  8s to 17s (3 × 5s cadence + 2s slack) so the pre-swap probe's
+  "3 missed writes" confidence matches the dashboard pill's 15s
+  `live` window. `.status.json` mtime remains the sole loader health
+  signal — no MQTT-based loader logic added.
+- `lib_shared/paho_mqtt_client.py` — added optional `status_topic` +
+  `status_dispatch_callback` kwargs to the constructor; subscribe loop
+  in the daemon thread handles both topics independently.
+- `heart-message-manager/templates/{base,dashboard,settings}.html` —
+  Dashboard pill became dynamic, Settings gained Sign Health section,
+  `mqttStatusTopic` injected into `APP_CONFIG`.
+
 ## [Unreleased] — 2026-07-02
 
 ### Added — MMS image and video attachments (issue #38, `openspec_change_name: add-image-and-video-support`)
