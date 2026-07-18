@@ -419,11 +419,28 @@ def get_current_media():
             dict_converter=js.Object.fromEntries,
         )
     if isinstance(current, BrowserMediaOverlay):
+        url = current.current_media_url
+        kind = current.current_media_kind
+        key = current.current_media_key
+        opacity = current.current_opacity
+        brightness = current.current_brightness
+        # Source logging (issue #26 follow-up): the browser preview
+        # has no Python-side fetch — the JS `<img>` / `<video>` element
+        # does its own GET against `url`. The ground truth for "did
+        # the image actually get requested" lives on the Flask side
+        # (`/api/media/<key>` logs every 302 with `requester=browser`),
+        # but it also helps to see here what URL we're handing back
+        # to JS — if `url` is empty while `key` is set, something is
+        # wrong in the overlay's `current_media_url` property
+        # (probably `api_base_url` not bound). The log is throttled
+        # so the 30 FPS rAF loop doesn't spam the console.
+        if key:
+            _preview_media_info(key, url, kind, opacity)
         return to_js(
             {
-                "url": current.current_media_url,
-                "kind": current.current_media_kind,
-                "opacity": current.current_opacity,
+                "url": url,
+                "kind": kind,
+                "opacity": opacity,
                 # `brightness` is the multiplicative boost applied
                 # on top of full opacity (~1.15 by default). The JS
                 # applies it as `style.filter = "brightness(N)"`
@@ -431,8 +448,8 @@ def get_current_media():
                 # matches the panel's channel-level clamping for
                 # the Pi side. Sent UNCLAMPED; the JS clamps before
                 # applying to keep the CSS sane.
-                "brightness": current.current_brightness,
-                "key": current.current_media_key,
+                "brightness": brightness,
+                "key": key,
             },
             dict_converter=js.Object.fromEntries,
         )
@@ -580,6 +597,41 @@ def get_diagnostics():
 import time as _time  # noqa: E402  (local import keeps module top tidy)
 
 _preview_media_warn_last: dict = {"ts": 0.0, "key": None}
+_preview_media_info_last: dict = {"ts": 0.0, "key": None}
+
+
+def _preview_media_info(key: str, url: str, kind: str, opacity: float) -> None:
+    """Throttled `console.log` for the browser-side source trace.
+
+    Logs once per second per key (the S3 key is the stable identifier
+    across cycles). The line shows what URL `BrowserMediaOverlay` is
+    handing back to the JS `<img>` / `<video>` element on each frame,
+    plus the opacity — when the operator reports "fade logs fire but
+    no network call appears", this log + the Flask `/api/media/<key>`
+    log together pin down whether the URL was constructed but never
+    fetched (no Flask log, no Network tab request) or constructed and
+    fetched but the response failed (Flask log shows the 302 but the
+    `<img>`/`<video>` `error` event fires in the browser).
+    """
+    try:
+        import js  # type: ignore[import-not-found]
+
+        now = _time.monotonic()
+        if key == _preview_media_info_last["key"] and now - _preview_media_info_last["ts"] < 1.0:
+            return
+        _preview_media_info_last["ts"] = now
+        _preview_media_info_last["key"] = key
+        source = "browser-proxy" if url else "<empty url — overlay not bound>"
+        js.console.log(
+            "[preview-media-source] key=%s source=%s url=%s kind=%s opacity=%.2f",
+            key,
+            source,
+            url,
+            kind,
+            opacity,
+        )
+    except Exception:
+        pass
 
 
 def _preview_media_warn(fmt: str, *args: object) -> None:

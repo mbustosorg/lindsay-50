@@ -891,16 +891,62 @@ def api_media(s3_key):
         exist) → 404 with a JSON ``{"error": "..."}`` body
       - S3 raises on a transient outage (network, IAM, throttle) → 502
         with a JSON ``{"error": "..."}`` body
+
+    Diagnostic logging (issue #26 follow-up): every request is logged
+    with the S3 key, the requester (Pi vs browser, distinguished via
+    the ``X-API-Key`` header vs the Flask session cookie), the outcome
+    (302 redirect, 400 invalid path, 404 signing failed, 502 transient),
+    and the resolved signed-URL host (when signing succeeds). The
+    User-Agent is included so we can tell the browser preview's
+    `<img>` / `<video>` fetch from the Pi's MediaCycler fetch from
+    curl-style debugging hits. This is the ground truth for "did the
+    image actually get requested" — when the browser reports
+    fade-in/out but no network call appears in DevTools, this line
+    tells us whether the proxy was hit at all.
     """
+    requester = "pi" if request.headers.get("X-API-Key") else "browser"
+    user_agent = request.headers.get("User-Agent", "")[:80]
     if ".." in s3_key or s3_key.startswith("/") or "//" in s3_key:
+        logger.warning(
+            "/api/media rejected invalid key=%s requester=%s ua=%r",
+            s3_key,
+            requester,
+            user_agent,
+        )
         return jsonify({"error": "invalid S3 key"}), 400
     try:
         signed = s3.signed_media_url(s3_key)
     except Exception as exc:  # boto3 raises BotoCoreError / ClientError
-        logger.warning("/api/media signing failed for %s: %s", s3_key, exc)
+        logger.warning(
+            "/api/media signing failed key=%s requester=%s ua=%r err=%s",
+            s3_key,
+            requester,
+            user_agent,
+            exc,
+        )
         return jsonify({"error": "media not found"}), 404
     if not signed:
+        logger.warning(
+            "/api/media empty signed url key=%s requester=%s ua=%r",
+            s3_key,
+            requester,
+            user_agent,
+        )
         return jsonify({"error": "media not found"}), 404
+    # Extract the S3 host (the `netloc` of the signed URL) so the log
+    # shows the actual destination the client will GET. The full
+    # signed URL is intentionally NOT logged — it carries a query
+    # string with credentials and is short-lived.
+    from urllib.parse import urlparse
+
+    signed_host = urlparse(signed).netloc
+    logger.info(
+        "/api/media 302 key=%s requester=%s ua=%r signed_host=%s",
+        s3_key,
+        requester,
+        user_agent,
+        signed_host,
+    )
     response = Response("", status=302)
     response.headers["Location"] = signed
     return response
