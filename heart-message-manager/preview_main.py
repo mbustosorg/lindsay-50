@@ -438,29 +438,27 @@ def get_current_media():
         )
     # Throttled diagnostic: log when the current effect is NOT a
     # BrowserMediaOverlay but the current message has media — this
-    # is the "falling back to a regular effect" path the user is
-    # trying to diagnose. `coord.current_message` is the slot the
-    # `out→in` transition populates from `on_deck`, so it's the
-    # authoritative read of "what message is being staged."
+    # is the "cycler should be playing but isn't" path. The cycler
+    # is the active effect during `in` and `hold`; everywhere else
+    # the rotation effect is the healthy state, so the warning
+    # would be a false positive.
     #
-    # Skip during `coord.mode == "out"`: this is a transient phase
-    # where `current` is still the previous rotation effect (e.g.
-    # Honeycomb) but the picked media message has already been
-    # selected. The out→in transition will construct a
-    # BrowserMediaOverlay for the picked message in a few frames;
-    # the "image will NOT render in preview" assertion would be
-    # inaccurate during this brief window. (During `in` / `hold`
-    # / `text_out` `current` IS the overlay, so the diagnostic
-    # wouldn't fire anyway — `out` is the only fade phase where
-    # `current != overlay && picked has media` is healthy
-    # transient state.)
+    # `coord.current_message` is the slot the `out→in` transition
+    # populates from `on_deck`, so it's the authoritative read of
+    # "what message is being staged." During `text_out` and
+    # `background`, `current_message` is still the cycler's message
+    # (the cycler has played; `_maybe_fall_back_to_rotation` swapped
+    # `current` back to the rotation effect and armed the
+    # suppress flag) — that's NOT a bug, it's the cycler-finished
+    # state. Skip `text_out` and `background` so the diagnostic
+    # only fires on the genuine "cycler should be active but
+    # wasn't built" bug. `out` and `intro` are skipped for the
+    # same reason: `current` is the previous rotation / heart
+    # effect, the cycler hasn't been installed yet.
     try:
         current_msg = coord.current_message
-        if (
-            current_msg is not None
-            and (media := getattr(current_msg, "media", None) or [])
-            and getattr(coord, "mode", None) != "out"
-        ):
+        mode = getattr(coord, "mode", None)
+        if current_msg is not None and (media := getattr(current_msg, "media", None) or []) and mode in ("in", "hold"):
             effect_name = type(current).__name__ if current is not None else "None"
             _preview_media_warn(
                 "picked message has %d media item(s) but current effect is %s (not BrowserMediaOverlay); "

@@ -230,6 +230,52 @@ def test_maybe_build_media_cycler_returns_none_when_no_current_message():
     assert coord._maybe_build_media_cycler() is None
 
 
+def test_maybe_build_media_cycler_constructs_browser_overlay_when_is_browser():
+    """When the coordinator is constructed with `is_browser=True`,
+    `_maybe_build_media_cycler` returns a `BrowserMediaOverlay`
+    (not a `MediaCycler`). The overlay is the browser preview's
+    media render path — DOM-driven, no PIL/cv2, the JS-side
+    `<img>` / `<video>` elements consume the URL via
+    `current_media_url`. This pins the dispatch: same helper,
+    different output class depending on `is_browser`."""
+    from lib_shared.models import Message
+
+    mgr = _StubMessageManager(messages=[])
+    coord = _build_coord(
+        message_manager=mgr,
+        media_api_base_url="http://preview.test",
+    )
+    # Simulate `app_main.py`'s coordinator construction.
+    coord._is_browser = True
+    coord.current_message = Message(
+        id="m1",
+        sender="+15551234567",
+        body="an mms",
+        received_at="2026-07-09T00:00:00Z",
+        media=[{"type": "image/jpeg", "url": "media/images/2026-07/a.jpg"}],
+    )
+
+    cycler = coord._maybe_build_media_cycler()
+    assert cycler is not None
+    from lib_shared.patterns.browser_media_overlay import BrowserMediaOverlay
+
+    assert isinstance(cycler, BrowserMediaOverlay)
+    # The overlay carries the picked message's id, the media list,
+    # and the configured api_base_url (preview uses
+    # `js.window.location.origin`, tests pass a stub).
+    assert cycler.message_id == "m1"
+    assert cycler._api_base_url == "http://preview.test"
+    # 1-item case: not exhausted at construction.
+    assert cycler.exhausted is False
+    assert cycler.complete is False  # type: ignore[attr-defined]
+    # The first `tick()` populates `_active` — that's when the
+    # JS-side `current_media_url` becomes non-empty (the DOM
+    # `<img>` / `<video>` element reads from there).
+    cycler.tick()
+    assert cycler.current_media_url == "http://preview.test/api/media/media/images/2026-07/a.jpg"
+    assert cycler.current_media_kind == "image"
+
+
 # ---------------------------------------------------------------------------
 # _maybe_build_media_cycler: MMS messages → cycler
 # ---------------------------------------------------------------------------
