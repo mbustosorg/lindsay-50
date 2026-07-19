@@ -1,10 +1,10 @@
-"""Tests for lib_shared.models.SignConfig — the v2 wire shape + migration.
+"""Tests for lib_shared.models.SignConfig — the v3 wire shape + migration.
 
 Covers:
-- CURRENT_VERSION is 2
-- Default SignConfig carries the v2 blocks
+- CURRENT_VERSION is 3
+- Default SignConfig carries the v2+ blocks
 - from_dict runs the migration registry
-- to_dict emits the v2 shape (no `tz_offset_mins`, no `rendering`)
+- to_dict emits the current shape (no `tz_offset_mins`, no `rendering`)
 - update_from_dict only overwrites the new blocks when present
 - update_from_dict migrates v1 inputs transparently
 """
@@ -19,9 +19,9 @@ from lib_shared.models import (
 )
 
 
-def test_current_version_is_2():
-    """SignConfig.CURRENT_VERSION is 2 (matches the registered migration)."""
-    assert SignConfig.CURRENT_VERSION == 2
+def test_current_version_is_3():
+    """SignConfig.CURRENT_VERSION is 3 (matches the registered migrations)."""
+    assert SignConfig.CURRENT_VERSION == 3
 
 
 def test_default_sign_config_has_v2_blocks():
@@ -29,7 +29,7 @@ def test_default_sign_config_has_v2_blocks():
     c = SignConfig()
     assert isinstance(c.effects_settings, EffectsSettings)
     assert isinstance(c.text_settings, TextSettings)
-    assert c.version == 2
+    assert c.version == 3
 
 
 def test_default_sign_config_has_no_tz_offset_mins():
@@ -63,7 +63,7 @@ def test_default_text_settings_speed_is_3():
 def test_from_dict_default():
     """from_dict({}) yields a default SignConfig."""
     c = SignConfig.from_dict({})
-    assert c.version == 2
+    assert c.version == 3
     assert isinstance(c.effects_settings, EffectsSettings)
     assert isinstance(c.text_settings, TextSettings)
 
@@ -80,7 +80,7 @@ def test_from_dict_runs_migration():
         "rendering": {"mode": "scroll", "speed": 0.5, "color": 0xFFFFFF},
     }
     c = SignConfig.from_dict(v1)
-    assert c.version == 2
+    assert c.version == 3
     assert isinstance(c.effects_settings, EffectsSettings)
     assert isinstance(c.text_settings, TextSettings)
     # Filters + senders + sign + timezone are preserved.
@@ -102,14 +102,24 @@ def test_from_dict_preserves_filters_and_senders():
     assert len(c.filters) == 1
     assert c.filters[0].type == "keyword"
     assert c.filters[0].pattern == "spam"
-    assert c.senders["+15551112222"] == "Mom"
+    # senders is now dict-of-dict (normalized phone -> value object).
+    assert c.senders["+15551112222"]["name"] == "Mom"
+    assert c.senders["+15551112222"]["action"] == "allow"
+    assert c.senders["+15551112222"]["status"] == "enabled"
 
 
 def test_to_dict_from_dict_round_trip():
     """to_dict / from_dict round-trips cleanly."""
     c = SignConfig(
-        filters=[FilterRule(type="sender", pattern="+15550001111", action="suppress")],
-        senders={"+15550001111": "Alice"},
+        filters=[FilterRule(type="keyword", pattern="spam", action="suppress")],
+        senders={
+            "+15550001111": {
+                "name": "Alice",
+                "action": "allow",
+                "status": "enabled",
+                "phone": "+15550001111",
+            }
+        },
         sign=SignSettings(name="Round Trip"),
         timezone="America/Chicago",
         effects_settings=EffectsSettings(fade_seconds=1.0, hold_seconds=10.0),
@@ -122,9 +132,9 @@ def test_to_dict_from_dict_round_trip():
     assert c2.effects_settings.fade_seconds == 1.0
     assert c2.effects_settings.hold_seconds == 10.0
     assert c2.text_settings.color == 0x00FF00
-    assert c2.senders["+15550001111"] == "Alice"
+    assert c2.senders["+15550001111"]["name"] == "Alice"
     assert len(c2.filters) == 1
-    assert c2.filters[0].pattern == "+15550001111"
+    assert c2.filters[0].pattern == "spam"
 
 
 def test_update_from_dict_replaces_fields():
@@ -161,7 +171,7 @@ def test_update_from_dict_migrates_v1_input():
             "rendering": {"mode": "scroll", "speed": 0.5, "color": 0},
         }
     )
-    assert c.version == 2
+    assert c.version == 3
     assert c.sign.name == "Migrated"
     assert isinstance(c.effects_settings, EffectsSettings)
     assert isinstance(c.text_settings, TextSettings)
@@ -179,7 +189,7 @@ def test_update_method_copies_fields():
 def test_sign_config_classmethod_default():
     """SignConfig.default() returns a fresh default."""
     c = SignConfig.default()
-    assert c.version == 2
+    assert c.version == 3
     assert isinstance(c.effects_settings, EffectsSettings)
 
 
@@ -192,8 +202,8 @@ def test_from_dict_with_constructors():
     assert c.text_settings is ts
 
 
-def test_migrate_helper_brings_v1_to_v2():
-    """The standalone migrate() helper handles v1 → v2."""
+def test_migrate_helper_brings_v1_to_v3():
+    """The standalone migrate() helper chains v1 → v2 → v3."""
     v1 = {
         "filters": [],
         "senders": [],
@@ -202,24 +212,24 @@ def test_migrate_helper_brings_v1_to_v2():
         "rendering": {"mode": "scroll", "speed": 0.5},
     }
     out = migrate(v1, current_version=SignConfig.CURRENT_VERSION)
-    assert out["version"] == 2
+    assert out["version"] == 3
     assert "tz_offset_mins" not in out
     assert "rendering" not in out
     assert "effects_settings" in out
     assert "text_settings" in out
 
 
-def test_migrate_helper_no_op_for_v2():
-    """migrate() on a v2 input is a no-op."""
-    v2 = {
+def test_migrate_helper_no_op_for_v3():
+    """migrate() on a v3 input is a no-op."""
+    v3 = {
         "filters": [],
         "senders": [],
-        "version": 2,
+        "version": 3,
         "effects_settings": EffectsSettings().to_dict(),
         "text_settings": TextSettings().to_dict(),
     }
-    out = migrate(v2, current_version=SignConfig.CURRENT_VERSION)
-    assert out == v2
+    out = migrate(v3, current_version=SignConfig.CURRENT_VERSION)
+    assert out == v3
 
 
 def test_update_from_dict_preserves_existing_blocks_when_absent():

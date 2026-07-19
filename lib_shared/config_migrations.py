@@ -16,6 +16,7 @@ import logging
 from typing import Callable, Dict, Optional
 
 from lib_shared.models import EffectsSettings, TextSettings
+from lib_shared.phone_utils import normalize_phone
 
 log = logging.getLogger("heart")
 
@@ -40,8 +41,84 @@ def _v1_to_v2(d: dict) -> dict:
     return out
 
 
+def _v2_to_v3(d: dict) -> dict:
+    """v2 → v3: senders/FilterRule taxonomy change, bump version.
+
+    Three transformations (see the ``senders-status`` and
+    ``filter-rule-status`` capabilities):
+
+    1. **senders entries** — rename the v2 ``status`` field
+       (``"allowed"``/``"blocked"``) to the v3 ``action`` field
+       (``"allow"``/``"suppress"``) and add a new ``status`` lifecycle field
+       defaulting to ``"enabled"``. The legacy v1 dict shape
+       (``{phone: name}``) is normalized to the list shape.
+    2. **type=sender filter rules** — REMOVED from the wire. Each is converted
+       to a senders list entry (``action="suppress"``, ``status="enabled"``,
+       ``name``/``phone`` both = the rule's pattern) and dropped from
+       ``filters``. Deduplicated by normalized phone — a pre-existing senders
+       entry wins.
+    3. **remaining filter rules** — rename the ``enabled`` bool to a ``status``
+       enum (``True`` → ``"enabled"``, ``False`` → ``"disabled"``; missing →
+       ``"enabled"``).
+
+    Returns a shallow copy — never mutates the caller's dict (matches
+    ``_v1_to_v2``). Preserves ``sign``, ``timezone``, ``effects_settings``,
+    ``text_settings`` unchanged.
+    """
+    out = dict(d)
+
+    # --- senders: rename status → action, add lifecycle status ---
+    raw_senders = out.get("senders", [])
+    senders_list: list[dict] = []
+    if isinstance(raw_senders, dict):
+        # Legacy v1 dict shape {phone: name} — every entry was implicitly
+        # allow + enabled.
+        for phone, name in raw_senders.items():
+            senders_list.append({"phone": phone, "name": name, "action": "allow", "status": "enabled"})
+    elif isinstance(raw_senders, list):
+        for entry in raw_senders:
+            new_entry = dict(entry)
+            old_status = new_entry.pop("status", None)
+            if "action" not in new_entry:
+                if old_status == "blocked":
+                    new_entry["action"] = "suppress"
+                elif old_status == "allowed":
+                    new_entry["action"] = "allow"
+                else:
+                    # Missing or already-v3 value — default to allow.
+                    new_entry["action"] = "allow"
+            # New lifecycle field: every pre-existing sender was "on".
+            new_entry["status"] = "enabled"
+            senders_list.append(new_entry)
+
+    # --- filters: convert type=sender to senders entries, rename enabled ---
+    raw_filters = out.get("filters", [])
+    new_filters: list[dict] = []
+    existing_norm = {normalize_phone(s["phone"]) for s in senders_list}
+    for rule in raw_filters:
+        if rule.get("type") == "sender":
+            phone = rule.get("pattern", "")
+            norm = normalize_phone(phone)
+            if norm not in existing_norm:
+                senders_list.append({"phone": phone, "name": phone, "action": "suppress", "status": "enabled"})
+                existing_norm.add(norm)
+            # Drop the rule — sender matching is the senders list's job now.
+            continue
+        new_rule = dict(rule)
+        if "status" not in new_rule:
+            enabled = new_rule.pop("enabled", True)
+            new_rule["status"] = "enabled" if enabled else "disabled"
+        new_filters.append(new_rule)
+
+    out["senders"] = senders_list
+    out["filters"] = new_filters
+    out["version"] = 3
+    return out
+
+
 MIGRATIONS: Dict[int, Callable[[dict], dict]] = {
     1: _v1_to_v2,
+    2: _v2_to_v3,
 }
 
 

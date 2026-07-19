@@ -5,7 +5,49 @@ import logging
 import threading
 from typing import List, Optional
 
+from lib_shared.phone_utils import normalize_phone
+
 log = logging.getLogger("heart")
+
+
+def _parse_senders_wire(entries: list) -> dict[str, dict]:
+    """Convert the wire ``senders`` list into the internal dict-of-dict shape.
+
+    Each wire entry is ``{"phone", "name", "action"?, "status"?}``. The
+    returned dict is keyed by the NORMALIZED phone (via
+    ``phone_utils.normalize_phone``) so lookups after normalizing an incoming
+    sender are O(1). The value preserves the operator's original ``phone``
+    string for round-trip display fidelity. Missing ``action`` defaults to
+    ``"allow"``; missing ``status`` defaults to ``"enabled"`` (back-compat for
+    partial / legacy payloads — the migration normally backfills both).
+    """
+    result: dict[str, dict] = {}
+    for entry in entries:
+        original_phone = entry["phone"]
+        result[normalize_phone(original_phone)] = {
+            "name": entry.get("name", ""),
+            "action": entry.get("action", "allow"),
+            "status": entry.get("status", "enabled"),
+            "phone": original_phone,
+        }
+    return result
+
+
+def _senders_to_wire(senders: dict[str, dict]) -> list[dict]:
+    """Serialize the internal senders dict to the wire list shape.
+
+    Emits each value's original ``phone`` (not the normalized key), sorted by
+    phone for deterministic output.
+    """
+    return [
+        {
+            "phone": value["phone"],
+            "name": value["name"],
+            "action": value["action"],
+            "status": value["status"],
+        }
+        for value in sorted(senders.values(), key=lambda v: v["phone"])
+    ]
 
 
 class MessageEnvelope:
@@ -163,29 +205,72 @@ class FilterRule:
     """A single filter rule that can suppress messages.
 
     Attributes:
-        type: Rule type — "keyword", "regex", "sender", or "message".
+        type: Rule type — one of ``"keyword"``, ``"regex"``, ``"message"``.
+            The ``"sender"`` type was REMOVED from the wire in v3 — sender
+            matching is now the sole responsibility of ``SignConfig.senders``.
         pattern: The value to match against (case-sensitive except for keyword).
-        action: Always "suppress" in practice.
+        action: Always ``"suppress"`` in v1 (the only accepted value on the
+            wire). ``"allow"`` is deferred to a future change.
+        status: The LIFECYCLE axis — ``"enabled"`` (the rule is on) or
+            ``"disabled"`` (muted without deleting). Default ``"enabled"``.
     """
 
-    def __init__(self, type: str, pattern: str, action: str = "suppress") -> None:
+    #: The set of rule types accepted on the wire in v3. ``"sender"`` is gone.
+    VALID_TYPES: frozenset = frozenset({"keyword", "regex", "message"})
+
+    def __init__(
+        self,
+        type: str,
+        pattern: str,
+        action: str = "suppress",
+        status: str = "enabled",
+    ) -> None:
         """Initialize a FilterRule.
 
         Args:
-            type: Rule type — "keyword", "regex", "sender", or "message".
+            type: Rule type — one of ``"keyword"``, ``"regex"``, ``"message"``.
             pattern: Value to match against.
-            action: Action to take when matched (default "suppress").
+            action: Action to take when matched (default ``"suppress"``; the
+                only accepted value in v1).
+            status: Lifecycle flag — ``"enabled"`` (default) or ``"disabled"``.
         """
         self.type = type
         self.pattern = pattern
         self.action = action
+        self.status = status
 
     @classmethod
     def from_dict(cls, d):
-        return cls(type=d["type"], pattern=d["pattern"], action=d.get("action", "suppress"))
+        """Parse a FilterRule from a wire dict.
+
+        Raises:
+            ValueError: if ``type`` is not one of ``keyword``/``regex``/
+                ``message`` (notably rejecting the removed ``"sender"`` type),
+                or if ``action`` is any value other than ``"suppress"``.
+        """
+        rule_type = d["type"]
+        if rule_type not in cls.VALID_TYPES:
+            raise ValueError(
+                f"FilterRule.type must be one of {sorted(cls.VALID_TYPES)}, got {rule_type!r} "
+                "(the 'sender' type was removed in v3 — use SignConfig.senders instead)"
+            )
+        action = d.get("action", "suppress")
+        if action != "suppress":
+            raise ValueError(f"FilterRule.action must be 'suppress' in v1, got {action!r}")
+        return cls(
+            type=rule_type,
+            pattern=d["pattern"],
+            action=action,
+            status=d.get("status", "enabled"),
+        )
 
     def to_dict(self):
-        return {"type": self.type, "pattern": self.pattern, "action": self.action}
+        return {
+            "type": self.type,
+            "pattern": self.pattern,
+            "action": self.action,
+            "status": self.status,
+        }
 
 
 class SignSettings:
@@ -317,6 +402,7 @@ class EffectsSettings:
             for n in effects
         ):
             raise ValueError("effects must be a list of {name: str, enabled: bool} objects")
+
         # Pacing fields are passed as `None` when absent so `__init__`
         # can fall through to the loader (canonical or operator
         # override). This way an empty wire envelope (`{}`) on a device
@@ -470,7 +556,10 @@ class SignConfig:
     """Configuration data model for the sign.
 
     filters: list of FilterRule objects
-    senders: dict of phone -> name
+    senders: dict mapping NORMALIZED phone -> ``{"name", "action", "status",
+        "phone"}`` value object (see the ``senders-status`` capability). The
+        dict key is the normalized phone (``phone_utils.normalize_phone``);
+        the value's ``phone`` field preserves the operator's original input.
     sign: SignSettings
     timezone: IANA timezone string
     effects_settings: EffectsSettings
@@ -481,30 +570,29 @@ class SignConfig:
 
     # Wire-format schema version. Bump on breaking changes; pair with
     # a new entry in lib_shared.config_migrations.MIGRATIONS.
-    CURRENT_VERSION: int = 2
+    CURRENT_VERSION: int = 3
 
     def __init__(
         self,
         filters: list["FilterRule"] | None = None,
-        senders: dict[str, str] | None = None,
+        senders: dict[str, dict] | None = None,
         sign: "SignSettings | dict | None" = None,
         timezone: str = "US/Pacific",
         version: int = CURRENT_VERSION,
         effects_settings: "EffectsSettings | dict | None" = None,
         text_settings: "TextSettings | dict | None" = None,
-        allowed_senders: list[str] | None = None,
     ) -> None:
         """Initialize a SignConfig.
 
         Args:
             filters: List of FilterRule objects (default empty).
-            senders: Dict mapping phone number -> display name (default empty).
+            senders: Dict mapping normalized phone -> ``{"name", "action",
+                "status", "phone"}`` value object (default empty).
             sign: SignSettings instance or dict (default built from empty dict).
             timezone: IANA timezone string (default "US/Pacific").
-            version: Config schema version (default CURRENT_VERSION = 2).
+            version: Config schema version (default CURRENT_VERSION = 3).
             effects_settings: EffectsSettings instance or dict (default built from empty dict).
             text_settings: TextSettings instance or dict (default built from empty dict).
-            allowed_senders: Deprecated, ignored (kept for backward compat with tests).
         """
         self.filters = filters or []
         self.senders = senders or {}
@@ -563,7 +651,7 @@ class SignConfig:
             data = {}
         return cls(
             filters=[FilterRule.from_dict(f) for f in data.get("filters", [])],
-            senders={s["phone"]: s["name"] for s in data.get("senders", [])},
+            senders=_parse_senders_wire(data.get("senders", [])),
             sign=(SignSettings.from_dict(data.get("sign")) if data.get("sign") else SignSettings()),
             timezone=data.get("timezone", "US/Pacific"),
             version=data.get("version", cls.CURRENT_VERSION),
@@ -581,7 +669,7 @@ class SignConfig:
         return self._with_lock(
             lambda: {
                 "filters": [f.to_dict() for f in self.filters],
-                "senders": [{"phone": p, "name": n} for p, n in self.senders.items()],
+                "senders": _senders_to_wire(self.senders),
                 "sign": self.sign.to_dict(),
                 "timezone": self.timezone,
                 "version": self.version,
@@ -638,18 +726,14 @@ class SignConfig:
         # shallow-copy before pop.
         from lib_shared.effects_loader import is_effects_settings_override_active
 
-        if (
-            is_effects_settings_override_active()
-            and isinstance(data, dict)
-            and "effects_settings" in data
-        ):
+        if is_effects_settings_override_active() and isinstance(data, dict) and "effects_settings" in data:
             data = dict(data)
             data.pop("effects_settings", None)
             log.debug("SignConfig.update_from_dict: dropped wire effects_settings (override active)")
 
         def _do():
             self.filters = [FilterRule.from_dict(f) for f in data.get("filters", [])]
-            self.senders = {s["phone"]: s["name"] for s in data.get("senders", [])}
+            self.senders = _parse_senders_wire(data.get("senders", []))
             sign_data = data.get("sign")
             self.sign = SignSettings.from_dict(sign_data) if sign_data else SignSettings()
             self.timezone = data.get("timezone", "US/Pacific")

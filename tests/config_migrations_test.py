@@ -171,9 +171,9 @@ def test_migrate_handles_empty_dict():
 
 def test_migrate_raises_keyerror_for_unknown_version_step():
     """migrate() raises KeyError when a step isn't registered."""
-    # The registry only has v1 → v2; ask for v1 → v3 and expect an error.
+    # The registry has v1 → v2 → v3; ask for v3 → v4 and expect an error.
     with pytest.raises(KeyError):
-        migrate({"version": 1}, current_version=3)
+        migrate({"version": 3}, current_version=4)
 
 
 # --- migrate_on_startup ---
@@ -206,21 +206,21 @@ def test_migrate_on_startup_fresh_install_initializes_defaults():
         log_func=log_lines.append,
     )
     assert out is not None
-    assert out["version"] == 2
+    assert out["version"] == 3
     assert len(s3_written) == 1
     assert len(sqlite_written) == 1
     assert len(mqtt_published) == 1
 
 
-def test_migrate_on_startup_v2_input_is_noop():
-    """When s3 already has a v2 config, the writers are NOT called."""
+def test_migrate_on_startup_v3_input_is_noop():
+    """When s3 already has a v3 config, the writers are NOT called."""
     s3_written = []
     sqlite_written = []
     mqtt_published = []
 
     def s3_getter():
         return {
-            "version": 2,
+            "version": 3,
             "filters": [],
             "senders": [],
             "effects_settings": EffectsSettings().to_dict(),
@@ -233,14 +233,14 @@ def test_migrate_on_startup_v2_input_is_noop():
         mqtt_publisher=lambda d: mqtt_published.append(d),
         s3_writer=lambda d: s3_written.append(d),
     )
-    assert out["version"] == 2
+    assert out["version"] == 3
     assert s3_written == []
     assert sqlite_written == []
     assert mqtt_published == []
 
 
 def test_migrate_on_startup_v1_input_calls_writers():
-    """When s3 has a v1 config, the writers receive the migrated v2."""
+    """When s3 has a v1 config, the writers receive the migrated (current) config."""
     s3_written = []
     sqlite_written = []
     mqtt_published = []
@@ -261,7 +261,7 @@ def test_migrate_on_startup_v1_input_calls_writers():
         mqtt_publisher=lambda d: mqtt_published.append(d),
         s3_writer=lambda d: s3_written.append(d),
     )
-    assert out["version"] == 2
+    assert out["version"] == 3
     assert "tz_offset_mins" not in out
     assert "rendering" not in out
     assert len(s3_written) == 1
@@ -269,3 +269,141 @@ def test_migrate_on_startup_v1_input_calls_writers():
     assert len(mqtt_published) == 1
     # Filters are preserved through the migration.
     assert sqlite_written[0].filters[0].pattern == "spam"
+
+
+# ---------------------------------------------------------------------------
+# _v2_to_v3 migration (task 3.2)
+# ---------------------------------------------------------------------------
+
+
+def _senders_by_phone(out):
+    """Index the migrated senders list by phone for order-independent asserts."""
+    return {s["phone"]: s for s in out["senders"]}
+
+
+def test_v2_to_v3_senders_defaults_and_filter_status():
+    out = migrate(
+        {
+            "version": 2,
+            "senders": [{"phone": "+15551234567", "name": "Alice"}],
+            "filters": [{"type": "keyword", "pattern": "spam"}],
+        },
+        current_version=3,
+    )
+    assert out["version"] == 3
+    entry = _senders_by_phone(out)["+15551234567"]
+    assert entry["action"] == "allow"
+    assert entry["status"] == "enabled"
+    assert out["filters"][0]["status"] == "enabled"
+
+
+def test_v2_to_v3_legacy_dict_senders_shape():
+    out = migrate({"version": 2, "senders": {"+15551234567": "Alice"}}, current_version=3)
+    assert out["senders"] == [{"phone": "+15551234567", "name": "Alice", "action": "allow", "status": "enabled"}]
+
+
+def test_v2_to_v3_blocked_sender_becomes_suppress():
+    out = migrate(
+        {"version": 2, "senders": [{"phone": "+15551234567", "name": "Alice", "status": "blocked"}]},
+        current_version=3,
+    )
+    entry = _senders_by_phone(out)["+15551234567"]
+    assert entry["action"] == "suppress"  # renamed from status="blocked"
+    assert entry["status"] == "enabled"  # new lifecycle field
+
+
+def test_v2_to_v3_filter_enabled_false_becomes_disabled():
+    out = migrate(
+        {"version": 2, "filters": [{"type": "keyword", "pattern": "spam", "enabled": False}]},
+        current_version=3,
+    )
+    assert out["filters"][0]["status"] == "disabled"
+    assert "enabled" not in out["filters"][0]
+
+
+def test_v2_to_v3_sender_rule_converts_to_senders_entry():
+    out = migrate(
+        {"version": 2, "filters": [{"type": "sender", "pattern": "+15551234567"}], "senders": []},
+        current_version=3,
+    )
+    assert out["filters"] == []
+    assert out["senders"] == [
+        {"phone": "+15551234567", "name": "+15551234567", "action": "suppress", "status": "enabled"}
+    ]
+
+
+def test_v2_to_v3_sender_rule_appends_to_existing_senders():
+    out = migrate(
+        {
+            "version": 2,
+            "filters": [{"type": "sender", "pattern": "+15559999999"}],
+            "senders": [{"phone": "+15551234567", "name": "Alice", "status": "allowed"}],
+        },
+        current_version=3,
+    )
+    assert out["filters"] == []
+    by_phone = _senders_by_phone(out)
+    assert by_phone["+15551234567"]["action"] == "allow"
+    assert by_phone["+15551234567"]["status"] == "enabled"
+    assert by_phone["+15559999999"]["action"] == "suppress"
+    assert by_phone["+15559999999"]["status"] == "enabled"
+
+
+def test_v2_to_v3_sender_rule_dedupes_against_existing():
+    """A type=sender rule matching an existing senders entry does not duplicate it."""
+    out = migrate(
+        {
+            "version": 2,
+            "filters": [{"type": "sender", "pattern": "+1 (555) 123-4567"}],
+            "senders": [{"phone": "+15551234567", "name": "Alice", "status": "allowed"}],
+        },
+        current_version=3,
+    )
+    assert out["filters"] == []
+    # Both normalize to +15551234567 — the pre-existing Alice entry wins.
+    assert len(out["senders"]) == 1
+    assert out["senders"][0]["name"] == "Alice"
+    assert out["senders"][0]["action"] == "allow"
+
+
+def test_v2_to_v3_is_idempotent_on_v3_input():
+    v3 = {
+        "version": 3,
+        "senders": [{"phone": "+15551234567", "name": "Alice", "action": "allow", "status": "enabled"}],
+        "filters": [{"type": "keyword", "pattern": "spam", "action": "suppress", "status": "enabled"}],
+    }
+    assert migrate(v3, current_version=3) == v3
+
+
+def test_v2_to_v3_does_not_mutate_input():
+    original = {
+        "version": 2,
+        "senders": [{"phone": "+15551234567", "name": "Alice", "status": "blocked"}],
+        "filters": [{"type": "sender", "pattern": "+15559999999"}],
+    }
+    migrate(original, current_version=3)
+    assert original["version"] == 2
+    assert original["senders"] == [{"phone": "+15551234567", "name": "Alice", "status": "blocked"}]
+    assert original["filters"] == [{"type": "sender", "pattern": "+15559999999"}]
+
+
+def test_v1_to_v3_full_chain():
+    out = migrate(
+        {
+            "version": 1,
+            "tz_offset_mins": -420,
+            "rendering": {"mode": "scroll"},
+            "senders": [{"phone": "+15551234567", "name": "Alice"}],
+            "filters": [{"type": "keyword", "pattern": "spam"}],
+        },
+        current_version=3,
+    )
+    assert out["version"] == 3
+    assert "tz_offset_mins" not in out
+    assert "rendering" not in out
+    assert "effects_settings" in out
+    assert "text_settings" in out
+    entry = _senders_by_phone(out)["+15551234567"]
+    assert entry["action"] == "allow"
+    assert entry["status"] == "enabled"
+    assert out["filters"][0]["status"] == "enabled"
