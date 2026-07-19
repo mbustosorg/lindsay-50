@@ -41,6 +41,7 @@ the historic per-kwarg defaults).
 import logging
 import random
 import time
+from types import SimpleNamespace
 
 from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Effect
@@ -277,6 +278,15 @@ class EffectsCoordinator:
         self.fade_start = 0.0
         self.last_step = 0.0
         self.phase_start = 0.0  # start of intro / hold / background
+        # Compatibility shims for the round-4 selected-log shape:
+        # `_last_picked_entry` is the MessageView-shaped namespace
+        # the selected-log reads (`entry.message.id`, etc.) — we
+        # write it at every `_pick_message_via_selector` site.
+        # `_last_display_message` is the body string `_step_fade`
+        # reads during the fade-out log. Both default to None so the
+        # first-tick code paths don't trip on missing attributes.
+        self._last_picked_entry = None
+        self._last_display_message = None
         # Two semantic slots replace the legacy `_last_*` shortcut
         # fields. `current_message` is the message currently being
         # rendered (consumed from `on_deck` at out→in, persists through
@@ -1333,6 +1343,18 @@ class EffectsCoordinator:
             if now - self.phase_start >= effects_settings.intro_seconds:
                 if self.on_deck is None:
                     self.on_deck = self._pick_message_via_selector()
+                    # Round 4 (debug-visibility): selected-log fires
+                    # at the pick site BEFORE `_begin_out`, so the
+                    # operator reads `selected → fade out` rather than
+                    # `fade out → selected`. The picked `on_deck`
+                    # drives the next cycle's `out→in` consume.
+                    if self.on_deck is not None:
+                        self._last_picked_entry = SimpleNamespace(
+                            message=self.on_deck,
+                            source="selector",
+                            suppressed=False,
+                        )
+                    self._emit_selected_log(self._resolve_next_effect_name())
                 self._begin_out(now)
 
         elif mode == "out":
