@@ -4,6 +4,43 @@ All notable changes to lindsay-50 are documented in this file.
 
 ## [Unreleased] — 2026-07-02
 
+### Changed — Senders allowlist + filter/sender lifecycle (issue #6, `openspec_change_name: implement-senders-filtering`)
+
+The `/settings` "Allowed Senders" panel (which iterated the non-existent
+`cfg.allowed_senders` and rendered an empty list) is replaced by a working
+**Senders** panel. Each sender entry now carries two independent fields:
+
+- **Action** (`allow` / `suppress`) — the effect when the sender matches.
+- **Status** (`enabled` / `disabled`) — the lifecycle flag: mute an entry
+  without deleting it (keeps the phone→name mapping for display).
+
+Filtering is **allowlist-by-default and egress-only**: a message renders
+only if its sender's entry is `action="allow"` AND `status="enabled"`. Every
+inbound SMS is still stored on ingress (SQLite + S3 + MQTT), so adding a
+sender later un-suppresses their already-received messages on the next config
+update — no Twilio re-fetch.
+
+`FilterRule` gained a `status` (`enabled` / `disabled`) lifecycle field
+(same "disable it vs. delete it" affordance for keyword/regex/message rules),
+and the `sender` rule **type was removed** — sender matching is now solely the
+Senders list's job. Phone numbers are normalized to `+1XXXXXXXXXX` (last-10-
+digits, formatting-insensitive) via the new `lib_shared/phone_utils.py`.
+
+Config schema bumps to **version 3**. A `_v2_to_v3` migration runs on server
+startup and on every device `update_from_dict`: it renames each sender's v2
+`status` (`allowed`/`blocked`) to `action` (`allow`/`suppress`), adds the new
+`status="enabled"` lifecycle field, renames `FilterRule.enabled` (bool) to
+`status` (enum), and converts stored `type=sender` rules into Senders entries
+(`action="suppress"`, `status="enabled"`).
+
+**Operator action required after upgrade:** filtering is now an allowlist, so
+senders NOT in the list are suppressed (previously they displayed with no
+name). Add each known sender to the Senders table with **Action = Allow** and
+**Status = Enabled** to restore their visibility. The migration does NOT
+auto-add senders from message history. Review any entries created from
+migrated `type=sender` rules — they arrive as `Suppress` and can be deleted or
+flipped to `Allow`.
+
 ### Added — MMS image and video attachments (issue #38, `openspec_change_name: add-image-and-video-support`)
 
 The Flask webhook now ingests MMS attachments: Twilio's `MediaUrl0..`
