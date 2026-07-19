@@ -1455,13 +1455,23 @@ def settings():
                 "phone": stripped_phone,
             }
         if duplicate_phones:
+            # Duplicate-phone rows on the form were skipped (see above).
+            # Log them so an operator wondering "why didn't my entry
+            # save?" can grep for the cause. The first occurrence of each
+            # phone wins — the row that's actually saved is the one whose
+            # position in the form list is earliest, regardless of which
+            # row the operator intended.
             logger.warning(
-                "[settings] senders POST dropped duplicate phone(s): %s " "— preserving prior senders",
+                "[settings] senders POST dropped duplicate phone(s): %s " "(first occurrence wins)",
                 sorted(set(duplicate_phones)),
             )
-        elif new_senders:
-            cfg.senders = new_senders
-        # else: defensive — preserve existing senders on a zero-row POST.
+        # The form is the source of truth on save. If the operator posted
+        # zero filled senders (e.g. clicked Remove on every row, leaving
+        # only the trailing blank add-row), save an empty dict — they
+        # explicitly emptied the list. The earlier `if not stripped_phone:
+        # continue` strips the add-row's empty phone, so an empty POST
+        # is unambiguous.
+        cfg.senders = new_senders
 
         _save_and_publish(cfg)
         return redirect(url_for("settings"))

@@ -427,8 +427,16 @@ def test_post_sign_name_writes_to_sign_settings(app_with_real_cfg, client):
     assert real_cfg.sign_settings.timezone == "US/Eastern"
 
 
-def test_post_empty_senders_preserves_existing(app_with_real_cfg, client):
-    """An empty entries list does NOT wipe the existing senders (defensive)."""
+def test_post_empty_senders_clears_existing(app_with_real_cfg, client):
+    """POST with no filled sender rows (only the trailing blank add-row)
+    → cfg.senders is cleared. The form is the source of truth on save.
+
+    Regression pin: an earlier "defensive" branch preserved the prior
+    cfg.senders when the form posted zero filled rows — which made it
+    impossible for an operator to empty the list by clicking Remove on
+    every row. The trailing blank add-row's empty phone is skipped by
+    the handler, so an empty POST is unambiguous.
+    """
     flask_app, real_cfg = app_with_real_cfg
     from lib_shared.phone_utils import normalize_phone
 
@@ -440,14 +448,35 @@ def test_post_empty_senders_preserves_existing(app_with_real_cfg, client):
     }
 
     _login(client)
-    # POST with empty sender rows
+    # POST with no filled sender rows (only the blank add-row's empty
+    # phone is in the form, which the handler skips).
     response = client.post("/settings", data=_base_form(), follow_redirects=False)
     assert response.status_code in (200, 302)
 
-    # Pre-existing sender is preserved
-    key = normalize_phone("+15551234567")
-    assert key in real_cfg.senders
-    assert real_cfg.senders[key]["name"] == "Pre-existing"
+    # The pre-existing sender is cleared — the operator clicked Remove on
+    # every row before saving.
+    assert real_cfg.senders == {}
+
+
+def test_post_only_blanks_then_add_row_with_filled_phone_saves(app_with_real_cfg, client):
+    """The blank add-row's empty phone is skipped; an add-row the
+    operator fills in BEFORE saving lands as a normal sender."""
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post(
+        "/settings",
+        data=_base_form(
+            sender_name=["Alice"],
+            sender_phone=["+15551234567"],
+            sender_allowed=["+15551234567"],
+        ),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+    from lib_shared.phone_utils import normalize_phone
+
+    assert normalize_phone("+15551234567") in real_cfg.senders
+    assert real_cfg.senders[normalize_phone("+15551234567")]["name"] == "Alice"
 
 
 def test_post_filter_rule_add_creates_new_rule(app_with_real_cfg, client):
