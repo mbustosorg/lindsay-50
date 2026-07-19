@@ -138,6 +138,19 @@ class _StubMessageManager:
         from collections import deque
         from lib_shared.models import EffectsSettings, TextSettings
 
+        # Tests use hardcoded `received_at` values from 2026-01-XX. The
+        # production lookback window (default 14 days from the
+        # `lookback_days` setting) is far narrower than a half-year
+        # gap, so the tests would see an empty eligible set. Default
+        # the stub to the maximum possible lookback (365 days) so
+        # the hardcoded timestamps stay eligible. Tests that
+        # specifically pin the eligibility filter override
+        # `effects_settings=EffectsSettings(lookback_days=...)` to
+        # something narrower.
+        effective_settings = effects_settings or EffectsSettings(
+            lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
+            selector_algorithm="weighted",
+        )
         self.messages = SimpleNamespace(get_messages=self._get_messages)
         self._entries = list(messages or [])
         # Round 4 (queue redesign): mirror production. `add_message`
@@ -146,7 +159,7 @@ class _StubMessageManager:
         # matter at the small scales tests use).
         self._new_messages_queue: deque = deque()
         self.config = SimpleNamespace(
-            effects_settings=effects_settings or EffectsSettings(),
+            effects_settings=effective_settings,
             text_settings=text_settings or TextSettings(),
         )
 
@@ -227,11 +240,17 @@ def _build(
     # pacing values from this helper — the coordinator reads
     # pacing live from the manager, and a passing test needs
     # those values to land in the manager's EffectSettings.
+    # `lookback_days` defaults to MAX_LOOKBACK_DAYS so the test's
+    # hardcoded 2026-01-XX `received_at` timestamps stay eligible.
+    # Tests that specifically pin the eligibility filter pass
+    # `lookback_days=EffectsSettings.MIN_LOOKBACK_DAYS` explicitly.
     message_manager.config.effects_settings = EffectsSettings(
         fade_seconds=fade_seconds,
         intro_seconds=intro_seconds,
         hold_seconds=hold_seconds,
         idle_seconds=idle_seconds,
+        lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
+        selector_algorithm="weighted",
     )
     coord_kwargs = {
         "message_manager": message_manager,
@@ -435,9 +454,9 @@ def test_out_to_in_does_not_pick_same_message_back_to_back():
         hold_seconds=0.05,
         message_manager=mgr,
         # Pin to `RandomSelector` so the test exercises the
-        # coordinator's anti-repeat hint (the path that USED to
-        # be the production default before `USE_WEIGHTED_SELECTOR`
-        # was flipped True 2026-07-18). With `WeightedSelector`
+        # coordinator's anti-repeat hint (the operator
+        # opt-out rotation per the `selector_algorithm` config
+        # field on the admin /settings page). With `WeightedSelector`
         # the display_recency-based avoidance already prevents
         # back-to-back picks; the hint is a no-op there.
         selector=RandomSelector(),
@@ -467,59 +486,73 @@ def test_out_to_in_does_not_pick_same_message_back_to_back():
 
 
 def test_default_selector_is_weighted():
-    """The default-selector rollout flag is True post-2026-07-18 —
-    the coordinator instantiates `WeightedSelector()` (not
-    `RandomSelector()`) when no explicit `selector` kwarg is
-    passed. This pins the new production default at the
-    construction-time layer — the bug fix is "use the algorithm
-    designed for issue #26", not "patch the historical rotation".
+    """The coordinator is selector-agnostic — at construction time
+    it stores `None` in `_selector_override` and resolves the
+    concrete selector on every pick via `make_selector(...)` from
+    the live `effects_settings.selector_algorithm` field. The
+    default for that field is `"weighted"` (see
+    `EffectsSettings.DEFAULT_SELECTOR_ALGORITHM`), so a freshly
+    built coordinator with the boot-time EffectsSettings()
+    resolves to `WeightedSelector` on the first pick.
 
-    Without this test, an accidental flip of `USE_WEIGHTED_SELECTOR`
-    back to False (or a coordinator refactor that drops the
-    default-selector wiring) would silently regress the production
-    rotation to the pre-26 random.choice pattern without breaking
-    any selector-level tests.
+    Without this test, an accidental flip of
+    `EffectsSettings.DEFAULT_SELECTOR_ALGORITHM` back to "random"
+    would silently regress the production rotation to the pre-#26
+    `random.choice` pattern without breaking any selector-level
+    tests. The property under test is the *field default*, not a
+    coordinator-level rollout flag — the rollout flag
+    (`USE_WEIGHTED_SELECTOR`) and the per-effect `recent_count`
+    field were both dropped in favor of this settings.toml-driven
+    design.
     """
+    from lib_shared.models import EffectsSettings
     from lib_shared.selector import (
-        USE_WEIGHTED_SELECTOR,
         WeightedSelector,
+        make_selector,
     )
 
-    assert USE_WEIGHTED_SELECTOR is True, (
-        "USE_WEIGHTED_SELECTOR should default to True post-2026-07-18; "
-        "the weighted algorithm was designed to prevent the same-message "
-        "back-to-back symptom via display_recency."
+    assert EffectsSettings.DEFAULT_SELECTOR_ALGORITHM == "weighted", (
+        "EffectsSettings.DEFAULT_SELECTOR_ALGORITHM should default to "
+        "'weighted' — the weighted algorithm was designed for issue #26 "
+        "to prevent the same-message back-to-back symptom via "
+        "display_recency."
     )
-    # Construct a coordinator WITHOUT an explicit `selector` kwarg —
-    # the same shape every call site (and every test that uses
-    # `_build()`) ends up using. The coordinator must consult
-    # `USE_WEIGHTED_SELECTOR` at construction time and pick
-    # `WeightedSelector()`.
+    # The factory must yield a WeightedSelector when the field is at
+    # the default — pin the dispatch wiring, not the storage field.
+    selector = make_selector(EffectsSettings.DEFAULT_SELECTOR_ALGORITHM)
+    assert isinstance(selector, WeightedSelector), (
+        f"make_selector must dispatch 'weighted' to WeightedSelector; " f"got {type(selector).__name__}"
+    )
+    # And the coordinator must NOT cache — every pick rebuilds via
+    # `make_selector(settings.selector_algorithm)`, so a flip on
+    # the admin page lands on the very next tick. We assert this
+    # by inspection: `_selector_override` defaults to `None`, and
+    # `_pick_message_via_selector` reads `effects_settings` live.
     mgr = _StubMessageManager()
     coord, *_ = _build(message_manager=mgr)
-    assert isinstance(coord._selector, WeightedSelector), (
-        "coordinator must default to WeightedSelector under "
-        f"USE_WEIGHTED_SELECTOR=True; got {type(coord._selector).__name__}. "
-        "Coordinator is selector-agnostic but its default selector must "
-        "honor USE_WEIGHTED_SELECTOR so callers don't have to know about "
-        "the rollout flag at every call site."
+    assert coord._selector_override is None, (
+        "coordinator must NOT pin a default selector at construction — "
+        "live `selector_algorithm` config drives every pick"
     )
 
 
 def test_weighted_selector_avoids_back_to_back_via_display_recency(monkeypatch):
-    """End-to-end under the new default: with `WeightedSelector`
-    installed at the coordinator and an event log recording the
-    just-shown message's `text_display` event, the next out→in
-    pick avoids the same id. The weighted algorithm solves the
-    back-to-back symptom at the scoring layer (just-shown messages
-    get `display_recency ≈ 0.0`, so they get the lowest score)
+    """End-to-end under the live "weighted" dispatch: with the
+    coordinator's manager seeded with the default
+    `EffectsSettings()` (so `selector_algorithm == "weighted"`),
+    and the event log recording the just-shown message's
+    `text_display` event, the next out→in pick avoids the same
+    id. The weighted algorithm solves the back-to-back symptom
+    at the scoring layer (just-shown messages get
+    `display_recency ≈ 0.0`, so they get the lowest score)
     rather than relying on the coordinator's anti-repeat hint
-    (which is now defense-in-depth).
+    (which is defense-in-depth for the "random" mode).
 
-    Pins the new default behavior. The companion test
-    `test_out_to_in_does_not_pick_same_message_back_to_back` exercises
-    the same property under `RandomSelector` to keep the anti-repeat
-    contract alive as a fallback for the operator opt-out rotation.
+    Pins the live-dispatch wiring. The companion test
+    `test_out_to_in_does_not_pick_same_message_back_to_back`
+    exercises the same property under an explicit
+    `selector=RandomSelector()` to keep the anti-repeat contract
+    alive as a fallback for the operator opt-out rotation.
 
     Uses the `monkeypatch` fixture (auto-cleanup) instead of
     `pytest.MonkeyPatch()` so a failure mid-test doesn't leak
@@ -542,20 +575,18 @@ def test_weighted_selector_avoids_back_to_back_via_display_recency(monkeypatch):
     )
     mgr = _StubMessageManager(messages=[msg1, msg2])
     monkeypatch.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
-    from lib_shared.selector import WeightedSelector
 
-    # Note: NOT passing `selector=` — the coordinator picks its own
-    # default per `USE_WEIGHTED_SELECTOR`. We assert it's
-    # `WeightedSelector` immediately below.
+    # Note: NOT passing `selector=` — the coordinator dispatches
+    # per the live `effects_settings.selector_algorithm` field on
+    # every pick via `make_selector(...)`. The `_build()` helper
+    # seeds the manager's config from a default `EffectsSettings()`,
+    # which means `selector_algorithm == "weighted"` (the field's
+    # default) — so the live dispatch path picks WeightedSelector.
     coord, _, _, _, _, _ = _build(
         intro_seconds=0.0,
         fade_seconds=0.05,
         hold_seconds=0.05,
         message_manager=mgr,
-    )
-    assert isinstance(coord._selector, WeightedSelector), (
-        f"coordinator must default to WeightedSelector under USE_WEIGHTED_SELECTOR=True; "
-        f"got {type(coord._selector).__name__}"
     )
     coord.start()
     _drive(clock, coord, 0.10)  # intro → out → in
@@ -565,11 +596,11 @@ def test_weighted_selector_avoids_back_to_back_via_display_recency(monkeypatch):
     second_pick = coord.current_message
     assert second_pick is not None
     assert second_pick.id != first_pick.id, (
-        f"under the new WeightedSelector default, back-to-back picks "
+        f"under the live 'weighted' dispatch, back-to-back picks "
         f"of {first_pick.id!r} should be impossible — display_recency "
         f"penalizes the just-shown message. Got first={first_pick.id!r} "
         f"second={second_pick.id!r}. The weighted algorithm is broken "
-        f"or USE_WEIGHTED_SELECTOR regressed to False."
+        f"or the make_selector dispatch regressed."
     )
 
 
@@ -772,7 +803,8 @@ def test_rotation_advances_through_enabled_effects_across_cycles():
         intro_seconds=0.0,
         hold_seconds=0.02,
         idle_seconds=999.0,
-        recent_count=20,
+        lookback_days=14,
+        selector_algorithm="weighted",
     )
     mgr = _StubMessageManager(
         messages=[msg_a, msg_b, msg_c, msg_d],

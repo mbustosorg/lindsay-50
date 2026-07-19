@@ -26,9 +26,7 @@ import pytest  # noqa: E402
 
 from lib_shared.models import Message  # noqa: E402
 from lib_shared.selector import (  # noqa: E402
-    OFFSET_SECONDS,
     SATURATION_SECONDS,
-    USE_WEIGHTED_SELECTOR,
     W_DISPLAY,
     W_FAVORITE,
     W_SEND,
@@ -350,60 +348,159 @@ def test_send_recency_normalizes_over_eligible_set():
     assert picked.id == "m4"  # newest
 
 
-# --- 6.10 Unit test: messages older than OFFSET_SECONDS are excluded from the eligible set ---
+# --- build_eligible_messages tests (issue #26 redesign) ---
 
 
-def test_eligibility_excludes_old_messages(monkeypatch):
-    """6.10: messages older than OFFSET_SECONDS are not in the eligible set.
+class _StubMsgMgr:
+    """Minimal stub of the MessageManager interface that build_eligible_messages needs.
 
-    Patch OFFSET_SECONDS to 60s for the test so we don't need real-world durations.
+    Only `get_messages(limit, suppress)` is invoked — the helper reads
+    the buffer through that method (same call site the production
+    EffectsCoordinator uses). Suppressed messages are excluded by
+    default (suppress=True) so the eligibility filter sees the same
+    view the coordinator's other call sites do.
 
-    Reimports `lib_shared.selector` and rebinds `WeightedSelector` to the
-    current module instance before monkeypatching, so the patch hits the
-    same module dict the function reads from.
+    Accepts both bare `Message` objects and `MessageView` envelopes —
+    `build_eligible_messages` calls `entry.message.received_at_epoch()`,
+    so the bare `Message` path needs to be wrapped in a MessageView
+    before forwarding. Helper normalizes both shapes.
     """
-    import importlib
 
-    import lib_shared.selector as selector_mod  # noqa: F401  (resolves sys.modules)
+    def __init__(self, msgs):
+        self._msgs = list(msgs)
 
-    selector_mod = importlib.import_module("lib_shared.selector")
-    monkeypatch.setattr(selector_mod, "OFFSET_SECONDS", 60.0)
-    event_log = _FakeEventLog()
+    def _as_view(self, entry):
+        # Already a MessageView — pass through.
+        if hasattr(entry, "message") and hasattr(entry, "suppressed"):
+            return entry
+        # Bare Message — wrap with view-only attributes so
+        # `entry.message.received_at_epoch()` resolves.
+        from lib_shared.models import MessageView
+
+        return MessageView(entry, source="test", suppressed=False)
+
+    def get_messages(self, limit=None, suppress=True):
+        out = [self._as_view(m) for m in self._msgs]
+        if suppress:
+            out = [m for m in out if not getattr(m, "suppressed", False)]
+        if limit is not None:
+            out = out[:limit]
+        return out
+
+
+def test_build_eligible_messages_respects_lookback_seconds():
+    """Messages older than `lookback_seconds` are excluded.
+
+    The coordinator's `build_eligible_messages` is the single source
+    of truth for eligibility; the selectors receive a pre-filtered
+    list and do NOT re-filter. A message at `now - 30s` is within
+    the 60s window; one at `now - 90s` falls outside.
+    """
+    from lib_shared.selector import build_eligible_messages
+
     now = 1_000_000.0
     from datetime import datetime, timedelta, timezone
 
     now_dt = datetime.fromtimestamp(now, tz=timezone.utc)
     eligible_dt = now_dt - timedelta(seconds=30)
     too_old_dt = now_dt - timedelta(seconds=90)
+
     eligible = _msg("m1", eligible_dt.isoformat().replace("+00:00", "Z"))
     too_old = _msg("m2", too_old_dt.isoformat().replace("+00:00", "Z"))
+    mgr = _StubMsgMgr([eligible, too_old])
 
-    picked = selector_mod.WeightedSelector().pick([eligible, too_old], now=now, event_log=event_log)
-    assert picked is not None
-    assert picked.id == "m1"
+    picked_in = build_eligible_messages(mgr, now=now, lookback_seconds=60.0)
+    assert [m.id for m in picked_in] == ["m1"]
+    # Wider window: both included.
+    picked_both = build_eligible_messages(mgr, now=now, lookback_seconds=120.0)
+    assert {m.id for m in picked_both} == {"m1", "m2"}
 
 
-def test_empty_eligible_set_returns_none(monkeypatch):
-    """When no message is eligible, pick() returns None.
+def test_build_eligible_messages_excludes_suppressed():
+    """build_eligible_messages filters suppressed messages by default.
 
-    Reimports `lib_shared.selector` so monkeypatch hits the live module.
+    Mirrors the coordinator's `get_messages(suppress=True)` default —
+    a suppressed (filtered-out) message should never make it into the
+    eligible set, regardless of how recent it is. The stub manager
+    looks at the MessageView's `suppressed` attribute to mirror what
+    the production `InMemoryMessages.get_messages` does.
     """
-    import importlib
+    from lib_shared.models import MessageView
+    from lib_shared.selector import build_eligible_messages
 
-    import lib_shared.selector as selector_mod  # noqa: F401  (resolves sys.modules)
-
-    selector_mod = importlib.import_module("lib_shared.selector")
-    monkeypatch.setattr(selector_mod, "OFFSET_SECONDS", 60.0)
-    event_log = _FakeEventLog()
     now = 1_000_000.0
-    from datetime import datetime, timedelta, timezone
+    fresh_view = MessageView(
+        _msg("fresh", "2026-07-18T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    suppressed_view = MessageView(
+        _msg("suppressed", "2026-07-18T00:00:00Z"),
+        source="mqtt",
+        suppressed=True,
+    )
+    mgr = _StubMsgMgr([fresh_view, suppressed_view])
 
-    now_dt = datetime.fromtimestamp(now, tz=timezone.utc)
-    too_old_dt = now_dt - timedelta(seconds=120)
-    too_old = _msg("m1", too_old_dt.isoformat().replace("+00:00", "Z"))
+    picked = build_eligible_messages(mgr, now=now, lookback_seconds=86_400.0 * 14)
+    assert [mv.id for mv in picked] == ["fresh"]
 
-    picked = selector_mod.WeightedSelector().pick([too_old], now=now, event_log=event_log)
+
+def test_build_eligible_messages_drops_messages_with_no_received_at():
+    """Messages with `received_at_epoch() == 0.0` are dropped.
+
+    The helper gates on `received_at_epoch() > 0.0` — the same
+    defensive contract the WeightedSelector pre-filter used to
+    enforce — so a malformed `received_at` (None, "", non-string)
+    cannot leak into the eligible set.
+    """
+    from lib_shared.selector import build_eligible_messages
+
+    now = 1_000_000.0
+    good = _msg("good", "2026-07-18T00:00:00Z")
+    no_ts = _msg("no_ts", "")  # received_at_epoch() returns 0.0
+    mgr = _StubMsgMgr([good, no_ts])
+
+    picked = build_eligible_messages(mgr, now=now, lookback_seconds=86_400.0 * 14)
+    assert [m.id for m in picked] == ["good"]
+
+
+def test_random_selector_returns_none_on_empty_input():
+    """RandomSelector on an empty list returns None (coordinator pre-filters).
+
+    With the redesign, selectors receive a pre-filtered list and
+    don't do their own eligibility check — so the empty-input path
+    is hit when build_eligible_messages yields nothing (all messages
+    out of window, all suppressed, or buffer empty). Pin that
+    behavior here.
+    """
+    event_log = _FakeEventLog()
+    picked = RandomSelector().pick([], now=1_000_000.0, event_log=event_log)
     assert picked is None
+
+
+def test_weighted_selector_returns_none_on_empty_input():
+    """WeightedSelector on an empty list returns None (coordinator pre-filters)."""
+    event_log = _FakeEventLog()
+    picked = WeightedSelector().pick([], now=1_000_000.0, event_log=event_log)
+    assert picked is None
+
+
+def test_make_selector_dispatches_by_algorithm_field():
+    """`make_selector` returns the right concrete class for each
+    `selector_algorithm` value, and raises ValueError on unknown.
+
+    The factory is the coordinator's single dispatch point — the
+    `selector_algorithm` EffectsSettings field drives which class
+    is constructed at every pick. A typo in the dispatch table is
+    a silent regression: the coordinator would always pick the
+    fallback. Pin the dispatch.
+    """
+    from lib_shared.selector import make_selector
+
+    assert isinstance(make_selector("weighted"), WeightedSelector)
+    assert isinstance(make_selector("random"), RandomSelector)
+    with pytest.raises(ValueError):
+        make_selector("not-a-real-algorithm")
 
 
 def test_messages_within_offset_are_eligible():
@@ -609,26 +706,26 @@ def test_integration_renderer_writes_event_then_selector_observes_it(tmp_path):
 
 
 def test_constants_have_documented_defaults():
-    """6.18: the selector's behavioral knobs are importable with documented defaults."""
-    # Re-import to assert that the module exports them and they
-    # match the design values. We assert specific numeric values
-    # so any accidental tuning change shows up in CI.
+    """6.18 (refactored): the selector's behavioral knobs are importable
+    with documented defaults. The eligibility-time cutoff
+    (`OFFSET_SECONDS`) and the rollout flag (`USE_WEIGHTED_SELECTOR`)
+    were both dropped in the #26 redesign — eligibility is now a
+    settings.toml-driven field (`lookback_days`) and the algorithm
+    pick is a settings.toml-driven dropdown (`selector_algorithm`).
+    The numeric scoring weights and the display-recency decay
+    window stay as behavioral knobs (module-level constants) per
+    the project's "behavioral knobs of an algorithm → code
+    constants, not settings.toml" rule."""
     assert W_DISPLAY == 0.6
     assert W_SEND == 0.3
     assert W_FAVORITE == 0.4
     assert SATURATION_SECONDS == 86_400.0
-    assert OFFSET_SECONDS == 1_209_600.0
-    assert USE_WEIGHTED_SELECTOR is True
+    # The factory must be exported alongside the concrete classes —
+    # the EffectsCoordinator imports `make_selector` to dispatch by
+    # `effects_settings.selector_algorithm` on every pick.
+    from lib_shared.selector import make_selector
 
-
-def test_use_weighted_selector_flag_defaults_true():
-    """Default-selector rollout flag — flipped to True 2026-07-18
-    after the "same message picked back-to-back" symptom observed
-    in the browser preview. `WeightedSelector.display_recency`
-    penalizes just-shown messages; `RandomSelector` had no such
-    mechanism. `RandomSelector` stays in the file as the operator
-    opt-out (Default-to-X-keeps-Y rule)."""
-    assert USE_WEIGHTED_SELECTOR is True
+    assert callable(make_selector)
 
 
 # --- 6.19: browser preview uses the same MessageSelector class ---
@@ -644,8 +741,8 @@ def test_browser_preview_uses_same_selector_class():
     import lib_shared.selector as _selector_mod
 
     # The selector module exports the abstract base + both concrete
-    # implementations. The base class is named MessageSelector — that's
-    # the contract.
+    # implementations + the factory + the candidate builder. The
+    # base class is named MessageSelector — that's the contract.
     assert hasattr(_selector_mod, "MessageSelector")
     assert _selector_mod.MessageSelector.__module__ == "lib_shared.selector"
 
@@ -653,7 +750,6 @@ def test_browser_preview_uses_same_selector_class():
     assert _selector_mod.W_DISPLAY == 0.6
     assert _selector_mod.W_SEND == 0.3
     assert _selector_mod.W_FAVORITE == 0.4
-    assert _selector_mod.USE_WEIGHTED_SELECTOR is True
 
 
 # --- MessageSelector ABC is abstract ---

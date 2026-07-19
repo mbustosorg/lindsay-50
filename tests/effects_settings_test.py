@@ -4,7 +4,8 @@ Covers:
 - Default values (7 enabled + 2 disabled canonical effects) read via
   the loader
 - Round-trip via from_dict / to_dict
-- Validation (out-of-range pacing, bad recent_count, malformed entries)
+- Validation (out-of-range pacing, bad lookback_days, unknown
+  selector_algorithm, malformed entries)
 - Wire shape (what the device + admin UI consume)
 
 `_DEFAULT_EFFECTS_LIST_FULL` is gone — the canonical list now lives in
@@ -74,7 +75,8 @@ def test_default_pacing_values():
     assert s.hold_seconds == 15.0
     assert s.intro_seconds == 5.0
     assert s.idle_seconds == 300.0
-    assert s.recent_count == 5
+    assert s.lookback_days == 14
+    assert s.selector_algorithm == "weighted"
 
 
 def test_canonical_list_has_known_names():
@@ -103,7 +105,9 @@ def test_to_dict_contains_all_fields():
     assert "hold_seconds" in d
     assert "intro_seconds" in d
     assert "idle_seconds" in d
-    assert "recent_count" in d
+    assert "recent_count" not in d  # dropped in #26 redesign (replaced by lookback_days + selector_algorithm)
+    assert "lookback_days" in d
+    assert "selector_algorithm" in d
 
 
 def test_round_trip_default():
@@ -116,7 +120,8 @@ def test_round_trip_default():
     assert s2.hold_seconds == s.hold_seconds
     assert s2.intro_seconds == s.intro_seconds
     assert s2.idle_seconds == s.idle_seconds
-    assert s2.recent_count == s.recent_count
+    assert s2.lookback_days == s.lookback_days
+    assert s2.selector_algorithm == s.selector_algorithm
 
 
 def test_from_dict_accepts_empty_dict():
@@ -143,7 +148,8 @@ def test_from_dict_with_custom_values():
         "hold_seconds": 7.0,
         "intro_seconds": 3.0,
         "idle_seconds": 60.0,
-        "recent_count": 10,
+        "lookback_days": 21,
+        "selector_algorithm": "weighted",
     }
     s = EffectsSettings.from_dict(d)
     assert s.effects == d["effects"]
@@ -151,7 +157,8 @@ def test_from_dict_with_custom_values():
     assert s.hold_seconds == 7.0
     assert s.intro_seconds == 3.0
     assert s.idle_seconds == 60.0
-    assert s.recent_count == 10
+    assert s.lookback_days == 21
+    assert s.selector_algorithm == "weighted"
 
 
 def test_from_dict_rejects_malformed_effects_list():
@@ -179,16 +186,34 @@ def test_validate_negative_pacing_raises():
         s.validate()
 
 
-def test_validate_recent_count_zero_raises():
-    """validate() raises ValueError on recent_count < 1."""
-    s = EffectsSettings(recent_count=0)
+def test_validate_lookback_days_below_min_raises():
+    """validate() raises ValueError on `lookback_days` below MIN_LOOKBACK_DAYS."""
+    from lib_shared.models import EffectsSettings as _ES
+
+    s = EffectsSettings(lookback_days=_ES.MIN_LOOKBACK_DAYS - 1)
     with pytest.raises(ValueError):
         s.validate()
 
 
-def test_validate_recent_count_negative_raises():
-    """validate() raises ValueError on negative recent_count."""
-    s = EffectsSettings(recent_count=-3)
+def test_validate_lookback_days_above_max_raises():
+    """validate() raises ValueError on `lookback_days` above MAX_LOOKBACK_DAYS."""
+    from lib_shared.models import EffectsSettings as _ES
+
+    s = EffectsSettings(lookback_days=_ES.MAX_LOOKBACK_DAYS + 1)
+    with pytest.raises(ValueError):
+        s.validate()
+
+
+def test_validate_selector_algorithm_unknown_raises():
+    """validate() raises ValueError on unknown `selector_algorithm`."""
+    s = EffectsSettings(selector_algorithm="not-a-real-algorithm")
+    with pytest.raises(ValueError):
+        s.validate()
+
+
+def test_validate_lookback_days_non_int_raises():
+    """validate() raises ValueError on non-int `lookback_days` (e.g. a float)."""
+    s = EffectsSettings(lookback_days=14.5)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         s.validate()
 
@@ -248,7 +273,8 @@ def test_default_pacing_reads_from_override(tmp_path, monkeypatch):
                 "hold_seconds": 7.0,
                 "intro_seconds": 3.0,
                 "idle_seconds": 30.0,
-                "recent_count": 8,
+                "lookback_days": 21,
+                "selector_algorithm": "weighted",
             }
         )
     )
@@ -260,7 +286,8 @@ def test_default_pacing_reads_from_override(tmp_path, monkeypatch):
     assert s.hold_seconds == 7.0
     assert s.intro_seconds == 3.0
     assert s.idle_seconds == 30.0
-    assert s.recent_count == 8
+    assert s.lookback_days == 21
+    assert s.selector_algorithm == "weighted"
 
 
 def test_from_dict_empty_dict_reads_pacing_from_override(tmp_path, monkeypatch):
@@ -286,7 +313,8 @@ def test_from_dict_empty_dict_reads_pacing_from_override(tmp_path, monkeypatch):
                 "hold_seconds": 7.0,
                 "intro_seconds": 3.0,
                 "idle_seconds": 30.0,
-                "recent_count": 8,
+                "lookback_days": 21,
+                "selector_algorithm": "weighted",
             }
         )
     )
@@ -300,4 +328,5 @@ def test_from_dict_empty_dict_reads_pacing_from_override(tmp_path, monkeypatch):
     assert s.fade_seconds == 1.0
     assert s.hold_seconds == 7.0
     assert s.intro_seconds == 3.0
-    assert s.recent_count == 8
+    assert s.lookback_days == 21
+    assert s.selector_algorithm == "weighted"

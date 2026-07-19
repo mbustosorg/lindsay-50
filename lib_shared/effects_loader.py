@@ -94,8 +94,8 @@ def _load_from_disk(path: Path) -> dict:
 
     Returns:
         Parsed dict with `effects`, `fade_seconds`, `hold_seconds`,
-        `intro_seconds`, `idle_seconds`, `recent_count`, and
-        `schema_version`.
+        `intro_seconds`, `idle_seconds`, `lookback_days`,
+        `selector_algorithm`, and `schema_version`.
 
     Raises:
         RuntimeError: If the file's `schema_version` exceeds

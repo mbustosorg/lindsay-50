@@ -50,24 +50,21 @@ def _make_view(message_id: str, body: str, received_at: str, suppressed: bool = 
 class _StubMessageManager:
     """Minimal MessageManager stub exposing just the surface EffectsCoordinator reads."""
 
-    def __init__(self, messages=None, recent_count=5):
-        from collections import deque
+    def __init__(self, messages=None, lookback_days=None):
         from lib_shared.models import EffectsSettings, TextSettings
 
+        # Default to the maximum lookback (365 days) so the
+        # 2026-01-XX hardcoded `received_at` values used throughout
+        # this file stay eligible. Tests that specifically pin the
+        # eligibility filter pass `lookback_days=` explicitly.
+        if lookback_days is None:
+            lookback_days = EffectsSettings.MAX_LOOKBACK_DAYS
         self._entries = list(messages or [])
-        self._recent_count = recent_count
-        # Round 4 (queue redesign): the stub now mirrors the
-        # production MessageManager API. `take_next_new_message`
-        # returns None (the FIFO is empty) — this stub seeds via
-        # the constructor, so all entries are "pre-existing" and
-        # the random-pool path applies. Tests that exercise the
-        # queue drain should append to `_new_messages_queue`
-        # directly.
-        self._new_messages_queue: deque = deque()
-        # The coordinator reads `recent_count` (and the rest of
+        self._lookback_days = lookback_days
+        # The coordinator reads `lookback_days` (and the rest of
         # the pacing) live from `message_manager.config.effects_settings`.
         self.config = SimpleNamespace(
-            effects_settings=EffectsSettings(recent_count=recent_count),
+            effects_settings=EffectsSettings(lookback_days=lookback_days),
             text_settings=TextSettings(),
         )
 
@@ -100,12 +97,12 @@ class _StubMessageManager:
             return None
 
 
-def _build(message_manager=None, recent_count=5, selector=None, event_log=None):
+def _build(message_manager=None, lookback_days=14, selector=None, event_log=None):
     """Build a coordinator with the minimum layer needed to construct one."""
     if message_manager is None:
-        message_manager = _StubMessageManager(recent_count=recent_count)
+        message_manager = _StubMessageManager(lookback_days=lookback_days)
     else:
-        message_manager.config.effects_settings.recent_count = recent_count
+        message_manager.config.effects_settings.lookback_days = lookback_days
     coord = EffectsCoordinator(
         message_manager=message_manager,
         selector=selector,
@@ -133,7 +130,7 @@ def test_required_message_manager_raises_typeerror_when_omitted():
 
 def test_get_display_message_returns_current_message_body():
     """When current_message is set, get_display_message returns its body."""
-    coord, _ = _build(recent_count=5)
+    coord, _ = _build(lookback_days=14)
     msg = Message(id="a", sender="+1", body="hello", received_at="2026-01-02T00:00:00Z")
     coord.current_message = msg
     coord.on_deck = Message(id="b", sender="+1", body="world", received_at="2026-01-03T00:00:00Z")
@@ -145,7 +142,7 @@ def test_get_display_message_returns_current_message_body():
 
 def test_get_display_message_returns_on_deck_when_no_current():
     """When current_message is None (e.g. intro phase), get_display_message returns on_deck.body."""
-    coord, _ = _build(recent_count=5)
+    coord, _ = _build(lookback_days=14)
     coord.on_deck = Message(id="b", sender="+1", body="on-deck", received_at="2026-01-01T00:00:00Z")
     assert coord.current_message is None
     assert coord.get_display_message() == "on-deck"
@@ -156,7 +153,7 @@ def test_get_display_message_returns_on_deck_when_no_current():
 
 def test_get_display_message_returns_none_when_no_slots():
     """Both slots None → get_display_message returns None."""
-    coord, _ = _build(recent_count=5)
+    coord, _ = _build(lookback_days=14)
     assert coord.current_message is None
     assert coord.on_deck is None
     assert coord.get_display_message() is None
@@ -169,7 +166,7 @@ def test_get_display_message_prefers_current_over_on_deck():
     """current_message wins when both slots are set (the body being shown now,
     not what's queued for next). Setting on_deck alone returns on_deck.body;
     setting both returns current.body."""
-    coord, _ = _build(recent_count=5)
+    coord, _ = _build(lookback_days=14)
     coord.on_deck = Message(id="b", sender="+1", body="queued", received_at="2026-01-01T00:00:00Z")
     coord.current_message = Message(id="a", sender="+1", body="now", received_at="2026-01-02T00:00:00Z")
     assert coord.get_display_message() == "now"
@@ -208,7 +205,7 @@ def test_tick_picks_at_out_to_in_only():
     # within the 2-second window. The new design ignores settings.toml
     # idle_seconds here — that's the behavioral knob move.
     monkey.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
-    coord, _ = _build(message_manager=mgr, recent_count=5)
+    coord, _ = _build(message_manager=mgr, lookback_days=14)
 
     display = _StubDisplay()
     scroller = _StubScroller()

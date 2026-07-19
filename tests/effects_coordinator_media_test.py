@@ -1028,6 +1028,12 @@ def test_hold_replaces_on_deck_for_new_mms(tmp_path):
             fade_seconds=0.01,
             hold_seconds=0.05,
             idle_seconds=0.05,
+            # Wide lookback so the test's hardcoded `received_at`
+            # stays eligible. The eligibility filter is not what
+            # this test is exercising — the test pins the
+            # out→in→hold lifecycle on a media-bearing message.
+            lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
+            selector_algorithm="weighted",
         ),
     )
     coord = _build_coord(

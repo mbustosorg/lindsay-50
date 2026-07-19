@@ -76,6 +76,18 @@ def _load_app_module(mock_cfg):
     models_mod.Message = MagicMock()
     models_mod.MessageEnvelope = MagicMock()
     models_mod.MessageView = MagicMock()
+    # New after the #26 effects-settings redesign — `main.py`'s
+    # `_build_sign_config_from_request` validator consults
+    # `EffectsSettings.MIN_LOOKBACK_DAYS`, `MAX_LOOKBACK_DAYS`, and
+    # `VALID_SELECTOR_ALGORITHMS`, so the mock loader has to expose
+    # them with real class-level attributes (a bare MagicMock would
+    # accept `MIN_LOOKBACK_DAYS` reads but the value would be a
+    # Mock, not a number — validator comparisons would silently lie).
+    effects_settings_mock = MagicMock()
+    effects_settings_mock.MIN_LOOKBACK_DAYS = 1
+    effects_settings_mock.MAX_LOOKBACK_DAYS = 365
+    effects_settings_mock.VALID_SELECTOR_ALGORITHMS = ("weighted", "random")
+    models_mod.EffectsSettings = effects_settings_mock
 
     # Mock the v2 config migration module (heart-message-manager/main.py
     # imports it at module level). The startup migration runs at app load
@@ -522,7 +534,8 @@ class TestSettingsSaveFormFieldMerge:
                 "effects_settings_hold_seconds": "20",
                 "effects_settings_intro_seconds": "5",
                 "effects_settings_idle_seconds": "300",
-                "effects_settings_recent_count": "7",
+                "effects_settings_lookback_days": "21",
+                "effects_settings_selector_algorithm": "weighted",
             },
             follow_redirects=False,
         )
@@ -530,14 +543,16 @@ class TestSettingsSaveFormFieldMerge:
         # Successful save → 302 redirect to /settings
         assert response.status_code == 302, response.data
 
-        # All four pacing fields and recent_count must have landed on the
-        # cfg that was passed to put_config (MagicMock attribute writes are
-        # recordable, so we read them back through the cfg MagicMock).
+        # All four pacing fields, `lookback_days`, and `selector_algorithm`
+        # must have landed on the cfg that was passed to put_config
+        # (MagicMock attribute writes are recordable, so we read them
+        # back through the cfg MagicMock).
         assert baseline_cfg.effects_settings.fade_seconds == 5.0
         assert baseline_cfg.effects_settings.hold_seconds == 20.0
         assert baseline_cfg.effects_settings.intro_seconds == 5.0
         assert baseline_cfg.effects_settings.idle_seconds == 300.0
-        assert baseline_cfg.effects_settings.recent_count == 7
+        assert baseline_cfg.effects_settings.lookback_days == 21
+        assert baseline_cfg.effects_settings.selector_algorithm == "weighted"
 
         # And the saved cfg must have been persisted to sqlite.
         assert sqlite_mod.put_config.called, "expected sqlite.put_config to be called"
@@ -595,7 +610,8 @@ class TestSettingsSaveFormFieldMerge:
                 "effects_settings_hold_seconds": "15",
                 "effects_settings_intro_seconds": "5",
                 "effects_settings_idle_seconds": "300",
-                "effects_settings_recent_count": "5",
+                "effects_settings_lookback_days": "14",
+                "effects_settings_selector_algorithm": "weighted",
             },
             follow_redirects=False,
         )
@@ -609,7 +625,7 @@ class TestSettingsSaveFormFieldMerge:
         for key in (
             "sign_name",
             "effects_settings_fade_seconds",
-            "effects_settings_recent_count",
+            "effects_settings_lookback_days",
         ):
             assert (
                 key in raw_records[0].getMessage()
@@ -622,4 +638,5 @@ class TestSettingsSaveFormFieldMerge:
         assert "fade_seconds" in merge_msg
         assert "POST='5'" in merge_msg, merge_msg
         assert "saved=5.0" in merge_msg, merge_msg
-        assert "recent_count" in merge_msg
+        assert "lookback_days" in merge_msg
+        assert "selector_algorithm" in merge_msg

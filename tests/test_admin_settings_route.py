@@ -10,7 +10,7 @@ Verifies the contract that the spec pins:
   unchanged — no rebuild, no merge.
 
 - The four timing fields (`fade_seconds`, `hold_seconds`,
-  `intro_seconds`, `idle_seconds`) and `recent_count` pre-populate
+  `intro_seconds`, `idle_seconds`) and `lookback_days` pre-populate
   from the loader's canonical value when the wire envelope is absent
   (i.e. `cfg.effects_settings.<field>` is `None`).
 
@@ -103,6 +103,16 @@ def _load_app_module(mock_cfg, paho_client_ctor):
 
     models_mod.MessageEnvelope = _FakeEnvelope
     models_mod.MessageView = MagicMock()
+    # `main.py` imports `EffectsSettings` and consults its validator
+    # class-level constants (`MIN_LOOKBACK_DAYS`, `MAX_LOOKBACK_DAYS`,
+    # `VALID_SELECTOR_ALGORITHMS`) when validating /settings POST
+    # payloads — the mock loader has to expose real values for those
+    # so validator comparisons don't silently lie with MagicMocks.
+    effects_settings_mock = MagicMock()
+    effects_settings_mock.MIN_LOOKBACK_DAYS = 1
+    effects_settings_mock.MAX_LOOKBACK_DAYS = 365
+    effects_settings_mock.VALID_SELECTOR_ALGORITHMS = ("weighted", "random")
+    models_mod.EffectsSettings = effects_settings_mock
 
     cm_mod = _make_mock("lib_shared.config_migrations")
     cm_mod.migrate = MagicMock(side_effect=lambda d, current_version: d or {})
@@ -246,7 +256,8 @@ def _make_cfg_with_none_timing():
     cfg.effects_settings.hold_seconds = None
     cfg.effects_settings.intro_seconds = None
     cfg.effects_settings.idle_seconds = None
-    cfg.effects_settings.recent_count = None
+    cfg.effects_settings.lookback_days = None
+    cfg.effects_settings.selector_algorithm = None
     cfg.effects_settings.effects = None
     return cfg
 
@@ -361,7 +372,8 @@ class TestOverrideAddedEffectShows:
                     "hold_seconds": 15.0,
                     "intro_seconds": 5.0,
                     "idle_seconds": 300.0,
-                    "recent_count": 5,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
@@ -443,7 +455,8 @@ class TestDeletedCanonicalNameAbsent:
                     "hold_seconds": 15.0,
                     "intro_seconds": 5.0,
                     "idle_seconds": 300.0,
-                    "recent_count": 5,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
@@ -470,8 +483,11 @@ class TestDeletedCanonicalNameAbsent:
 
 class TestTimingFieldsPrePopulate:
     """When no wire envelope is present (`cfg.effects_settings.<field>`
-    is `None`), the four timing fields and `recent_count` pre-populate
-    from the loader's canonical `effects_settings` block."""
+    is `None`), the four timing fields and `lookback_days`
+    pre-populate from the loader's canonical `effects_settings`
+    block. (The `selector_algorithm` field is a `<select>` — its
+    default pre-populates via a `selected` attribute on the
+    matching `<option>`, pinned in a sibling test below.)"""
 
     def test_timing_fields_render_canonical_value(self, app, client):
         import sqlite as sqlite_mod
@@ -490,9 +506,39 @@ class TestTimingFieldsPrePopulate:
 
         # Each timing input has `value="<canonical>"`. The canonical
         # values are: fade=2.0, hold=15.0, intro=5.0, idle=300.0,
-        # recent=5.
+        # lookback_days=14.
         assert f'value="{canonical["fade_seconds"]}"' in body
         assert f'value="{canonical["hold_seconds"]}"' in body
         assert f'value="{canonical["intro_seconds"]}"' in body
         assert f'value="{canonical["idle_seconds"]}"' in body
-        assert f'value="{canonical["recent_count"]}"' in body
+        assert f'value="{canonical["lookback_days"]}"' in body
+
+    def test_selector_algorithm_dropdown_pre_selects_canonical(self, app, client):
+        """The `selector_algorithm` `<select>` marks the canonical
+        value as `selected` so the admin /settings page reflects the
+        right algorithm on first render.
+
+        Pins the dispatch wiring for the live-config pick path —
+        if the `selected` attribute ever lands on the wrong option,
+        an operator who opens /settings after a fresh deploy sees
+        a misleading default. We assert `selected` appears on the
+        option whose value matches the canonical field.
+        """
+        import sqlite as sqlite_mod
+        import lib_shared.effects_loader as effects_loader
+
+        canonical = effects_loader.load_effects_settings()
+        assert canonical is not None
+        canonical_alg = canonical["selector_algorithm"]
+
+        sqlite_mod.get_config.return_value = _make_cfg_with_none_timing()
+        _login(client)
+
+        response = client.get("/settings")
+        body = response.get_data(as_text=True)
+
+        assert (f'value="{canonical_alg}"' " selected") in body or (f'value="{canonical_alg}" selected') in body, (
+            f"Expected the `selector_algorithm` <select> to "
+            f"pre-select {canonical_alg!r} on first render; not "
+            f"found in body. The first 600 chars:\n{body[:600]}"
+        )

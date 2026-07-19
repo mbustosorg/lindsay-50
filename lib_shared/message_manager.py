@@ -825,11 +825,16 @@ class MessageManager:
         self._messages._enrich_messages(list(self._messages._msgs))
         self._emit_change()
 
-    def get_messages(self, limit: int = 100, suppress: bool = True):
+    def get_messages(self, limit: int | None = 100, suppress: bool = True):
         """Return messages from the ring buffer.
 
         Args:
-            limit: Maximum number of messages to return.
+            limit: Maximum number of messages to return. `None`
+                means "every message in the ring buffer" (the
+                natural upper bound is `InMemoryMessages.maxlen`,
+                default 100). The selector pool uses `None` to
+                bypass any per-pick cap and yield the full ring —
+                see `EffectsCoordinator._pick_message_via_selector`.
             suppress: If True (default), exclude suppressed messages.
         """
         return self._messages.get_messages(limit, suppress=suppress)

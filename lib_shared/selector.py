@@ -6,13 +6,9 @@ implementations:
   - `RandomSelector` — the historical rotation: uniform random pick
     from the candidate pool, after filtering out the coordinator's
     `exclude_id` (the just-consumed message — anti-repeat hint).
-    Kept as the explicit operator opt-out: pass
-    `RandomSelector()` to the `EffectsCoordinator(selector=...)`
-    constructor to restore the historical rotation. The default
-    since 2026-07-18 is `WeightedSelector` (see
-    `USE_WEIGHTED_SELECTOR`), which solves the
-    same-message-back-to-back symptom via `display_recency` rather
-    than via the coordinator's anti-repeat hint.
+    Operators pick it via the `selector_algorithm` config field
+    (admin UI: "Selection algorithm"). Kept in the file as the
+    explicit operator opt-out (Default-to-X-keeps-Y rule).
 
   - `WeightedSelector` — additive weighted scoring on three components:
         score(message, now, event_log, favorites) =
@@ -21,36 +17,50 @@ implementations:
           + W_SEND     * send_recency(message, eligible_set, now)
           + W_FAVORITE * (1.0 if message.id in favorites else 0.0)
 
-    Ships behind `USE_WEIGHTED_SELECTOR=False` so the historical
-    rotation runs unchanged. Flip the constant (or pass an explicit
-    `WeightedSelector()` instance to `EffectsCoordinator(...)`) to
-    enable.
+    The default selection algorithm — `selector_algorithm="weighted"`.
+    Solves the same-message-back-to-back symptom via `display_recency`
+    rather than via the coordinator's anti-repeat hint.
 
 The `EffectsCoordinator` accepts any `MessageSelector` subclass as a
-constructor kwarg — the coordinator itself is selector-agnostic. New
-algorithms (e.g. round-robin, weighted-random, per-sender priority)
-subclass `MessageSelector` and can be dropped in without coordinator
-changes. The same Python class runs in both runtimes (PyScript on the
-browser, CPython on the Pi); only the event-log source differs.
+constructor kwarg (`selector=`) and calls `make_selector(algorithm)` to
+resolve the live-config default. New algorithms (round-robin,
+weighted-random, per-sender priority) subclass `MessageSelector`,
+register an entry in `VALID_SELECTOR_ALGORITHMS`, and can be selected
+via the admin UI without coordinator changes. The same Python class
+runs in both runtimes (PyScript on the browser, CPython on the Pi);
+only the event-log source differs.
 
-Only two operational values flow through `heart-matrix-controller/settings.toml`:
+Configuration fields (operator-tunable; NOT code constants):
 
-    EVENT_LOG_PATH          default "data/events.jsonl"
-    EVENT_LOG_MAX_ENTRIES   default 100
+    effects_settings.selector_algorithm   "weighted" (default) | "random"
+    effects_settings.lookback_days        14 (default; 1..365)
 
-These describe *where the artifact lives on disk*, not *how the
-algorithm scores* — the weights, decay window, and eligibility window
-are behavioral knobs and live as module-level constants in this file.
-Operators who want to tune them edit this file and redeploy. This
-mirrors the `TextSettings.MIN_SPEED/MAX_SPEED/DEFAULT_SPEED` pattern
-in `lib_shared/models.py`.
+`selector_algorithm` picks the algorithm. `lookback_days` is the
+eligibility window: messages older than `lookback_days` are filtered
+out of the candidate pool by `build_eligible_messages`. Both fields
+are surfaced on the admin /settings page; both apply uniformly to
+all selection algorithms (per the user's "single shared candidate
+pool" design — the coordinator builds the eligible set once and
+hands it to whichever selector `make_selector` returns).
+
+Behavioral knobs (scoring weights, display-recency decay window)
+remain module-level constants alongside the algorithm. Per the
+project's behavioral-knobs-in-code rule — operators tune these by
+editing this file and redeploying, not via settings.toml. Only the
+two values above (`selector_algorithm`, `lookback_days`) cross the
+admin-UI boundary, because they describe WHAT pool to pick from and
+WHICH algorithm to run, not HOW the algorithm scores.
 
 Algorithm design notes (the `WeightedSelector`):
 
   - Eligibility filter: a message is eligible iff
-    `now - received_at_epoch <= OFFSET_SECONDS`. The offset is checked
-    against `received_at` (the message record), not the event log,
-    because dormant older messages should stay dormant.
+    `now - received_at_epoch <= lookback_days * 86_400.0`. The
+    eligibility check happens in `build_eligible_messages` BEFORE
+    `pick()` is called — selectors receive a pre-filtered pool and
+    can assume every entry is within `lookback_seconds` of `now`.
+    The filter is checked against `received_at` (the message
+    record), not the event log, because dormant older messages
+    should stay dormant.
 
   - Display-recency (per event_type): for the most recent event in
     the log matching `(message.id, current_event_type)`, `display_recency`
@@ -90,6 +100,17 @@ from typing import Iterable, Optional
 from lib_shared.models import Message
 
 # ---------------------------------------------------------------------------
+# Selector registry (issue #26). The admin UI surfaces this list as a
+# dropdown; `make_selector(algorithm)` resolves a string to a concrete
+# `MessageSelector` instance. Adding a new algorithm = add an entry here
+# + register its class in `make_selector`. Coordinator is selector-agnostic.
+# ---------------------------------------------------------------------------
+
+VALID_SELECTOR_ALGORITHMS: tuple[str, ...] = ("weighted", "random")
+DEFAULT_SELECTOR_ALGORITHM: str = "weighted"
+
+
+# ---------------------------------------------------------------------------
 # Behavioral knobs for the WeightedSelector (code constants — see module
 # docstring). Tunable by editing this file and redeploying. NOT in
 # settings.toml, NOT on the Flask Settings page. The values below are the
@@ -112,33 +133,100 @@ W_FAVORITE: float = 0.4
 # short enough that a recently-shown message can resurface within a day.
 SATURATION_SECONDS: float = 86_400.0
 
-# Eligibility window. Messages with `received_at_epoch < now -
-# OFFSET_SECONDS` are dormant and never appear in the eligible set.
-# Default 14 days — long enough to keep a couple of weeks of recent
-# activity eligible, short enough to suppress ancient messages.
-OFFSET_SECONDS: float = 14 * 86_400.0  # 1,209,600 seconds = 14 days
 
-# Default-selector rollout flag. When False, the call sites
-# (`heart-matrix-controller/main.py`, `heart-message-manager/app_main.py`)
-# instantiate `RandomSelector()` (the historical rotation). Flipping to
-# True swaps in `WeightedSelector()` — same coordinator wiring, same
-# event log, different pick algorithm. The flag is for the caller's
-# default-selector pick; the coordinator itself is selector-agnostic
-# and accepts any `MessageSelector` instance as a constructor kwarg.
-#
-# Flipped to True on 2026-07-18 in response to the "same message
-# selected back-to-back" symptom observed in the browser preview:
-# `WeightedSelector.display_recency` penalizes a just-shown message
-# (`~0.0` immediately after `text_display` is logged, growing back
-# toward `1.0` over `SATURATION_SECONDS`), so the rotation naturally
-# avoids back-to-back repeats. `RandomSelector` had no such
-# mechanism — the coordinator's anti-repeat hint (`exclude_id`) is
-# the defense-in-depth shim, but the weighted algorithm is the
-# designed fix. `RandomSelector` stays in the file (Default-to-X
-# rule: don't delete alternatives when switching the default) — pass
-# `RandomSelector()` to `EffectsCoordinator(selector=...)` to
-# restore the historical rotation.
-USE_WEIGHTED_SELECTOR: bool = True
+def build_eligible_messages(
+    message_manager,
+    *,
+    now: float,
+    lookback_seconds: float,
+) -> list[Message]:
+    """Return every unsuppressed message in the manager whose
+    `received_at` is within `lookback_seconds` of `now`.
+
+    Single source of truth for the eligibility filter — used by
+    `EffectsCoordinator._pick_message_via_selector` before delegating
+    to the configured selector. Both `WeightedSelector` and
+    `RandomSelector` receive this pre-filtered pool; neither runs its
+    own eligibility check. Centralizing the filter here means:
+
+      1. No selector does wasted work on messages that get thrown
+         out — the "select over and over just to throw it out"
+         anti-pattern.
+      2. Adding a new selector subclass doesn't require duplicating
+         the eligibility rule.
+      3. Operators tune the window via the `lookback_days` config
+         field; the same value applies uniformly across all
+         selection algorithms.
+
+    Runs every pick (not cached) because the candidate set is a live
+    snapshot of a live buffer: new MQTT arrivals, deque rotation at
+    `maxlen=100`, and filter-rule edits all mutate the eligible set
+    between picks without firing any explicit "settings changed"
+    event. The cost is ~100 epoch comparisons per pick — sub-ms in
+    CPython, negligible against the selector's downstream work.
+
+    Args:
+        message_manager: A `MessageManager` (or duck-typed equivalent)
+            exposing `get_messages(limit=None, suppress=True) -> list[MessageView]`.
+        now: Epoch seconds (float) representing the current time.
+        lookback_seconds: Messages with `received_at_epoch < now -
+            lookback_seconds` are excluded.
+
+    Returns:
+        A list of `Message` instances, sorted newest-first (the
+        manager's `get_messages` already enforces the order).
+        Returns an empty list when no message qualifies or the
+        manager holds nothing.
+    """
+    if lookback_seconds <= 0.0:
+        return []
+    cutoff = now - lookback_seconds
+    entries = message_manager.get_messages(limit=None, suppress=True)
+    eligible: list[Message] = []
+    for entry in entries:
+        try:
+            received_at = entry.message.received_at_epoch()
+        except Exception:
+            # A malformed received_at should not crash the picker —
+            # the rotation pauses on None rather than raising.
+            continue
+        if received_at <= 0.0:
+            # `received_at_epoch()` returns 0.0 on parse failure;
+            # treat as ineligible (same defensive contract
+            # `WeightedSelector._is_eligible` had pre-refactor).
+            continue
+        if received_at >= cutoff:
+            eligible.append(entry.message)
+    return eligible
+
+
+def make_selector(algorithm: str) -> MessageSelector:
+    """Resolve a `selector_algorithm` config string to a fresh selector instance.
+
+    The coordinator calls this at every pick (`make_selector` is cheap —
+    `WeightedSelector.__init__` is two attribute writes). Live config
+    edits to `selector_algorithm` land on the next pick without
+    requiring a coordinator rebuild.
+
+    Args:
+        algorithm: One of `VALID_SELECTOR_ALGORITHMS`. Strict case —
+            "weighted" / "random" lowercase only.
+
+    Returns:
+        A fresh `MessageSelector` instance (the call site owns the
+        lifecycle; the coordinator does not cache the instance).
+
+    Raises:
+        ValueError: When `algorithm` is not in `VALID_SELECTOR_ALGORITHMS`.
+            Callers (the coordinator's `_pick_message_via_selector`) catch
+            and translate to a "selector unavailable" log line — the
+            rotation pauses rather than crashing.
+    """
+    if algorithm == "weighted":
+        return WeightedSelector()
+    if algorithm == "random":
+        return RandomSelector()
+    raise ValueError(f"unknown selector_algorithm {algorithm!r}; must be one of {VALID_SELECTOR_ALGORITHMS}")
 
 
 class MessageSelector(ABC):
@@ -147,26 +235,29 @@ class MessageSelector(ABC):
     A `MessageSelector` picks the next `Message` to display from a pool
     of candidates. Subclasses encapsulate the algorithm — random pick,
     weighted score, round-robin, etc. The `EffectsCoordinator` accepts
-    any subclass via its `selector` kwarg; swapping algorithms is a
-    one-line change at the call site (or flip `USE_WEIGHTED_SELECTOR`
-    in this module to switch defaults).
+    any subclass via its `selector` kwarg; the default is resolved
+    from `effects_settings.selector_algorithm` via `make_selector(...)`
+    on every pick.
 
     Contract:
       - `pick()` MUST be pure with respect to its arguments for any
         subclass that advertises determinism (e.g. `WeightedSelector`).
         Subclasses that are inherently non-deterministic (e.g.
         `RandomSelector`) MUST document the non-determinism.
-      - `pick()` MUST return `None` when the candidate pool is empty
-        (or when eligibility filtering yields no candidates). The
-        coordinator treats `None` as "rotation pauses; pre-emption is
-        unaffected".
-      - `pick()` MUST NOT mutate its inputs. The coordinator and the
-        call sites depend on the candidate list being preserved across
-        calls so the head-of-list fresh-id check still works.
+      - `pick()` MUST return `None` when the candidate pool is empty.
+        The coordinator treats `None` as "rotation pauses; pre-emption
+        is unaffected".
+      - `pick()` MUST NOT mutate its inputs.
       - `pick()` MUST honor `exclude_id` when supplied: the message
         whose id matches `exclude_id` MUST NOT be returned unless
         every candidate matches (the pool would otherwise be empty
         and the sign would go dark).
+      - The `messages` iterable passed in is the pre-filtered eligible
+        set — `build_eligible_messages` already filtered by
+        `received_at`, suppressed, and capped at the ring-buffer's
+        maxlen. Selectors can assume every entry is within
+        `lookback_seconds` of `now`. No per-selector eligibility check
+        is needed.
     """
 
     @abstractmethod
@@ -182,10 +273,10 @@ class MessageSelector(ABC):
         """Pick the next message to display.
 
         Args:
-            messages: Iterable of `Message` candidates (typically
-                `message_manager.get_messages(...)` results, already
-                filtered by the renderer's `recent_count`). Order does
-                NOT matter — selectors sort internally as needed.
+            messages: Iterable of pre-filtered `Message` candidates
+                (eligible set, built by `build_eligible_messages`).
+                Order does NOT matter — selectors sort internally as
+                needed.
             now: Epoch seconds (float) representing the current time.
                 Passed in rather than read from `time.time()` so tests
                 can pin a clock.
@@ -219,12 +310,12 @@ class MessageSelector(ABC):
 
 
 class RandomSelector(MessageSelector):
-    """Uniformly-random pick from the candidates.
+    """Uniformly-random pick from the eligible candidate pool.
 
     Mirrors the historical rotation: the previous
     `random.choice(entries)` call in `EffectsCoordinator.get_display_message()`.
-    Use this when no behavior change is desired — it's the default
-    `USE_WEIGHTED_SELECTOR=False` selector.
+    Use this when no behavior change is desired — the operator selects
+    it via the `selector_algorithm="random"` config field.
 
     Non-deterministic — same inputs may return different outputs across
     calls. Tests that need determinism should seed `random.seed(...)`
@@ -236,6 +327,11 @@ class RandomSelector(MessageSelector):
     was just consumed. When exclusion would empty the pool, the
     unfiltered pool is used so the sign keeps rotating instead of
     pausing on the only-available message.
+
+    Receives a pre-filtered eligible set from `build_eligible_messages`
+    — does NOT run its own eligibility check (per the shared-pool
+    design: the coordinator filters once, every selector operates on
+    the filtered result).
     """
 
     def pick(
@@ -270,8 +366,9 @@ class WeightedSelector(MessageSelector):
 
     Algorithm (see module docstring for the full rationale):
 
-      1. Filter to the eligible set: `now - received_at_epoch <=
-         OFFSET_SECONDS`.
+      1. The coordinator's `build_eligible_messages` already filtered
+         the candidate pool to messages within `lookback_seconds` of
+         `now` — `pick()` operates on the pre-filtered set.
       2. For each candidate, compute `display_recency` from the event
          log (per the current pattern's `event_type`), `send_recency`
          normalized over the eligible set, and the favorite boost.
@@ -323,7 +420,10 @@ class WeightedSelector(MessageSelector):
         """Pick the next message to display by weighted score.
 
         Args:
-            messages: Iterable of `Message` candidates.
+            messages: Iterable of pre-filtered `Message` candidates.
+                Every entry is within `lookback_seconds` of `now`
+                (the coordinator's `build_eligible_messages` already
+                filtered).
             now: Epoch seconds (float).
             event_log: An object exposing `last_for(message_id,
                 event_type) -> dict | None` and (optionally)
@@ -347,7 +447,7 @@ class WeightedSelector(MessageSelector):
         """
         current_event_type = event_type if event_type is not None else self._event_type
 
-        candidates = [m for m in messages if self._is_eligible(m, now)]
+        candidates = [m for m in messages if m.received_at_epoch() > 0.0]
         if not candidates:
             return None
         if exclude_id is not None:
@@ -383,25 +483,6 @@ class WeightedSelector(MessageSelector):
         return best[3]
 
     # --- internals ---
-
-    @staticmethod
-    def _is_eligible(message: Message, now: float) -> bool:
-        """True iff the message is within the eligibility window.
-
-        The window is checked against `received_at_epoch`, NOT against
-        the event log. A message older than `now - OFFSET_SECONDS` is
-        dormant — it does not appear in the eligible set even if never
-        shown.
-        """
-        try:
-            received_at = message.received_at_epoch()
-        except Exception:
-            # If the message lacks a parseable timestamp, treat it as
-            # ineligible rather than crashing the selector. Messages
-            # in this state are an upstream bug; the rotation pauses
-            # until they're cleared.
-            return False
-        return (now - received_at) <= OFFSET_SECONDS
 
     @staticmethod
     def _display_recency(

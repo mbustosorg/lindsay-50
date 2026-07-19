@@ -45,17 +45,23 @@ import time
 from lib_shared.display_base import DisplayBase
 from lib_shared.effect_base import Effect
 from lib_shared.message_manager import MessageManager
-from lib_shared.models import Message, MessageView, EffectsSettings, TextSettings
+from lib_shared.models import Message, EffectsSettings, TextSettings
 from lib_shared.scroller_base import ScrollerBase
 
 # Pluggable message-selection (issue #26). The coordinator is
 # selector-agnostic — it accepts any `MessageSelector` subclass via its
-# `selector` kwarg and delegates the pick to `selector.pick(...)`. The
-# default is `WeightedSelector` (see `USE_WEIGHTED_SELECTOR` in
-# `lib_shared/selector.py`, flipped True 2026-07-18 to fix the
-# same-message-back-to-back symptom). Callers wanting the historical
-# `random.choice` rotation pass `RandomSelector()` explicitly.
-from lib_shared.selector import MessageSelector, RandomSelector, USE_WEIGHTED_SELECTOR, WeightedSelector
+# `selector` kwarg (test override) and resolves the live default from
+# `effects_settings.selector_algorithm` via `make_selector(...)` on
+# every pick. Both `WeightedSelector` and `RandomSelector` are
+# available; the operator picks between them on the admin /settings
+# page (default: "weighted"). The eligibility filter that bounds the
+# candidate pool runs through the shared `build_eligible_messages`
+# helper — every selection algorithm sees the same pre-filtered set.
+from lib_shared.selector import (
+    MessageSelector,
+    build_eligible_messages,
+    make_selector,
+)
 
 log = logging.getLogger("heart")
 
@@ -243,25 +249,26 @@ class EffectsCoordinator:
         self._is_browser = bool(is_browser)
         # Pluggable selector wiring (issue #26). The coordinator is
         # selector-agnostic — it accepts any `MessageSelector` subclass
-        # and delegates the pick to `selector.pick(...)`. The default
-        # is `WeightedSelector()` when `USE_WEIGHTED_SELECTOR=True`
-        # (the production default since 2026-07-18 — the weighted
-        # algorithm solves the same-message-back-to-back symptom via
-        # `display_recency`); callers wanting the historical
-        # `random.choice` rotation pass `RandomSelector()` explicitly.
-        # When `event_log` is supplied, the coordinator writes a
-        # `text_display` event to the log at every out→in (no
-        # special-casing for pre-emption — the on-deck model treats
-        # all fade-ins uniformly). `favorites` is the optional
-        # message-id list consumed by the selector's favorite boost
-        # — kept as a coordinator field (not a global) so tests and
-        # the preview can change it without reconstructing the
-        # coordinator.
+        # via its `selector` kwarg (test override; explicit instances
+        # bypass `make_selector` entirely) and resolves the live
+        # default from `effects_settings.selector_algorithm` via
+        # `make_selector(...)` on every pick. Both `WeightedSelector`
+        # and `RandomSelector` are available; the operator picks
+        # between them on the admin /settings page (default:
+        # "weighted"). The eligibility filter that bounds the
+        # candidate pool runs through the shared
+        # `build_eligible_messages` helper — every selection algorithm
+        # sees the same pre-filtered set, regardless of which
+        # `selector_algorithm` is active. When `event_log` is
+        # supplied, the coordinator writes a `text_display` event to
+        # the log at every out→in (no special-casing for pre-emption
+        # — the on-deck model treats all fade-ins uniformly).
+        # `favorites` is the optional message-id list consumed by the
+        # selector's favorite boost — kept as a coordinator field (not
+        # a global) so tests and the preview can change it without
+        # reconstructing the coordinator.
         self._event_log = event_log
-        if selector is not None:
-            self._selector = selector
-        else:
-            self._selector = WeightedSelector() if USE_WEIGHTED_SELECTOR else RandomSelector()
+        self._selector_override = selector  # `None` → resolve via make_selector each pick
         self._favorites = favorites if favorites is not None else ()
 
         self.idx = -1  # first message shown advances this to 0
@@ -384,12 +391,6 @@ class EffectsCoordinator:
         self.phase_start = time.monotonic()
 
     @property
-    def current_messages(self) -> list[MessageView]:
-        """Returns the current consideration set of messages to display,
-        ie. the latest unsupressed recent_count messages"""
-        return self.message_manager.get_messages(limit=self.effects_settings.recent_count, suppress=True)
-
-    @property
     def effects_settings(self) -> EffectsSettings:
         """Returns the current effects settings"""
         return self.message_manager.get_effects_settings()
@@ -451,7 +452,7 @@ class EffectsCoordinator:
         `background` branches to decide whether a new SMS has
         arrived (and replace `on_deck` accordingly).
         """
-        entries = self.current_messages
+        entries = self.message_manager.get_messages(limit=1, suppress=True)
         if not entries:
             return False
         shown = self.displayed_message_ids()
@@ -472,12 +473,16 @@ class EffectsCoordinator:
         Hold runs to natural end; the fresh SMS shows up after the
         held message completes its lifecycle.
 
+        Reads just the buffer head (`limit=1`) — fresh-id detection
+        is a "is there a NEW SMS at the head?" check; the rest of
+        the buffer isn't relevant to this branch.
+
         When no event log is bound we fall back to a head-vs-current
         check — the head is fresh if it differs from the currently-
         rendered message. This handles tests that drive the
         coordinator without an event log (the typical harness).
         """
-        entries = self.current_messages
+        entries = self.message_manager.get_messages(limit=1, suppress=True)
         if not entries:
             return None
         head = entries[0].message
@@ -491,20 +496,33 @@ class EffectsCoordinator:
         return head
 
     def _consumed_message_id_at_pick(self, body: str) -> str | None:
-        """Return the id of the buffered message whose body matches `body`.
+        """Return the id of the eligible message whose body matches `body`.
 
         Called at the out→in transition to mark "this is the message we
-        just faded in." The buffer (held by the manager) is searched in
-        recent-first order so the most-recent match wins — relevant when
-        the same body was sent twice (rare but possible). Returns None
-        when the buffer no longer holds the body (e.g. evicted by a
-        flood of newer messages before the fade-in completed); the
-        caller treats that as "no consumption tracking" and the next
-        fresh-id check defaults to a no-match.
+        just faded in." The eligible set (built via
+        `build_eligible_messages` with the live `lookback_days`) is
+        searched in recent-first order so the most-recent match wins —
+        relevant when the same body was sent twice (rare but possible).
+        Returns None when the eligible set no longer holds the body
+        (e.g. evicted from the ring buffer or aged out beyond the
+        lookback window before the fade-in completed); the caller
+        treats that as "no consumption tracking" and the next fresh-id
+        check defaults to a no-match.
+
+        Searching the eligible set (not the full buffer) keeps the
+        consumed-id logic consistent with the selector pool — a
+        message that just faded in MUST be in the eligible set (the
+        body was just picked from it), so the lookup is the same scan
+        the selector ran a moment ago.
         """
-        for entry in self.current_messages:
-            if entry.message.body == body:
-                return entry.message.id
+        candidates = build_eligible_messages(
+            self.message_manager,
+            now=time.time(),
+            lookback_seconds=self.effects_settings.lookback_seconds,
+        )
+        for m in candidates:
+            if m.body == body:
+                return m.id
         return None
 
     def _refresh_render_layer_from_settings(self, display: "DisplayBase", scroller: "ScrollerBase") -> None:
@@ -1100,7 +1118,7 @@ class EffectsCoordinator:
         Reads from the slot fields directly — no selector call, no
         `random.choice`, no fresh-id branch. The pick happens at the
         `out→in` transition (the only call site for
-        `self._selector.pick(...)` in the hot path); `get_display_message`
+        `self._pick_message_via_selector(...)` in the hot path); `get_display_message`
         is just a slot reader so callers (preview JS, status
         endpoints, ad-hoc diagnostics) can ask "what's showing now?"
         without mutating coordinator state.
@@ -1124,25 +1142,34 @@ class EffectsCoordinator:
         self,
         exclude_id: str | None = None,
     ) -> Message | None:
-        """Pick the next message from the buffer via the configured selector.
+        """Pick the next message from the eligible set via the configured selector.
 
         Called from `intro→out` (first pick, populates `on_deck`) and
         from `out→in` (every subsequent pick, overwrites `on_deck` with
-        the message for the next cycle). `WeightedSelector` reads the
-        event log for `display_recency`; `RandomSelector` ignores the
-        log and picks uniformly. Returns None when the buffer is
-        empty or the selector yields no eligible candidate — callers
-        treat None as "no message for the next cycle; rotation-only
-        display."
+        the message for the next cycle). The eligible set is built
+        once per pick by `build_eligible_messages(...)` from the
+        live `lookback_days` setting; the same pre-filtered list is
+        handed to whatever selector `make_selector(selector_algorithm)`
+        returns — both `WeightedSelector` and `RandomSelector` operate
+        on identical inputs (the shared-pool design). Returns None
+        when the eligible set is empty or the selector yields nothing
+        — callers treat None as "no message for the next cycle;
+        rotation-only display."
 
         `exclude_id` is the anti-repeat hint from the out→in call
         site: pass the just-consumed message's id so the next pick
         avoids back-to-back selection. Both selectors honor it —
         `RandomSelector` filters the candidate pool before
-        `random.choice`; `WeightedSelector` filters after the
-        eligibility check. When the exclusion would empty the pool
-        both selectors fall back to the unfiltered set so the sign
-        keeps rotating.
+        `random.choice`; `WeightedSelector` filters before scoring.
+        When the exclusion would empty the pool both selectors fall
+        back to the unfiltered set so the sign keeps rotating.
+
+        Algorithm dispatch: each pick reads
+        `effects_settings.selector_algorithm` (live, so an admin UI
+        change lands on the next pick without restart) and resolves
+        it via `make_selector(...)`. The explicit `selector=` kwarg
+        set at construction wins over the live setting — tests that
+        pin a specific selector still get a deterministic pick.
 
         Note: the `current_event_type` is fixed to `"text_display"`
         here — the coordinator's text-display event is the
@@ -1150,12 +1177,21 @@ class EffectsCoordinator:
         for image cycler playback) would add a `current_event_type`
         kwarg; not needed today.
         """
-        entries = self.current_messages
-        if not entries:
+        settings = self.effects_settings
+        candidates = build_eligible_messages(
+            self.message_manager,
+            now=time.time(),
+            lookback_seconds=settings.lookback_seconds,
+        )
+        if not candidates:
             return None
-        candidate_messages = [e.message for e in entries]
-        picked = self._selector.pick(
-            candidate_messages,
+        selector = (
+            self._selector_override
+            if self._selector_override is not None
+            else make_selector(settings.selector_algorithm)
+        )
+        picked = selector.pick(
+            candidates,
             now=time.time(),
             event_log=self._event_log,
             favorites=self._favorites,
@@ -1169,12 +1205,12 @@ class EffectsCoordinator:
         # sign still rotates instead of going dark. Same exclusion
         # logic — the candidate pool would otherwise include the
         # just-consumed message every time.
-        if exclude_id is not None and candidate_messages:
-            filtered = [m for m in candidate_messages if m.id != exclude_id]
-            candidates = filtered or candidate_messages
+        if exclude_id is not None and candidates:
+            filtered = [m for m in candidates if m.id != exclude_id]
+            fallback = filtered or candidates
         else:
-            candidates = candidate_messages
-        return random.choice(candidates) if candidates else None
+            fallback = candidates
+        return random.choice(fallback) if fallback else None
 
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""
@@ -1308,7 +1344,7 @@ class EffectsCoordinator:
             #   3. Stage the rotation effect (or MediaCycler
             #      override), the scroller text, and the
             #      `text_display` event log entry.
-            # This is the ONLY call site for `self._selector.pick(...)`
+            # This is the ONLY call site for `self._pick_message_via_selector(...)`
             # in the hot path — `random.choice` (or weighted scoring)
             # runs here, once per cycle, never on a timer.
             if self._step_fade(now, fading_out=True):

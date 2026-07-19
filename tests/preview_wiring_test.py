@@ -2,7 +2,7 @@
 
 Covers:
 - `build_effects(effects_settings, effect_classes)` — shared builder
-- `EffectsCoordinator.apply_settings(...)` — live pacing + recent_count
+- `EffectsCoordinator.apply_settings(...)` — live pacing + lookback_days + selector_algorithm
 - `ScrollerBase.set_color(...)` / `set_speed(...)` — live text updates
 - `PreviewScroller` accepts the same kwargs as `ScrollerBase`
   (speed / color / frame_delay / offset_seconds)

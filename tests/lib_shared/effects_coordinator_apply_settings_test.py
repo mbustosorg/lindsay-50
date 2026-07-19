@@ -2,11 +2,11 @@
 
 The coordinator holds no copy of the config — pacing fields
 (`fade_seconds`, `hold_seconds`, `intro_seconds`,
-`recent_count`), the rotation, and the scroller text settings
-(`color`, `speed`) all live on the manager. The coordinator reads
-pacing fields at tick time via the `effects_settings` /
-`text_settings` properties (which delegate to the manager's
-`get_effects_settings` / `get_text_settings`).
+`lookback_days`), the `selector_algorithm` field, the rotation, and
+the scroller text settings (`color`, `speed`) all live on the
+manager. The coordinator reads pacing fields at tick time via the
+`effects_settings` / `text_settings` properties (which delegate to
+the manager's `get_effects_settings` / `get_text_settings`).
 
 The rotation rebuild and scroller color / speed application only
 happen at cycle boundaries — specifically, at the `out→in`
@@ -22,8 +22,8 @@ These tests pin down that contract:
 
 1. `EffectsCoordinator(...)` exposes no `apply_settings` method and
    no `fade_seconds` / `hold_seconds` / `intro_seconds` /
-   `idle_seconds` / `recent_count` fields. The coordinator
-   delegates to the manager.
+   `idle_seconds` / `lookback_days` / `selector_algorithm`
+   fields. The coordinator delegates to the manager.
 2. `tick()` does NOT rebuild the rotation or call scroller
    `set_color` / `set_speed`. The render layer stays as-is
    across many ticks in the same mode.
@@ -133,10 +133,18 @@ def _make_effect(name):
 
 def _make_manager(effects_settings=None, text_settings=None, messages=None):
     msgs = list(messages or [])
+    # Default `lookback_days=MAX` so hardcoded 2026-XX-XX
+    # `received_at` values used throughout this file stay
+    # eligible. Tests that target the eligibility filter pass
+    # `effects_settings=EffectsSettings(lookback_days=...)`.
+    effective_es = effects_settings or EffectsSettings(
+        lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
+        selector_algorithm="weighted",
+    )
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: list(msgs[:limit])),
         config=SimpleNamespace(
-            effects_settings=effects_settings or EffectsSettings(),
+            effects_settings=effective_es,
             text_settings=text_settings or TextSettings(),
         ),
     )
@@ -186,13 +194,15 @@ def test_coordinator_has_no_apply_settings_method():
 
 def test_coordinator_has_no_cached_pacing_fields():
     """The coordinator does not store `fade_seconds`,
-    `hold_seconds`, `intro_seconds`, or `recent_count` as
-    instance attributes — those are read from the manager on
-    demand. (`idle_seconds` was promoted to a module-level
-    constant `IDLE_SECONDS_AFTER_HOLD` per the user's
-    behavioral-knobs-in-code rule.)"""
+    `hold_seconds`, `intro_seconds`, `lookback_days`, or
+    `selector_algorithm` as instance attributes — those are read
+    from the manager on demand. (`idle_seconds` was promoted to
+    a module-level constant `IDLE_SECONDS_AFTER_HOLD` per the
+    user's behavioral-knobs-in-code rule; the selection
+    algorithm is resolved freshly via `make_selector(...)` on
+    every pick.)"""
     coord, _, _, _ = _build_bound()
-    for field in ("fade_seconds", "hold_seconds", "intro_seconds", "recent_count"):
+    for field in ("fade_seconds", "hold_seconds", "intro_seconds", "lookback_days", "selector_algorithm"):
         assert not hasattr(coord, field), (
             f"EffectsCoordinator should not cache {field!r} — " f"it lives on message_manager.config.effects_settings"
         )
@@ -259,10 +269,10 @@ def test_tick_reads_intro_seconds_from_manager():
     assert mgr.config.effects_settings.intro_seconds == 0.0
 
 
-def test_get_display_message_reads_recent_count_from_manager():
-    """`get_display_message` reads `recent_count` from the manager."""
+def test_get_display_message_reads_lookback_days_from_manager():
+    """`get_display_message` reads `lookback_days` from the manager."""
     mgr = _make_manager(
-        effects_settings=EffectsSettings(recent_count=3),
+        effects_settings=EffectsSettings(lookback_days=3),
     )
     coord, _, _, _ = _build_bound(message_manager=mgr)
     assert coord.get_display_message() is None

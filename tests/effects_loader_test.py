@@ -91,7 +91,8 @@ class TestPrecedence:
                     "hold_seconds": 9.9,
                     "intro_seconds": 9.9,
                     "idle_seconds": 9.9,
-                    "recent_count": 9,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
@@ -115,7 +116,8 @@ class TestPrecedence:
                     "hold_seconds": 1.0,
                     "intro_seconds": 1.0,
                     "idle_seconds": 1.0,
-                    "recent_count": 1,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
@@ -124,7 +126,7 @@ class TestPrecedence:
             reset_effects_settings()
             assert is_effects_settings_override_active() is True
             cfg = load_effects_settings()
-            assert cfg["recent_count"] == 9
+            assert cfg["lookback_days"] == 14
             assert [e["name"] for e in cfg["effects"]] == ["Fireworks"]
         finally:
             repo_override.unlink(missing_ok=True)
@@ -151,7 +153,8 @@ class TestPrecedence:
                     "hold_seconds": 7.0,
                     "intro_seconds": 7.0,
                     "idle_seconds": 7.0,
-                    "recent_count": 7,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
@@ -159,7 +162,7 @@ class TestPrecedence:
             reset_effects_settings()
             assert is_effects_settings_override_active() is True
             cfg = load_effects_settings()
-            assert cfg["recent_count"] == 7
+            assert cfg["lookback_days"] == 14
         finally:
             repo_override.unlink(missing_ok=True)
 
@@ -171,9 +174,9 @@ class TestPrecedence:
         reset_effects_settings()
         assert is_effects_settings_override_active() is False
         cfg = load_effects_settings()
-        # Canonical: 9 effects (PngDisplay/VideoDisplay/Flame removed), recent_count=5.
+        # Canonical: 9 effects (PngDisplay/VideoDisplay/Flame removed), lookback_days=14.
         assert len(cfg["effects"]) == 9
-        assert cfg["recent_count"] == 5
+        assert cfg["lookback_days"] == 14
 
     def test_env_var_pointing_to_missing_file_falls_back(self, monkeypatch, tmp_path):
         """Env var set to a non-existent path → warning + fallback."""
@@ -183,7 +186,7 @@ class TestPrecedence:
         # Should not raise; loader logs a warning and uses canonical.
         cfg = load_effects_settings()
         assert len(cfg["effects"]) == 9
-        assert cfg["recent_count"] == 5
+        assert cfg["lookback_days"] == 14
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +284,8 @@ class TestEmptyEffects:
                     "hold_seconds": 1.0,
                     "intro_seconds": 1.0,
                     "idle_seconds": 1.0,
-                    "recent_count": 1,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
@@ -312,7 +316,8 @@ class TestReset:
                     "hold_seconds": 1.0,
                     "intro_seconds": 1.0,
                     "idle_seconds": 1.0,
-                    "recent_count": 1,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
@@ -326,22 +331,23 @@ class TestReset:
                     "hold_seconds": 2.0,
                     "intro_seconds": 2.0,
                     "idle_seconds": 2.0,
-                    "recent_count": 2,
+                    "lookback_days": 21,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
 
         monkeypatch.setenv("EFFECTS_SETTINGS_OVERRIDE", str(f1))
         reset_effects_settings()
-        assert load_effects_settings()["recent_count"] == 1
+        assert load_effects_settings()["lookback_days"] == 14
 
         # Switch the env var; without reset, cache holds the old dict.
         monkeypatch.setenv("EFFECTS_SETTINGS_OVERRIDE", str(f2))
-        assert load_effects_settings()["recent_count"] == 1  # cached
+        assert load_effects_settings()["lookback_days"] == 14  # cached
 
         # With reset, the new file is read.
         reset_effects_settings()
-        assert load_effects_settings()["recent_count"] == 2
+        assert load_effects_settings()["lookback_days"] == 21
 
 
 # ---------------------------------------------------------------------------
@@ -385,9 +391,9 @@ class TestFactory:
         with caplog.at_level(logging.WARNING, logger="heart"):
             cls = make_effect_class("NotARealEffect")
         assert cls is None
-        assert not any("NotARealEffect" in rec.message for rec in caplog.records), (
-            "unknown name should be silently skipped, not logged"
-        )
+        assert not any(
+            "NotARealEffect" in rec.message for rec in caplog.records
+        ), "unknown name should be silently skipped, not logged"
 
     def test_repeated_calls_are_idempotent(self):
         """Calling the factory twice returns the same class object."""
@@ -414,7 +420,8 @@ class TestFactory:
                     "hold_seconds": 1.0,
                     "intro_seconds": 1.0,
                     "idle_seconds": 1.0,
-                    "recent_count": 1,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
@@ -462,7 +469,8 @@ class TestReplaceSemantics:
                     "hold_seconds": 8.0,
                     "intro_seconds": 3.0,
                     "idle_seconds": 60.0,
-                    "recent_count": 3,
+                    "lookback_days": 7,
+                    "selector_algorithm": "random",
                 }
             )
         )
@@ -474,7 +482,7 @@ class TestReplaceSemantics:
             "NightSky",
             "Flame",
         ]
-        assert cfg["recent_count"] == 3
+        assert cfg["lookback_days"] == 7
         # Canonical-only names are NOT in the override (no merge).
         assert make_effect_class("Hyperspace") is None
 
@@ -505,7 +513,8 @@ class TestReplaceSemantics:
                     "hold_seconds": 1.0,
                     "intro_seconds": 1.0,
                     "idle_seconds": 1.0,
-                    "recent_count": 1,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 }
             )
         )
