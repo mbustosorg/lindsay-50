@@ -56,6 +56,7 @@ _cfg = get_config(REQUIRED_KEYS)
 import sqlite, s3
 from server_time import format_from_iso, now_utc_iso
 from lib_shared.boot_config import BootConfig, from_heroku_or_git as _boot_config_from_heroku_or_git
+from lib_shared.boot_config import SIGN_SETTINGS_PATH, short_sha as _short_sha
 from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.effects_loader import load_effects_settings
 from lib_shared.models import SignConfig, FilterRule, Message
@@ -812,6 +813,112 @@ def api_sign_boot_config():
     )
 
 
+@app.route(SIGN_SETTINGS_PATH, methods=["GET"])
+@api_login_required
+def api_sign_settings():
+    """GET /api/sign/settings — return the resolved sign settings (issue #51).
+
+    Wire shape (both fields always concrete on success):
+        {
+            "target_version": "<7-char short SHA>",
+            "timezone": "US/Pacific"
+        }
+
+    `target_version` is resolved server-side: if the persisted
+    `SignSettings.target_version` is operator-pinned, the endpoint
+    returns that value verbatim (truncated to 7 chars to match the
+    worktree directory naming convention); if empty, Flask resolves
+    to its own running short SHA before responding. The wire form is
+    therefore always a concrete short SHA — the Pi never sees null
+    or empty.
+
+    `timezone` is read from `SignConfig.timezone` (top-level;
+    pre-existing) and defaults to `"US/Pacific"`.
+
+    The endpoint runs in parallel with the existing
+    `GET /api/sign/boot-config` (legacy Pis continue to call that).
+    New Pis call this endpoint; the legacy endpoint is unchanged.
+
+    Auth: same `X-API-Key` as `/api/config`. Returns 401 on bad key;
+    500 only when Flask cannot resolve its own running short SHA
+    (no env var, no git, no dyno metadata).
+    """
+    cfg = sqlite.get_config()
+    persisted = cfg.sign.target_version or ""
+    if persisted:
+        target = _short_sha(persisted)
+    else:
+        # Resolve empty persisted value to Flask's own running short SHA.
+        flask_config = _resolve_boot_config()
+        target = flask_config.short_sha
+    if not target:
+        return jsonify({"error": "could not resolve target_version"}), 500
+    return jsonify(
+        {
+            "target_version": target,
+            "timezone": cfg.timezone or "US/Pacific",
+        }
+    )
+
+
+# Issue #51: command endpoints publish a `type=command` envelope on the
+# existing `MQTT_TOPIC` for the Pi to dispatch. We deliberately share
+# one helper across all three — the wire shape differs ONLY in the
+# `action` field. Returns 202 on successful publish, 503 when the
+# broker rejected the publish (Flask still keeps running; the operator
+# can retry).
+_VALID_COMMAND_ACTIONS = {"force-upgrade", "restart", "shutdown"}
+
+
+def _publish_sign_command(action: str) -> tuple:
+    """Publish `{"action": <action>}` on MQTT_TOPIC and return a Flask response.
+
+    Returns `(response, status)`. `response` is `None` when the action
+    is invalid (caller maps that to 404). On a successful publish,
+    `status` is 202 and `response` is a JSON body with the published
+    envelope for the operator's UI. On a publish failure, `status` is
+    503 and `response` carries the error message.
+
+    The publish itself is fire-and-forget — Flask does NOT wait for
+    the Pi to acknowledge. The Pi's MQTT receive thread routes the
+    envelope to its registered handler (see `command_handlers.py`).
+    """
+    assert _mqtt_client is not None
+    try:
+        envelope = MessageEnvelope("command", {"action": action})
+        ok = _mqtt_client.publish_envelope(envelope)
+    except Exception as exc:
+        logger.warning("[flask] publish sign command %s raised: %s", action, exc)
+        return jsonify({"error": "publish failed", "action": action}), 503
+
+    if not ok:
+        logger.warning("[flask] publish sign command %s returned False", action)
+        return jsonify({"error": "publish failed", "action": action}), 503
+
+    logger.info("[flask] published sign command: action=%s", action)
+    return jsonify({"status": "published", "action": action}), 202
+
+
+@app.route("/api/sign/commands/<action>", methods=["POST"])
+@api_login_required
+def api_sign_command(action: str):
+    """POST /api/sign/commands/<action> — publish a sign command (issue #51).
+
+    The three valid actions are `force-upgrade`, `restart`, and
+    `shutdown`. Any other value returns 404. On success, returns 202
+    Accepted with the published envelope; on publish failure, 503.
+
+    Auth: same `X-API-Key` as `/api/config`. The Pi's MQTT thread
+    routes the envelope to its registered handler
+    (`command_handlers.{force_upgrade,restart,shutdown}`); Flask
+    does not wait for acknowledgment.
+    """
+    if action not in _VALID_COMMAND_ACTIONS:
+        return jsonify({"error": "unknown action", "action": action}), 404
+    response, status = _publish_sign_command(action)
+    return response, status
+
+
 @app.route("/api/sign-status", methods=["GET"])
 def api_sign_status():
     """GET /api/sign-status — return the most recent snapshot Flask has.
@@ -1323,6 +1430,16 @@ def settings():
         sign_name = request.form.get("sign_name", "").strip()
         if sign_name:
             cfg.sign_settings.sign_name = sign_name
+
+        # Issue #51 §6: operator-pinned `sign.target_version`. Only update
+        # if a non-empty value is POSTed — when the input is empty, we
+        # treat it as "no override; default to Flask's running short SHA."
+        # The pin is a *string of either length* (full or short); GET /api/sign/settings
+        # truncates to 7 chars before responding, and the validation in
+        # the SignSettings model handles parsing.
+        target_version_raw = request.form.get("sign_target_version", "").strip()
+        if target_version_raw:
+            cfg.sign.target_version = target_version_raw
 
         timezone = request.form.get("timezone", "").strip()
         if timezone:

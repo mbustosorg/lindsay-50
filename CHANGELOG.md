@@ -2,6 +2,75 @@
 
 All notable changes to lindsay-50 are documented in this file.
 
+## [Unreleased] — 2026-07-19
+
+### Added — Pi upgrade controls (issue #51, `openspec_change_name: add-pi-upgrade-controls`)
+
+The Settings page now exposes operator-driven Pi upgrade controls,
+paired with three new Flask endpoints and a Pi-side command registry.
+The loader migrates from `/api/sign/boot-config` to `/api/sign/settings`
+for the target version, and short-vs-short comparison replaces the
+legacy full-SHA matching. AUTO_UPDATE stays in `settings.toml` — no UI
+checkbox in v1.
+
+**New endpoints (Flask):**
+
+- `GET /api/sign/settings` — returns `{target_version, timezone}` where
+  `target_version` is always a concrete 7-char short SHA. Reads the
+  operator-pinned value from `cfg.sign.target_version`; if empty,
+  falls back to the Flask's own running short SHA. Backend truncates
+  to 7 chars at serialization time so the wire form is deterministic.
+- `POST /api/sign/commands/<action>` — publishes a `type=command`
+  envelope on the existing `MQTT_TOPIC`. Valid actions: `force-upgrade`,
+  `restart`, `shutdown`. Returns 202 on publish, 503 on broker failure,
+  404 on unknown action, 401 on missing/bad X-API-Key.
+
+**Pi-side dispatcher (hand-side):**
+
+- `heart-matrix-controller/command_handlers.py` — three zero-arg
+  handlers (`force_upgrade`, `restart`, `shutdown`) registered via the
+  new `MessageManager.register_handler` action registry. `force-upgrade`
+  uses `os.execvpe` with `LINDSAY50_FORCE_UPGRADE=1` to enter the
+  loader's force-upgrade entrypoint (which bypasses `AUTO_UPDATE`).
+- The legacy `check-for-update` handler still works via the
+  `on_check_for_update` constructor kwarg; the registry takes
+  precedence when both are wired.
+
+**Loader changes:**
+
+- New `fetch_target_version` calls `/api/sign/settings`; the legacy
+  `fetch_expected_sha` (which calls `/api/sign/boot-config`) is kept
+  as a transitional safety net.
+- Short-vs-short comparison: `local` is the full SHA from
+  `git rev-parse HEAD`; `target_version` is already the 7-char form.
+- New `force_upgrade_main()` entrypoint bypasses the `AUTO_UPDATE`
+  gate but uses the same SHA-check + stage + probe + swap logic as
+  the regular `main()`.
+
+**UI:**
+
+- New "Pi Upgrade Control" section on `templates/settings.html` with
+  a Target Pi version input + Clear button, plus three command buttons
+  (force upgrade / restart / shutdown) that POST to the new Flask
+  endpoints via `static/pi_upgrade_settings.js`. Each command is
+  gated behind a `confirm()` modal.
+
+**Behaviour:**
+
+- `sign.target_version` is `cfg.sign.target_version` on the Flask side.
+  An empty form value means "no override; fall back to Flask's self-SHA"
+  — not "null" or "missing" (the wire form is always concrete).
+- `force-upgrade` preserves signal handling via `os.execvpe` so the
+  systemd unit sees the loader as the PID's direct child.
+- AUTO_UPDATE remains operator-only — no checkbox is rendered.
+
+**Operational notes:**
+
+- Old Pis (before issue #51) keep working because `/api/sign/boot-config`
+  is unchanged. The new code uses `/api/sign/settings` exclusively.
+- Pi-side updates are not rolled back automatically; the operator
+  uses `heroku rollback v<N>` if a regression appears after `force-upgrade`.
+
 ## [Unreleased] — 2026-07-09
 
 ### Added — Sign status reports over MQTT (issue #15, `openspec_change_name: add-sign-status-reports`)

@@ -46,6 +46,11 @@ HEROKU_DYNO_METADATA_PATH = Path("/etc/heroku/dyno")
 # constant so a typo or rename is caught at import time.
 BOOT_CONFIG_PATH = "/api/sign/boot-config"
 
+# Settings endpoint — issue #51. Parallel to BOOT_CONFIG_PATH; the
+# loader calls this on boot to learn the operator-pinned target
+# version (or Flask's self-SHA when no pin is set).
+SIGN_SETTINGS_PATH = "/api/sign/settings"
+
 # Conservative HTTP timeout. The broker is the same network as
 # MQTT; 5s is enough for a healthy connection and short enough
 # that a network blip doesn't stall the loader or the app.
@@ -127,6 +132,95 @@ def from_response(payload: Any) -> Optional[BootConfig]:
         logger.warning("boot_config: expected_sha missing or empty: %r", payload)
         return None
     return BootConfig(expected_sha=sha)
+
+
+def from_sign_settings_response(payload: Any) -> Optional[str]:
+    """Parse a Flask `/api/sign/settings` JSON payload — issue #51.
+
+    Returns the `target_version` short SHA on success, None on any
+    malformed input (non-dict, missing/empty `target_version`,
+    wrong type). Callers treat None as "couldn't parse the response"
+    — same as a network failure.
+
+    The endpoint guarantees `target_version` is always a concrete
+    short SHA server-side (Flask resolves operator-empty input to
+    its own running short SHA before responding). A None or empty
+    value here means either Flask is broken or the response is
+    stale — the loader falls through to running `current/.../main.py`
+    in either case (safe default).
+    """
+    if not isinstance(payload, dict):
+        logger.warning("sign_settings: response is not a dict: %r", payload)
+        return None
+    target = payload.get("target_version")
+    if not isinstance(target, str) or not target:
+        logger.warning("sign_settings: target_version missing or empty: %r", payload)
+        return None
+    return target
+
+
+def fetch_sign_settings(
+    *,
+    api_url: str,
+    api_key: str,
+    timeout: float = DEFAULT_TIMEOUT,
+    requests_module: Any = None,
+) -> Optional[str]:
+    """GET `/api/sign/settings` with the `X-API-Key` header — issue #51.
+
+    Returns the resolved `target_version` (always a concrete short
+    SHA on a healthy server) on success, None on any failure
+    (network, timeout, non-200, malformed JSON, missing/empty
+    `target_version`). Callers must not raise on None — it's a soft
+    failure that means "we don't know what Flask wants; fall through
+    to the safe default."
+
+    Mirrors `fetch_boot_config`'s shape so the loader can call either
+    endpoint with the same import-and-call pattern.
+    """
+    if not api_url:
+        logger.warning("sign_settings: api_url is empty; cannot fetch")
+        return None
+    if not api_key:
+        logger.warning("sign_settings: api_key is empty; cannot fetch")
+        return None
+
+    if requests_module is None:
+        try:
+            import requests as requests_module  # type: ignore[import-untyped]
+        except ImportError:
+            logger.warning("sign_settings: requests not available; cannot fetch")
+            return None
+
+    from urllib.parse import urlparse
+
+    parsed = urlparse(api_url)
+    if not parsed.scheme or not parsed.netloc:
+        logger.warning("sign_settings: could not derive origin from %r", api_url)
+        return None
+    url = f"{parsed.scheme}://{parsed.netloc}{SIGN_SETTINGS_PATH}"
+
+    try:
+        response = requests_module.get(
+            url,
+            headers={"X-API-Key": api_key},
+            timeout=timeout,
+        )
+    except Exception as exc:
+        logger.warning("sign_settings: fetch failed: %s", exc)
+        return None
+
+    if response.status_code != 200:
+        logger.warning("sign_settings: HTTP %s from %s", response.status_code, url)
+        return None
+
+    try:
+        payload = response.json()
+    except (json.JSONDecodeError, ValueError) as exc:
+        logger.warning("sign_settings: bad JSON from %s: %s", url, exc)
+        return None
+
+    return from_sign_settings_response(payload)
 
 
 def fetch_boot_config(

@@ -137,6 +137,77 @@
     {% endif %}
   </div>
 
+  {# --- Pi Upgrade Control (issue #51 §6) --- #}
+  {# The Flask self-version (running short SHA) is what the loader uses by
+     default when no override is set. The operator can pin a target (full
+     or short SHA); it truncates server-side. The three command buttons
+     POST to /api/sign/commands/<action> with a confirm() gate. The form
+     input lives inside the OUTER form (POST /settings) so the operator
+     pin survives the page save. The clear button only resets the input
+     field — it does NOT submit the form. #}
+  <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6"
+       data-upgrade-settings-field>
+    <h3 class="font-heading font-semibold text-dark text-lg mb-2 flex items-center gap-2">
+      <span>🛠️</span> Pi Upgrade Control
+    </h3>
+    <p class="text-sm text-slate-500 mb-4">
+      Pin a target version for the Pi, or trigger an upgrade without a
+      pin. The Flask self-version (the running short SHA above) is the
+      default when no override is set.
+    </p>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-2">
+          Target Pi version
+        </label>
+        <div class="flex gap-2 items-center">
+          <input type="text" name="sign_target_version"
+                 class="flex-1 px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-mono"
+                 value="{{ cfg.sign.target_version or '' }}"
+                 placeholder="e.g. abc1234 (short) or full SHA"
+                 data-upgrade-target-input>
+          <button type="button"
+                  class="px-4 py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
+                  data-action="clear-target"
+                  title="Clear the override; falls back to Flask self-version">
+            Clear
+          </button>
+        </div>
+        <p class="text-xs text-slate-500 mt-2">
+          When empty, the Pi targets Flask's running short SHA. The
+          value truncates to 7 characters on save.
+        </p>
+      </div>
+    </div>
+
+    <div class="border-t border-indigo-50 pt-4">
+      <h4 class="font-heading font-semibold text-dark text-base mb-3">Commands</h4>
+      <p class="text-sm text-slate-500 mb-3">
+        Each command publishes an MQTT envelope to the Pi. The Pi's
+        dispatcher routes to the matching handler. None of these are
+        reversible from the UI — proceed with care.
+      </p>
+      <div class="flex flex-wrap gap-3">
+        <button type="button"
+                class="px-5 py-3 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 hover:shadow-xl transition-all cursor-pointer"
+                data-action="force-upgrade">
+          Force upgrade
+        </button>
+        <button type="button"
+                class="px-5 py-3 rounded-xl bg-amber-100 text-amber-800 font-semibold hover:bg-amber-200 transition-colors cursor-pointer"
+                data-action="restart">
+          Restart Pi
+        </button>
+        <button type="button"
+                class="px-5 py-3 rounded-xl bg-red-100 text-red-700 font-semibold hover:bg-red-200 transition-colors cursor-pointer"
+                data-action="shutdown">
+          Shut down Pi
+        </button>
+      </div>
+    </div>
+  </div>
+
 <!-- Effects -->
   <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
     <h3 class="font-heading font-semibold text-dark text-lg mb-4 flex items-center gap-2">

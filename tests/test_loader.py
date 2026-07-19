@@ -1009,15 +1009,21 @@ class TestRunUpgradeFlowCallsPruneAfterSwap:
 
     def test_prune_not_called_when_local_matches_expected(self, loader, bare_repo_with_two_commits):
         """No deploy happened → no prune. Old v-<sha>/ dirs are still useful
-        as rollback targets / historical state."""
+        as rollback targets / historical state.
+
+        Issue #51: the new wire contract is short-vs-short
+        (`short_sha(local) == target_version`). Mock returns the short
+        form to match what `/api/sign/settings` actually delivers.
+        """
         repo, sha1, _sha2 = bare_repo_with_two_commits
+        short_sha1 = _short(sha1)
         prune_calls = []
 
         loader.run_upgrade_flow(
             repo,
             api_url="https://x/api/messages",
             api_key="k",
-            fetch_fn=lambda **_kw: sha1,  # local == expected
+            fetch_fn=lambda **_kw: short_sha1,  # local == expected (short form)
             refresh_fn=lambda *_a, **_kw: True,
             stage_fn=lambda *_a, **_kw: repo / f"v-{_short(sha1)}",
             probe_fn=lambda *_a, **_kw: True,

@@ -92,6 +92,12 @@
     that have neither #sign-live-pill nor [data-sign-status-field].
   -->
   <script src="{{ url_for('static', filename='sign_status.js') }}?v=1"></script>
+  <!--
+    pi_upgrade_settings.js — Settings-page Pi Upgrade Control section
+    (issue #51). Loaded on every authenticated page; the script is a
+    no-op when [data-upgrade-settings-field] is absent.
+  -->
+  <script src="{{ url_for('static', filename='pi_upgrade_settings.js') }}?v=1"></script>
   <script>
     // PyScript 2024.9.x fires `py:error` on each <py-script>
     // element when its main module raises during evaluation
