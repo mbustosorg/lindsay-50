@@ -265,7 +265,12 @@ def _base_form(**overrides):
 
 
 def test_post_senders_parses_parallel_lists(app_with_real_cfg, client):
-    """sender_name / sender_phone / sender_allowed lists parse into a dict-of-dict."""
+    """sender_name / sender_phone / sender_allowed lists parse into a dict-of-dict.
+
+    The handler pairs `sender_allowed` to its row by phone (the row's
+    `value="<phone>"`), not by enumerate index — so removing a row
+    doesn't shift surviving rows' allowed flags.
+    """
     flask_app, real_cfg = app_with_real_cfg
     _login(client)
     response = client.post(
@@ -273,7 +278,8 @@ def test_post_senders_parses_parallel_lists(app_with_real_cfg, client):
         data=_base_form(
             sender_name=["Alice", "Bob"],
             sender_phone=["+15551234567", "+15559999999"],
-            sender_allowed=["0"],  # only Alice is allowed (row index 0)
+            # Only Alice is allowed: checkbox value = Alice's phone.
+            sender_allowed=["+15551234567"],
         ),
         follow_redirects=False,
     )
@@ -289,6 +295,94 @@ def test_post_senders_parses_parallel_lists(app_with_real_cfg, client):
     assert real_cfg.senders[key_alice]["allowed"] is True
     assert real_cfg.senders[key_bob]["name"] == "Bob"
     assert real_cfg.senders[key_bob]["allowed"] is False
+
+
+def test_post_senders_remove_surviving_rows_preserve_their_allowed_flag(app_with_real_cfg, client):
+    """Removing a row from the form (e.g. operator clicks Remove on the
+    first of three rows) does NOT flip the surviving rows' allowed flags.
+
+    Regression test for the index-drift bug: the previous handler paired
+    `sender_allowed` by enumerate index, so removing row 0 left row 1's
+    checkbox at `value="1"` while the handler checked `str(0) in
+    allowed_set` — flipping it to False. The fix pairs by phone.
+    """
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post(
+        "/settings",
+        data=_base_form(
+            # Three rows; the first is "removed" by simply not including
+            # its phone's checkbox in `sender_allowed`. (In the browser
+            # the Remove button does `tr.remove()` which omits the row
+            # entirely; here we exercise the same end-state by including
+            # only Bob and Carol's checkbox values.)
+            sender_name=["Alice", "Bob", "Carol"],
+            sender_phone=["+15551111111", "+15552222222", "+15553333333"],
+            sender_allowed=["+15552222222", "+15553333333"],
+        ),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    from lib_shared.phone_utils import normalize_phone
+
+    assert real_cfg.senders[normalize_phone("+15552222222")]["allowed"] is True
+    assert real_cfg.senders[normalize_phone("+15553333333")]["allowed"] is True
+    # Alice's row was excluded from `sender_allowed` — she's not in the
+    # checked list, so her allowed flag is False.
+    assert real_cfg.senders[normalize_phone("+15551111111")]["allowed"] is False
+
+
+def test_post_senders_unfilled_add_row_skipped(app_with_real_cfg, client):
+    """The blank add-row at the bottom of the form (empty phone) is
+    skipped — it does NOT land in cfg.senders."""
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post(
+        "/settings",
+        data=_base_form(
+            # The form always has one trailing empty row (the add-row).
+            sender_name=["Alice", ""],
+            sender_phone=["+15551234567", ""],
+            sender_allowed=["+15551234567"],
+        ),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+    # Only Alice is in cfg.senders; the empty add-row was dropped.
+    assert len(real_cfg.senders) == 1
+    from lib_shared.phone_utils import normalize_phone
+
+    assert normalize_phone("+15551234567") in real_cfg.senders
+
+
+def test_post_senders_duplicate_phone_preserves_prior_state(app_with_real_cfg, client):
+    """Two rows with the same phone → the duplicate is dropped (the
+    existing entry is preserved by the partial-save logic, since the
+    duplicate check refuses to clobber cfg.senders when `seen_keys`
+    already has the entry).
+    """
+    flask_app, real_cfg = app_with_real_cfg
+    from lib_shared.phone_utils import normalize_phone
+
+    key = normalize_phone("+15551234567")
+    # Pre-populate so the post has a fresh entry to dedupe against.
+    real_cfg.senders[key] = {"name": "Pre-existing", "allowed": True, "phone": "+15551234567"}
+    _login(client)
+    response = client.post(
+        "/settings",
+        data=_base_form(
+            sender_name=["Pre-existing", "Duplicate"],
+            sender_phone=["+15551234567", "+15551234567"],
+            sender_allowed=[key],
+        ),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+    # Only one entry; the duplicate was rejected (logger.warning was
+    # emitted; the handler kept cfg.senders intact).
+    assert len(real_cfg.senders) == 1
+    assert real_cfg.senders[key]["name"] in ("Pre-existing",)
 
 
 def test_post_enforcement_enabled_checkbox_writes_to_text_settings(app_with_real_cfg, client):

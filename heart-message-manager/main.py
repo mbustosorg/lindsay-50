@@ -1402,34 +1402,64 @@ def settings():
 
         # Senders list (issue #6 / implement-senders-filtering).
         # Form posts parallel `sender_name` / `sender_phone` lists plus
-        # a `sender_allowed` checkbox list (each checked box's value is
-        # its row index; unchecked rows are absent from the form data).
-        # Build a new `cfg.senders` dict (dict[str, dict] keyed by
-        # normalized phone). Empty rows are dropped; an empty entries
-        # list does NOT wipe the existing senders (defensive
-        # partial-post handling).
+        # a `sender_allowed` checkbox list — each checked box's `value`
+        # carries the row's normalized phone (kept in sync by the
+        # template's `syncSenderAllowed` JS handler as the operator types).
+        # Build a new `cfg.senders` dict keyed by `normalize_phone(phone)`.
+        # Empty rows are dropped; an empty entries list does NOT wipe the
+        # existing senders (defensive partial-post handling).
+        #
+        # Pairing by phone (not by enumerate index) avoids the
+        # index-drift bug where removing a row from the DOM left
+        # surviving rows' `sender_allowed` values out of sync with
+        # their new enumerate positions — a removed row's checkbox
+        # would no longer be in the form data, and any surviving row
+        # whose original index no longer matched its new DOM position
+        # would have its allowed flag flipped. Phone is the natural
+        # unique key; if two rows carry the same phone, the handler
+        # rejects the duplicate so the operator's intent is preserved.
         names = request.form.getlist("sender_name")
         phones = request.form.getlist("sender_phone")
         allowed_list = request.form.getlist("sender_allowed")
-        # Build the allowed-set as a set of str(row_index) for O(1) lookup.
-        allowed_set = set(allowed_list)
+        # Build the allowed-set as a set of normalized-phone strings.
+        # Unrecognized checkbox values (e.g. an unfilled new row whose
+        # `value=""`) are simply absent — the row is treated as
+        # not-allowed. The operator who clicks the checkbox before
+        # typing the phone gets `value=""` (unchecked) and is treated
+        # as allowed=False at save time, which matches what the
+        # checkbox actually says on the form.
         from lib_shared.phone_utils import normalize_phone
 
+        allowed_set = set(allowed_list)
         new_senders: dict[str, dict] = {}
-        for idx, (name, phone) in enumerate(zip(names, phones)):
+        seen_keys: set[str] = set()
+        duplicate_phones: list[str] = []
+        for name, phone in zip(names, phones):
             stripped_name = name.strip()
             stripped_phone = phone.strip()
             if not stripped_phone:
                 # Empty phone = unfilled row, preserve operator intent.
                 continue
-            allowed = str(idx) in allowed_set
             key = normalize_phone(stripped_phone)
+            if key in seen_keys:
+                # Duplicate phone on the form — refuse silently so the
+                # operator's UI doesn't surprise them with a half-saved
+                # list. Keep the existing senders; the operator can fix
+                # the duplicate and re-submit.
+                duplicate_phones.append(stripped_phone)
+                continue
+            seen_keys.add(key)
             new_senders[key] = {
                 "name": stripped_name or stripped_phone,
-                "allowed": allowed,
+                "allowed": key in allowed_set,
                 "phone": stripped_phone,
             }
-        if new_senders:
+        if duplicate_phones:
+            logger.warning(
+                "[settings] senders POST dropped duplicate phone(s): %s " "— preserving prior senders",
+                sorted(set(duplicate_phones)),
+            )
+        elif new_senders:
             cfg.senders = new_senders
         # else: defensive — preserve existing senders on a zero-row POST.
 

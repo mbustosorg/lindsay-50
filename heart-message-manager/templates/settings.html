@@ -273,15 +273,15 @@
           {% for key, entry in cfg.senders.items() %}
           <tr>
             <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ entry.name }}"></td>
-            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ key }}"></td>
-            <td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="{{ loop.index0 }}"{% if entry.allowed %} checked{% endif %}></td>
+            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ key }}" oninput="syncSenderAllowed(this)"></td>
+            <td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="{{ key }}"{% if entry.allowed %} checked{% endif %}></td>
             <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
           </tr>
           {% endfor %}
           <tr>
             <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td>
-            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td>
-            <td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="{{ cfg.senders|length }}" checked></td>
+            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567" oninput="syncSenderAllowed(this)"></td>
+            <td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="" checked></td>
             <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
           </tr>
         </tbody>
@@ -364,10 +364,23 @@
 </div>
 
 <script>
+function syncSenderAllowed(phoneInput) {
+  // Keep the row's sender_allowed checkbox value in sync with the
+  // normalized phone field. The /settings POST handler keys allowed by
+  // normalize_phone(phone) — so when the operator types a new phone,
+  // the matching checkbox's value must follow. Phone-format edge cases
+  // (parens, dashes, leading +1) are handled server-side; we copy the
+  // raw input verbatim so the operator's typed format is preserved on
+  // round-trip if the row is later edited.
+  const tr = phoneInput.closest('tr');
+  const allowed = tr.querySelector('input[name="sender_allowed"]');
+  if (allowed) allowed.value = phoneInput.value.trim();
+}
+
 function addSenderRow() {
   const tbody = document.querySelector('#senders-table tbody');
   const tr = document.createElement('tr');
-  tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td><td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="new" checked></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
+  tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567" oninput="syncSenderAllowed(this)"></td><td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="" checked></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
   tbody.appendChild(tr);
 }
 
