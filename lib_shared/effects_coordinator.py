@@ -519,32 +519,28 @@ class EffectsCoordinator:
         Reads the manager's `effects_settings` and `text_settings`
         live. Three concrete applications:
 
-        1. Rotation rebuild — when the `effects` list shape changes
-           (effect added/removed/disabled), rebuild the Effect
-           instances and reset `idx = -1` so the next out→in picks
-           `effects[0]` (after the +1 wrap). Without this, removed
-           effects keep cycling indefinitely.
-        2. Scroller color — applies `text_settings.color` if it
-           changed since the last cycle boundary.
-        3. Scroller speed — applies `text_settings.speed` if it
-           changed since the last cycle boundary.
+        1. Rotation rebuild — rebuild the Effect instances from the
+           current `effects_settings.effects` so a config edit
+           between cycles (effect added/removed/disabled) shows up
+           on the next out→in. `self.idx` is intentionally NOT
+           reset here — the next out→in's `idx = (idx + 1) % len`
+           advance picks from the new (possibly shorter) list, so
+           removed effects drop out naturally and the rotation
+           continues from wherever it was. Resetting idx to -1
+           here would force the next cycle back to `effects[0]`
+           every time, no matter what changed.
+        2. Scroller color — applies `text_settings.color`.
+        3. Scroller speed — applies `text_settings.speed`.
 
         Each branch logs the change at INFO level so operators can
         trace live config edits in the journal.
         """
         effects_settings = self.effects_settings
-        rotation = tuple((e.get("name"), e.get("enabled")) for e in effects_settings.effects)
-        # Always rebuild at this cycle boundary so a config edit
-        # between cycles shows up on the next out→in. Cheap relative
-        # to the fade machinery; the user's directive was to drop
-        # the per-tick diff gate, not to gate cycle-boundary work.
-        del rotation
         log.info(
             "Coordinator rotation refresh at cycle boundary: %s",
             [e.get("name") for e in effects_settings.effects],
         )
         self.effects = build_effects(effects_settings, display=display)
-        self.idx = -1  # next fade picks the head of the new list
 
         text_settings = self.text_settings
         log.info(

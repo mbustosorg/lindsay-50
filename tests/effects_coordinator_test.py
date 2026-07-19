@@ -705,6 +705,117 @@ def test_current_effect_name_and_text():
     assert coord.current_text == ""
     monkey.undo()
 
+
+def test_rotation_advances_through_enabled_effects_across_cycles():
+    """Regression: `_refresh_render_layer_from_settings` must NOT
+    reset `self.idx` at the cycle boundary. The rotation should
+    advance through the enabled-effects list across cycles, not
+    be pinned at `effects[0]` (Hyperspace in production) every
+    cycle.
+
+    Pre-regression bug (2026-07-18): commit 5d52cb5 dropped the
+    `self.idx = -1` reset that was actually a "reset before
+    rebuild" sentinel — but the comment in the rebuild path
+    stayed ("next fade picks the head of the new list"). The
+    unconditional reset meant every out→in picked `effects[0]`
+    regardless of the previous idx, so the rotation never
+    advanced and the sign always showed the first effect in
+    the canonical rotation order.
+
+    Pins the contract: across multiple out→in cycles, the
+    `idx` field advances through the enabled-effects list
+    (modulo len), and `coord.current` rotates through the
+    actual effects in declared order.
+    """
+    from lib_shared.models import EffectsSettings, MessageView, Message
+    from lib_shared.effects_coordinator import EffectsCoordinator
+
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
+    monkey.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.02)
+    # Four stub effects so we can see the rotation advance
+    # through multiple slots.
+    fx0 = _make_effect("E0")()
+    fx1 = _make_effect("E1")()
+    fx2 = _make_effect("E2")()
+    fx3 = _make_effect("E3")()
+
+    # Pool of 4 messages so we can drive 3+ out→in transitions.
+    msg_a = MessageView(
+        Message(id="ma", sender="+1", body="a", received_at="2026-01-01T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    msg_b = MessageView(
+        Message(id="mb", sender="+1", body="b", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    msg_c = MessageView(
+        Message(id="mc", sender="+1", body="c", received_at="2026-01-03T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    msg_d = MessageView(
+        Message(id="md", sender="+1", body="d", received_at="2026-01-04T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    # Build the coordinator directly so we can inject a custom
+    # effects list (the _build helper hardcodes fx_a/fx_b).
+    display = _StubDisplay()
+    scroller = _StubScroller()
+    heart = _make_effect("Heart")()
+    effects_settings = EffectsSettings(
+        fade_seconds=0.02,
+        intro_seconds=0.0,
+        hold_seconds=0.02,
+        idle_seconds=999.0,
+        recent_count=20,
+    )
+    mgr = _StubMessageManager(
+        messages=[msg_a, msg_b, msg_c, msg_d],
+        effects_settings=effects_settings,
+    )
+    coord = EffectsCoordinator(
+        message_manager=mgr,
+        display=display,
+        scroller=scroller,
+        effects=[fx0, fx1, fx2, fx3],
+        heart=heart,
+    )
+    coord.start()
+    # Drive ~0.55s. Each cycle is ~0.10s (fade-out 0.02 + fade-in 0.02
+    # + hold 0.02 + text_out 0.02 + background 0.02 + idle 0.02 = 0.12
+    # conservative; the +0.01 tick granularity makes it land at
+    # ~0.10-0.11s). Driving 0.55s should give ~5 cycles.
+    seen_names = set()
+    idx_history = []
+    for _ in range(60):
+        clock.advance(0.01)
+        coord.tick()
+        idx_history.append(coord.idx)
+        if coord.mode in ("hold", "text_out", "background"):
+            seen_names.add(coord.current_effect_name)
+    # Assert: visited at least 3 of the 4 effects across cycles.
+    # The regression bug would produce exactly 1 (E0 only, pinned
+    # at idx=0 by every cycle-boundary refresh).
+    assert len(seen_names) >= 3, (
+        f"rotation only visited {sorted(seen_names)!r} across "
+        f"~5 cycles — expected at least 3 of the 4 enabled "
+        f"effects. The cycle-boundary refresh is still "
+        f"resetting idx=-1 every cycle. idx_history tail: {idx_history[-10:]}"
+    )
+    # Also assert idx advanced beyond 0 at some point. Without
+    # the fix, idx history would be all -1s and 0s.
+    assert max(idx_history) >= 1, (
+        f"idx never advanced past 0; idx_history={idx_history}. "
+        f"The cycle-boundary refresh is pinning idx=0 every cycle."
+    )
+    monkey.undo()
+
+
 # --- optional render layer (bind / unbound) ---------------------------------
 
 def test_unbound_coordinator_starts_unbound():
