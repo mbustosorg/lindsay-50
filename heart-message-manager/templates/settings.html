@@ -8,7 +8,7 @@
   </div>
 </div>
 
-<form method="POST">
+<form method="POST" id="settings-form">
   <!-- Sign Settings -->
   <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
     <h3 class="font-heading font-semibold text-dark text-lg mb-4 flex items-center gap-2">
@@ -225,38 +225,55 @@
     </div>
   </div>
 
-  <!-- Allowed Senders -->
+  <!-- Senders -->
   <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
     <h3 class="font-heading font-semibold text-dark text-lg mb-2 flex items-center gap-2">
-      <span>📱</span> Allowed Senders
+      <span>📱</span> Senders
     </h3>
-    <p class="text-sm text-slate-500 mb-4">These are informational only. All messages are stored regardless of sender.</p>
+    <p class="text-sm text-slate-500 mb-1">Only messages from senders set to <strong>Allow</strong> + <strong>Enabled</strong> appear on the display. All messages are stored regardless of sender.</p>
+    <p class="text-sm text-slate-400 mb-4">Phone numbers are normalized to +1XXXXXXXXXX.</p>
     <div class="overflow-x-auto">
       <table class="w-full" id="senders-table">
         <thead>
           <tr class="bg-indigo-50">
             <th class="text-left px-4 py-3 font-heading font-semibold text-dark text-sm">Name</th>
             <th class="text-left px-4 py-3 font-heading font-semibold text-dark text-sm">Phone (E.164)</th>
+            <th class="text-left px-4 py-3 font-heading font-semibold text-dark text-sm">Action</th>
+            <th class="text-left px-4 py-3 font-heading font-semibold text-dark text-sm">Status</th>
             <th class="w-20"></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-indigo-50">
-          {% for sender in cfg.allowed_senders %}
+          {% for phone_key, sender in cfg.senders.items() %}
           <tr>
             <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ sender.name }}"></td>
-            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ sender.phone }}"></td>
+            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ phone_key }}"></td>
+            <td class="px-4 py-3">
+              <select name="sender_action" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
+                <option value="allow"{% if sender.action == 'allow' %} selected{% endif %}>Allow</option>
+                <option value="suppress"{% if sender.action == 'suppress' %} selected{% endif %}>Suppress</option>
+              </select>
+            </td>
+            <td class="px-4 py-3 text-center"><input type="checkbox" name="sender_status" value="{{ loop.index0 }}"{% if sender.status == 'enabled' %} checked{% endif %} class="w-4 h-4 rounded text-primary focus:ring-primary"></td>
             <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
           </tr>
           {% endfor %}
           <tr>
             <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td>
             <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td>
+            <td class="px-4 py-3">
+              <select name="sender_action" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
+                <option value="allow" selected>Allow</option>
+                <option value="suppress">Suppress</option>
+              </select>
+            </td>
+            <td class="px-4 py-3 text-center"><input type="checkbox" name="sender_status" value="{{ cfg.senders|length }}" checked class="w-4 h-4 rounded text-primary focus:ring-primary"></td>
             <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
           </tr>
         </tbody>
       </table>
     </div>
-    <button type="button" class="mt-4 px-4 py-2 rounded-xl bg-indigo-50 text-primary font-semibold hover:bg-indigo-100 transition-colors cursor-pointer" onclick="addSenderRow()">+ Add Sender</button>
+    <button type="button" class="mt-4 px-4 py-2 rounded-xl bg-indigo-50 text-primary font-semibold hover:bg-indigo-100 transition-colors cursor-pointer" onclick="addSenderRow()">+ Add Entry</button>
   </div>
 
   <button type="submit" class="px-8 py-3 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 hover:shadow-xl transition-all text-lg cursor-pointer">Save Settings</button>
@@ -276,6 +293,7 @@
         <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">#</th>
         <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Type</th>
         <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Pattern</th>
+        <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Status</th>
         <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Action</th>
         <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Remove</th>
       </tr>
@@ -288,6 +306,9 @@
           <span class="px-3 py-1 rounded-lg bg-purple-100 text-purple-700 text-sm font-semibold">{{ f.type }}</span>
         </td>
         <td class="px-6 py-4 text-sm text-dark font-mono">{{ f.pattern }}</td>
+        <td class="px-6 py-4 text-center">
+          <input type="checkbox" name="filter_status_{{ loop.index0 }}" form="settings-form"{% if f.status == 'enabled' %} checked{% endif %} class="w-4 h-4 rounded text-primary focus:ring-primary" title="Enabled — save the form above to apply">
+        </td>
         <td class="px-6 py-4 text-sm text-slate-600">{{ f.action }}</td>
         <td class="px-6 py-4">
           <form method="POST">
@@ -299,7 +320,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="5" class="px-6 py-8 text-center text-slate-500">
+        <td colspan="6" class="px-6 py-8 text-center text-slate-500">
           No filter rules. All messages will be displayed.
         </td>
       </tr>
@@ -314,7 +335,6 @@
         <select name="filter_type" class="px-4 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none min-w-[120px]">
           <option value="keyword">keyword</option>
           <option value="regex">regex</option>
-          <option value="sender">sender</option>
           <option value="message">message</option>
         </select>
       </div>
@@ -322,6 +342,10 @@
         <label class="block text-sm font-medium text-slate-600 mb-1">Pattern</label>
         <input type="text" name="filter_pattern" class="w-full px-4 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Enter pattern..." required>
       </div>
+      <label class="flex items-center gap-2 pb-2 cursor-pointer">
+        <input type="checkbox" name="filter_status" checked class="w-4 h-4 rounded text-primary focus:ring-primary">
+        <span class="text-sm font-medium text-slate-600">Enabled</span>
+      </label>
       <button type="submit" class="px-6 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 hover:shadow-xl transition-all cursor-pointer">Add Rule</button>
     </form>
   </div>
@@ -331,9 +355,31 @@
 function addSenderRow() {
   const tbody = document.querySelector('#senders-table tbody');
   const tr = document.createElement('tr');
-  tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
+  tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td>'
+    + '<td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td>'
+    + '<td class="px-4 py-3"><select name="sender_action" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none"><option value="allow" selected>Allow</option><option value="suppress">Suppress</option></select></td>'
+    + '<td class="px-4 py-3 text-center"><input type="checkbox" name="sender_status" value="0" checked class="w-4 h-4 rounded text-primary focus:ring-primary"></td>'
+    + '<td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
   tbody.appendChild(tr);
 }
+
+// Reindex the sender Status checkboxes to their current DOM row order right
+// before submit. Rows can be added / removed dynamically, which makes the
+// server-rendered `value` indices stale; the POST handler treats each
+// checked box's value as its row index (checkbox-with-index pattern), so the
+// values must match the parallel sender_name / sender_phone list positions.
+(function () {
+  const form = document.getElementById('settings-form');
+  const tbody = document.querySelector('#senders-table tbody');
+  if (!form || !tbody) return;
+  form.addEventListener('submit', function () {
+    const rows = tbody.querySelectorAll('tr');
+    rows.forEach(function (row, i) {
+      const box = row.querySelector('input[name="sender_status"]');
+      if (box) box.value = String(i);
+    });
+  });
+})();
 
 // Bidirectional wiring for the text color control: <input type="color">
 // and the hex text field mirror each other. Only the hex field has

@@ -60,6 +60,7 @@ from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.effects_loader import load_effects_settings
 from lib_shared.models import SignConfig, FilterRule, Message
 from lib_shared.models import MessageEnvelope
+from lib_shared.phone_utils import normalize_phone
 from lib_shared.scroller_base import ScrollerBase
 from lib_shared.sign_status import LatestSignStatus, REQUIRED_SNAPSHOT_KEYS
 
@@ -1161,8 +1162,11 @@ def settings():
         if filter_action == "add":
             ftype = request.form.get("filter_type", "").strip()
             pattern = request.form.get("filter_pattern", "").strip()
-            if ftype in ("keyword", "regex", "sender", "message") and pattern:
-                cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress"))
+            # The "sender" type was removed in v3 — sender matching lives in
+            # the senders list. The Status checkbox posts "on" when checked.
+            status = "enabled" if request.form.get("filter_status") == "on" else "disabled"
+            if ftype in ("keyword", "regex", "message") and pattern:
+                cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress", status=status))
                 _save_and_publish(cfg)
                 return redirect(url_for("settings"))
         elif filter_action == "delete":
@@ -1279,15 +1283,42 @@ def settings():
         es_form.effects = new_effects
         cfg.effects_settings = es_form
 
+        # Per-row Filter Rule status checkboxes. Each existing rule's row
+        # posts `filter_status_<i>="on"` when checked (the checkbox lives in
+        # the filter table but is associated with the main form via the HTML
+        # `form=` attribute). Absent → the operator unchecked it → disabled.
+        for i, rule in enumerate(cfg.filters):
+            rule.status = "enabled" if request.form.get(f"filter_status_{i}") == "on" else "disabled"
+
+        # Senders: rebuild the dict-of-dict from the parallel form rows.
+        # `sender_status` is a checkbox list whose values are the row indices
+        # of the checked boxes (standard HTML checkbox-with-index pattern).
         names = request.form.getlist("sender_name")
         phones = request.form.getlist("sender_phone")
-        new_senders = {}
-        for name, phone in zip(names, phones):
+        actions = request.form.getlist("sender_action")
+        checked_rows = set(request.form.getlist("sender_status"))
+        new_senders: dict[str, dict] = {}
+        for i, (name, phone) in enumerate(zip(names, phones)):
             name = name.strip()
             phone = phone.strip()
-            if phone:
-                new_senders[phone] = name or phone
-        cfg.senders = new_senders
+            if not phone:
+                # Empty phone = unfilled row; drop it (preserve operator intent).
+                continue
+            action = actions[i] if i < len(actions) else "allow"
+            if action not in ("allow", "suppress"):
+                action = "allow"
+            status = "enabled" if str(i) in checked_rows else "disabled"
+            new_senders[normalize_phone(phone)] = {
+                "name": name or phone,
+                "action": action,
+                "status": status,
+                "phone": phone,
+            }
+        # Defensive: a POST with zero senders rows (fields absent entirely)
+        # must NOT wipe the existing senders — same partial-form preservation
+        # as the sign_name / timezone handling above.
+        if names or phones:
+            cfg.senders = new_senders
 
         _save_and_publish(cfg)
         return redirect(url_for("settings"))
