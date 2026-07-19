@@ -17,24 +17,24 @@
     <div class="grid grid-cols-2 gap-6">
       <div>
         <label class="block text-sm font-medium text-slate-600 mb-2">Sign Name</label>
-        <input type="text" name="sign_name" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ cfg.sign.name }}">
+        <input type="text" name="sign_name" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ cfg.sign_settings.sign_name }}">
       </div>
       <div>
         <label class="block text-sm font-medium text-slate-600 mb-2">Timezone</label>
         <select name="timezone" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
-          <option value="America/Los_Angeles"{% if cfg.timezone == 'America/Los_Angeles' %} selected{% endif %}>Pacific (America/Los_Angeles)</option>
-          <option value="America/Denver"{% if cfg.timezone == 'America/Denver' %} selected{% endif %}>Mountain (America/Denver)</option>
-          <option value="America/Chicago"{% if cfg.timezone == 'America/Chicago' %} selected{% endif %}>Central (America/Chicago)</option>
-          <option value="America/New_York"{% if cfg.timezone == 'America/New_York' %} selected{% endif %}>Eastern (America/New_York)</option>
-          <option value="America/Anchorage"{% if cfg.timezone == 'America/Anchorage' %} selected{% endif %}>Alaska (America/Anchorage)</option>
-          <option value="Pacific/Honolulu"{% if cfg.timezone == 'Pacific/Honolulu' %} selected{% endif %}>Hawaii (Pacific/Honolulu)</option>
-          <option value="Europe/London"{% if cfg.timezone == 'Europe/London' %} selected{% endif %}>London (Europe/London)</option>
-          <option value="Europe/Paris"{% if cfg.timezone == 'Europe/Paris' %} selected{% endif %}>Paris (Europe/Paris)</option>
-          <option value="Europe/Berlin"{% if cfg.timezone == 'Europe/Berlin' %} selected{% endif %}>Berlin (Europe/Berlin)</option>
-          <option value="Asia/Tokyo"{% if cfg.timezone == 'Asia/Tokyo' %} selected{% endif %}>Tokyo (Asia/Tokyo)</option>
-          <option value="Asia/Singapore"{% if cfg.timezone == 'Asia/Singapore' %} selected{% endif %}>Singapore (Asia/Singapore)</option>
-          <option value="Australia/Sydney"{% if cfg.timezone == 'Australia/Sydney' %} selected{% endif %}>Sydney (Australia/Sydney)</option>
-          <option value="UTC"{% if cfg.timezone == 'UTC' %} selected{% endif %}>UTC</option>
+          <option value="America/Los_Angeles"{% if cfg.sign_settings.timezone == 'America/Los_Angeles' %} selected{% endif %}>Pacific (America/Los_Angeles)</option>
+          <option value="America/Denver"{% if cfg.sign_settings.timezone == 'America/Denver' %} selected{% endif %}>Mountain (America/Denver)</option>
+          <option value="America/Chicago"{% if cfg.sign_settings.timezone == 'America/Chicago' %} selected{% endif %}>Central (America/Chicago)</option>
+          <option value="America/New_York"{% if cfg.sign_settings.timezone == 'America/New_York' %} selected{% endif %}>Eastern (America/New_York)</option>
+          <option value="America/Anchorage"{% if cfg.sign_settings.timezone == 'America/Anchorage' %} selected{% endif %}>Alaska (America/Anchorage)</option>
+          <option value="Pacific/Honolulu"{% if cfg.sign_settings.timezone == 'Pacific/Honolulu' %} selected{% endif %}>Hawaii (Pacific/Honolulu)</option>
+          <option value="Europe/London"{% if cfg.sign_settings.timezone == 'Europe/London' %} selected{% endif %}>London (Europe/London)</option>
+          <option value="Europe/Paris"{% if cfg.sign_settings.timezone == 'Europe/Paris' %} selected{% endif %}>Paris (Europe/Paris)</option>
+          <option value="Europe/Berlin"{% if cfg.sign_settings.timezone == 'Europe/Berlin' %} selected{% endif %}>Berlin (Europe/Berlin)</option>
+          <option value="Asia/Tokyo"{% if cfg.sign_settings.timezone == 'Asia/Tokyo' %} selected{% endif %}>Tokyo (Asia/Tokyo)</option>
+          <option value="Asia/Singapore"{% if cfg.sign_settings.timezone == 'Asia/Singapore' %} selected{% endif %}>Singapore (Asia/Singapore)</option>
+          <option value="Australia/Sydney"{% if cfg.sign_settings.timezone == 'Australia/Sydney' %} selected{% endif %}>Sydney (Australia/Sydney)</option>
+          <option value="UTC"{% if cfg.sign_settings.timezone == 'UTC' %} selected{% endif %}>UTC</option>
         </select>
       </div>
     </div>
@@ -233,38 +233,61 @@
     </div>
   </div>
 
-  <!-- Allowed Senders -->
+  <!-- Senders -->
   <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
     <h3 class="font-heading font-semibold text-dark text-lg mb-2 flex items-center gap-2">
-      <span>📱</span> Allowed Senders
+      <span>📱</span> Senders
     </h3>
     <p class="text-sm text-slate-500 mb-4">These are informational only. All messages are stored regardless of sender.</p>
+    <div class="grid grid-cols-2 gap-6 mb-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-2">
+          <input type="checkbox" name="enforcement_enabled" value="1"{% if cfg.text_settings.enforcement_enabled %} checked{% endif %} class="mr-2 align-middle">
+          Enforce senders filter
+        </label>
+        <p class="text-xs text-slate-500">When checked, only senders with "Allowed" ticked render on the display. When unchecked, every message renders (display names still resolve).</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-2">Name display format</label>
+        <select name="name_display_format" class="w-full px-4 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
+          <option value="full"{% if cfg.effects_settings.name_display_format == 'full' %} selected{% endif %}>Full name (First Last)</option>
+          <option value="first_initial"{% if cfg.effects_settings.name_display_format == 'first_initial' %} selected{% endif %}>First name + last initial (Alice S.)</option>
+          <option value="first"{% if cfg.effects_settings.name_display_format == 'first' %} selected{% endif %}>First name only (Alice)</option>
+          <option value="first_initial_if_duplicates"{% if cfg.effects_settings.name_display_format == 'first_initial_if_duplicates' %} selected{% endif %}>First name; last initial only if duplicate (default)</option>
+        </select>
+        <p class="text-xs text-slate-500 mt-1">How sender names appear on the display and in the admin UI. The default adds a last initial only when two or more senders share a first name.</p>
+      </div>
+    </div>
+    <p class="text-sm text-slate-500 mb-2">Phone numbers are normalized to +1XXXXXXXXXX.</p>
     <div class="overflow-x-auto">
       <table class="w-full" id="senders-table">
         <thead>
           <tr class="bg-indigo-50">
             <th class="text-left px-4 py-3 font-heading font-semibold text-dark text-sm">Name</th>
             <th class="text-left px-4 py-3 font-heading font-semibold text-dark text-sm">Phone (E.164)</th>
+            <th class="text-left px-4 py-3 font-heading font-semibold text-dark text-sm">Allowed</th>
             <th class="w-20"></th>
           </tr>
         </thead>
         <tbody class="divide-y divide-indigo-50">
-          {% for sender in cfg.allowed_senders %}
+          {% for key, entry in cfg.senders.items() %}
           <tr>
-            <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ sender.name }}"></td>
-            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ sender.phone }}"></td>
+            <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ entry.name }}"></td>
+            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ key }}"></td>
+            <td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="{{ loop.index0 }}"{% if entry.allowed %} checked{% endif %}></td>
             <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
           </tr>
           {% endfor %}
           <tr>
             <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td>
             <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td>
+            <td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="{{ cfg.senders|length }}" checked></td>
             <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
           </tr>
         </tbody>
       </table>
     </div>
-    <button type="button" class="mt-4 px-4 py-2 rounded-xl bg-indigo-50 text-primary font-semibold hover:bg-indigo-100 transition-colors cursor-pointer" onclick="addSenderRow()">+ Add Sender</button>
+    <button type="button" class="mt-4 px-4 py-2 rounded-xl bg-indigo-50 text-primary font-semibold hover:bg-indigo-100 transition-colors cursor-pointer" onclick="addSenderRow()">+ Add Entry</button>
   </div>
 
   <button type="submit" class="px-8 py-3 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 hover:shadow-xl transition-all text-lg cursor-pointer">Save Settings</button>
@@ -284,7 +307,7 @@
         <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">#</th>
         <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Type</th>
         <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Pattern</th>
-        <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Action</th>
+        <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Status</th>
         <th class="text-left px-6 py-3 font-heading font-semibold text-dark text-sm">Remove</th>
       </tr>
     </thead>
@@ -296,7 +319,9 @@
           <span class="px-3 py-1 rounded-lg bg-purple-100 text-purple-700 text-sm font-semibold">{{ f.type }}</span>
         </td>
         <td class="px-6 py-4 text-sm text-dark font-mono">{{ f.pattern }}</td>
-        <td class="px-6 py-4 text-sm text-slate-600">{{ f.action }}</td>
+        <td class="px-6 py-4">
+          <input type="checkbox" name="filter_status_{{ loop.index0 }}" value="on"{% if f.status == 'enabled' %} checked{% endif %}>
+        </td>
         <td class="px-6 py-4">
           <form method="POST">
             <input type="hidden" name="filter_action" value="delete">
@@ -322,13 +347,16 @@
         <select name="filter_type" class="px-4 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none min-w-[120px]">
           <option value="keyword">keyword</option>
           <option value="regex">regex</option>
-          <option value="sender">sender</option>
           <option value="message">message</option>
         </select>
       </div>
       <div class="flex-1">
         <label class="block text-sm font-medium text-slate-600 mb-1">Pattern</label>
         <input type="text" name="filter_pattern" class="w-full px-4 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Enter pattern..." required>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-600 mb-1">Enabled</label>
+        <input type="checkbox" name="filter_status" value="on" checked>
       </div>
       <button type="submit" class="px-6 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 hover:shadow-xl transition-all cursor-pointer">Add Rule</button>
     </form>
@@ -339,7 +367,7 @@
 function addSenderRow() {
   const tbody = document.querySelector('#senders-table tbody');
   const tr = document.createElement('tr');
-  tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
+  tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567"></td><td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="new" checked></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
   tbody.appendChild(tr);
 }
 

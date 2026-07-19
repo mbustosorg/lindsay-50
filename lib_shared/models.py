@@ -194,51 +194,149 @@ class MessageView:
 class FilterRule:
     """A single filter rule that can suppress messages.
 
+    v3 taxonomy (issue #6 / implement-senders-filtering):
+      - `type` is restricted to `"keyword"`, `"regex"`, or `"message"`.
+        The `"sender"` type is REMOVED from the wire — sender matching
+        is the `SignConfig.senders` list's job (see the senders-status
+        spec). `from_dict` raises `ValueError` on `type="sender"` or
+        any other unrecognized value.
+      - `action` is restricted to `"suppress"` (the only v1 action).
+        `from_dict` raises `ValueError` on any other value.
+      - `status` is the per-RULE lifecycle (`"enabled"` | `"disabled"`).
+        A rule with `status="disabled"` is treated as absent at apply
+        time (see `FilteredMessages._apply_filter`). `from_dict`
+        accepts a missing `status` key as a back-compat default of
+        `"enabled"` so legacy v2 payloads still load.
+
     Attributes:
-        type: Rule type — "keyword", "regex", "sender", or "message".
+        type: Rule type — "keyword", "regex", or "message".
         pattern: The value to match against (case-sensitive except for keyword).
-        action: Always "suppress" in practice.
+        action: Always "suppress" in practice (other values rejected at from_dict).
+        status: Per-rule lifecycle — "enabled" (default) or "disabled".
     """
 
-    def __init__(self, type: str, pattern: str, action: str = "suppress") -> None:
+    VALID_TYPES = ("keyword", "regex", "message")
+    VALID_ACTIONS = ("suppress",)
+    VALID_STATUSES = ("enabled", "disabled")
+    DEFAULT_STATUS = "enabled"
+
+    def __init__(
+        self,
+        type: str,
+        pattern: str,
+        action: str = "suppress",
+        status: str = DEFAULT_STATUS,
+    ) -> None:
         """Initialize a FilterRule.
 
         Args:
-            type: Rule type — "keyword", "regex", "sender", or "message".
+            type: Rule type — "keyword", "regex", or "message".
             pattern: Value to match against.
-            action: Action to take when matched (default "suppress").
+            action: Action to take when matched (default "suppress"; other values rejected at from_dict).
+            status: "enabled" or "disabled" (default "enabled").
+
+        Raises:
+            ValueError: on an unknown type, action, or status value.
         """
+        if type not in FilterRule.VALID_TYPES:
+            raise ValueError(f"FilterRule.type must be one of {FilterRule.VALID_TYPES}, got {type!r}")
+        if action not in FilterRule.VALID_ACTIONS:
+            raise ValueError(f"FilterRule.action must be one of {FilterRule.VALID_ACTIONS}, got {action!r}")
+        if status not in FilterRule.VALID_STATUSES:
+            raise ValueError(f"FilterRule.status must be one of {FilterRule.VALID_STATUSES}, got {status!r}")
         self.type = type
         self.pattern = pattern
         self.action = action
+        self.status = status
 
     @classmethod
     def from_dict(cls, d):
-        return cls(type=d["type"], pattern=d["pattern"], action=d.get("action", "suppress"))
+        """Parse from a dict (wire shape).
+
+        Args:
+            d: dict with required keys: type, pattern. Optional: action (default
+                "suppress"), status (default "enabled").
+
+        Returns:
+            A new FilterRule instance.
+
+        Raises:
+            ValueError: on an unknown type, action, or status value. Notably,
+                `type="sender"` raises (the type is REMOVED from the wire).
+        """
+        if not isinstance(d, dict):
+            raise ValueError(f"FilterRule.from_dict requires a dict, got {type(d).__name__}")
+        ftype = d.get("type")
+        if ftype not in cls.VALID_TYPES:
+            raise ValueError(f"FilterRule.type must be one of {cls.VALID_TYPES}, got {ftype!r}")
+        action = d.get("action", "suppress")
+        if action not in cls.VALID_ACTIONS:
+            raise ValueError(f"FilterRule.action must be one of {cls.VALID_ACTIONS}, got {action!r}")
+        status = d.get("status", cls.DEFAULT_STATUS)
+        if status not in cls.VALID_STATUSES:
+            raise ValueError(f"FilterRule.status must be one of {cls.VALID_STATUSES}, got {status!r}")
+        return cls(type=ftype, pattern=d.get("pattern", ""), action=action, status=status)
 
     def to_dict(self):
-        return {"type": self.type, "pattern": self.pattern, "action": self.action}
+        return {"type": self.type, "pattern": self.pattern, "action": self.action, "status": self.status}
 
 
 class SignSettings:
-    """Sign configuration with name attribute."""
+    """Sign configuration: identity (sign_name) and operational metadata (timezone).
 
-    def __init__(self, name: str = "Lindsay's Heart"):
+    v3 layout (issue #6 / implement-senders-filtering):
+      - `name` was renamed to `sign_name` (matches the HTML form
+        field name and disambiguates "the sign's name" from generic
+        "name" in the context of `SignConfig`).
+      - `timezone` moved from a top-level field on `SignConfig`
+        into this nested block.
+
+    The block is renamed `SignSettings` → `SignConfig.sign_settings`
+    (was `SignConfig.sign`) to match the `effects_settings` /
+    `text_settings` naming convention.
+
+    Attributes:
+        sign_name: Display name shown on the sign (default "Lindsay's Heart").
+        timezone: IANA timezone string (default "US/Pacific").
+    """
+
+    DEFAULT_SIGN_NAME = "Lindsay's Heart"
+    DEFAULT_TIMEZONE = "US/Pacific"
+
+    def __init__(
+        self,
+        sign_name: str = DEFAULT_SIGN_NAME,
+        timezone: str = DEFAULT_TIMEZONE,
+    ) -> None:
         """Initialize SignSettings.
 
         Args:
-            name: Display name shown on the sign (default "Lindsay's Heart").
+            sign_name: Display name shown on the sign (default "Lindsay's Heart").
+            timezone: IANA timezone string (default "US/Pacific").
         """
-        self.name = name
+        self.sign_name = sign_name
+        self.timezone = timezone
 
     @classmethod
     def from_dict(cls, d):
+        """Parse from a dict (wire shape).
+
+        Args:
+            d: dict with optional keys: sign_name (default "Lindsay's Heart"),
+                timezone (default "US/Pacific"). May also be `None`.
+
+        Returns:
+            A new SignSettings instance.
+        """
         if d is None:
             return cls()
-        return cls(name=d.get("name", "Lindsay's Heart"))
+        return cls(
+            sign_name=d.get("sign_name", cls.DEFAULT_SIGN_NAME),
+            timezone=d.get("timezone", cls.DEFAULT_TIMEZONE),
+        )
 
     def to_dict(self):
-        return {"name": self.name}
+        return {"sign_name": self.sign_name, "timezone": self.timezone}
 
 
 # ---------------------------------------------------------------------------
@@ -284,6 +382,22 @@ class EffectsSettings:
     VALID_SELECTOR_ALGORITHMS = ("weighted", "random")
     DEFAULT_SELECTOR_ALGORITHM = "weighted"
 
+    # Name display format (issue #6 / implement-senders-filtering).
+    # The field governs how `MessageView.sender_name` is computed from
+    # the stored `name` field. The format lives here in
+    # `effects_settings` (alongside the effects list and pacing fields)
+    # because it's a presentation knob — display-format knobs group
+    # with other presentation knobs. See
+    # `lib_shared/name_utils.format_display_name` for the per-format
+    # semantics.
+    VALID_NAME_DISPLAY_FORMATS = (
+        "full",
+        "first_initial",
+        "first",
+        "first_initial_if_duplicates",
+    )
+    DEFAULT_NAME_DISPLAY_FORMAT = "first_initial_if_duplicates"
+
     # Eligibility-window bounds. The admin UI surfaces `lookback_days`
     # directly; the lower bound (1) keeps the operator from accidentally
     # filtering every message out, and the upper bound (365) caps the
@@ -302,6 +416,7 @@ class EffectsSettings:
         idle_seconds: Optional[float] = None,
         lookback_days: Optional[int] = None,
         selector_algorithm: Optional[str] = None,
+        name_display_format: Optional[str] = None,
     ):
         """Initialize EffectsSettings.
 
@@ -355,6 +470,11 @@ class EffectsSettings:
             if selector_algorithm is not None
             else loader_cfg.get("selector_algorithm", self.DEFAULT_SELECTOR_ALGORITHM)
         )
+        self.name_display_format = (
+            name_display_format
+            if name_display_format is not None
+            else loader_cfg.get("name_display_format", self.DEFAULT_NAME_DISPLAY_FORMAT)
+        )
 
     @property
     def lookback_seconds(self) -> float:
@@ -391,6 +511,12 @@ class EffectsSettings:
         ):
             raise ValueError("effects must be a list of {name: str, enabled: bool} objects")
 
+        name_display_format = d.get("name_display_format")
+        if name_display_format is not None and name_display_format not in cls.VALID_NAME_DISPLAY_FORMATS:
+            raise ValueError(
+                f"name_display_format must be one of {cls.VALID_NAME_DISPLAY_FORMATS}, " f"got {name_display_format!r}"
+            )
+
         # Pacing fields are passed as `None` when absent so `__init__`
         # can fall through to the loader (canonical or operator
         # override). This way an empty wire envelope (`{}`) on a device
@@ -416,6 +542,7 @@ class EffectsSettings:
             idle_seconds=_f("idle_seconds"),
             lookback_days=_i("lookback_days"),
             selector_algorithm=d.get("selector_algorithm"),
+            name_display_format=name_display_format,
         )
 
     def to_dict(self):
@@ -428,6 +555,7 @@ class EffectsSettings:
             "idle_seconds": self.idle_seconds,
             "lookback_days": self.lookback_days,
             "selector_algorithm": self.selector_algorithm,
+            "name_display_format": self.name_display_format,
         }
 
     def validate(self):
@@ -451,6 +579,11 @@ class EffectsSettings:
             raise ValueError(
                 f"selector_algorithm must be one of {self.VALID_SELECTOR_ALGORITHMS}, "
                 f"got {self.selector_algorithm!r}"
+            )
+        if self.name_display_format not in self.VALID_NAME_DISPLAY_FORMATS:
+            raise ValueError(
+                f"name_display_format must be one of {self.VALID_NAME_DISPLAY_FORMATS}, "
+                f"got {self.name_display_format!r}"
             )
         if not isinstance(self.effects, list) or not all(
             isinstance(n, dict) and isinstance(n.get("name"), str) and isinstance(n.get("enabled"), bool)
@@ -478,11 +611,22 @@ class TextSettings:
     MAX_SPEED = 5
     DEFAULT_SPEED = 3
 
+    # Senders-filter master toggle (issue #6 / implement-senders-filtering).
+    # Lives inside `text_settings` because it's the policy gate for
+    # which messages reach the display; display-side policy knobs group
+    # here alongside `speed` / `color` / `text_effect`. See the
+    # `senders-status` capability — when False, every message renders
+    # regardless of `cfg.senders[<phone>]["allowed"]`; when True, only
+    # `allowed=True` senders render (and unlisted senders are
+    # suppressed).
+    DEFAULT_ENFORCEMENT_ENABLED = True
+
     def __init__(
         self,
         speed: int = DEFAULT_SPEED,
         color: int = 0xFF0000,
         text_effect: str = "scroll",
+        enforcement_enabled: bool = DEFAULT_ENFORCEMENT_ENABLED,
     ):
         """Initialize TextSettings.
 
@@ -490,10 +634,16 @@ class TextSettings:
             speed: 1..5 scroll speed (1=Low, 3=Medium default, 5=High).
             color: 24-bit RGB color value (default 0xFF0000 red).
             text_effect: One of TEXT_EFFECTS (currently "scroll").
+            enforcement_enabled: Master toggle for the senders
+                allowlist filter. True (default) means `cfg.senders`
+                governs which senders render; False bypasses the
+                filter entirely (every message renders, display names
+                still resolve).
         """
         self.speed = speed
         self.color = color
         self.text_effect = text_effect
+        self.enforcement_enabled = enforcement_enabled
 
     @classmethod
     def from_dict(cls, d):
@@ -520,10 +670,14 @@ class TextSettings:
         speed = d.get("speed", cls.DEFAULT_SPEED)
         if isinstance(speed, bool) or not isinstance(speed, int) or not cls.MIN_SPEED <= speed <= cls.MAX_SPEED:
             raise ValueError(f"speed must be an integer in {cls.MIN_SPEED}..{cls.MAX_SPEED}, got {speed!r}")
+        enforcement_enabled = d.get("enforcement_enabled", cls.DEFAULT_ENFORCEMENT_ENABLED)
+        if not isinstance(enforcement_enabled, bool):
+            raise ValueError(f"enforcement_enabled must be a bool, got {type(enforcement_enabled).__name__}")
         return cls(
             speed=speed,
             color=int(d.get("color", 0xFF0000)),
             text_effect=text_effect,
+            enforcement_enabled=enforcement_enabled,
         )
 
     def to_dict(self):
@@ -532,6 +686,7 @@ class TextSettings:
             "speed": self.speed,
             "color": self.color,
             "text_effect": self.text_effect,
+            "enforcement_enabled": self.enforcement_enabled,
         }
 
     def validate(self):
@@ -539,7 +694,7 @@ class TextSettings:
 
         Raises:
             ValueError: on speed outside 1..5, color outside 0..0xFFFFFF,
-                or an unknown text_effect.
+                an unknown text_effect, or a non-bool enforcement_enabled.
         """
         if (
             isinstance(self.speed, bool)
@@ -551,52 +706,66 @@ class TextSettings:
             raise ValueError("color must be in range 0..0xFFFFFF")
         if self.text_effect not in self.TEXT_EFFECTS:
             raise ValueError(f"text_effect must be one of {self.TEXT_EFFECTS}")
+        if not isinstance(self.enforcement_enabled, bool):
+            raise ValueError(f"enforcement_enabled must be a bool, got {type(self.enforcement_enabled).__name__}")
 
 
 class SignConfig:
     """Configuration data model for the sign.
 
-    filters: list of FilterRule objects
-    senders: dict of phone -> name
-    sign: SignSettings
-    timezone: IANA timezone string
-    effects_settings: EffectsSettings
-    text_settings: TextSettings
+    v3 layout (issue #6 / implement-senders-filtering):
+      - `sign_settings` (was `sign`) holds `sign_name` (was `name`) and
+        `timezone` (was a top-level field).
+      - `text_settings` gains `enforcement_enabled` (was a top-level
+        field in the draft schema).
+      - `effects_settings` gains `name_display_format`.
+      - `senders` is a `dict[str, dict]` mapping NORMALIZED phone →
+        `{"name", "allowed", "phone"}` (was `dict[str, str]`).
+      - `filters` use `FilterRule.status: "enabled" | "disabled"` (was
+        `enabled: bool`) and `type` is restricted to `keyword`, `regex`,
+        `message` (sender type REMOVED — sender matching moved to the
+        senders list).
+      - No top-level `sign`, `timezone`, `enforcement_enabled`, or
+        `name_display_format` keys. No top-level `allowed_senders` (it
+        was already deprecated).
 
     Thread-safe: guards mutations with a reentrant lock.
     """
 
     # Wire-format schema version. Bump on breaking changes; pair with
     # a new entry in lib_shared.config_migrations.MIGRATIONS.
-    CURRENT_VERSION: int = 2
+    CURRENT_VERSION: int = 3
 
     def __init__(
         self,
         filters: list["FilterRule"] | None = None,
-        senders: dict[str, str] | None = None,
-        sign: "SignSettings | dict | None" = None,
-        timezone: str = "US/Pacific",
+        senders: "dict[str, dict] | None" = None,
+        sign_settings: "SignSettings | dict | None" = None,
         version: int = CURRENT_VERSION,
         effects_settings: "EffectsSettings | dict | None" = None,
         text_settings: "TextSettings | dict | None" = None,
-        allowed_senders: list[str] | None = None,
     ) -> None:
         """Initialize a SignConfig.
 
         Args:
             filters: List of FilterRule objects (default empty).
-            senders: Dict mapping phone number -> display name (default empty).
-            sign: SignSettings instance or dict (default built from empty dict).
-            timezone: IANA timezone string (default "US/Pacific").
-            version: Config schema version (default CURRENT_VERSION = 2).
-            effects_settings: EffectsSettings instance or dict (default built from empty dict).
-            text_settings: TextSettings instance or dict (default built from empty dict).
-            allowed_senders: Deprecated, ignored (kept for backward compat with tests).
+            senders: Dict mapping NORMALIZED phone (e.g. ``+15551234567``)
+                to a value dict ``{"name": str, "allowed": bool, "phone": str}``
+                (default empty dict).
+            sign_settings: SignSettings instance or dict (default built
+                from empty dict — sign_name="Lindsay's Heart",
+                timezone="US/Pacific").
+            version: Config schema version (default CURRENT_VERSION = 3).
+            effects_settings: EffectsSettings instance or dict (default
+                built from empty dict).
+            text_settings: TextSettings instance or dict (default built
+                from empty dict — enforcement_enabled=True by default).
         """
         self.filters = filters or []
-        self.senders = senders or {}
-        self.sign = sign if isinstance(sign, SignSettings) else SignSettings.from_dict(sign or {})
-        self.timezone = timezone
+        self.senders = senders if senders is not None else {}
+        self.sign_settings = (
+            sign_settings if isinstance(sign_settings, SignSettings) else SignSettings.from_dict(sign_settings or {})
+        )
         self.version = version
         self.effects_settings = (
             effects_settings
@@ -624,7 +793,7 @@ class SignConfig:
 
     @classmethod
     def default(cls):
-        """Return a default SignConfig with empty filters, senders, and US/Pacific timezone."""
+        """Return a default SignConfig (CURRENT_VERSION, empty filters / senders)."""
         return cls()
 
     @classmethod
@@ -632,14 +801,19 @@ class SignConfig:
         """Deserialize a SignConfig from a dict (the same shape as to_dict()).
 
         Runs the migration registry at the top so older wire shapes are
-        transparently brought up to CURRENT_VERSION.
+        transparently brought up to CURRENT_VERSION. The senders list is
+        normalized via ``phone_utils.normalize_phone`` on ingest so the
+        dict key is always the canonical form.
 
         Args:
-            data: dict with optional keys: filters, senders, sign, timezone,
+            data: dict with optional keys: filters, senders, sign_settings,
                 version, effects_settings, text_settings.
 
         Returns:
             A new SignConfig instance.
+
+        Raises:
+            ValueError: on malformed filter or senders entries.
         """
         # Defense-in-depth: bring older payloads forward before parsing.
         from lib_shared.config_migrations import migrate
@@ -648,11 +822,28 @@ class SignConfig:
             data = migrate(data, current_version=cls.CURRENT_VERSION)
         else:
             data = {}
+
+        senders: dict[str, dict] = {}
+        for entry in data.get("senders", []):
+            if not isinstance(entry, dict):
+                continue
+            phone = entry.get("phone")
+            name = entry.get("name", "")
+            if not isinstance(phone, str):
+                continue
+            from lib_shared.phone_utils import normalize_phone
+
+            key = normalize_phone(phone)
+            senders[key] = {
+                "name": name,
+                "allowed": bool(entry.get("allowed", True)),
+                "phone": phone,
+            }
+
         return cls(
             filters=[FilterRule.from_dict(f) for f in data.get("filters", [])],
-            senders={s["phone"]: s["name"] for s in data.get("senders", [])},
-            sign=(SignSettings.from_dict(data.get("sign")) if data.get("sign") else SignSettings()),
-            timezone=data.get("timezone", "US/Pacific"),
+            senders=senders,
+            sign_settings=data.get("sign_settings"),
             version=data.get("version", cls.CURRENT_VERSION),
             effects_settings=data.get("effects_settings"),
             text_settings=data.get("text_settings"),
@@ -662,15 +853,22 @@ class SignConfig:
         """Serialize the config to a dict suitable for JSON or S3 storage.
 
         Returns:
-            dict with keys: filters, senders, sign, timezone, effects_settings,
-            text_settings, version.
+            dict with keys: filters, senders, sign_settings, effects_settings,
+            text_settings, version. No top-level `sign`, `timezone`,
+            `enforcement_enabled`, or `name_display_format` keys (all
+            live inside their respective nested settings blocks).
         """
         return self._with_lock(
             lambda: {
                 "filters": [f.to_dict() for f in self.filters],
-                "senders": [{"phone": p, "name": n} for p, n in self.senders.items()],
-                "sign": self.sign.to_dict(),
-                "timezone": self.timezone,
+                "senders": sorted(
+                    (
+                        {"phone": entry["phone"], "name": entry["name"], "allowed": entry["allowed"]}
+                        for entry in self.senders.values()
+                    ),
+                    key=lambda d: d["phone"],
+                ),
+                "sign_settings": self.sign_settings.to_dict(),
                 "version": self.version,
                 "effects_settings": self.effects_settings.to_dict(),
                 "text_settings": self.text_settings.to_dict(),
@@ -685,9 +883,8 @@ class SignConfig:
 
         def _do():
             self.filters = other.filters
-            self.senders = other.senders
-            self.sign = other.sign
-            self.timezone = other.timezone
+            self.senders = dict(other.senders)
+            self.sign_settings = other.sign_settings
             self.version = other.version
             self.effects_settings = other.effects_settings
             self.text_settings = other.text_settings
@@ -730,15 +927,31 @@ class SignConfig:
             data.pop("effects_settings", None)
             log.debug("SignConfig.update_from_dict: dropped wire effects_settings (override active)")
 
+        senders: dict[str, dict] = {}
+        for entry in data.get("senders", []):
+            if not isinstance(entry, dict):
+                continue
+            phone = entry.get("phone")
+            name = entry.get("name", "")
+            if not isinstance(phone, str):
+                continue
+            from lib_shared.phone_utils import normalize_phone
+
+            key = normalize_phone(phone)
+            senders[key] = {
+                "name": name,
+                "allowed": bool(entry.get("allowed", True)),
+                "phone": phone,
+            }
+
         def _do():
             self.filters = [FilterRule.from_dict(f) for f in data.get("filters", [])]
-            self.senders = {s["phone"]: s["name"] for s in data.get("senders", [])}
-            sign_data = data.get("sign")
-            self.sign = SignSettings.from_dict(sign_data) if sign_data else SignSettings()
-            self.timezone = data.get("timezone", "US/Pacific")
+            self.senders = senders
+            sign_data = data.get("sign_settings")
+            self.sign_settings = SignSettings.from_dict(sign_data) if sign_data else SignSettings()
             self.version = data.get("version", self.CURRENT_VERSION)
             # Only overwrite the new blocks if the incoming payload carries them.
-            # This keeps the existing in-memory values when a v1 partial update
+            # This keeps the existing in-memory values when a partial update
             # arrives (the migration fills defaults, so the blocks are present
             # — but we still want the caller's intent to "leave it alone" honored).
             if "effects_settings" in data:

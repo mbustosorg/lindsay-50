@@ -387,7 +387,7 @@ def _process_inbound_message(req) -> Response:
 
     # 204 short-circuited above; from here on we always respond 200.
     cfg = sqlite.get_config()
-    sign_name = cfg.sign.name if cfg.sign else "Lindsay's Heart"
+    sign_name = cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart"
     reply_body = body if body else "(no message)"
     reply = f"{sign_name} got your message: {html.escape(reply_body)}"
     twiml = Response(
@@ -1177,8 +1177,8 @@ def dashboard():
         messages=msgs[:20],
         total_count=total,
         suppression_counts=suppression_counts,
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
-        timezone=cfg.timezone,
+        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
+        timezone=cfg.sign_settings.timezone,
         format_from_iso=format_from_iso,
     )
 
@@ -1206,7 +1206,7 @@ def message_list():
         page=page,
         total_pages=total_pages,
         cfg=cfg,
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
+        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         format_from_iso=format_from_iso,
     )
 
@@ -1225,13 +1225,18 @@ def settings():
     cfg = sqlite.get_config()
 
     if request.method == "POST":
-        # Filter rules (before general settings so saves happen once)
+        # Filter rules (before general settings so saves happen once).
+        # v3 (issue #6): `filter_status` checkbox drives the new rule's
+        # `status` field ("on" → "enabled", absent → "disabled"). The
+        # `type` selector no longer offers `sender` (sender matching is
+        # the senders list's job — see FilterRule.VALID_TYPES).
         filter_action = request.form.get("filter_action")
         if filter_action == "add":
             ftype = request.form.get("filter_type", "").strip()
             pattern = request.form.get("filter_pattern", "").strip()
-            if ftype in ("keyword", "regex", "sender", "message") and pattern:
-                cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress"))
+            if ftype in ("keyword", "regex", "message") and pattern:
+                new_status = "enabled" if request.form.get("filter_status") == "on" else "disabled"
+                cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress", status=new_status))
                 _save_and_publish(cfg)
                 return redirect(url_for("settings"))
         elif filter_action == "delete":
@@ -1263,17 +1268,19 @@ def settings():
 
         sign_name = request.form.get("sign_name", "").strip()
         if sign_name:
-            cfg.sign.name = sign_name
+            cfg.sign_settings.sign_name = sign_name
 
         timezone = request.form.get("timezone", "").strip()
         if timezone:
             try:
                 ZoneInfo(timezone)
-                cfg.timezone = timezone
+                cfg.sign_settings.timezone = timezone
             except ZoneInfoNotFoundError:
                 pass  # ignore invalid timezone, keep current value
 
-        # Text settings: speed (1..5), color, text effect.
+        # Text settings: speed (1..5), color, text effect, AND the new
+        # `enforcement_enabled` master toggle (issue #6 — controls
+        # whether the senders list gates rendering).
         ts_form = cfg.text_settings
         speed_raw = request.form.get("text_settings_speed")
         if speed_raw is not None and speed_raw != "":
@@ -1292,11 +1299,18 @@ def settings():
         te = request.form.get("text_settings_text_effect")
         if te:
             ts_form.text_effect = te
+        # `enforcement_enabled` is True when the checkbox is posted with
+        # value "1"; absent form field (or anything other than "1") is
+        # treated as False (defensive default — the operator must
+        # explicitly check the box to enable the filter).
+        ts_form.enforcement_enabled = request.form.get("enforcement_enabled") == "1"
         cfg.text_settings = ts_form
 
         # Effect settings: pacing (fade/hold/intro/idle seconds),
-        # `lookback_days`, `selector_algorithm`, and the rotation list
-        # (handled by the multi-effect form below).
+        # `lookback_days`, `selector_algorithm`, the rotation list, AND
+        # the new `name_display_format` field (issue #6 — controls how
+        # the operator-supplied name is rendered in the admin UI and on
+        # the sign).
         #
         # BUGFIX (2026-07-07): the previous handler built field names as
         # `f"effects_settings{field}"` which produced `effects_settingsfade_seconds`
@@ -1355,6 +1369,16 @@ def settings():
                 )
         else:
             pacing_summary["selector_algorithm"] = "absent"
+        # `name_display_format` (issue #6): one of the four valid
+        # display formats. Unknown / missing values fall back to the
+        # default (`first_initial_if_duplicates`) so a partial form
+        # never corrupts the config.
+        ndf_raw = request.form.get("name_display_format")
+        if ndf_raw in EffectsSettings.VALID_NAME_DISPLAY_FORMATS:
+            es_form.name_display_format = ndf_raw
+        else:
+            es_form.name_display_format = EffectsSettings.DEFAULT_NAME_DISPLAY_FORMAT
+        pacing_summary["name_display_format"] = f"POST={ndf_raw!r} saved={es_form.name_display_format}"
         logger.info(
             "[settings] effect pacing merge: %s",
             _json.dumps(pacing_summary, sort_keys=True),
@@ -1376,15 +1400,38 @@ def settings():
         es_form.effects = new_effects
         cfg.effects_settings = es_form
 
+        # Senders list (issue #6 / implement-senders-filtering).
+        # Form posts parallel `sender_name` / `sender_phone` lists plus
+        # a `sender_allowed` checkbox list (each checked box's value is
+        # its row index; unchecked rows are absent from the form data).
+        # Build a new `cfg.senders` dict (dict[str, dict] keyed by
+        # normalized phone). Empty rows are dropped; an empty entries
+        # list does NOT wipe the existing senders (defensive
+        # partial-post handling).
         names = request.form.getlist("sender_name")
         phones = request.form.getlist("sender_phone")
-        new_senders = {}
-        for name, phone in zip(names, phones):
-            name = name.strip()
-            phone = phone.strip()
-            if phone:
-                new_senders[phone] = name or phone
-        cfg.senders = new_senders
+        allowed_list = request.form.getlist("sender_allowed")
+        # Build the allowed-set as a set of str(row_index) for O(1) lookup.
+        allowed_set = set(allowed_list)
+        from lib_shared.phone_utils import normalize_phone
+
+        new_senders: dict[str, dict] = {}
+        for idx, (name, phone) in enumerate(zip(names, phones)):
+            stripped_name = name.strip()
+            stripped_phone = phone.strip()
+            if not stripped_phone:
+                # Empty phone = unfilled row, preserve operator intent.
+                continue
+            allowed = str(idx) in allowed_set
+            key = normalize_phone(stripped_phone)
+            new_senders[key] = {
+                "name": stripped_name or stripped_phone,
+                "allowed": allowed,
+                "phone": stripped_phone,
+            }
+        if new_senders:
+            cfg.senders = new_senders
+        # else: defensive — preserve existing senders on a zero-row POST.
 
         _save_and_publish(cfg)
         return redirect(url_for("settings"))
@@ -1393,7 +1440,7 @@ def settings():
         "settings.html",
         cfg=cfg,
         effects_settings=load_effects_settings(),
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
+        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         speed_labels=ScrollerBase.SPEED_LABELS,
         # Deployed SHA: what Flask expects the Pi to be running.
         # This is the last-deployed commit, not the Pi's literal live
@@ -1416,8 +1463,8 @@ def preview():
         "preview.html",
         result=all_msgs,
         include_filtered=include_filtered,
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
-        timezone=cfg.timezone,
+        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
+        timezone=cfg.sign_settings.timezone,
         format_from_iso=format_from_iso,
     )
 
@@ -1430,7 +1477,7 @@ def testing():
     twilio_token = _cfg.if_exists("TWILIO_AUTH_TOKEN")
     return render_template(
         "testing.html",
-        sign_name=cfg.sign.name,
+        sign_name=cfg.sign_settings.sign_name,
         twilio_token=twilio_token or "",
     )
 

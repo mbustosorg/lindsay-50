@@ -259,8 +259,8 @@ def test_coordinator_reads_pacing_from_message_manager():
 
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
-            # Round 4 (queue redesign): empty FIFO returns None.
-            take_next_new_message=lambda: None,
+        # Round 4 (queue redesign): empty FIFO returns None.
+        take_next_new_message=lambda: None,
         config=SimpleNamespace(
             effects_settings=EffectsSettings(
                 fade_seconds=2.0,
@@ -476,8 +476,8 @@ def test_tick_does_not_reapply_settings_when_config_changes():
     heart = _make_effect("Heart")()
     mgr = SimpleNamespace(
         messages=SimpleNamespace(get_messages=lambda limit=100, suppress=True: []),
-            # Round 4 (queue redesign): empty FIFO returns None.
-            take_next_new_message=lambda: None,
+        # Round 4 (queue redesign): empty FIFO returns None.
+        take_next_new_message=lambda: None,
         config=SimpleNamespace(
             effects_settings=EffectsSettings(),
             text_settings=TextSettings(),

@@ -283,9 +283,9 @@ class MessageManager:
             return ""
         sign_name = "unknown"
         try:
-            sign = getattr(self._config, "sign", None)
+            sign = getattr(self._config, "sign_settings", None)
             if sign is not None:
-                sign_name = getattr(sign, "name", None) or "unknown"
+                sign_name = getattr(sign, "sign_name", None) or "unknown"
         except Exception:
             pass
         return f"{self._CACHE_KEY_PREFIX}{sign_name}"
@@ -298,7 +298,7 @@ class MessageManager:
         try:
             payload = {
                 "v": self._CACHE_VERSION,
-                "sign_name": self._config.sign.name if self._config.sign else "unknown",
+                "sign_name": self._config.sign_settings.sign_name if self._config.sign_settings else "unknown",
                 "messages": [m.to_dict() for m in self._messages._msgs],
                 "config": self._config.to_dict(),
             }
@@ -389,7 +389,7 @@ class MessageManager:
             return False
         if payload.get("v") != self._CACHE_VERSION:
             return False
-        expected_sign = self._config.sign.name if self._config.sign else "unknown"
+        expected_sign = self._config.sign_settings.sign_name if self._config.sign_settings else "unknown"
         if payload.get("sign_name") != expected_sign:
             return False
         msgs_raw = payload.get("messages") or []
@@ -587,9 +587,11 @@ class MessageManager:
             # producer is the fix.
             logger.warning(
                 "MessageManager: dropped malformed MQTT envelope (missing/empty id, sender, or received_at): %s",
-                {k: type(v).__name__ for k, v in payload.items()}
-                if isinstance(payload, dict)
-                else type(payload).__name__,
+                (
+                    {k: type(v).__name__ for k, v in payload.items()}
+                    if isinstance(payload, dict)
+                    else type(payload).__name__
+                ),
             )
             return
         view = self._messages.add(msg, source="mqtt")

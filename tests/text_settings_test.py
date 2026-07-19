@@ -23,10 +23,10 @@ def test_text_effects_whitelist():
     assert TextSettings.TEXT_EFFECTS == ("scroll",)
 
 
-def test_to_dict_contains_only_three_fields():
-    """to_dict emits the three-field wire shape (no frame_delay / offset_seconds)."""
+def test_to_dict_contains_wire_fields():
+    """to_dict emits the wire fields including v3's enforcement_enabled."""
     d = TextSettings().to_dict()
-    assert set(d.keys()) == {"speed", "color", "text_effect"}
+    assert set(d.keys()) == {"speed", "color", "text_effect", "enforcement_enabled"}
 
 
 def test_round_trip_default():

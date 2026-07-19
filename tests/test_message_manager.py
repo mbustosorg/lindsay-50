@@ -92,7 +92,7 @@ def seed_messages():
 def seed_config():
     return {
         "filters": [],
-        "senders": [],
+        "senders": [{"phone": "+15551111111", "name": "Test", "allowed": True}],
         "effects_settings": {
             "effects": [{"name": "Hyperspace", "enabled": True}],
             "fade_seconds": 2.0,
@@ -107,9 +107,8 @@ def seed_config():
             "color": 16711680,
             "text_effect": "scroll",
         },
-        "sign": {"name": "Test Sign"},
-        "timezone": "US/Pacific",
-        "version": 2,
+        "sign_settings": {"sign_name": "Test Sign", "timezone": "US/Pacific"},
+        "version": 3,
     }
 
 
@@ -219,8 +218,8 @@ class TestSeedServer:
         assert msgs[0].message.id == "m2"
         assert msgs[1].message.id == "m1"
         # Config is populated
-        assert mgr.config.timezone == "US/Pacific"
-        assert mgr.config.sign.name == "Test Sign"
+        assert mgr.config.sign_settings.timezone == "US/Pacific"
+        assert mgr.config.sign_settings.sign_name == "Test Sign"
 
     def test_seed_preserves_media_from_rest_payload(self, messages_api_url, config_api_url, api_key):
         """REST seed must carry `media` through to the in-memory Message.
@@ -626,14 +625,13 @@ class TestDispatchMessage:
                     "color": 16711680,
                     "text_effect": "scroll",
                 },
-                "sign": {"name": "Updated"},
-                "timezone": "US/Pacific",
-                "version": 2,
+                "sign_settings": {"sign_name": "Updated", "timezone": "US/Pacific"},
+                "version": 3,
             }
         )
         mgr.dispatch(env)
         # Config updated
-        assert mgr.config.sign.name == "Updated"
+        assert mgr.config.sign_settings.sign_name == "Updated"
         names = [e["name"] for e in mgr.config.effects_settings.effects]
         assert "Fireworks" in names
         # on_change WAS called (the universal change event covers
@@ -880,13 +878,12 @@ class TestDispatchCommand:
                     "color": 16711680,
                     "text_effect": "scroll",
                 },
-                "sign": {"name": "Reg Sign"},
-                "timezone": "US/Pacific",
-                "version": 2,
+                "sign_settings": {"sign_name": "Reg Sign", "timezone": "US/Pacific"},
+                "version": 3,
             }
         )
         mgr.dispatch(env)
-        assert mgr.config.sign.name == "Reg Sign"
+        assert mgr.config.sign_settings.sign_name == "Reg Sign"
         handler.assert_not_called()
 
 
@@ -939,6 +936,13 @@ class TestDispatchFilterRules:
             api_key=api_key,
             on_change=cb,
         )
+        # v3: senders list governs sender matching; allowlist the test sender
+        # so the senders list doesn't suppress the message.
+        mgr.config.senders["+15551234567"] = {
+            "name": "X",
+            "allowed": True,
+            "phone": "+15551234567",
+        }
         mgr.config.filters.append(FilterRule(type="keyword", pattern="spam", action="suppress"))
         env = _make_env(
             {
@@ -1035,13 +1039,12 @@ class TestOnChange:
                     "color": 16711680,
                     "text_effect": "scroll",
                 },
-                "sign": {"name": "Updated"},
-                "timezone": "US/Pacific",
-                "version": 2,
+                "sign_settings": {"sign_name": "Updated", "timezone": "US/Pacific"},
+                "version": 3,
             }
         )
         cb.assert_called_once()
-        assert mgr.config.sign.name == "Updated"
+        assert mgr.config.sign_settings.sign_name == "Updated"
 
     def test_seed_emits_change_once(self, messages_api_url, config_api_url, api_key, seed_messages, seed_config):
         """A successful seed of both endpoints fires on_change exactly once."""
@@ -1120,6 +1123,8 @@ class TestOnChange:
             config_api_url=config_api_url,
             api_key=api_key,
         )
+        # v3: allowlist the "+1" test sender so the senders list doesn't suppress it.
+        mgr.config.senders["+1"] = {"name": "X", "allowed": True, "phone": "+1"}
         mgr.config.filters.append(FilterRule(type="keyword", pattern="spam", action="suppress"))
         # A non-spam message
         mgr.dispatch(
@@ -1397,9 +1402,9 @@ class TestSessionCache:
         # Confirm shape
         payload = json.loads(written)
         assert payload["v"] == 1
-        assert payload["sign_name"] == seed_config["sign"]["name"]
+        assert payload["sign_name"] == seed_config["sign_settings"]["sign_name"]
         assert len(payload["messages"]) == 2
-        assert payload["config"]["sign"]["name"] == "Test Sign"
+        assert payload["config"]["sign_settings"]["sign_name"] == "Test Sign"
         # Second manager: hydrate from the same store. The
         # sign_name check requires mgr2's sign.name to match
         # the cache entry's sign_name, so seed it with the
@@ -1418,14 +1423,14 @@ class TestSessionCache:
                 api_key=api_key,
                 is_browser=True,
             )
-            mgr2._config.sign = SignSettings(name=seed_config["sign"]["name"])
+            mgr2._config.sign_settings = SignSettings(sign_name=seed_config["sign_settings"]["sign_name"])
             hit = asyncio.run(mgr2.hydrate_from_cache())
             assert hit is True
             msgs = mgr2.get_messages(limit=10, suppress=False)
             assert len(msgs) == 2
             assert {m.message.id for m in msgs} == {"m1", "m2"}
-            assert mgr2.config.sign.name == "Test Sign"
-            assert mgr2.config.timezone == "US/Pacific"
+            assert mgr2.config.sign_settings.sign_name == "Test Sign"
+            assert mgr2.config.sign_settings.timezone == "US/Pacific"
         finally:
             mm._js_session_storage = None
             mm._js_json = None
@@ -1481,7 +1486,7 @@ class TestSessionCache:
                 api_key=api_key,
                 is_browser=True,
             )
-            mgr._config.sign = SignSettings(name="Lindsay's Heart")
+            mgr._config.sign_settings = SignSettings(sign_name="Lindsay's Heart")
             hit = asyncio.run(mgr.hydrate_from_cache())
             assert hit is True
             msgs = mgr.get_messages(limit=10, suppress=False)
@@ -1526,9 +1531,8 @@ class TestSessionCache:
                         "selector_algorithm": "weighted",
                     },
                     "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
-                    "sign": {"name": "Lindsay's Heart"},
-                    "timezone": "US/Pacific",
-                    "version": 2,
+                    "sign_settings": {"sign_name": "Lindsay's Heart", "timezone": "US/Pacific"},
+                    "version": 3,
                 },
             }
         )
@@ -1643,9 +1647,8 @@ class TestSessionCache:
                 "selector_algorithm": "weighted",
             },
             "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
-            "sign": {"name": "Test Sign"},
-            "timezone": "US/Pacific",
-            "version": 2,
+            "sign_settings": {"sign_name": "Test Sign", "timezone": "US/Pacific"},
+            "version": 3,
         }
         try:
             mgr = mm.MessageManager(
@@ -1709,14 +1712,13 @@ class TestSessionCache:
                         "color": 16711680,
                         "text_effect": "scroll",
                     },
-                    "sign": {"name": "Lindsay's Heart"},
-                    "timezone": "US/Pacific",
-                    "version": 2,
+                    "sign_settings": {"sign_name": "Lindsay's Heart", "timezone": "US/Pacific"},
+                    "version": 3,
                 }
             )
             assert len(store) == 1
             payload = json.loads(list(store.values())[0])
-            assert payload["config"]["timezone"] == "US/Pacific"
+            assert payload["config"]["sign_settings"]["timezone"] == "US/Pacific"
         finally:
             mm._js_session_storage = None
             mm._js_json = None
@@ -2054,10 +2056,10 @@ class TestHandleConfigOverrideStrip:
         """Override active: timezone and filters come from the wire."""
         manager._handle_config(
             {
-                "timezone": "US/Eastern",
-                "filters": [{"type": "sender", "pattern": "+15550000000", "action": "suppress"}],
+                "sign_settings": {"sign_name": "Lindsay's Heart", "timezone": "US/Eastern"},
+                "filters": [{"type": "keyword", "pattern": "+15550000000", "action": "suppress"}],
             }
         )
-        assert manager.config.timezone == "US/Eastern"
+        assert manager.config.sign_settings.timezone == "US/Eastern"
         assert len(manager.config.filters) == 1
-        assert manager.config.filters[0].type == "sender"
+        assert manager.config.filters[0].type == "keyword"

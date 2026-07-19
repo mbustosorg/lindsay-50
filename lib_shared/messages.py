@@ -11,6 +11,56 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from lib_shared.models import MessageView, SignConfig
+from lib_shared.name_utils import format_display_name, parse_name
+from lib_shared.phone_utils import normalize_phone
+
+
+def should_render_sender(
+    sender: object,
+    senders: dict,
+    enforcement_enabled: bool = True,
+) -> bool:
+    """Decide whether a message from `sender` should render.
+
+    Issue #6 / implement-senders-filtering. The decision is a pure
+    function of three inputs:
+
+      - `sender` — the incoming sender string (any common format).
+      - `senders` — the allowlist dict (`cfg.senders`):
+        `dict[str, dict]` mapping normalized phone to
+        `{"name", "allowed", "phone"}`.
+      - `enforcement_enabled` — the master toggle (cfg.text_settings.enforcement_enabled).
+
+    The decision rule:
+
+      1. `not enforcement_enabled` → True (master toggle off; every
+         sender renders, regardless of per-entry state — names still
+         resolve for display).
+      2. sender NOT in `senders` → False (allowlist mode is exclusive
+         when enforcement is on; unlisted = blocked).
+      3. sender in `senders` with `allowed=True` → True.
+      4. sender in `senders` with `allowed=False` → False.
+
+    Args:
+        sender: The incoming sender string (any format — gets normalized
+            via `phone_utils.normalize_phone` before lookup).
+        senders: The `cfg.senders` dict (mapping normalized phone → value
+            dict with `"allowed"` field).
+        enforcement_enabled: The master enforcement toggle (default True).
+
+    Returns:
+        True iff the message should render; False if the sender list
+        decided to suppress it.
+    """
+    if not enforcement_enabled:
+        return True
+    if not isinstance(sender, str):
+        return False
+    normalized = normalize_phone(sender)
+    entry = senders.get(normalized) if isinstance(senders, dict) else None
+    if entry is None:
+        return False
+    return bool(entry.get("allowed", False))
 
 
 def _format_display_time(received_at: str, timezone: str) -> str:
@@ -61,6 +111,10 @@ class FilteredMessages:
     def _apply_filter(self, msg, rules):
         """Apply filter rules to a message.
 
+        Disabled rules (status="disabled") are treated as absent and
+        do NOT contribute to the suppressing list — they're the
+        "disable it vs. delete it" affordance the issue asks for.
+
         Args:
             msg:   Message object
             rules: list of FilterRule objects
@@ -70,6 +124,10 @@ class FilteredMessages:
         """
         suppressing = []
         for rule in rules:
+            if getattr(rule, "status", "enabled") != "enabled":
+                # Disabled rules are skipped (per-rule lifecycle — the
+                # operator can mute without losing the rule).
+                continue
             if rule.action != "suppress":
                 continue
             if self._matches(msg, rule):
@@ -77,7 +135,15 @@ class FilteredMessages:
         return suppressing
 
     def _matches(self, msg, rule):
-        """Return True if message matches the filter rule."""
+        """Return True if message matches the filter rule.
+
+        v3 (issue #6): no `type == "sender"` branch — sender matching
+        moved to `cfg.senders` (per-entry `allowed` + master
+        `text_settings.enforcement_enabled` toggle). A rule whose
+        `type` is `"sender"` will fall through to `False` here; the
+        `_v2_to_v3` migration converts such rules into senders list
+        entries before they reach this code.
+        """
         if rule.type == "keyword":
             return rule.pattern.lower() in msg.body.lower()
         elif rule.type == "regex":
@@ -85,8 +151,6 @@ class FilteredMessages:
                 return bool(re.fullmatch(rule.pattern, msg.body))
             except re.error:
                 return False
-        elif rule.type == "sender":
-            return msg.sender == rule.pattern
         elif rule.type == "message":
             return msg.id == rule.pattern
         return False
@@ -98,13 +162,63 @@ class FilteredMessages:
         `_handle_config` (whole-list re-enrich) at event time. Reads
         (`get_messages`) do not call this — the derived fields are already
         populated on the buffered views. Override to customize.
+
+        v3 (issue #6): after the FilterRule pass, consults
+        `should_render_sender` to apply the master `enforcement_enabled`
+        toggle + per-entry `allowed` flag. When the senders list
+        suppresses a message AND no FilterRule matched, appends a
+        synthetic `sender_action` rule to `entry.rules` so the admin
+        UI can render a "Suppressed by sender action" badge. When
+        `enforcement_enabled` is False, no suppression decision is
+        made (the master toggle bypasses the filter); no synthetic
+        marker is added.
+
+        The display-name resolution works regardless of `allowed` —
+        the operator sees "From: Alice" (or whatever the format
+        produces) for disallowed senders in the admin UI.
         """
-        timezone = self._config.timezone
+        timezone = self._config.sign_settings.timezone
+        enforcement_enabled = bool(self._config.text_settings.enforcement_enabled)
+        senders = self._config.senders
+        name_format = self._config.effects_settings.name_display_format
+        # Precompute `all_first_names` once per call — stable across
+        # the buffer's messages. Empty/missing names contribute an
+        # empty string to the list (no name to format either way).
+        all_first_names = [(parse_name((entry or {}).get("name", ""))[0]) for entry in senders.values()]
+
         for entry in entries:
             suppressing = self._apply_filter(entry.message, self._config.filters)
-            entry.suppressed = bool(suppressing)
-            entry.rules = [r.to_dict() for r in suppressing]
-            entry.sender_name = self._config.senders.get(entry.message.sender)
+            rule_dicts = [r.to_dict() for r in suppressing]
+            sender = entry.message.sender
+            # Display name: lookup the normalized entry's stored name and
+            # apply the configured format. Works regardless of `allowed` —
+            # even a disallowed sender's name resolves for display.
+            sender_entry = senders.get(normalize_phone(sender)) if isinstance(sender, str) else None
+            stored_name = (sender_entry or {}).get("name", "") if sender_entry else ""
+            entry.sender_name = format_display_name(stored_name, name_format, all_first_names)
+
+            # Apply senders list decision (master toggle + per-entry allowed).
+            sender_passes = should_render_sender(sender, senders, enforcement_enabled)
+            if not sender_passes:
+                entry.suppressed = True
+                if not suppressing:
+                    # No FilterRule matched — add the synthetic marker so
+                    # the admin UI can render "Suppressed by sender action".
+                    entry.rules = rule_dicts + [
+                        {
+                            "type": "sender_action",
+                            "pattern": normalize_phone(sender) if isinstance(sender, str) else "",
+                            "action": "suppress",
+                        }
+                    ]
+                # If a FilterRule already matched, leave entry.rules alone
+                # (the real rule wins for display — no synthetic marker
+                # when a real rule already accounted for the suppression).
+                else:
+                    entry.rules = rule_dicts
+            else:
+                entry.suppressed = bool(suppressing)
+                entry.rules = rule_dicts
             entry.display_time = _format_display_time(entry.message.received_at, timezone)
 
     def add(self, message, source="rest"):
