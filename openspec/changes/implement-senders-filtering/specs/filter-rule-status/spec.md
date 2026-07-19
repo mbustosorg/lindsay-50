@@ -1,5 +1,7 @@
 ## ADDED Requirements
 
+> **Note:** This capability covers the FilterRule mechanics (per-rule status, allowed types, migration). The interaction between FilterRule evaluation and the senders list (the master `text_settings.enforcement_enabled` toggle and per-entry `allowed` flag) is covered by the `senders-status` capability. FilterRule evaluation is independent of `cfg.text_settings.enforcement_enabled` — the rules run regardless of enforcement, and a rule that matches still suppresses a message even when enforcement is off.
+
 ### Requirement: Every FilterRule carries a status field with "enabled" default
 
 `FilterRule` SHALL carry a `status` field on the wire and in memory. The status is the LIFECYCLE axis — whether the rule is "on" right now or muted without being deleted. The valid values SHALL be the literal strings `"enabled"` or `"disabled"`. The default for a new rule SHALL be `"enabled"`. A stored rule that lacks the `status` field on read SHALL be treated as `"enabled"` (the migration backfills the field; `from_dict` SHALL also accept the missing field silently so partial / legacy payloads still load).
@@ -112,10 +114,10 @@ The `_v2_to_v3` migration in `lib_shared/config_migrations.MIGRATIONS` SHALL tra
 
 For each rule in `data["filters"]`:
 
-- If the rule has `type=sender`: convert to a senders list entry with `action="suppress"`, `status="enabled"`, `name=rule.pattern`, `phone=rule.pattern` (best-effort: the rule's pattern becomes both the display name and the phone). Append the new entry to `data["senders"]` (creating the list if absent). DROP the rule from `data["filters"]` — sender matching is the senders list's job going forward.
+- If the rule has `type=sender`: convert to a senders list entry with `allowed=False`, `name=rule.pattern`, `phone=rule.pattern` (best-effort: the rule's pattern becomes both the display name and the phone; `allowed=False` because the v2 sender-type rule was always a suppression rule, so the migrated entry inherits the suppressed classification). Append the new entry to `data["senders"]` (creating the list if absent). The migrated entry SHALL NOT contain a `status` field — there is no per-entry lifecycle in v3. DROP the rule from `data["filters"]` — sender matching is the senders list's job going forward.
 - Otherwise (the rule has `type` in `keyword`/`regex`/`message`): rename the `enabled` (bool) field to `status` (enum). `enabled=True` → `status="enabled"`; `enabled=False` → `status="disabled"`. Rules that already have `status` (the migration is idempotent) are left unchanged.
 
-The migration SHALL NOT mutate the caller's input dict (returns a shallow copy). The migration SHALL preserve `sign`, `timezone`, `effects_settings`, `text_settings` unchanged. The migration's transformation of the `senders` array itself is described in the `senders-status` capability (rename `status` field → `action` field, add new `status` lifecycle field).
+The migration SHALL NOT mutate the caller's input dict (returns a shallow copy). The migration SHALL preserve `sign_settings` (with its `sign_name` and `timezone` fields), `effects_settings`, `text_settings`, and `filters` (after the `type=sender` rules have been removed) unchanged. The structural moves (top-level `timezone` → `sign_settings.timezone`, `sign` rename → `sign_settings` with `name` → `sign_name`, top-level `enforcement_enabled` → `text_settings.enforcement_enabled`, top-level `name_display_format` → `effects_settings.name_display_format`) are described in the overall v2 → v3 migration; the `filter-rule-status` migration step is just the FilterRule-level rename and type removal. The migration's transformation of the `senders` array itself is described in the `senders-status` capability (legacy `status="allowed"|"blocked"` → `allowed: bool`).
 
 #### Scenario: A v2 payload with an enabled keyword rule migrates to v3
 - **WHEN** `migrate({"version": 2, "filters": [{"type": "keyword", "pattern": "spam", "enabled": true}]}, current_version=3)` is called
@@ -127,11 +129,11 @@ The migration SHALL NOT mutate the caller's input dict (returns a shallow copy).
 
 #### Scenario: A v2 payload with a type=sender rule migrates the rule into a senders entry
 - **WHEN** `migrate({"version": 2, "filters": [{"type": "sender", "pattern": "+15551234567"}], "senders": []}, current_version=3)` is called
-- **THEN** the returned dict SHALL have `version == 3`, the `filters` array SHALL be empty (the rule was dropped), AND the `senders` array SHALL contain a new entry `{"phone": "+15551234567", "name": "+15551234567", "action": "suppress", "status": "enabled"}` (the rule's pattern became both the display name and the phone, with the suppress action since the original rule was a sender-suppress rule)
+- **THEN** the returned dict SHALL have `version == 3`, the `filters` array SHALL be empty (the rule was dropped), AND the `senders` array SHALL contain a new entry `{"phone": "+15551234567", "name": "+15551234567", "allowed": false}` (the rule's pattern became both the display name and the phone; `allowed=false` because the original rule was a sender-suppression rule; no `status` field — there is no per-entry lifecycle in v3)
 
 #### Scenario: A v2 payload with a type=sender rule appends to an existing senders list
 - **WHEN** `migrate({"version": 2, "filters": [{"type": "sender", "pattern": "+15559999999"}], "senders": [{"phone": "+15551234567", "name": "Alice", "status": "allowed"}]}, current_version=3)` is called
-- **THEN** the returned dict SHALL have `version == 3`, the `filters` array SHALL be empty, AND the `senders` array SHALL contain TWO entries (the original Alice entry migrated to `action="allow"` + `status="enabled"` AND the new sender rule converted to `action="suppress"` + `status="enabled"`)
+- **THEN** the returned dict SHALL have `version == 3`, the `filters` array SHALL be empty, AND the `senders` array SHALL contain TWO entries (the original Alice entry migrated to `allowed: true` with no `status` field AND the new sender rule converted to `allowed: false` with no `status` field)
 
 #### Scenario: A v2 payload with a filter missing the enabled field gets enabled default
 - **WHEN** `migrate({"version": 2, "filters": [{"type": "keyword", "pattern": "spam"}]}, current_version=3)` is called (no `enabled` key)
@@ -149,7 +151,7 @@ The migration SHALL NOT mutate the caller's input dict (returns a shallow copy).
 
 `SignConfig.to_dict()` SHALL include the `filters` key as a list of dict objects, each with `type`, `pattern`, `action`, and `status` fields. `SignConfig.from_dict()` SHALL accept the list shape and parse each entry into the new `FilterRule` instances. `SignConfig.update_from_dict()` SHALL replace the in-memory `cfg.filters` with the parsed value (full replacement, not merge).
 
-The wire shape (sent over MQTT as a `type="config"` envelope and persisted in SQLite + S3) SHALL include `filters` at the top level alongside `senders`, `sign`, `timezone`, `version`, `effects_settings`, `text_settings`.
+The wire shape (sent over MQTT as a `type="config"` envelope and persisted in SQLite + S3) SHALL include `filters` at the top level alongside `senders`, `sign_settings` (containing `sign_name` and `timezone`), `version`, `effects_settings` (containing the effects list, pacing fields, and `name_display_format`), and `text_settings` (containing `speed`, `color`, `text_effect`, and `enforcement_enabled`). There is NO top-level `sign`, `timezone`, `enforcement_enabled`, or `name_display_format` key — they all live inside their respective nested settings blocks.
 
 #### Scenario: to_dict emits the list shape with status
 - **WHEN** `cfg.filters` has two rules — one enabled, one disabled
