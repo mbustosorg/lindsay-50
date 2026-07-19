@@ -66,7 +66,10 @@ def test_migrate_v1_adds_effects_settings():
     es = out["effects_settings"]
     assert "effects" in es
     assert es["fade_seconds"] == 2.0
-    assert es["hold_seconds"] == 15.0
+    # Defaults come from EffectsSettings().to_dict(), which reads the
+    # canonical lib_shared/config/effects_settings.json — bumped from
+    # the historic 15.0 on 2026-07-19.
+    assert es["hold_seconds"] == 30.0
 
 
 def test_migrate_v1_adds_text_settings():

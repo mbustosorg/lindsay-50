@@ -28,9 +28,10 @@ class TestBootHold:
         assert isinstance(loader.BOOT_HOLD_S, float)
 
     def test_loader_source_documents_derivation(self):
-        loader_path = Path(
-            "/Users/adam/.agent-orchestrator/projects/lindsay-50_f658f025d5/worktrees/l5-19/heart-matrix-controller/loader.py"
-        )
+        # Resolve relative to this test file's location so the assertion
+        # works no matter which worktree the tests run from (the older
+        # hardcoded `l5-19` path broke when that worktree was deleted).
+        loader_path = Path(__file__).resolve().parent.parent / "heart-matrix-controller" / "loader.py"
         assert loader_path.exists()
         content = loader_path.read_text(encoding="utf-8")
         # Find the BOOT_HOLD_S assignment and the surrounding comment.

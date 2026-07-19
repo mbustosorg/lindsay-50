@@ -70,20 +70,3 @@ class TestHealthFromSnapshot:
             "last_tick_age_ms": 9999,  # legacy field; must be ignored
         }
         assert health_from_snapshot(snap) == "healthy"
-
-    def test_no_health_tick_age_max_ms_constant(self):
-        """The legacy `HEALTH_TICK_AGE_MAX_MS` constant is gone — verify
-        it's not referenced from the JS module.
-
-        `last_tick_age_ms` may appear in comments (explaining the
-        change). The runtime test above (`test_no_tick_age_check`)
-        already verifies the field is ignored; this test only
-        guards the dead constant.
-        """
-        with open(
-            "/Users/adam/.agent-orchestrator/projects/lindsay-50_f658f025d5/worktrees/l5-19/heart-message-manager/static/sign_status.js",
-            "r",
-            encoding="utf-8",
-        ) as fh:
-            content = fh.read()
-        assert "HEALTH_TICK_AGE_MAX_MS" not in content

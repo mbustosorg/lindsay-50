@@ -174,8 +174,9 @@ class TestPrecedence:
         reset_effects_settings()
         assert is_effects_settings_override_active() is False
         cfg = load_effects_settings()
-        # Canonical: 9 effects (PngDisplay/VideoDisplay/Flame removed), lookback_days=14.
-        assert len(cfg["effects"]) == 9
+        # Canonical: 10 effects (PngDisplay/VideoDisplay/Flame removed;
+        # FractalFlower added 2026-07-19), lookback_days=14.
+        assert len(cfg["effects"]) == 10
         assert cfg["lookback_days"] == 14
 
     def test_env_var_pointing_to_missing_file_falls_back(self, monkeypatch, tmp_path):
@@ -185,7 +186,7 @@ class TestPrecedence:
         reset_effects_settings()
         # Should not raise; loader logs a warning and uses canonical.
         cfg = load_effects_settings()
-        assert len(cfg["effects"]) == 9
+        assert len(cfg["effects"]) == 10
         assert cfg["lookback_days"] == 14
 
 
@@ -220,14 +221,14 @@ class TestOverrideActive:
 
 
 class TestSchema:
-    def test_canonical_has_schema_version_and_nine_effects(self):
-        """The canonical JSON declares schema_version=1 + 9 effects
+    def test_canonical_has_schema_version_and_ten_effects(self):
+        """The canonical JSON declares schema_version=1 + 10 effects
         (PngDisplay/VideoDisplay removed in #38 — those are now inner
         renderers consumed by MediaCycler, not registry entries; Flame
-        removed as well)."""
+        removed as well; FractalFlower added 2026-07-19)."""
         cfg = load_effects_settings()
         assert cfg["schema_version"] == 1
-        assert len(cfg["effects"]) == 9
+        assert len(cfg["effects"]) == 10
 
     def test_every_effect_entry_has_required_keys(self):
         """Each effects entry has name, enabled, module, class_name."""

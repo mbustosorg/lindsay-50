@@ -44,15 +44,16 @@ def _canonical_entries():
 
 
 def test_default_instantiation_uses_canonical_list():
-    """A no-arg constructor picks up the canonical 9-entry list
+    """A no-arg constructor picks up the canonical 10-entry list
     (PngDisplay/VideoDisplay removed in #38 — those are now inner
     renderers consumed by MediaCycler, not registry entries; Flame
-    removed as well)."""
+    removed as well; FractalFlower added 2026-07-19, ported from
+    Pixelblaze — see commit 0518a89)."""
     s = EffectsSettings()
-    assert len(s.effects) == 9
-    # All nine are enabled by default.
+    assert len(s.effects) == 10
+    # All ten are enabled by default.
     enabled = [e["name"] for e in s.effects if e["enabled"]]
-    assert len(enabled) == 9
+    assert len(enabled) == 10
     assert "Hyperspace" in enabled
     assert "WindFire" in enabled
     assert "CoronalMassEjection" in enabled
@@ -62,6 +63,7 @@ def test_default_instantiation_uses_canonical_list():
     assert "Fireworks" in enabled
     assert "NightSky" in enabled
     assert "Honeycomb" in enabled
+    assert "FractalFlower" in enabled
     # Inner renderers consumed by MediaCycler (not registry entries)
     assert "VideoDisplay" not in enabled
     assert "PngDisplay" not in enabled
@@ -69,10 +71,13 @@ def test_default_instantiation_uses_canonical_list():
 
 
 def test_default_pacing_values():
-    """The historic pacing values are preserved as defaults."""
+    """The canonical pacing values drive the defaults."""
     s = EffectsSettings()
     assert s.fade_seconds == 2.0
-    assert s.hold_seconds == 15.0
+    # Bumped from the historic 15.0 on 2026-07-19 to give the
+    # weighted selector's read-the-message-and-let-it-breathe
+    # pacing room to actually land before the post-hold idle gap.
+    assert s.hold_seconds == 30.0
     assert s.intro_seconds == 5.0
     assert s.idle_seconds == 300.0
     assert s.lookback_days == 14
@@ -80,8 +85,9 @@ def test_default_pacing_values():
 
 
 def test_canonical_list_has_known_names():
-    """The canonical list contains exactly the 9 expected effect names
-    (PngDisplay/VideoDisplay removed in #38; Flame removed)."""
+    """The canonical list contains exactly the 10 expected effect names
+    (PngDisplay/VideoDisplay removed in #38; Flame removed;
+    FractalFlower added 2026-07-19)."""
     names = {e["name"] for e in _canonical_entries()}
     assert names == {
         "Hyperspace",
@@ -91,6 +97,7 @@ def test_canonical_list_has_known_names():
         "Eyeball",
         "Marble",
         "Metaballs",
+        "FractalFlower",
         "Fireworks",
         "NightSky",
     }
@@ -127,14 +134,14 @@ def test_round_trip_default():
 def test_from_dict_accepts_empty_dict():
     """An empty dict is valid and yields the canonical defaults."""
     s = EffectsSettings.from_dict({})
-    assert len(s.effects) == 9
+    assert len(s.effects) == 10
     assert s.fade_seconds == 2.0
 
 
 def test_from_dict_none_uses_defaults():
     """from_dict(None) yields the canonical defaults."""
     s = EffectsSettings.from_dict(None)
-    assert len(s.effects) == 9
+    assert len(s.effects) == 10
 
 
 def test_from_dict_with_custom_values():
