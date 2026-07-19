@@ -44,6 +44,7 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 "lib_shared/patterns/marble.py" = "/static/preview/lib_shared/patterns/marble.py"
 "lib_shared/patterns/metaballs.py" = "/static/preview/lib_shared/patterns/metaballs.py"
 "lib_shared/patterns/hyperspace.py" = "/static/preview/lib_shared/patterns/hyperspace.py"
+"lib_shared/patterns/fractal_flower.py" = "/static/preview/lib_shared/patterns/fractal_flower.py"
 "lib_shared/patterns/heartbeat.py" = "/static/preview/lib_shared/patterns/heartbeat.py"
 # `BrowserMediaOverlay` (issue #38) is the preview-side equivalent of
 # MediaCycler: it lets the browser drive the same per-message MMS
