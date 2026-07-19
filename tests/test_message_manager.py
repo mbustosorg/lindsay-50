@@ -937,6 +937,13 @@ class TestDispatchFilterRules:
             on_change=cb,
         )
         mgr.config.filters.append(FilterRule(type="keyword", pattern="spam", action="suppress"))
+        # v3 allowlist: the sender must be allow + enabled to render.
+        mgr.config.senders["+15551234567"] = {
+            "name": "Alice",
+            "action": "allow",
+            "status": "enabled",
+            "phone": "+15551234567",
+        }
         env = _make_env(
             {
                 "id": "x1",
@@ -1117,6 +1124,9 @@ class TestOnChange:
             api_key=api_key,
         )
         mgr.config.filters.append(FilterRule(type="keyword", pattern="spam", action="suppress"))
+        # v3 allowlist: allow the "+1" sender so suppression is driven by the
+        # keyword filter under test, not the implicit allowlist.
+        mgr.config.senders["+1"] = {"name": "+1", "action": "allow", "status": "enabled", "phone": "+1"}
         # A non-spam message
         mgr.dispatch(
             _make_env(
@@ -2046,9 +2056,9 @@ class TestHandleConfigOverrideStrip:
         manager._handle_config(
             {
                 "timezone": "US/Eastern",
-                "filters": [{"type": "sender", "pattern": "+15550000000", "action": "suppress"}],
+                "filters": [{"type": "keyword", "pattern": "spam", "action": "suppress"}],
             }
         )
         assert manager.config.timezone == "US/Eastern"
         assert len(manager.config.filters) == 1
-        assert manager.config.filters[0].type == "sender"
+        assert manager.config.filters[0].type == "keyword"

@@ -11,6 +11,29 @@ from datetime import datetime
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from lib_shared.models import MessageView, SignConfig
+from lib_shared.phone_utils import normalize_phone
+
+
+def should_render_sender(sender: str, senders: dict) -> bool:
+    """Return True iff a message from ``sender`` should render (egress decision).
+
+    The hard-coded allowlist rule: a sender renders only if their entry in the
+    ``senders`` dict has BOTH ``action == "allow"`` AND ``status == "enabled"``.
+
+    Args:
+        sender: The raw incoming sender phone (any format — normalized here).
+        senders: The ``SignConfig.senders`` dict (normalized phone → value
+            object).
+
+    Returns:
+        True to render, False to suppress. A sender NOT in the dict is
+        suppressed (implicit allowlist); an entry with ``action="suppress"``
+        OR ``status="disabled"`` is suppressed.
+    """
+    entry = senders.get(normalize_phone(sender))
+    if entry is None:
+        return False
+    return entry.get("action") == "allow" and entry.get("status") == "enabled"
 
 
 def _format_display_time(received_at: str, timezone: str) -> str:
@@ -70,6 +93,10 @@ class FilteredMessages:
         """
         suppressing = []
         for rule in rules:
+            # Disabled rules are treated as absent — the "disable it vs.
+            # delete it" affordance (filter-rule-status capability).
+            if getattr(rule, "status", "enabled") != "enabled":
+                continue
             if rule.action != "suppress":
                 continue
             if self._matches(msg, rule):
@@ -77,7 +104,11 @@ class FilteredMessages:
         return suppressing
 
     def _matches(self, msg, rule):
-        """Return True if message matches the filter rule."""
+        """Return True if message matches the filter rule.
+
+        There is no ``"sender"`` branch — sender matching moved to
+        ``SignConfig.senders`` (the single source of truth) in v3.
+        """
         if rule.type == "keyword":
             return rule.pattern.lower() in msg.body.lower()
         elif rule.type == "regex":
@@ -85,8 +116,6 @@ class FilteredMessages:
                 return bool(re.fullmatch(rule.pattern, msg.body))
             except re.error:
                 return False
-        elif rule.type == "sender":
-            return msg.sender == rule.pattern
         elif rule.type == "message":
             return msg.id == rule.pattern
         return False
@@ -102,9 +131,28 @@ class FilteredMessages:
         timezone = self._config.timezone
         for entry in entries:
             suppressing = self._apply_filter(entry.message, self._config.filters)
-            entry.suppressed = bool(suppressing)
             entry.rules = [r.to_dict() for r in suppressing]
-            entry.sender_name = self._config.senders.get(entry.message.sender)
+            # Senders-action check (egress-only, after the FilterRule loop).
+            # A sender renders iff their entry is allow + enabled; otherwise the
+            # message is suppressed. When the senders list suppressed it AND no
+            # FilterRule matched, append a synthetic marker so the admin UI can
+            # show "Suppressed by sender action" (design D8).
+            sender = entry.message.sender
+            if should_render_sender(sender, self._config.senders):
+                entry.suppressed = bool(suppressing)
+            else:
+                entry.suppressed = True
+                if not suppressing:
+                    entry.rules.append(
+                        {
+                            "type": "sender_action",
+                            "pattern": normalize_phone(sender),
+                            "action": "suppress",
+                        }
+                    )
+            # Display name resolves regardless of action/status — the operator
+            # sees "From: Alice" even for a blocked/disabled sender.
+            entry.sender_name = (self._config.senders.get(normalize_phone(sender)) or {}).get("name")
             entry.display_time = _format_display_time(entry.message.received_at, timezone)
 
     def add(self, message, source="rest"):

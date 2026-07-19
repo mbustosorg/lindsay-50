@@ -43,6 +43,21 @@ def get_messages(msgs, cfg, include_filtered=False, since=None):
 # ---------------------------------------------------------------------------
 
 
+def _allow(*phones):
+    """Build an allow+enabled senders dict for the given normalized phones.
+
+    v3 filtering is allowlist-by-default (a sender renders only if their
+    entry is allow + enabled), so the get_messages tests below must add the
+    sample senders to the list or every message is suppressed.
+    """
+    return {p: {"name": p, "action": "allow", "status": "enabled", "phone": p} for p in phones}
+
+
+# Phones used by the sample_messages fixture — allowed so the tests exercise
+# the FilterRule / ordering logic rather than the allowlist suppression.
+SAMPLE_SENDERS = _allow("+15551234567", "+15559876543", "+15550001111")
+
+
 @pytest.fixture
 def sample_messages():
     return [
@@ -70,45 +85,36 @@ def sample_messages():
 @pytest.fixture
 def default_config():
     return SignConfig(
-        version=1,
+        version=3,
         filters=[],
-        senders={},
+        senders=dict(SAMPLE_SENDERS),
     )
 
 
 @pytest.fixture
 def config_with_keyword_filter():
     return SignConfig(
-        version=1,
+        version=3,
         filters=[FilterRule(type="keyword", pattern="badword", action="suppress")],
-        senders={},
-    )
-
-
-@pytest.fixture
-def config_with_sender_filter():
-    return SignConfig(
-        version=1,
-        filters=[FilterRule(type="sender", pattern="+15550001111", action="suppress")],
-        senders={},
+        senders=dict(SAMPLE_SENDERS),
     )
 
 
 @pytest.fixture
 def config_with_regex_filter():
     return SignConfig(
-        version=1,
+        version=3,
         filters=[FilterRule(type="regex", pattern=r"^\s*$", action="suppress")],
-        senders={},
+        senders=dict(SAMPLE_SENDERS),
     )
 
 
 @pytest.fixture
 def config_with_message_filter():
     return SignConfig(
-        version=1,
+        version=3,
         filters=[FilterRule(type="message", pattern="msg-002", action="suppress")],
-        senders={},
+        senders=dict(SAMPLE_SENDERS),
     )
 
 
@@ -149,18 +155,6 @@ class TestApply:
         suppressed, rule = apply(msg, config_with_regex_filter)
         assert not suppressed
 
-    def test_sender_suppress(self, config_with_sender_filter):
-        msg = Message(id="1", sender="+15550001111", body="hello", received_at="")
-        suppressed, rule = apply(msg, config_with_sender_filter)
-        assert suppressed
-        assert rule.type == "sender"
-        assert rule.pattern == "+15550001111"
-
-    def test_sender_no_match(self, config_with_sender_filter):
-        msg = Message(id="1", sender="+15551234567", body="hello", received_at="")
-        suppressed, rule = apply(msg, config_with_sender_filter)
-        assert not suppressed
-
     def test_message_uuid_suppress(self, config_with_message_filter):
         msg = Message(id="msg-002", sender="+1555", body="hello", received_at="")
         suppressed, rule = apply(msg, config_with_message_filter)
@@ -170,10 +164,10 @@ class TestApply:
 
     def test_first_matching_rule_wins(self):
         cfg = SignConfig(
-            version=1,
+            version=3,
             filters=[
                 FilterRule(type="keyword", pattern="bad", action="suppress"),
-                FilterRule(type="sender", pattern="+15550001111", action="suppress"),
+                FilterRule(type="message", pattern="1", action="suppress"),
             ],
             senders={},
         )

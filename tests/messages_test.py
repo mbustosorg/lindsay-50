@@ -81,10 +81,14 @@ def test_format_display_time_empty_string():
 
 
 def _make_config(timezone="America/Los_Angeles"):
+    # v3 filtering is allowlist-by-default, so the "+1" sender used by the
+    # enrichment tests below must be allow + enabled or its messages are
+    # suppressed regardless of the FilterRule / display-time behavior tested.
     return SignConfig(
         effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
         timezone=timezone,
+        senders={"+1": {"name": "+1", "action": "allow", "status": "enabled", "phone": "+1"}},
     )
 
 

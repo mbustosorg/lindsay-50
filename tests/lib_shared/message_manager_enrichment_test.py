@@ -21,6 +21,16 @@ from lib_shared.messages import InMemoryMessages
 from lib_shared.message_manager import MessageManager
 from lib_shared.models import EffectsSettings, FilterRule, Message, SignConfig, TextSettings
 
+# v3 filtering is allowlist-by-default. The "+1" sender used throughout these
+# tests must be allow + enabled or its messages are suppressed regardless of
+# the enrichment mechanics under test. Wire shape for a pushed config:
+ALLOW_PLUS1_WIRE = [{"phone": "+1", "name": "+1", "action": "allow", "status": "enabled"}]
+
+
+def _allow_plus1_senders():
+    """Internal dict-of-dict shape allowing the "+1" sender."""
+    return {"+1": {"name": "+1", "action": "allow", "status": "enabled", "phone": "+1"}}
+
 
 def _make_config(timezone="America/Los_Angeles", filters=None, senders=None):
     return SignConfig(
@@ -28,7 +38,7 @@ def _make_config(timezone="America/Los_Angeles", filters=None, senders=None):
         text_settings=TextSettings(),
         timezone=timezone,
         filters=list(filters or []),
-        senders=dict(senders or {}),
+        senders=dict(senders if senders is not None else _allow_plus1_senders()),
     )
 
 
@@ -44,6 +54,7 @@ def test_handle_message_enriches_only_new_entry():
         config_api_url="http://localhost/api/config",
         api_key="key",
     )
+    mgr._config.senders = _allow_plus1_senders()
     mgr._handle_message(
         {
             "id": "a",
@@ -126,6 +137,7 @@ def test_handle_config_re_enriches_all_entries():
         config_api_url="http://localhost/api/config",
         api_key="key",
     )
+    mgr._config.senders = _allow_plus1_senders()
     mgr._handle_message(
         {
             "id": "a",
@@ -147,11 +159,11 @@ def test_handle_config_re_enriches_all_entries():
     b_view = [v for v in mgr.messages._msgs if v.message.id == "b"][0]
     assert b_view.suppressed is False
 
-    # Push a config that adds a 'bad' keyword filter.
+    # Push a config that adds a 'bad' keyword filter (keeping "+1" allowed).
     mgr._handle_config(
         {
             "filters": [{"type": "keyword", "pattern": "bad", "action": "suppress"}],
-            "senders": [],
+            "senders": ALLOW_PLUS1_WIRE,
             "effects_settings": {"effects": [{"name": "Hyperspace", "enabled": True}]},
             "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
             "sign": {"name": "Lindsay's Heart"},
