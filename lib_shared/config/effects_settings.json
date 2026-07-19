@@ -8,12 +8,13 @@
     {"name": "Eyeball", "module": "lib_shared.patterns.eyeball", "class_name": "Eyeball", "enabled": true},
     {"name": "Marble", "module": "lib_shared.patterns.marble", "class_name": "Marble", "enabled": true},
     {"name": "Metaballs", "module": "lib_shared.patterns.metaballs", "class_name": "Metaballs", "enabled": true},
+    {"name": "FractalFlower", "module": "lib_shared.patterns.fractal_flower", "class_name": "FractalFlower", "enabled": true},
     {"name": "Fireworks", "module": "lib_shared.patterns.fireworks", "class_name": "Fireworks", "enabled": true},
     {"name": "NightSky", "module": "lib_shared.patterns.nightsky", "class_name": "NightSky", "enabled": true}
   ],
   "fade_seconds": 2.0,
-  "hold_seconds": 15.0,
+  "hold_seconds": 30.0,
   "intro_seconds": 5.0,
   "idle_seconds": 300.0,
-  "recent_count": 5
+  "recent_count": 10
 }
