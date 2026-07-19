@@ -4,9 +4,15 @@ Defines a pluggable `MessageSelector` ABC plus two concrete
 implementations:
 
   - `RandomSelector` — the historical rotation: uniform random pick
-    from the candidate pool. The default; runs unchanged from before
-    this change. Use it until the operator has decided the new
-    `WeightedSelector` is an improvement.
+    from the candidate pool, after filtering out the coordinator's
+    `exclude_id` (the just-consumed message — anti-repeat hint).
+    Kept as the explicit operator opt-out: pass
+    `RandomSelector()` to the `EffectsCoordinator(selector=...)`
+    constructor to restore the historical rotation. The default
+    since 2026-07-18 is `WeightedSelector` (see
+    `USE_WEIGHTED_SELECTOR`), which solves the
+    same-message-back-to-back symptom via `display_recency` rather
+    than via the coordinator's anti-repeat hint.
 
   - `WeightedSelector` — additive weighted scoring on three components:
         score(message, now, event_log, favorites) =
@@ -119,7 +125,20 @@ OFFSET_SECONDS: float = 14 * 86_400.0  # 1,209,600 seconds = 14 days
 # event log, different pick algorithm. The flag is for the caller's
 # default-selector pick; the coordinator itself is selector-agnostic
 # and accepts any `MessageSelector` instance as a constructor kwarg.
-USE_WEIGHTED_SELECTOR: bool = False
+#
+# Flipped to True on 2026-07-18 in response to the "same message
+# selected back-to-back" symptom observed in the browser preview:
+# `WeightedSelector.display_recency` penalizes a just-shown message
+# (`~0.0` immediately after `text_display` is logged, growing back
+# toward `1.0` over `SATURATION_SECONDS`), so the rotation naturally
+# avoids back-to-back repeats. `RandomSelector` had no such
+# mechanism — the coordinator's anti-repeat hint (`exclude_id`) is
+# the defense-in-depth shim, but the weighted algorithm is the
+# designed fix. `RandomSelector` stays in the file (Default-to-X
+# rule: don't delete alternatives when switching the default) — pass
+# `RandomSelector()` to `EffectsCoordinator(selector=...)` to
+# restore the historical rotation.
+USE_WEIGHTED_SELECTOR: bool = True
 
 
 class MessageSelector(ABC):
@@ -144,6 +163,10 @@ class MessageSelector(ABC):
       - `pick()` MUST NOT mutate its inputs. The coordinator and the
         call sites depend on the candidate list being preserved across
         calls so the head-of-list fresh-id check still works.
+      - `pick()` MUST honor `exclude_id` when supplied: the message
+        whose id matches `exclude_id` MUST NOT be returned unless
+        every candidate matches (the pool would otherwise be empty
+        and the sign would go dark).
     """
 
     @abstractmethod
@@ -154,6 +177,7 @@ class MessageSelector(ABC):
         event_log: object | None = None,
         favorites: Optional[Iterable[str]] = None,
         event_type: Optional[str] = None,
+        exclude_id: Optional[str] = None,
     ) -> Optional[Message]:
         """Pick the next message to display.
 
@@ -179,6 +203,14 @@ class MessageSelector(ABC):
                 `"text_display"`) for selectors that need
                 per-event-type display-recency. Selectors that don't
                 (e.g. `RandomSelector`) ignore this.
+            exclude_id: Optional message id to drop from the
+                candidate pool before picking. The coordinator passes
+                the message it just consumed at the previous out→in
+                transition so the next pick avoids back-to-back
+                selection of the same message. When the exclusion
+                would leave an empty pool, the unfiltered pool is
+                used — the sign must not go dark just because the
+                currently-rendered message is the only one available.
 
         Returns:
             The next `Message` to display, or `None` when the eligible
@@ -197,6 +229,13 @@ class RandomSelector(MessageSelector):
     Non-deterministic — same inputs may return different outputs across
     calls. Tests that need determinism should seed `random.seed(...)`
     before driving the selector, or use `WeightedSelector` instead.
+
+    Honors `exclude_id` by dropping that id from the candidate pool
+    before the random pick. The exclusion is the coordinator's
+    anti-repeat hint — the next pick should avoid the message that
+    was just consumed. When exclusion would empty the pool, the
+    unfiltered pool is used so the sign keeps rotating instead of
+    pausing on the only-available message.
     """
 
     def pick(
@@ -206,15 +245,23 @@ class RandomSelector(MessageSelector):
         event_log: object | None = None,
         favorites: Optional[Iterable[str]] = None,
         event_type: Optional[str] = None,
+        exclude_id: Optional[str] = None,
     ) -> Optional[Message]:
         """Pick uniformly at random. Ignores `now`, `event_log`,
         `favorites`, and `event_type` — pure random.choice over the
-        candidate pool.
+        candidate pool, after `exclude_id` is filtered out.
+
+        Falls back to the unfiltered pool when `exclude_id` would
+        leave an empty pool — the sign must not go dark just because
+        the currently-rendered message is the only candidate.
         """
         del now, event_log, favorites, event_type
         candidates = list(messages)
         if not candidates:
             return None
+        if exclude_id is not None:
+            filtered = [m for m in candidates if m.id != exclude_id]
+            candidates = filtered or candidates
         return random.choice(candidates)
 
 
@@ -271,6 +318,7 @@ class WeightedSelector(MessageSelector):
         event_log: object | None = None,
         favorites: Optional[Iterable[str]] = None,
         event_type: Optional[str] = None,
+        exclude_id: Optional[str] = None,
     ) -> Optional[Message]:
         """Pick the next message to display by weighted score.
 
@@ -285,6 +333,13 @@ class WeightedSelector(MessageSelector):
                 this call only.
             favorites: Override the constructor's favorites list for
                 this call only.
+            exclude_id: Optional message id to drop from the
+                candidate pool before scoring — the coordinator's
+                anti-repeat hint. Defensive double-check on top of
+                the `display_recency` component (which already
+                penalizes just-shown messages). When exclusion would
+                leave an empty pool, the unfiltered eligible set is
+                used so the sign keeps rotating.
 
         Returns:
             The next `Message` to display, or `None` when the eligible
@@ -295,6 +350,9 @@ class WeightedSelector(MessageSelector):
         candidates = [m for m in messages if self._is_eligible(m, now)]
         if not candidates:
             return None
+        if exclude_id is not None:
+            filtered = [m for m in candidates if m.id != exclude_id]
+            candidates = filtered or candidates
 
         if len(candidates) == 1:
             return candidates[0]

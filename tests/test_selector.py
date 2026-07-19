@@ -618,12 +618,17 @@ def test_constants_have_documented_defaults():
     assert W_FAVORITE == 0.4
     assert SATURATION_SECONDS == 86_400.0
     assert OFFSET_SECONDS == 1_209_600.0
-    assert USE_WEIGHTED_SELECTOR is False
+    assert USE_WEIGHTED_SELECTOR is True
 
 
-def test_use_weighted_selector_flag_defaults_false():
-    """Documented rollout flag default — ships dark."""
-    assert USE_WEIGHTED_SELECTOR is False
+def test_use_weighted_selector_flag_defaults_true():
+    """Default-selector rollout flag — flipped to True 2026-07-18
+    after the "same message picked back-to-back" symptom observed
+    in the browser preview. `WeightedSelector.display_recency`
+    penalizes just-shown messages; `RandomSelector` had no such
+    mechanism. `RandomSelector` stays in the file as the operator
+    opt-out (Default-to-X-keeps-Y rule)."""
+    assert USE_WEIGHTED_SELECTOR is True
 
 
 # --- 6.19: browser preview uses the same MessageSelector class ---
@@ -648,7 +653,7 @@ def test_browser_preview_uses_same_selector_class():
     assert _selector_mod.W_DISPLAY == 0.6
     assert _selector_mod.W_SEND == 0.3
     assert _selector_mod.W_FAVORITE == 0.4
-    assert _selector_mod.USE_WEIGHTED_SELECTOR is False
+    assert _selector_mod.USE_WEIGHTED_SELECTOR is True
 
 
 # --- MessageSelector ABC is abstract ---
@@ -768,3 +773,104 @@ def test_effects_coordinator_accepts_weighted_and_random_via_kwarg():
         selector=RandomSelector(),
         event_log=_FakeEventLog(),
     )
+
+
+# --- exclude_id: anti-repeat hint at the coordinator call site ---
+
+
+def test_random_selector_excludes_id_from_candidate_pool():
+    """`exclude_id` drops the matching message from the candidate pool
+    before `random.choice`. Pins the anti-repeat contract: the
+    coordinator passes the just-consumed message's id so the next
+    pick doesn't re-pick the same message back-to-back.
+
+    Regression for the "image isn't always rendering reliably" +
+    "same message gets selected back-to-back" symptoms observed in
+    the browser preview 2026-07-18: with `RandomSelector` (the
+    default `USE_WEIGHTED_SELECTOR=False`) and a 2-message buffer,
+    uniform random over `[m1, m2]` produces `m1` ~50% of the time,
+    including right after `m1` was just shown. The downstream
+    cycler-suppress guard (same-id discriminator) then intentionally
+    skips the cycler rebuild and the image fails to render.
+    Filtering `exclude_id` out of the candidate pool breaks the
+    cycle at the source.
+    """
+    import random as _random
+
+    _random.seed(0)
+    msgs = [
+        _msg("m1", "2026-07-05T10:00:00Z"),
+        _msg("m2", "2026-07-05T10:01:00Z"),
+    ]
+    selector = RandomSelector()
+    # Pin the seed so the random.choice is deterministic across runs;
+    # without exclude_id, the pick may return m1; with exclude_id="m1",
+    # the only remaining candidate is m2.
+    for _ in range(20):
+        picked = selector.pick(msgs, now=1_000_000.0, exclude_id="m1")
+        assert picked is not None
+        assert picked.id == "m2", f"exclude_id='m1' should drop m1 from the candidate pool; got {picked.id!r}"
+
+
+def test_random_selector_falls_back_when_exclusion_empties_pool():
+    """When `exclude_id` is the only candidate's id, the unfiltered
+    pool is used so the sign keeps rotating. The sign must not go
+    dark just because the currently-rendered message happens to be
+    the only one available — the same behavior the historical
+    rotation had when the buffer held a single message.
+    """
+    import random as _random
+
+    _random.seed(0)
+    msgs = [_msg("only", "2026-07-05T10:00:00Z")]
+    picked = RandomSelector().pick(msgs, now=1_000_000.0, exclude_id="only")
+    assert picked is not None
+    assert picked.id == "only", (
+        f"when the only candidate matches exclude_id, the unfiltered pool must "
+        f"be used so the sign doesn't go dark; got {picked.id!r}"
+    )
+
+
+def test_random_selector_exclude_id_unknown_does_not_drop_everything():
+    """`exclude_id` that doesn't match any candidate is a no-op —
+    the candidate pool is unchanged. Defensive against the
+    coordinator passing a stale id that no longer matches the
+    buffer (e.g. message evicted from the recent_count window).
+    """
+    import random as _random
+
+    _random.seed(42)
+    msgs = [_msg("a", "2026-07-05T10:00:00Z"), _msg("b", "2026-07-05T10:00:01Z")]
+    picked = RandomSelector().pick(msgs, now=1_000_000.0, exclude_id="not-in-pool")
+    assert picked is not None
+    assert picked.id in {"a", "b"}
+
+
+def test_weighted_selector_excludes_id_from_candidate_pool():
+    """`WeightedSelector` honors `exclude_id` after the eligibility
+    check, before scoring. The `display_recency` component already
+    penalizes just-shown messages, but the explicit `exclude_id`
+    filter is a defensive double-check that doesn't change the
+    algorithm's other invariants — and keeps the API consistent
+    with `RandomSelector`.
+    """
+    now = 1_000_000.0
+    msgs = [
+        _msg("m1", "2026-07-05T10:00:00Z"),
+        _msg("m2", "2026-07-05T10:01:00Z"),
+    ]
+    picked = WeightedSelector().pick(msgs, now=now, exclude_id="m1")
+    assert picked is not None
+    assert picked.id == "m2", f"exclude_id='m1' should drop m1 from the candidate pool; got {picked.id!r}"
+
+
+def test_weighted_selector_falls_back_when_exclusion_empties_pool():
+    """Same as `RandomSelector` — when the only eligible candidate
+    matches `exclude_id`, the unfiltered eligible set is used so
+    the sign keeps rotating.
+    """
+    now = 1_000_000.0
+    msgs = [_msg("only", "2026-07-05T10:00:00Z")]
+    picked = WeightedSelector().pick(msgs, now=now, exclude_id="only")
+    assert picked is not None
+    assert picked.id == "only"

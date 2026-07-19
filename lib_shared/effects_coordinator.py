@@ -51,11 +51,11 @@ from lib_shared.scroller_base import ScrollerBase
 # Pluggable message-selection (issue #26). The coordinator is
 # selector-agnostic — it accepts any `MessageSelector` subclass via its
 # `selector` kwarg and delegates the pick to `selector.pick(...)`. The
-# default is `RandomSelector` (the historical `random.choice`
-# rotation); callers wanting the new weighted algorithm pass
-# `WeightedSelector()` explicitly, or flip `USE_WEIGHTED_SELECTOR` in
-# `lib_shared/selector.py` and let the call site pick the default.
-from lib_shared.selector import MessageSelector, RandomSelector
+# default is `WeightedSelector` (see `USE_WEIGHTED_SELECTOR` in
+# `lib_shared/selector.py`, flipped True 2026-07-18 to fix the
+# same-message-back-to-back symptom). Callers wanting the historical
+# `random.choice` rotation pass `RandomSelector()` explicitly.
+from lib_shared.selector import MessageSelector, RandomSelector, USE_WEIGHTED_SELECTOR, WeightedSelector
 
 log = logging.getLogger("heart")
 
@@ -244,18 +244,24 @@ class EffectsCoordinator:
         # Pluggable selector wiring (issue #26). The coordinator is
         # selector-agnostic — it accepts any `MessageSelector` subclass
         # and delegates the pick to `selector.pick(...)`. The default
-        # is `RandomSelector()` (the historical `random.choice`
-        # rotation); callers wanting the weighted algorithm pass an
-        # explicit `WeightedSelector()`. When `event_log` is supplied,
-        # the coordinator writes a `text_display` event to the log
-        # at every out→in (no special-casing for pre-emption — the
-        # on-deck model treats all fade-ins uniformly). `favorites`
-        # is the optional message-id list consumed by the
-        # selector's favorite boost — kept as a coordinator field
-        # (not a global) so tests and the preview can change it
-        # without reconstructing the coordinator.
+        # is `WeightedSelector()` when `USE_WEIGHTED_SELECTOR=True`
+        # (the production default since 2026-07-18 — the weighted
+        # algorithm solves the same-message-back-to-back symptom via
+        # `display_recency`); callers wanting the historical
+        # `random.choice` rotation pass `RandomSelector()` explicitly.
+        # When `event_log` is supplied, the coordinator writes a
+        # `text_display` event to the log at every out→in (no
+        # special-casing for pre-emption — the on-deck model treats
+        # all fade-ins uniformly). `favorites` is the optional
+        # message-id list consumed by the selector's favorite boost
+        # — kept as a coordinator field (not a global) so tests and
+        # the preview can change it without reconstructing the
+        # coordinator.
         self._event_log = event_log
-        self._selector = selector if selector is not None else RandomSelector()
+        if selector is not None:
+            self._selector = selector
+        else:
+            self._selector = WeightedSelector() if USE_WEIGHTED_SELECTOR else RandomSelector()
         self._favorites = favorites if favorites is not None else ()
 
         self.idx = -1  # first message shown advances this to 0
@@ -1118,7 +1124,10 @@ class EffectsCoordinator:
             return self.on_deck.body
         return None
 
-    def _pick_message_via_selector(self) -> Message | None:
+    def _pick_message_via_selector(
+        self,
+        exclude_id: str | None = None,
+    ) -> Message | None:
         """Pick the next message from the buffer via the configured selector.
 
         Called from `intro→out` (first pick, populates `on_deck`) and
@@ -1129,6 +1138,15 @@ class EffectsCoordinator:
         empty or the selector yields no eligible candidate — callers
         treat None as "no message for the next cycle; rotation-only
         display."
+
+        `exclude_id` is the anti-repeat hint from the out→in call
+        site: pass the just-consumed message's id so the next pick
+        avoids back-to-back selection. Both selectors honor it —
+        `RandomSelector` filters the candidate pool before
+        `random.choice`; `WeightedSelector` filters after the
+        eligibility check. When the exclusion would empty the pool
+        both selectors fall back to the unfiltered set so the sign
+        keeps rotating.
 
         Note: the `current_event_type` is fixed to `"text_display"`
         here — the coordinator's text-display event is the
@@ -1146,13 +1164,21 @@ class EffectsCoordinator:
             event_log=self._event_log,
             favorites=self._favorites,
             event_type="text_display",
+            exclude_id=exclude_id,
         )
         if picked is not None:
             return picked
         # Selector returned None (e.g. nothing eligible under the
         # weighted path). Fall back to a uniform random pick so the
-        # sign still rotates instead of going dark.
-        return random.choice(candidate_messages) if candidate_messages else None
+        # sign still rotates instead of going dark. Same exclusion
+        # logic — the candidate pool would otherwise include the
+        # just-consumed message every time.
+        if exclude_id is not None and candidate_messages:
+            filtered = [m for m in candidate_messages if m.id != exclude_id]
+            candidates = filtered or candidate_messages
+        else:
+            candidates = candidate_messages
+        return random.choice(candidates) if candidates else None
 
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""
@@ -1300,7 +1326,24 @@ class EffectsCoordinator:
                     self.current_message = self._pick_message_via_selector()
                 else:
                     self.current_message = self.on_deck
-                self.on_deck = self._pick_message_via_selector()
+                # Anti-repeat: pass the just-consumed message's id to
+                # the selector so the next pick won't re-pick the same
+                # message back-to-back. The default selector is now
+                # `WeightedSelector` (post-2026-07-18), which already
+                # penalizes just-shown messages via `display_recency`
+                # — the hint is a no-op for the weighted path. With
+                # `RandomSelector` (the operator opt-out), the hint
+                # prevents the "same message shown twice in a row"
+                # symptom and its downstream cycler-suppress leak:
+                # when the same MMS is re-picked, the suppress flag
+                # from its cycler exhaust correctly fires (same-id
+                # discriminator) and the cycler rebuild is
+                # intentionally skipped, so the image fails to
+                # render.
+                next_exclude_id = self.current_message.id if self.current_message is not None else None
+                self.on_deck = self._pick_message_via_selector(
+                    exclude_id=next_exclude_id,
+                )
 
                 # Settings refresh at the cycle boundary. Tick
                 # itself is a pure render — but at out→in we apply

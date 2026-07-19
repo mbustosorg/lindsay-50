@@ -12,6 +12,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from lib_shared import effects_coordinator as _coord_mod  # noqa: E402  (imported for tests below)
+from lib_shared.selector import RandomSelector  # noqa: E402  (used by the anti-repeat back-to-back test)
 
 import pytest
 
@@ -196,6 +197,7 @@ def _build(
     hold_seconds=10.0,
     idle_seconds=300.0,
     message_manager=None,
+    selector=None,
 ):
     """Build a coordinator with a stub render layer already attached.
 
@@ -205,7 +207,12 @@ def _build(
 
     The pacing values are plumbed into the stub manager's
     `EffectSettings` — the coordinator reads them live from the
-    manager (no per-coordinator copy).
+    manager (no per-coordinator copy). The optional `selector` kwarg
+    forwards to `EffectsCoordinator` so tests that pin the pick
+    algorithm (e.g. the anti-repeat contract test, which needs
+    `RandomSelector` to exercise the coordinator's hint rather than
+    the weighted selector's display_recency) can do so without
+    monkey-patching the module default.
     """
     display = _StubDisplay()
     scroller = _StubScroller()
@@ -226,13 +233,16 @@ def _build(
         hold_seconds=hold_seconds,
         idle_seconds=idle_seconds,
     )
-    coord = _coord_mod.EffectsCoordinator(
-        message_manager=message_manager,
-        display=display,
-        scroller=scroller,
-        effects=[fx_a, fx_b],
-        heart=heart,
-    )
+    coord_kwargs = {
+        "message_manager": message_manager,
+        "display": display,
+        "scroller": scroller,
+        "effects": [fx_a, fx_b],
+        "heart": heart,
+    }
+    if selector is not None:
+        coord_kwargs["selector"] = selector
+    coord = _coord_mod.EffectsCoordinator(**coord_kwargs)
     return coord, display, scroller, fx_a, fx_b, heart
 
 def _build_unbound(
@@ -373,236 +383,194 @@ def test_current_message_advances_after_fresh_id_lifecycle(monkeypatch):
     )
 
 
-# --- round 4 (queue redesign): FIFO drain at natural pick sites --------------
-# New tests pin the queue contract: messages queued mid-cycle are picked at
-# the next natural pick site (background idle), FIFO order is preserved, the
-# queue takes priority over the recent-pool random pick, and the queue empties
-# the buffer's "fall-through" path. Tests that don't need full cycle timing
-# exercise `_pick_next` directly; tests that pin the "no interruption during
-# hold/background" contract drive the cycle through to a stable mode.
-# Both consume from the same `_StubMessageManager._new_messages_queue` so the
-# `_StubMessageManager.add_message` shape (mirroring production) stays in sync.
+def test_out_to_in_does_not_pick_same_message_back_to_back():
+    """Anti-repeat: at the out→in transition, the coordinator passes
+    the just-consumed message's id to the selector as `exclude_id`
+    so the next pick (the new `on_deck`) is a different message.
+    Without this hint, `RandomSelector` (the historical rotation,
+    kept as the operator opt-out post-2026-07-18) can re-pick the
+    just-shown message ~50% of the time with a 2-message buffer —
+    the "same message shown twice in a row" symptom observed in
+    the browser preview.
 
+    The downstream consequence: when an MMS is re-picked, the
+    cycler-suppress guard correctly fires (same-id discriminator)
+    and the cycler rebuild is intentionally skipped, so the image
+    fails to render. Filtering `exclude_id` out of the candidate
+    pool breaks the cycle at the source. The new default
+    `WeightedSelector` solves this at the algorithm layer via
+    `display_recency` — the hint is a no-op for the weighted path
+    but defense-in-depth for the operator-opt-out rotation.
 
-def _make_view(message_id, body, received_at):
-    """Stand-alone `MessageView` factory — pin the same shape
-    `_StubMessageManager.add_message` accepts."""
+    Drives two messages through two out→in transitions and asserts
+    the picked message is always different from the just-consumed
+    one. Uses `RandomSelector()` explicitly so the test pins the
+    anti-repeat contract (not the display_recency-based avoidance
+    that `WeightedSelector` would also satisfy).
+    """
+    import random as _random
+
+    _random.seed(0)
+    clock = _Clock()
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(time, "monotonic", clock)
     from lib_shared.models import MessageView, Message
 
-    return MessageView(
-        Message(id=message_id, sender="+15551234567", body=body, received_at=received_at),
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="hello", received_at="2026-01-01T00:00:00Z"),
         source="mqtt",
         suppressed=False,
     )
-
-
-def test_queue_drains_on_next_pick():
-    """A queued message drains at the very next `_pick_next` call.
-    Nothing should be left in the queue after the call."""
-    mgr = _StubMessageManager(messages=[])
-    coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(message_manager=mgr)
-    msg2 = _make_view("m2", "second", "2026-01-03T00:00:00Z")
-    mgr.add_message(msg2)
-    assert len(mgr._new_messages_queue) == 1
-
-    # Direct `_pick_next` call drains the queue.
-    body = coord._pick_next()
-    assert body == "second"
-    assert mgr.take_next_new_message() is None, (
-        "queue did not drain at the natural pick site"
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="world", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
     )
-    assert coord._last_picked_entry is not None
-    assert coord._last_picked_entry.message.id == "m2"
-    assert coord._last_display_message == "second"
-
-
-def test_queue_is_fifo():
-    """Three messages queue, three sequential `_pick_next` calls return
-    them in arrival order, queue empty after the third."""
-    mgr = _StubMessageManager(messages=[])
-    coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(message_manager=mgr)
-    msg_a = _make_view("a", "A", "2026-01-02T00:00:00Z")
-    msg_b = _make_view("b", "B", "2026-01-03T00:00:00Z")
-    msg_c = _make_view("c", "C", "2026-01-04T00:00:00Z")
-    mgr.add_message(msg_a)
-    mgr.add_message(msg_b)
-    mgr.add_message(msg_c)
-    assert len(mgr._new_messages_queue) == 3
-
-    assert coord._pick_next() == "A"
-    assert len(mgr._new_messages_queue) == 2
-    assert coord._pick_next() == "B"
-    assert len(mgr._new_messages_queue) == 1
-    assert coord._pick_next() == "C"
-    assert len(mgr._new_messages_queue) == 0
-    assert mgr.take_next_new_message() is None
-
-
-def test_queue_takes_priority_over_recent_pool():
-    """Buffer (random pool) AND queue both have messages; the queue
-    wins. The random pool is only consulted AFTER the FIFO drains."""
-    import random
-
-    random.seed(0)
-    msg_pool = [
-        _make_view(f"pool{i}", f"body{i}", f"2026-01-{10 + i:02d}T00:00:00Z")
-        for i in range(3)
-    ]
-    mgr = _StubMessageManager(messages=msg_pool)
-    coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(message_manager=mgr)
-    # The seed messages live in the buffer only (not the queue) —
-    # `add_message` mirrors production by adding to BOTH, but the
-    # constructor only adds to the buffer. The random pool is fed
-    # from the buffer; the queue is independent.
-    assert mgr.take_next_new_message() is None
-
-    # Queue a specific entry that the random pool wouldn't necessarily pick.
-    msg_target = _make_view("target", "target-body", "2026-01-20T00:00:00Z")
-    mgr.add_message(msg_target)
-    # The buffer now also has target, but the queue priority is the
-    # contract being tested: a `_pick_next` drains the queue first,
-    # before consulting the buffer.
-    assert len(mgr._new_messages_queue) == 1
-
-    # First `_pick_next`: drains the queue (target wins over random pool,
-    # even though target is also in the buffer).
-    body = coord._pick_next()
-    assert body == "target-body"
-    assert mgr.take_next_new_message() is None
-
-    # Second `_pick_next`: queue empty, falls through to random pool.
-    # Random pool has 4 entries (3 pool + target); with seed 0 the
-    # choice is deterministic. Either of those is acceptable; we just
-    # assert that the random pool returned something.
-    body2 = coord._pick_next()
-    assert body2 in {"body0", "body1", "body2", "target-body"}, (
-        f"random-pool fallback returned unexpected body={body2!r}"
-    )
-
-
-def test_no_interruption_during_hold():
-    """A fresh SMS arriving mid-hold does NOT trigger a fade-out.
-    The hold runs to `hold_seconds`, the queue holds the message,
-    and the only transition is at the natural hold→text_out edge."""
-    clock = _Clock()
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(time, "monotonic", clock)
-
-    msg1 = _make_view("m1", "first", "2026-01-02T00:00:00Z")
-    mgr = _StubMessageManager(messages=[msg1])
-    # Long hold, so the only way to leave it would be the (removed) fresh-id interrupt.
-    coord, _, _, fx_a, fx_b, _ = _build(
+    mgr = _StubMessageManager(messages=[msg1, msg2])
+    # Tight pacing — drive two complete out→in transitions in ~0.5s.
+    monkey.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
+    coord, display, scroller, fx_a, fx_b, heart = _build(
         intro_seconds=0.0,
         fade_seconds=0.05,
-        hold_seconds=999.0,
-        idle_seconds=0.05,
+        hold_seconds=0.05,
         message_manager=mgr,
+        # Pin to `RandomSelector` so the test exercises the
+        # coordinator's anti-repeat hint (the path that USED to
+        # be the production default before `USE_WEIGHTED_SELECTOR`
+        # was flipped True 2026-07-18). With `WeightedSelector`
+        # the display_recency-based avoidance already prevents
+        # back-to-back picks; the hint is a no-op there.
+        selector=RandomSelector(),
     )
     coord.start()
-    _drive(clock, coord, 0.2)  # boot to hold
-    assert coord.mode == "hold"
-
-    msg2 = _make_view("m2", "second", "2026-01-03T00:00:00Z")
-    mgr.add_message(msg2)
-    clock.advance(0.3)
-    coord.tick()
-
-    assert coord.mode == "hold", "mid-hold arrival must NOT trigger a fade-out"
-    assert coord.idx == 0
-    # Queue still holds m2 (not drained at a removed interrupt path).
-    assert mgr.take_next_new_message() is msg2
+    # First out→in — picks one of m1/m2 (random). With
+    # exclude_id=None on the very first pick (current_message is
+    # None at intro→out), both are eligible.
+    _drive(clock, coord, 0.10)  # intro → out → in
+    assert coord.mode == "in"
+    first_pick = coord.current_message
+    assert first_pick is not None
+    # Drive past in→hold→text_out→background→out→in (the second
+    # out→in). At that point the coordinator picks the NEXT on_deck
+    # with exclude_id=current_message.id — so the new pick MUST NOT
+    # be the same id as first_pick.
+    _drive(clock, coord, 0.30)  # in → hold → text_out → background → out → in
+    second_pick = coord.current_message
+    assert second_pick is not None
+    assert second_pick.id != first_pick.id, (
+        f"out→in re-picked the same message back-to-back: "
+        f"first={first_pick.id!r} second={second_pick.id!r}. "
+        f"Anti-repeat hint not honored — selector picked the "
+        f"just-consumed message id again."
+    )
     monkey.undo()
 
 
-def test_no_interruption_in_background():
-    """A fresh SMS arriving mid-background does NOT trigger a fade-out.
-    The background sits until `idle_seconds` elapses; with idle=999 the
-    coordinator never leaves background within the test window."""
-    clock = _Clock()
-    monkey = pytest.MonkeyPatch()
-    monkey.setattr(time, "monotonic", clock)
+def test_default_selector_is_weighted():
+    """The default-selector rollout flag is True post-2026-07-18 —
+    the coordinator instantiates `WeightedSelector()` (not
+    `RandomSelector()`) when no explicit `selector` kwarg is
+    passed. This pins the new production default at the
+    construction-time layer — the bug fix is "use the algorithm
+    designed for issue #26", not "patch the historical rotation".
 
-    msg1 = _make_view("m1", "first", "2026-01-02T00:00:00Z")
-    mgr = _StubMessageManager(messages=[msg1])
-    coord, _, _, fx_a, fx_b, _ = _build(
-        intro_seconds=0.0,
-        fade_seconds=0.05,
-        hold_seconds=0.3,
-        idle_seconds=999.0,  # background sits forever
-        message_manager=mgr,
-    )
-    coord.start()
-    # boot → out → in → hold → text_out → background. Hold=0.3s +
-    # text_out=0.05s lands us in background around t=0.5. Drive 0.6s
-    # to land cleanly in background with margin.
-    _drive(clock, coord, 0.6)
-    assert coord.mode == "background", (
-        f"setup: expected mode=background after 0.6s drive, got {coord.mode}"
-    )
-
-    msg2 = _make_view("m2", "second", "2026-01-03T00:00:00Z")
-    mgr.add_message(msg2)
-    clock.advance(0.3)
-    coord.tick()
-
-    assert coord.mode == "background", (
-        "mid-background arrival must NOT trigger a fade-out"
-    )
-    assert mgr.take_next_new_message() is msg2
-    monkey.undo()
-
-
-def test_drained_queue_falls_through_to_random_pool():
-    """Once the queue is empty, `_pick_next` falls through to the
-    random pool — `get_display_message` is consulted as a fallback."""
-    import random
-
-    random.seed(0)
-    msg_pool = [
-        _make_view(f"pool{i}", f"body{i}", f"2026-01-{10 + i:02d}T00:00:00Z")
-        for i in range(3)
-    ]
-    mgr = _StubMessageManager(messages=msg_pool)
-    coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(message_manager=mgr)
-    while mgr.take_next_new_message() is not None:
-        pass
-    assert mgr.take_next_new_message() is None
-
-    body = coord._pick_next()
-    assert body in {"body0", "body1", "body2"}, (
-        f"drained queue should fall through to random pool; got body={body!r}"
-    )
-
-
-def test_queue_pop_returns_empty_body_for_mms_only_message():
-    """An MMS-only message (`body=""`) drains from the queue returning
-    `""` (not `None`). The out→in branch's `if text:` check then clears
-    the scroller while the media cycler replaces `self.current`.
+    Without this test, an accidental flip of `USE_WEIGHTED_SELECTOR`
+    back to False (or a coordinator refactor that drops the
+    default-selector wiring) would silently regress the production
+    rotation to the pre-26 random.choice pattern without breaking
+    any selector-level tests.
     """
-    from lib_shared.models import Message, MessageView
+    from lib_shared.selector import (
+        USE_WEIGHTED_SELECTOR,
+        WeightedSelector,
+    )
 
-    mgr = _StubMessageManager(messages=[])
-    coord = importlib.import_module("lib_shared.effects_coordinator").EffectsCoordinator(message_manager=mgr)
-    mms = MessageView(
-        Message(
-            id="m2",
-            sender="+15551234567",
-            body="",
-            received_at="2026-01-03T00:00:00Z",
-            media=[{"type": "image/jpeg", "url": "key/x.jpg", "path": "/tmp/x.jpg"}],
-        ),
+    assert USE_WEIGHTED_SELECTOR is True, (
+        "USE_WEIGHTED_SELECTOR should default to True post-2026-07-18; "
+        "the weighted algorithm was designed to prevent the same-message "
+        "back-to-back symptom via display_recency."
+    )
+    # Construct a coordinator WITHOUT an explicit `selector` kwarg —
+    # the same shape every call site (and every test that uses
+    # `_build()`) ends up using. The coordinator must consult
+    # `USE_WEIGHTED_SELECTOR` at construction time and pick
+    # `WeightedSelector()`.
+    mgr = _StubMessageManager()
+    coord, *_ = _build(message_manager=mgr)
+    assert isinstance(coord._selector, WeightedSelector), (
+        "coordinator must default to WeightedSelector under "
+        f"USE_WEIGHTED_SELECTOR=True; got {type(coord._selector).__name__}. "
+        "Coordinator is selector-agnostic but its default selector must "
+        "honor USE_WEIGHTED_SELECTOR so callers don't have to know about "
+        "the rollout flag at every call site."
+    )
+
+
+def test_weighted_selector_avoids_back_to_back_via_display_recency(monkeypatch):
+    """End-to-end under the new default: with `WeightedSelector`
+    installed at the coordinator and an event log recording the
+    just-shown message's `text_display` event, the next out→in
+    pick avoids the same id. The weighted algorithm solves the
+    back-to-back symptom at the scoring layer (just-shown messages
+    get `display_recency ≈ 0.0`, so they get the lowest score)
+    rather than relying on the coordinator's anti-repeat hint
+    (which is now defense-in-depth).
+
+    Pins the new default behavior. The companion test
+    `test_out_to_in_does_not_pick_same_message_back_to_back` exercises
+    the same property under `RandomSelector` to keep the anti-repeat
+    contract alive as a fallback for the operator opt-out rotation.
+
+    Uses the `monkeypatch` fixture (auto-cleanup) instead of
+    `pytest.MonkeyPatch()` so a failure mid-test doesn't leak
+    `IDLE_SECONDS_AFTER_HOLD=0.05` into subsequent tests via
+    module-level state.
+    """
+    clock = _Clock()
+    monkeypatch.setattr(time, "monotonic", clock)
+    from lib_shared.models import MessageView, Message
+
+    msg1 = MessageView(
+        Message(id="m1", sender="+1", body="hello", received_at="2026-01-01T00:00:00Z"),
         source="mqtt",
         suppressed=False,
     )
-    mgr.add_message(mms)
+    msg2 = MessageView(
+        Message(id="m2", sender="+1", body="world", received_at="2026-01-02T00:00:00Z"),
+        source="mqtt",
+        suppressed=False,
+    )
+    mgr = _StubMessageManager(messages=[msg1, msg2])
+    monkeypatch.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
+    from lib_shared.selector import WeightedSelector
 
-    body = coord._pick_next()
-    assert body == "", f"queue drain returned {body!r}, expected '' for MMS-only message"
-    assert coord._last_picked_entry is not None
-    assert coord._last_picked_entry.message.id == "m2"
-    assert coord._last_picked_entry.message.body == ""
-    assert coord._last_display_message == ""
-    assert mgr.take_next_new_message() is None
+    # Note: NOT passing `selector=` — the coordinator picks its own
+    # default per `USE_WEIGHTED_SELECTOR`. We assert it's
+    # `WeightedSelector` immediately below.
+    coord, _, _, _, _, _ = _build(
+        intro_seconds=0.0,
+        fade_seconds=0.05,
+        hold_seconds=0.05,
+        message_manager=mgr,
+    )
+    assert isinstance(coord._selector, WeightedSelector), (
+        f"coordinator must default to WeightedSelector under USE_WEIGHTED_SELECTOR=True; "
+        f"got {type(coord._selector).__name__}"
+    )
+    coord.start()
+    _drive(clock, coord, 0.10)  # intro → out → in
+    first_pick = coord.current_message
+    assert first_pick is not None
+    _drive(clock, coord, 0.30)  # in → hold → text_out → background → out → in
+    second_pick = coord.current_message
+    assert second_pick is not None
+    assert second_pick.id != first_pick.id, (
+        f"under the new WeightedSelector default, back-to-back picks "
+        f"of {first_pick.id!r} should be impossible — display_recency "
+        f"penalizes the just-shown message. Got first={first_pick.id!r} "
+        f"second={second_pick.id!r}. The weighted algorithm is broken "
+        f"or USE_WEIGHTED_SELECTOR regressed to False."
+    )
 
 
 def test_pending_text_consumed_on_out_to_in():
@@ -1347,9 +1315,14 @@ def test_pick_runs_once_per_out_to_in_transition(monkeypatch):
     pick_count = {"n": 0}
     original = coord._pick_message_via_selector
 
-    def counting():
+    def counting(*args, **kwargs):
+        # The coordinator calls `_pick_message_via_selector(exclude_id=...)`
+        # at the out→in transition (anti-repeat hint); the bare call at
+        # intro→out passes no kwargs. Forward transparently so the original
+        # signature stays in sync — the assertion below only cares about
+        # call COUNT, not arguments.
         pick_count["n"] += 1
-        return original()
+        return original(*args, **kwargs)
 
     monkey.setattr(coord, "_pick_message_via_selector", counting)
 

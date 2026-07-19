@@ -196,9 +196,7 @@ def test_tick_picks_at_out_to_in_only():
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", lambda: clock[0])
 
-    msgs = [
-        _make_view(f"id{i:02d}", f"body-{i:02d}", f"2026-01-{10 + i:02d}T00:00:00Z") for i in range(5)
-    ]
+    msgs = [_make_view(f"id{i:02d}", f"body-{i:02d}", f"2026-01-{10 + i:02d}T00:00:00Z") for i in range(5)]
     mgr = _StubMessageManager(messages=msgs)
     # Tight pacing so multiple cycles fit in 2 seconds of clock time.
     mgr.config.effects_settings.intro_seconds = 0.0
@@ -222,9 +220,14 @@ def test_tick_picks_at_out_to_in_only():
     pick_count = [0]
     original_pick = coord._pick_message_via_selector
 
-    def counting_pick():
+    def counting_pick(*args, **kwargs):
+        # The coordinator calls `_pick_message_via_selector(exclude_id=...)`
+        # at the out→in transition (anti-repeat hint); the bare call at
+        # intro→out passes no kwargs. Forward transparently so the
+        # signature stays in sync with the call site — the assertion
+        # below only cares about call COUNT, not arguments.
         pick_count[0] += 1
-        return original_pick()
+        return original_pick(*args, **kwargs)
 
     monkey.setattr(coord, "_pick_message_via_selector", counting_pick)
 
@@ -238,10 +241,8 @@ def test_tick_picks_at_out_to_in_only():
     # pattern would produce ~120 picks at 250 ms throttle × 2 s; the
     # test pins the new contract by asserting a small count that
     # reflects "one pick per out→in transition".
-    assert pick_count[0] >= 2, (
-        f"expected ≥ 2 picks (intro→out seed + at least one out→in); got {pick_count[0]}"
-    )
-    assert pick_count[0] < 50, (
-        f"too many picks: {pick_count[0]}. The pull-on-a-timer pattern is back if this exceeds ~50."
-    )
+    assert pick_count[0] >= 2, f"expected ≥ 2 picks (intro→out seed + at least one out→in); got {pick_count[0]}"
+    assert (
+        pick_count[0] < 50
+    ), f"too many picks: {pick_count[0]}. The pull-on-a-timer pattern is back if this exceeds ~50."
     monkey.undo()

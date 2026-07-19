@@ -305,12 +305,11 @@ _coordinator = EffectsCoordinator(
     # triple, regardless of which runtime is asking). The preview
     # does NOT replicate the Pi's log — each browser has its own
     # IDB. Per the spec's "preview is illustrative" contract.
-    # The coordinator is selector-agnostic; pass `WeightedSelector()`
-    # to enable the new algorithm, `RandomSelector()` (default) for
-    # the historical random.rotation. `USE_WEIGHTED_SELECTOR` is a
-    # module-level constant in `lib_shared/selector.py` and ships
-    # False (dark) on both runtimes; flipping it to True enables
-    # the new selector on both the Pi and the browser preview.
+    # The coordinator is selector-agnostic; pass `RandomSelector()`
+    # to restore the historical `random.choice` rotation. The default
+    # is `WeightedSelector` since 2026-07-18 — `USE_WEIGHTED_SELECTOR`
+    # is a module-level constant in `lib_shared/selector.py` that
+    # drives the default pick at both the Pi and the browser preview.
     selector=WeightedSelector() if USE_WEIGHTED_SELECTOR else RandomSelector(),
     event_log=IndexedDBEventLog(max_entries=100),
 )
