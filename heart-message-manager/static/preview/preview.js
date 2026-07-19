@@ -309,6 +309,12 @@
       console.error("[preview-js] #preview-message-link element not found");
     }
     let lastMediaKey = "";
+    // Throttle variable for the "python returned" diagnostic log.
+    // Distinct from `lastMediaKey` (which `applyMedia` owns and
+    // updates AFTER the src swap) — updating `lastMediaKey` from
+    // the diagnostic path would race the swap check and silently
+    // skip the first media of every cycle.
+    let lastLoggedMediaKey = "";
     let lastEffectNameForLog = "";
     // Tracks the id of the message currently bound to the status
     // link. The link's `data-msg` is rewritten only when this
@@ -316,8 +322,15 @@
     // encode the full Message dict every frame even when the
     // coordinator is sitting on the same message for 15+ seconds.
     let lastLinkMessageId = "";
-    let lastEmptyLogAt = 0;
-    let emptyFramesSinceLog = 0;
+    // Tracks whether Python last returned empty media (no key/url).
+    // The empty-state log fires only on the transition INTO empty
+    // — once we're empty, stay quiet until Python produces a real
+    // key again. Same pattern as `[preview-state]` (state-change
+    // only). The 1s-throttle approach it replaced was useful while
+    // diagnosing one specific bug, but is just noise during normal
+    // text-only display where Python correctly returns empty for
+    // every frame.
+    let lastMediaWasEmpty = false;
     // Coordinator-state heartbeat: lets the developer console
     // show the live state-machine values (mode, scroller brightness,
     // media opacity, phase elapsed) at 1 Hz so you can correlate
@@ -329,9 +342,9 @@
     // Diagnostic flag — set to `false` in devtools or by overriding
     // `window.__PREVIEW_DEBUG__ = false` to silence the overlay
     // trace. Logs only fire on STATE CHANGES (effect name swap,
-    // media key swap, overlay hide) and throttled "no media"
-    // notices once per second, so the rAF loop at 30 FPS doesn't
-    // spam the console.
+    // media key swap, overlay hide, "python returned empty"
+    // transition), so the rAF loop at 30 FPS doesn't spam the
+    // console while the coordinator sits on a text-only message.
     const PREVIEW_DEBUG = (typeof window.__PREVIEW_DEBUG__ === "undefined")
       ? true : !!window.__PREVIEW_DEBUG__;
 
@@ -361,22 +374,18 @@
         // No active media — hide both, leave the canvas alone.
         if (!mediaImg.hidden) mediaImg.hidden = true;
         if (!mediaVideo.hidden) mediaVideo.hidden = true;
-        if (PREVIEW_DEBUG) {
-          // Throttle the "hiding overlay" log to once per 30s. The
-          // previous 1s throttle spammed the console when the
-          // preview sat idle for minutes — drain to 30s and skip
-          // entirely if the "python returned empty" log already
-          // fired in the same window (they convey the same info).
-          const now = Date.now();
-          if (now - lastEmptyLogAt > 30000) {
-            console.log(
-              "[preview-media] hiding overlay: url=%s kind=%s key=%s (no picked media, or BrowserMediaOverlay returned empty url)",
-              url, kind, key,
-            );
-            lastEmptyLogAt = now;
-            emptyFramesSinceLog = 0;
-          }
+        if (PREVIEW_DEBUG && !lastMediaWasEmpty) {
+          // Log only on the transition INTO the empty state.
+          // Once we're empty we stay quiet until Python produces
+          // a real key again — a steady "hiding overlay" line
+          // every frame (or every 1s) is just noise during
+          // normal text-only display.
+          console.log(
+            "[preview-media] hiding overlay: url=%s kind=%s key=%s (no picked media, or BrowserMediaOverlay returned empty url)",
+            url, kind, key,
+          );
         }
+        lastMediaWasEmpty = true;
         lastMediaKey = "";
         return;
       }
@@ -565,49 +574,47 @@
               //      that confirms the overlay is producing a real
               //      URL.
               //
-              //   2. Empty payload (key/url are ""): the previous
-              //      implementation gated this on key-change too,
-              //      which meant the log NEVER fired when Python
-              //      was persistently returning the empty stub
-              //      (the symptom we're trying to diagnose — the
-              //      picked message has media but the overlay
-              //      produces an empty URL on every frame).
-              //      Throttle to once per second instead, so we
-              //      get a steady "Python returned empty" signal
-              //      that the user can correlate with the picked-
-              //      message log to confirm the overlay isn't
-              //      producing a URL.
+              //   2. Empty payload (key/url are ""): log only on
+              //      the transition INTO empty — once we're empty,
+              //      stay quiet until Python produces a real key
+              //      again. The previous 1s-throttle implementation
+              //      surfaced a steady "Python returned empty"
+              //      stream during normal text-only display, which
+              //      was useful for diagnosing one specific bug
+              //      but is just noise for everyday operation.
               if (media && (media.key || media.url)) {
-                if (media.key !== lastMediaKey) {
+                if (media.key !== lastLoggedMediaKey) {
                   console.log(
                     `[preview-media] python returned: key=${media.key} kind=${media.kind} url=${media.url} opacity=${Number(media.opacity || 0).toFixed(2)}`,
                   );
+                  // Throttle the log via `lastLoggedMediaKey`
+                  // (distinct from `lastMediaKey`, which `applyMedia`
+                  // owns and updates AFTER the src swap). Updating
+                  // `lastMediaKey` from this diagnostic path would
+                  // race the swap check inside `applyMedia` and
+                  // silently skip the very first media of every
+                  // cycle (key was `""`, becomes the S3 key, then
+                  // `applyMedia` sees them equal and returns
+                  // without swapping).
+                  lastLoggedMediaKey = media.key;
                 }
-              } else {
-                // Empty payload is the normal idle state (no MMS in
-                // flight). The 1s throttle spammed the console when
-                // the preview sat idle for minutes — drain to once
-                // every 30s, and only fire on a 30-multiple so an
-                // operator looking at a wall of logs gets a clear
-                // "still empty" signal every 30s instead of a
-                // continuous stream.
-                const now = Date.now();
-                emptyFramesSinceLog += 1;
-                if (now - lastEmptyLogAt > 30000) {
-                  const shape = media === null
-                    ? "null"
-                    : media === undefined
-                      ? "undefined"
-                      : `{key=${JSON.stringify(media.key)} url=${JSON.stringify(media.url)} kind=${JSON.stringify(media.kind)} opacity=${media.opacity}}`;
-                  console.log(
-                    "[preview-media] python returned empty (%d idle frames, ~%ds): %s — no BrowserMediaOverlay active or overlay returned empty url",
-                    emptyFramesSinceLog,
-                    Math.round(emptyFramesSinceLog / 30),
-                    shape,
-                  );
-                  lastEmptyLogAt = now;
-                  emptyFramesSinceLog = 0;
-                }
+                lastMediaWasEmpty = false;
+              } else if (!lastMediaWasEmpty) {
+                const shape = media === null
+                  ? "null"
+                  : media === undefined
+                    ? "undefined"
+                    : `{key=${JSON.stringify(media.key)} url=${JSON.stringify(media.url)} kind=${JSON.stringify(media.kind)} opacity=${media.opacity}}`;
+                console.log(
+                  "[preview-media] python returned empty: %s — image will NOT render this frame (no BrowserMediaOverlay active, or overlay returned empty url)",
+                  shape,
+                );
+                lastMediaWasEmpty = true;
+                // Reset the throttle so the next non-empty key
+                // produces a "python returned" line even if it
+                // happens to match the key we logged before the
+                // empty window.
+                lastLoggedMediaKey = "";
               }
             }
             applyMedia(media);

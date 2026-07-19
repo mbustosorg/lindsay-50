@@ -352,9 +352,9 @@ def get_current_message():
     picked up the same `media` list the wire carried.
 
     Returns `None` when the coordinator is idle (no picked entry —
-    boot splash, SMS-only background, or post-`_last_picked_entry`
-    reset). `preview.js` treats `None` as "no link target", so
-    clicking the text in idle state is a no-op.
+    boot splash, SMS-only background, or post-`on_deck` consume).
+    `preview.js` treats `None` as "no link target", so clicking
+    the text in idle state is a no-op.
 
     Conversion note (issue #38 debug-2026-07-09): Pyodide's default
     conversion of a returned Python dict is a JS `Map`, not a plain
@@ -371,10 +371,10 @@ def get_current_message():
     coord = _coord()
     if coord is None:
         return None
-    picked = getattr(coord, "_last_picked_entry", None)
-    if picked is None:
+    current = coord.current_message
+    if current is None:
         return None
-    raw = picked.message.to_dict()
+    raw = current.to_dict()
     return to_js(raw, dict_converter=js.Object.fromEntries)
 
 
@@ -419,11 +419,28 @@ def get_current_media():
             dict_converter=js.Object.fromEntries,
         )
     if isinstance(current, BrowserMediaOverlay):
+        url = current.current_media_url
+        kind = current.current_media_kind
+        key = current.current_media_key
+        opacity = current.current_opacity
+        brightness = current.current_brightness
+        # Source logging (issue #26 follow-up): the browser preview
+        # has no Python-side fetch — the JS `<img>` / `<video>` element
+        # does its own GET against `url`. The ground truth for "did
+        # the image actually get requested" lives on the Flask side
+        # (`/api/media/<key>` logs every 302 with `requester=browser`),
+        # but it also helps to see here what URL we're handing back
+        # to JS — if `url` is empty while `key` is set, something is
+        # wrong in the overlay's `current_media_url` property
+        # (probably `api_base_url` not bound). The log is throttled
+        # so the 30 FPS rAF loop doesn't spam the console.
+        if key:
+            _preview_media_info(key, url, kind, opacity)
         return to_js(
             {
-                "url": current.current_media_url,
-                "kind": current.current_media_kind,
-                "opacity": current.current_opacity,
+                "url": url,
+                "kind": kind,
+                "opacity": opacity,
                 # `brightness` is the multiplicative boost applied
                 # on top of full opacity (~1.15 by default). The JS
                 # applies it as `style.filter = "brightness(N)"`
@@ -431,35 +448,34 @@ def get_current_media():
                 # matches the panel's channel-level clamping for
                 # the Pi side. Sent UNCLAMPED; the JS clamps before
                 # applying to keep the CSS sane.
-                "brightness": current.current_brightness,
-                "key": current.current_media_key,
+                "brightness": brightness,
+                "key": key,
             },
             dict_converter=js.Object.fromEntries,
         )
     # Throttled diagnostic: log when the current effect is NOT a
-    # BrowserMediaOverlay but the picked message has media — this
-    # is the "falling back to a regular effect" path the user is
-    # trying to diagnose. `coord._last_picked_entry` is a private
-    # field but the only signal we have here.
+    # BrowserMediaOverlay but the current message has media — this
+    # is the "cycler should be playing but isn't" path. The cycler
+    # is the active effect during `in` and `hold`; everywhere else
+    # the rotation effect is the healthy state, so the warning
+    # would be a false positive.
     #
-    # Skip during `coord.mode == "out"`: this is a transient phase
-    # where `current` is still the previous rotation effect (e.g.
-    # Honeycomb) but the picked media message has already been
-    # selected. The out→in transition will construct a
-    # BrowserMediaOverlay for the picked message in a few frames;
-    # the "image will NOT render in preview" assertion would be
-    # inaccurate during this brief window. (During `in` / `hold`
-    # / `text_out` `current` IS the overlay, so the diagnostic
-    # wouldn't fire anyway — `out` is the only fade phase where
-    # `current != overlay && picked has media` is healthy
-    # transient state.)
+    # `coord.current_message` is the slot the `out→in` transition
+    # populates from `on_deck`, so it's the authoritative read of
+    # "what message is being staged." During `text_out` and
+    # `background`, `current_message` is still the cycler's message
+    # (the cycler has played; `_maybe_fall_back_to_rotation` swapped
+    # `current` back to the rotation effect and armed the
+    # suppress flag) — that's NOT a bug, it's the cycler-finished
+    # state. Skip `text_out` and `background` so the diagnostic
+    # only fires on the genuine "cycler should be active but
+    # wasn't built" bug. `out` and `intro` are skipped for the
+    # same reason: `current` is the previous rotation / heart
+    # effect, the cycler hasn't been installed yet.
     try:
-        picked = getattr(coord, "_last_picked_entry", None)
-        if (
-            picked is not None
-            and (media := getattr(picked.message, "media", None) or [])
-            and getattr(coord, "mode", None) != "out"
-        ):
+        current_msg = coord.current_message
+        mode = getattr(coord, "mode", None)
+        if current_msg is not None and (media := getattr(current_msg, "media", None) or []) and mode in ("in", "hold"):
             effect_name = type(current).__name__ if current is not None else "None"
             _preview_media_warn(
                 "picked message has %d media item(s) but current effect is %s (not BrowserMediaOverlay); "
@@ -581,6 +597,41 @@ def get_diagnostics():
 import time as _time  # noqa: E402  (local import keeps module top tidy)
 
 _preview_media_warn_last: dict = {"ts": 0.0, "key": None}
+_preview_media_info_last: dict = {"ts": 0.0, "key": None}
+
+
+def _preview_media_info(key: str, url: str, kind: str, opacity: float) -> None:
+    """Throttled `console.log` for the browser-side source trace.
+
+    Logs once per second per key (the S3 key is the stable identifier
+    across cycles). The line shows what URL `BrowserMediaOverlay` is
+    handing back to the JS `<img>` / `<video>` element on each frame,
+    plus the opacity — when the operator reports "fade logs fire but
+    no network call appears", this log + the Flask `/api/media/<key>`
+    log together pin down whether the URL was constructed but never
+    fetched (no Flask log, no Network tab request) or constructed and
+    fetched but the response failed (Flask log shows the 302 but the
+    `<img>`/`<video>` `error` event fires in the browser).
+    """
+    try:
+        import js  # type: ignore[import-not-found]
+
+        now = _time.monotonic()
+        if key == _preview_media_info_last["key"] and now - _preview_media_info_last["ts"] < 1.0:
+            return
+        _preview_media_info_last["ts"] = now
+        _preview_media_info_last["key"] = key
+        source = "browser-proxy" if url else "<empty url — overlay not bound>"
+        js.console.log(
+            "[preview-media-source] key=%s source=%s url=%s kind=%s opacity=%s",
+            key,
+            source,
+            url,
+            kind,
+            f"{opacity:.2f}",
+        )
+    except Exception:
+        pass
 
 
 def _preview_media_warn(fmt: str, *args: object) -> None:

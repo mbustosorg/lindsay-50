@@ -163,8 +163,16 @@
           <input type="number" name="effects_settings_idle_seconds" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" step="0.1" min="0" value="{{ cfg.effects_settings.idle_seconds if cfg.effects_settings.idle_seconds is not none else effects_settings.idle_seconds }}">
         </div>
         <div>
-          <label class="block text-sm font-medium text-slate-600 mb-2">Recent Count</label>
-          <input type="number" name="effects_settings_recent_count" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" min="1" value="{{ cfg.effects_settings.recent_count if cfg.effects_settings.recent_count is not none else effects_settings.recent_count }}">
+          <label class="block text-sm font-medium text-slate-600 mb-2">Lookback (days)</label>
+          <input type="number" name="effects_settings_lookback_days" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" min="1" max="365" value="{{ cfg.effects_settings.lookback_days if cfg.effects_settings.lookback_days is not none else effects_settings.lookback_days }}">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-600 mb-2">Selection algorithm</label>
+          <select name="effects_settings_selector_algorithm" class="w-full px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
+            {% set _current_alg = cfg.effects_settings.selector_algorithm if cfg.effects_settings.selector_algorithm is not none else effects_settings.selector_algorithm %}
+            <option value="weighted"{% if _current_alg == 'weighted' %} selected{% endif %}>Weighted</option>
+            <option value="random"{% if _current_alg == 'random' %} selected{% endif %}>Random</option>
+          </select>
         </div>
       </div>
     </div>

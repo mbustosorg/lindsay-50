@@ -71,6 +71,9 @@ from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]
 from lib_shared.message_manager import MessageManager
 from lib_shared.effects_coordinator import EffectsCoordinator
 from lib_shared.models import Message, SignConfig
+from lib_shared.selector import WeightedSelector
+from event_log import IndexedDBEventLog
+
 print("[app-py] lib_shared.message_manager / effects_coordinator / models imported")
 
 # The existing JS-side `mqtt_ws_client.js` shim is loaded by `base.html`
@@ -295,6 +298,23 @@ _coordinator = EffectsCoordinator(
     media_api_base_url=str(js.window.location.origin),
     media_cache_dir="",
     is_browser=True,
+    # Selector wiring (issue #26). The browser preview maintains its
+    # own IndexedDB-backed event log so the preview is self-consistent
+    # (the same `WeightedSelector` class produces the same pick for the
+    # same `(messages, now, event_log)` triple, regardless of which
+    # runtime is asking). The preview does NOT replicate the Pi's log —
+    # each browser has its own IDB. Per the spec's "preview is
+    # illustrative" contract. The coordinator is selector-agnostic;
+    # pass `WeightedSelector()` (or `RandomSelector()`) here to pin the
+    # algorithm, OR omit and let the coordinator dispatch on the
+    # `selector_algorithm` config field on every pick (the operator's
+    # setting on the admin /settings page; defaults to "weighted").
+    # We pin `WeightedSelector()` here to avoid a race at PyScript
+    # startup where the manager's effects_settings hasn't been
+    # seeded yet — the explicit instance makes the preview
+    # deterministic from the first tick.
+    selector=WeightedSelector(),
+    event_log=IndexedDBEventLog(max_entries=100),
 )
 
 _mqtt_ws_client = None

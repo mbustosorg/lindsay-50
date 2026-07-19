@@ -68,6 +68,15 @@ MATRIX_PWM_BITS = 4
 MATRIX_BRIGHTNESS = 100
 MATRIX_GPIO_SLOWDOWN = 4                    # 4 is a good starting point for a Pi 4
 
+# Append-only JSONL event log (issue #26). The renderer writes one event per
+# message advance to this file; the weighted selector reads it on every
+# pick to compute display-recency. The schema is exactly
+# `{event_type, message_id, timestamp, received_at}` — no favorite or other
+# mutable fields. Bounded ring of the most recent N entries (default 100).
+# Path is relative to the working directory the app is launched from.
+EVENT_LOG_PATH = "data/events.jsonl"
+EVENT_LOG_MAX_ENTRIES = 100
+
 # DEBUG | INFO | WARNING | ERROR | CRITICAL
 LOG_LEVEL = "INFO"
 

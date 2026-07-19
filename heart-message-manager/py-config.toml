@@ -28,6 +28,11 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 "lib_shared/messages.py" = "/static/preview/lib_shared/messages.py"
 "lib_shared/models.py" = "/static/preview/lib_shared/models.py"
 "lib_shared/scroller_base.py" = "/static/preview/lib_shared/scroller_base.py"
+# Weighted message selector (issue #26). Runs in both runtimes
+# unchanged — the same Python class is consumed by the Pi's renderer
+# (with `heart-matrix-controller/event_log.py`) and by the browser
+# preview (with `static/event_log.py`).
+"lib_shared/selector.py" = "/static/preview/lib_shared/selector.py"
 "lib_shared/config_migrations.py" = "/static/preview/lib_shared/config_migrations.py"
 "lib_shared/patterns/__init__.py" = "/static/preview/lib_shared/patterns/__init__.py"
 "lib_shared/patterns/fireworks.py" = "/static/preview/lib_shared/patterns/fireworks.py"
@@ -39,6 +44,7 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 "lib_shared/patterns/marble.py" = "/static/preview/lib_shared/patterns/marble.py"
 "lib_shared/patterns/metaballs.py" = "/static/preview/lib_shared/patterns/metaballs.py"
 "lib_shared/patterns/hyperspace.py" = "/static/preview/lib_shared/patterns/hyperspace.py"
+"lib_shared/patterns/fractal_flower.py" = "/static/preview/lib_shared/patterns/fractal_flower.py"
 "lib_shared/patterns/heartbeat.py" = "/static/preview/lib_shared/patterns/heartbeat.py"
 # `BrowserMediaOverlay` (issue #38) is the preview-side equivalent of
 # MediaCycler: it lets the browser drive the same per-message MMS
@@ -48,6 +54,10 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 "heart-message-manager/preview_display.py" = "/static/preview/heart-message-manager/preview_display.py"
 "heart-message-manager/preview_scroller.py" = "/static/preview/heart-message-manager/preview_scroller.py"
 "heart-message-manager/preview_main.py" = "/static/preview/heart-message-manager/preview_main.py"
+# Browser-side event log (issue #26). PyScript wrapper around
+# `js.indexedDB`, mirroring the Pi-side `heart-matrix-controller/event_log.py`
+# schema so the same `MessageSelector` class works in the preview runtime.
+"heart-message-manager/event_log.py" = "/static/preview/heart-message-manager/event_log.py"
 
 # NOTE: do NOT declare [packages] here. PyScript 2024.9.x's TOML→micropip
 # bridge passes the dict to `micropip.install()` as a JsProxy, which

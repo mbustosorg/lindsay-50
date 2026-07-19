@@ -59,6 +59,7 @@ from lib_shared.boot_config import BootConfig, from_heroku_or_git as _boot_confi
 from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.effects_loader import load_effects_settings
 from lib_shared.models import SignConfig, FilterRule, Message
+from lib_shared.models import EffectsSettings
 from lib_shared.models import MessageEnvelope
 from lib_shared.scroller_base import ScrollerBase
 from lib_shared.sign_status import LatestSignStatus, REQUIRED_SNAPSHOT_KEYS
@@ -891,16 +892,62 @@ def api_media(s3_key):
         exist) → 404 with a JSON ``{"error": "..."}`` body
       - S3 raises on a transient outage (network, IAM, throttle) → 502
         with a JSON ``{"error": "..."}`` body
+
+    Diagnostic logging (issue #26 follow-up): every request is logged
+    with the S3 key, the requester (Pi vs browser, distinguished via
+    the ``X-API-Key`` header vs the Flask session cookie), the outcome
+    (302 redirect, 400 invalid path, 404 signing failed, 502 transient),
+    and the resolved signed-URL host (when signing succeeds). The
+    User-Agent is included so we can tell the browser preview's
+    `<img>` / `<video>` fetch from the Pi's MediaCycler fetch from
+    curl-style debugging hits. This is the ground truth for "did the
+    image actually get requested" — when the browser reports
+    fade-in/out but no network call appears in DevTools, this line
+    tells us whether the proxy was hit at all.
     """
+    requester = "pi" if request.headers.get("X-API-Key") else "browser"
+    user_agent = request.headers.get("User-Agent", "")[:80]
     if ".." in s3_key or s3_key.startswith("/") or "//" in s3_key:
+        logger.warning(
+            "/api/media rejected invalid key=%s requester=%s ua=%r",
+            s3_key,
+            requester,
+            user_agent,
+        )
         return jsonify({"error": "invalid S3 key"}), 400
     try:
         signed = s3.signed_media_url(s3_key)
     except Exception as exc:  # boto3 raises BotoCoreError / ClientError
-        logger.warning("/api/media signing failed for %s: %s", s3_key, exc)
+        logger.warning(
+            "/api/media signing failed key=%s requester=%s ua=%r err=%s",
+            s3_key,
+            requester,
+            user_agent,
+            exc,
+        )
         return jsonify({"error": "media not found"}), 404
     if not signed:
+        logger.warning(
+            "/api/media empty signed url key=%s requester=%s ua=%r",
+            s3_key,
+            requester,
+            user_agent,
+        )
         return jsonify({"error": "media not found"}), 404
+    # Extract the S3 host (the `netloc` of the signed URL) so the log
+    # shows the actual destination the client will GET. The full
+    # signed URL is intentionally NOT logged — it carries a query
+    # string with credentials and is short-lived.
+    from urllib.parse import urlparse
+
+    signed_host = urlparse(signed).netloc
+    logger.info(
+        "/api/media 302 key=%s requester=%s ua=%r signed_host=%s",
+        s3_key,
+        requester,
+        user_agent,
+        signed_host,
+    )
     response = Response("", status=302)
     response.headers["Location"] = signed
     return response
@@ -968,8 +1015,8 @@ def _build_sign_config_from_request(data: dict) -> tuple:
 
     Runs the migration registry at the top so v1 inputs are normalized to
     v2 before validation. Validates the new fields (effects entries,
-    behavior fields, recent_count, text fields) and returns per-field error
-    messages.
+    behavior fields, lookback_days, selector_algorithm, text fields)
+    and returns per-field error messages.
 
     Args:
         data: dict — the parsed JSON request body.
@@ -1025,13 +1072,35 @@ def _build_sign_config_from_request(data: dict) -> tuple:
                     jsonify({"error": (f"effects_settings.{field}: must be a non-negative number")}),
                     400,
                 )
-        rc = es.get("recent_count")
-        if rc is not None:
-            if isinstance(rc, bool) or not isinstance(rc, int) or rc < 1:
+        # `lookback_days` bounds mirror `EffectsSettings.MIN/MAX_LOOKBACK_DAYS`.
+        # The validator here is a defense-in-depth duplicate — `from_dict`
+        # also validates, but this returns a structured 400 with the exact
+        # field name so the wire path doesn't need to import the model
+        # class just to discover the bounds.
+        lb = es.get("lookback_days")
+        if lb is not None:
+            min_lb = EffectsSettings.MIN_LOOKBACK_DAYS
+            max_lb = EffectsSettings.MAX_LOOKBACK_DAYS
+            if isinstance(lb, bool) or not isinstance(lb, int) or not (min_lb <= lb <= max_lb):
                 return None, (
-                    jsonify({"error": ("effects_settings.recent_count: must be a positive integer")}),
+                    jsonify(
+                        {"error": (f"effects_settings.lookback_days: must be an integer " f"in {min_lb}..{max_lb}")}
+                    ),
                     400,
                 )
+        alg = es.get("selector_algorithm")
+        if alg is not None and alg not in EffectsSettings.VALID_SELECTOR_ALGORITHMS:
+            return None, (
+                jsonify(
+                    {
+                        "error": (
+                            f"effects_settings.selector_algorithm: must be one of "
+                            f"{EffectsSettings.VALID_SELECTOR_ALGORITHMS}, got {alg!r}"
+                        )
+                    }
+                ),
+                400,
+            )
 
     # Validate text_settings.
     ts = data.get("text_settings")
@@ -1225,8 +1294,9 @@ def settings():
             ts_form.text_effect = te
         cfg.text_settings = ts_form
 
-        # Effect settings: pacing (fade/hold/intro/idle seconds), recent_count,
-        # and the rotation list (handled by the multi-effect form below).
+        # Effect settings: pacing (fade/hold/intro/idle seconds),
+        # `lookback_days`, `selector_algorithm`, and the rotation list
+        # (handled by the multi-effect form below).
         #
         # BUGFIX (2026-07-07): the previous handler built field names as
         # `f"effects_settings{field}"` which produced `effects_settingsfade_seconds`
@@ -1249,15 +1319,42 @@ def settings():
                     pacing_summary[field] = f"POST={raw!r} DROPPED (not a float)"
             else:
                 pacing_summary[field] = "absent"
-        rc_raw = request.form.get("effects_settings_recent_count")
-        if rc_raw is not None and rc_raw != "":
+        # `lookback_days` is bounded 1..365 in the EffectsSettings model and
+        # in the validated wire path. The form-side guard mirrors that
+        # bounds check so an out-of-range submission lands as a no-op
+        # rather than corrupting the config (the field would round-trip
+        # to a 400 on the `/api/config` path on the next refresh anyway,
+        # but we keep the form parity for symmetry).
+        lb_raw = request.form.get("effects_settings_lookback_days")
+        if lb_raw is not None and lb_raw != "":
             try:
-                es_form.recent_count = int(rc_raw)
-                pacing_summary["recent_count"] = f"POST={rc_raw!r} saved={rc_raw}"
+                lb_val = int(lb_raw)
+                if EffectsSettings.MIN_LOOKBACK_DAYS <= lb_val <= EffectsSettings.MAX_LOOKBACK_DAYS:
+                    es_form.lookback_days = lb_val
+                    pacing_summary["lookback_days"] = f"POST={lb_raw!r} saved={lb_val}"
+                else:
+                    pacing_summary["lookback_days"] = (
+                        f"POST={lb_raw!r} DROPPED (out of range "
+                        f"{EffectsSettings.MIN_LOOKBACK_DAYS}..{EffectsSettings.MAX_LOOKBACK_DAYS})"
+                    )
             except ValueError:
-                pacing_summary["recent_count"] = f"POST={rc_raw!r} DROPPED (not an int)"
+                pacing_summary["lookback_days"] = f"POST={lb_raw!r} DROPPED (not an int)"
         else:
-            pacing_summary["recent_count"] = "absent"
+            pacing_summary["lookback_days"] = "absent"
+        # `selector_algorithm` is a closed enum (`weighted` | `random`);
+        # unknown values are dropped so a stale form (e.g. from a
+        # downgraded browser tab) doesn't clobber the saved setting.
+        alg_raw = request.form.get("effects_settings_selector_algorithm")
+        if alg_raw is not None and alg_raw != "":
+            if alg_raw in EffectsSettings.VALID_SELECTOR_ALGORITHMS:
+                es_form.selector_algorithm = alg_raw
+                pacing_summary["selector_algorithm"] = f"POST={alg_raw!r} saved={alg_raw!r}"
+            else:
+                pacing_summary["selector_algorithm"] = (
+                    f"POST={alg_raw!r} DROPPED (not in {EffectsSettings.VALID_SELECTOR_ALGORITHMS})"
+                )
+        else:
+            pacing_summary["selector_algorithm"] = "absent"
         logger.info(
             "[settings] effect pacing merge: %s",
             _json.dumps(pacing_summary, sort_keys=True),

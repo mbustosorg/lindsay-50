@@ -99,7 +99,8 @@ def seed_config():
             "hold_seconds": 15.0,
             "intro_seconds": 5.0,
             "idle_seconds": 300.0,
-            "recent_count": 5,
+            "lookback_days": 14,
+            "selector_algorithm": "weighted",
         },
         "text_settings": {
             "speed": 3,
@@ -617,7 +618,8 @@ class TestDispatchMessage:
                     "hold_seconds": 15.0,
                     "intro_seconds": 5.0,
                     "idle_seconds": 300.0,
-                    "recent_count": 5,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 },
                 "text_settings": {
                     "speed": 3,
@@ -870,7 +872,8 @@ class TestDispatchCommand:
                     "hold_seconds": 15.0,
                     "intro_seconds": 5.0,
                     "idle_seconds": 300.0,
-                    "recent_count": 5,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 },
                 "text_settings": {
                     "speed": 3,
@@ -1024,7 +1027,8 @@ class TestOnChange:
                     "hold_seconds": 15.0,
                     "intro_seconds": 5.0,
                     "idle_seconds": 300.0,
-                    "recent_count": 5,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 },
                 "text_settings": {
                     "speed": 3,
@@ -1518,7 +1522,8 @@ class TestSessionCache:
                         "hold_seconds": 15.0,
                         "intro_seconds": 5.0,
                         "idle_seconds": 300.0,
-                        "recent_count": 5,
+                        "lookback_days": 14,
+                        "selector_algorithm": "weighted",
                     },
                     "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
                     "sign": {"name": "Lindsay's Heart"},
@@ -1634,7 +1639,8 @@ class TestSessionCache:
                 "hold_seconds": 15.0,
                 "intro_seconds": 5.0,
                 "idle_seconds": 300.0,
-                "recent_count": 5,
+                "lookback_days": 14,
+                "selector_algorithm": "weighted",
             },
             "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
             "sign": {"name": "Test Sign"},
@@ -1695,7 +1701,8 @@ class TestSessionCache:
                         "hold_seconds": 15.0,
                         "intro_seconds": 5.0,
                         "idle_seconds": 300.0,
-                        "recent_count": 5,
+                        "lookback_days": 14,
+                        "selector_algorithm": "weighted",
                     },
                     "text_settings": {
                         "speed": 3,
@@ -1999,14 +2006,15 @@ class TestHandleConfigOverrideStrip:
                     "hold_seconds": 9.0,
                     "intro_seconds": 9.0,
                     "idle_seconds": 9.0,
-                    "recent_count": 9,
+                    "lookback_days": 14,
+                    "selector_algorithm": "weighted",
                 },
                 "filters": [{"type": "keyword", "pattern": "spam", "action": "suppress"}],
             }
         )
         # effects_settings from the wire did NOT land — the loader-driven
-        # canonical value (recent_count=5) is what the manager holds.
-        assert manager.config.effects_settings.recent_count == 5
+        # canonical value (lookback_days=14) is what the manager holds.
+        assert manager.config.effects_settings.lookback_days == 14
         assert manager.config.effects_settings.fade_seconds == 2.0
         # But text_settings and filters DID land from the wire.
         assert manager.config.text_settings.speed == 4
@@ -2024,11 +2032,12 @@ class TestHandleConfigOverrideStrip:
                     "hold_seconds": 7.0,
                     "intro_seconds": 7.0,
                     "idle_seconds": 7.0,
-                    "recent_count": 7,
+                    "lookback_days": 7,
+                    "selector_algorithm": "weighted",
                 },
             }
         )
-        assert manager.config.effects_settings.recent_count == 7
+        assert manager.config.effects_settings.lookback_days == 7
         assert manager.config.effects_settings.fade_seconds == 7.0
 
     def test_override_active_text_only_passes_through(self, manager, override_active):

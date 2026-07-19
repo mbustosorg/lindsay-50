@@ -192,7 +192,8 @@ def test_valid_v2_payload_returns_200(client, esp32_headers):
             "hold_seconds": 15.0,
             "intro_seconds": 5.0,
             "idle_seconds": 300.0,
-            "recent_count": 5,
+            "lookback_days": 14,
+            "selector_algorithm": "weighted",
         },
         "text_settings": {
             "speed": 3,
@@ -328,19 +329,49 @@ def test_effects_settings_zero_pacing_accepted(client, esp32_headers):
     assert response.status_code == 200
 
 
-def test_effects_settings_recent_count_zero_rejected(client, esp32_headers):
+def test_effects_settings_lookback_days_zero_rejected(client, esp32_headers):
+    """`lookback_days=0` is below MIN_LOOKBACK_DAYS=1, so 400."""
     response = client.put(
         "/api/config",
-        json={"effects_settings": {"recent_count": 0}},
+        json={"effects_settings": {"lookback_days": 0}},
         headers=esp32_headers,
     )
     assert response.status_code == 400
 
 
-def test_effects_settings_recent_count_negative_rejected(client, esp32_headers):
+def test_effects_settings_lookback_days_negative_rejected(client, esp32_headers):
+    """Negative `lookback_days` is below MIN_LOOKBACK_DAYS=1, so 400."""
     response = client.put(
         "/api/config",
-        json={"effects_settings": {"recent_count": -1}},
+        json={"effects_settings": {"lookback_days": -1}},
+        headers=esp32_headers,
+    )
+    assert response.status_code == 400
+
+
+def test_effects_settings_lookback_days_above_max_rejected(client, esp32_headers):
+    """`lookback_days` above MAX_LOOKBACK_DAYS=365 is rejected (400).
+
+    Pins the admin-UI /api/config wire path guard. The MAX
+    bound is dictated by usage: anything above ~1 year is almost
+    certainly operator error, and the validation here is the
+    belt-and-braces guard around the EffectsSettings model."""
+    response = client.put(
+        "/api/config",
+        json={"effects_settings": {"lookback_days": 9999}},
+        headers=esp32_headers,
+    )
+    assert response.status_code == 400
+
+
+def test_effects_settings_selector_algorithm_unknown_rejected(client, esp32_headers):
+    """An unknown `selector_algorithm` is rejected (400) on the wire.
+
+    Pins the wire validator (defense in depth — the model
+    `validate()` also rejects it on direct construction)."""
+    response = client.put(
+        "/api/config",
+        json={"effects_settings": {"selector_algorithm": "not-a-real-algorithm"}},
         headers=esp32_headers,
     )
     assert response.status_code == 400

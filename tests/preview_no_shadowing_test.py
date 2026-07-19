@@ -60,8 +60,7 @@ def test_preview_main_does_not_define_coordinator_at_module_level():
             f"Rename to `_get_app_coordinator()` (or similar)."
         )
         assert not stripped.startswith("_coordinator ="), (
-            f"preview_main.py:{n} binds `_coordinator` at module level; "
-            f"collides with app_main.py."
+            f"preview_main.py:{n} binds `_coordinator` at module level; " f"collides with app_main.py."
         )
 
 
@@ -69,8 +68,7 @@ def test_preview_main_exposes_get_app_coordinator():
     """The renamed looker must exist so callers can use it."""
     src = _read_preview_main_source()
     assert "def _get_app_coordinator" in src, (
-        "preview_main.py must define `_get_app_coordinator()` "
-        "as the renamed looker for `window._coordinator`."
+        "preview_main.py must define `_get_app_coordinator()` " "as the renamed looker for `window._coordinator`."
     )
 
 
@@ -84,6 +82,7 @@ def test_preview_main_does_not_call_bare_coordinator():
     (which is where the rename's rationale lives).
     """
     import re
+
     src = _read_preview_main_source()
     in_docstring = False
     for n, line in enumerate(src.splitlines(), 1):
@@ -102,6 +101,5 @@ def test_preview_main_does_not_call_bare_coordinator():
         # doesn't false-positive on the substring `_coordinator()`.
         match = re.search(r"(?<![a-zA-Z_])_coordinator\(", cleaned)
         assert not match, (
-            f"preview_main.py:{n} calls `_coordinator()`; "
-            f"use `_get_app_coordinator()` to avoid the shadowing bug."
+            f"preview_main.py:{n} calls `_coordinator()`; " f"use `_get_app_coordinator()` to avoid the shadowing bug."
         )

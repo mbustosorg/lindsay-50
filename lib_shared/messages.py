@@ -174,7 +174,7 @@ class InMemoryMessages(FilteredMessages):
         self._msgs.clear()
         self._seen_ids.clear()
 
-    def get_messages(self, limit=100, suppress=True) -> list[MessageView]:
+    def get_messages(self, limit: int | None = 100, suppress: bool = True) -> list[MessageView]:
         """Return the most recent N messages, newest first (sorted by received_at desc).
 
         Thin read: returns the already-enriched `MessageView` instances from

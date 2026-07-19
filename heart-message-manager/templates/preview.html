@@ -32,42 +32,44 @@
          to nowhere. #}
     </div>
     <div class="relative bg-slate-900 rounded-xl p-4 shadow-2xl w-full max-w-full">
-      <canvas id="sign-canvas" width="768" height="768"
-              class="block w-full max-w-[min(800px,100%)] h-auto aspect-square mx-auto"
-              style="position: relative; image-rendering: auto; z-index: 1;"></canvas>
-      {# Browser-side media overlay (issue #38). Positioned BEHIND the
-         LED-fuzzy canvas (z-index 0 vs the canvas's z-index 1) so the
-         scroller text and lit LED pixels drawn to the canvas overlay
-         the image. The Pillow WebCanvas is RGBA-transparent — pixels
-         the effect explicitly paints (lit LEDs, scroller text) become
-         opaque, gaps stay transparent, and the image DOM element
-         shows through those gaps. Without this, the opaque canvas
-         would hide the media for the lifetime of its fade-in (since
-         the BrowserMediaOverlay's `render()` is a no-op and the
-         canvas's transparent gaps would otherwise not exist).
-         `preview.js` swaps `src=` / `style.opacity` each frame from
-         `BrowserMediaOverlay`'s read-only properties. Hidden when the
-         picked message has no media — the LED look is preserved.
-         The `<video>` is muted/looped/ autoplayed to satisfy browser
-         autoplay policies for silent looping clips.
-
-         Layering note: the canvas needs `position: relative` for its
-         `z-index: 1` to take effect — z-index is ignored on
-         `position: static` elements. Without this, the absolutely-
-         positioned image / video siblings (which DO honor their
-         `z-index: 0`) paint on top of the static canvas in source
-         order, and the media DOM element ends up covering the
-         canvas's lit pixels (text appears to fade out as the media
-         fades in, even though the canvas is drawing the text at full
-         opacity). #}
-      <img id="browser-media-image" alt="" hidden
-           class="absolute inset-0 w-full h-full object-cover pointer-events-none"
-           style="z-index: 0; opacity: 0;">
-      <video id="browser-media-video" muted loop autoplay playsinline hidden
-             class="absolute inset-0 w-full h-full object-cover pointer-events-none"
-             style="z-index: 0; opacity: 0;"></video>
-      <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
-        Loading preview…
+      {# Square sizing wrapper. This div owns the cap-at-800px + 1:1
+         aspect rule so the canvas and the media overlay both fill
+         the SAME square box. If we put those classes on each child
+         individually, the absolute media (`inset-0` + `max-w-[...]`
+         + `max-h-[...]` + `aspect-square`) collapses to the smaller
+         of the two maxes while the block canvas takes the larger —
+         so the image ends up smaller than the canvas on a
+         wide-but-short parent. Putting one wrapper around both
+         guarantees an identical footprint. #}
+      <div class="relative w-full max-w-[min(800px,100%)] h-auto aspect-square mx-auto">
+        {# Browser-side media overlay (issue #38). Positioned BEHIND
+           the LED-fuzzy canvas (z-index 0 vs the canvas's z-index 1)
+           so the scroller text and lit LED pixels drawn to the canvas
+           overlay the image. The Pillow WebCanvas is RGBA-transparent
+           — pixels the effect explicitly paints (lit LEDs, scroller
+           text) become opaque, gaps stay transparent, and the image
+           DOM element shows through those gaps. Without this, the
+           opaque canvas would hide the media for the lifetime of its
+           fade-in (since the BrowserMediaOverlay's `render()` is a
+           no-op and the canvas's transparent gaps would otherwise
+           not exist). `preview.js` swaps `src=` / `style.opacity`
+           each frame from `BrowserMediaOverlay`'s read-only
+           properties. Hidden when the picked message has no media —
+           the LED look is preserved. The `<video>` is muted / looped
+           / autoplayed to satisfy browser autoplay policies for
+           silent looping clips. #}
+        <img id="browser-media-image" alt="" hidden
+             class="absolute inset-0 w-full h-full object-contain pointer-events-none"
+             style="z-index: 0; opacity: 0;">
+        <video id="browser-media-video" muted loop autoplay playsinline hidden
+               class="absolute inset-0 w-full h-full object-contain pointer-events-none"
+               style="z-index: 0; opacity: 0;"></video>
+        <canvas id="sign-canvas" width="768" height="768"
+                class="block w-full h-full"
+                style="position: relative; image-rendering: auto; z-index: 1;"></canvas>
+        <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
+          Loading preview…
+        </div>
       </div>
     </div>
   </div>

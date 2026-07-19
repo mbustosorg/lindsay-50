@@ -162,6 +162,106 @@ def test_preview_template_canvas_is_responsive():
     assert "height: 512px" not in template
 
 
+def test_preview_template_media_overlay_matches_canvas_footprint():
+    """The <img>/<video> media overlays MUST occupy the same square box as
+    the canvas — NOT stretch-fill the dark div with `object-cover`, and
+    NOT collapse to a different size than the canvas on wide viewports.
+
+    Regression history:
+
+    1. The original sizing (`absolute inset-0 w-full h-full object-cover`)
+       filled the dark div with no width cap; on wide viewports the image
+       blew past 800px wide while the canvas (capped at 800px) stayed
+       behind it.
+
+    2. The first attempt to fix this put `absolute inset-0 ... max-w +
+       max-h + aspect-square` directly on the overlay. That collapsed to
+       the smaller of the two maxes (the dark div's smaller axis) on a
+       wide-but-short parent — the image shrank while the canvas hit the
+       800px cap. Image and canvas were again at different sizes.
+
+    The current fix wraps the canvas and the media overlays in a single
+    sizing div (`relative w-full max-w-[min(800px,100%)] h-auto
+    aspect-square mx-auto`). Both children fill that wrapper identically
+    (`absolute inset-0 w-full h-full`), so the overlay footprint IS the
+    canvas footprint by construction. `object-contain` preserves the
+    source image's aspect ratio inside the square.
+
+    Lit LEDs still paint on top (canvas z-index 1 > media z-index 0);
+    what changed is only the media's footprint.
+    """
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+
+    # The image overlay must fill its parent wrapper (which owns the
+    # 800px cap + aspect-square). `absolute inset-0 w-full h-full` is
+    # the "fill the parent box exactly" pattern; combined with the
+    # wrapper's aspect-square, that produces a square footprint
+    # identical to the canvas.
+    img_block = _extract_tag(template, "browser-media-image")
+    assert "absolute inset-0" in img_block, (
+        "browser-media-image must use `absolute inset-0` to fill its "
+        "sizing wrapper (which owns the 800px cap + aspect-square)"
+    )
+    assert "w-full h-full" in img_block, (
+        "browser-media-image must declare `w-full h-full` so it fills " "the wrapper's box exactly (not just inset-0)"
+    )
+
+    # The image overlay must use `object-contain` (not `object-cover`)
+    # so the source aspect ratio is preserved — wide landscape images
+    # are letterboxed top/bottom, tall portrait images letterboxed
+    # left/right, instead of being cropped to fit.
+    assert "object-contain" in img_block, (
+        "browser-media-image must use object-contain to preserve the "
+        "source aspect ratio — object-cover crops the image to fit the "
+        "overlay box"
+    )
+    # `object-cover` MUST NOT appear on the image overlay anymore —
+    # that was the stretch-to-fill behavior being replaced.
+    assert "object-cover" not in img_block, (
+        "browser-media-image must NOT use object-cover — that's the " "stretch-to-fill behavior being replaced"
+    )
+
+    # Same constraints apply to the video overlay — videos also need
+    # to fill the canvas footprint and preserve aspect ratio.
+    video_block = _extract_tag(template, "browser-media-video")
+    assert "absolute inset-0" in video_block
+    assert "w-full h-full" in video_block
+    assert "object-contain" in video_block
+    assert "object-cover" not in video_block
+
+    # The sizing wrapper must declare the cap + aspect-square so the
+    # canvas and overlays end up at the same square footprint.
+    assert "max-w-[min(800px,100%)]" in template, (
+        "The sizing wrapper (or canvas) must cap at min(800px, 100%) — "
+        "this is the rule that keeps the overlay and canvas at the same "
+        "size"
+    )
+    assert "aspect-square" in template, (
+        "The sizing wrapper (or canvas) must declare aspect-square so " "the overlay and canvas share a 1:1 footprint"
+    )
+
+
+def _extract_tag(template: str, element_id: str) -> str:
+    """Return the substring of `template` covering the tag with `id=element_id`.
+
+    Helper for the media-overlay tests so the assertions can target
+    the specific element's class list instead of asserting on the
+    whole template (which has two overlays + the canvas, each with
+    their own sizing).
+    """
+    # The id is on the opening tag of an <img> or <video>. Grab from
+    # the previous `<` to the closing `>` of that opening tag.
+    needle = f'id="{element_id}"'
+    start = template.find(needle)
+    if start == -1:
+        return ""
+    open_lt = template.rfind("<", 0, start)
+    close_gt = template.find(">", start)
+    if open_lt == -1 or close_gt == -1:
+        return ""
+    return template[open_lt : close_gt + 1]
+
+
 def test_preview_template_has_status_block():
     """The template shows the current effect name and message body."""
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()

@@ -89,6 +89,11 @@ def _load_app_module(mock_cfg, paho_client_ctor):
     models_mod.SignConfig = MagicMock()  # type: ignore[attr-defined]
     models_mod.FilterRule = MagicMock()  # type: ignore[attr-defined]
     models_mod.Message = MagicMock()  # type: ignore[attr-defined]
+    effects_settings_mock = MagicMock()  # type: ignore[attr-defined]
+    effects_settings_mock.MIN_LOOKBACK_DAYS = 1
+    effects_settings_mock.MAX_LOOKBACK_DAYS = 365
+    effects_settings_mock.VALID_SELECTOR_ALGORITHMS = ("weighted", "random")
+    models_mod.EffectsSettings = effects_settings_mock  # type: ignore[attr-defined]
 
     class _FakeEnvelope:
         def __init__(self, type, payload):

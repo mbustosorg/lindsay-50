@@ -261,6 +261,14 @@ class MediaCycler(Effect):
         fetch failure the item is dropped (D12). Tests pass a `fetcher`
         callable that returns valid bytes synchronously, so the host
         test suite runs without HTTP.
+
+        Source logging (issue #26 follow-up): every successful resolve
+        logs where the bytes came from — ``stashed`` (test seam, the
+        ``item["path"]`` field was already populated), ``cache`` (the
+        SHA-derived cache file existed on disk), or ``fetch`` (downloaded
+        from the Flask proxy just now). The path and byte size are
+        included so the operator can confirm the file is the right one.
+        Every drop path logs at WARNING with the reason.
         """
         # If the item has a pre-stashed path (test seam, or set by
         # a previous successful resolve), reuse it. This also means
@@ -268,6 +276,12 @@ class MediaCycler(Effect):
         # to call the fetcher.
         stashed = item.get("path")
         if stashed and Path(stashed).exists() and Path(stashed).stat().st_size > 0:
+            logger.info(
+                "MediaCycler: resolve source=stashed key=%s path=%s bytes=%d",
+                item.get("url"),
+                stashed,
+                Path(stashed).stat().st_size,
+            )
             return stashed
 
         key = item["url"]
@@ -282,6 +296,12 @@ class MediaCycler(Effect):
         ext = os.path.splitext(key)[1] or _ext_for_mime(item["type"])
         cached = self._cache_dir / f"{digest}{ext}"
         if cached.exists() and cached.stat().st_size > 0:
+            logger.info(
+                "MediaCycler: resolve source=cache key=%s path=%s bytes=%d",
+                key,
+                cached,
+                cached.stat().st_size,
+            )
             return str(cached)
 
         if not self._api_base_url:
@@ -298,13 +318,14 @@ class MediaCycler(Effect):
             data = self._fetcher(proxy_url)
         except Exception as exc:  # noqa: BLE001 — fetcher can raise anything
             logger.warning(
-                "MediaCycler: fetch failed key=%s err=%s; dropping item",
+                "MediaCycler: fetch failed source=fetch key=%s proxy_url=%s err=%s; dropping item",
                 key,
+                proxy_url,
                 exc,
             )
             return None
         if not data:
-            logger.warning("MediaCycler: empty body for key=%s; dropping item", key)
+            logger.warning("MediaCycler: empty body source=fetch key=%s proxy_url=%s; dropping item", key, proxy_url)
             return None
         try:
             cached.write_bytes(data)
@@ -316,6 +337,13 @@ class MediaCycler(Effect):
                 exc,
             )
             return None
+        logger.info(
+            "MediaCycler: resolve source=fetch key=%s path=%s bytes=%d proxy_url=%s",
+            key,
+            cached,
+            len(data),
+            proxy_url,
+        )
         return str(cached)
 
     def _read_duration(self, item: dict, local_path: str) -> float:

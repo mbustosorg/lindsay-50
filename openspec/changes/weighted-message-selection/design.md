@@ -11,7 +11,7 @@ The browser preview (`/playful`) shares the same Python `MessageSelector` class 
 **Goals:**
 
 - Define a deterministic priority function that picks the next message given (messages, `now()`, event_log).
-- Make the score's contributions explicit and tunable: a recency-of-display component (sourced from the event log), a recency-of-send component (sourced from the message's `sent_at`), and a favorite boost (sourced from the message's `favorite` flag).
+- Make the score's contributions explicit and tunable: a recency-of-display component (sourced from the event log), a recency-of-send component (sourced from the message's `received_at`), and a favorite boost (sourced from the message's `favorite` flag).
 - Apply an eligibility window (default two weeks, module-level constant `OFFSET_SECONDS` in `lib_shared/selector.py`) so ancient messages do not compete. The window is a behavioral knob of the algorithm, not an operational value, so it lives in code rather than `settings.toml`. The constant is seconds-denominated (good for testing with small windows in unit tests), even though the eventual operator-facing presentation on the admin UI is likely days or hours — that's a UI-layer translation deferred to the change that adds the UI.
 - Persist render events on the Pi's disk so a restart does not reset rotation history.
 - Preserve the existing pre-emption invariant: a newly arrived message always shows immediately, bypassing the selector.
@@ -48,11 +48,11 @@ score(message, now, event_log) =
 
 These weights are behavioral knobs of the algorithm, not operator-facing operational values — they live as module-level constants in `lib_shared/selector.py`. Operators who want to tune them edit the source and redeploy; no `settings.toml` plumbing, no Settings page UI.
 
-The favorite weight is additive rather than a multiplier on `send_recency` (which the issue suggested as one option) because additive lets us tune "how much do favorites dominate" independently from "how recent is recent". The implementer may also implement the issue's alternative — clamping a favorite's effective `sent_at` to `now − 1 hour` — and that is acceptable as long as the result is functionally identical to a favorites-tilted score.
+The favorite weight is additive rather than a multiplier on `send_recency` (which the issue suggested as one option) because additive lets us tune "how much do favorites dominate" independently from "how recent is recent". The implementer may also implement the issue's alternative — clamping a favorite's effective `received_at` to `now − 1 hour` — and that is acceptable as long as the result is functionally identical to a favorites-tilted score.
 
 **Alternatives considered:**
 - Multiplicative (`score = display * send`): elegant but a never-shown ancient message would score ~0, which violates the "never-shown recent wins" intent.
-- Sort by event-log timestamp then by `sent_at` (lexicographic): simpler but loses the continuous tuning surface; users could not express "favor recent messages more" without reordering keys.
+- Sort by event-log timestamp then by `received_at` (lexicographic): simpler but loses the continuous tuning surface; users could not express "favor recent messages more" without reordering keys.
 - Pure ML ranking: deferred (non-goal).
 - Embedding `last_shown_at` on the `Message` model and replicating through server/Pi/browser: rejected (see Decision 5).
 - Surfacing the weights on the Flask Settings page: rejected (behavioral knob → code constant, per the lindsay-50 pattern of `TextSettings.MIN_SPEED/MAX_SPEED/DEFAULT_SPEED` and similar in `lib_shared/`).
@@ -73,17 +73,17 @@ A never-shown message gets the maximum value — "fresh slate, show me." A messa
 
 ```
 send_recency(message, eligible_set, now) =
-    (message.sent_at - min(eligible_set, key=sent_at)) /
-    (now - min(eligible_set, key=sent_at))
+    (message.received_at - min(eligible_set, key=received_at)) /
+    (now - min(eligible_set, key=received_at))
     if denominator > 0
     else 1.0
 ```
 
 Normalizing across the eligible set (rather than against an absolute reference like "epoch") keeps the score meaningful regardless of how old the database is. The oldest eligible message gets 0.0; the newest eligible message gets 1.0.
 
-### Decision 4 — Eligibility window uses `sent_at`, not the event log
+### Decision 4 — Eligibility window uses `received_at`, not the event log
 
-A message is eligible iff `now − sent_at ≤ OFFSET_SECONDS` (default 14 days). The offset is checked against `sent_at` because we want dormant older messages to stay dormant — a message from two years ago should not pop up just because it has never been shown. The implementation exposes `OFFSET_SECONDS` as a module-level constant in `lib_shared/selector.py`.
+A message is eligible iff `now − received_at ≤ OFFSET_SECONDS` (default 14 days). The offset is checked against `received_at` because we want dormant older messages to stay dormant — a message from two years ago should not pop up just because it has never been shown. The implementation exposes `OFFSET_SECONDS` as a module-level constant in `lib_shared/selector.py`.
 
 ### Decision 5 — Display-recency lives in a Pi-local append-only event log; server's `Message` model is unchanged
 
@@ -102,15 +102,15 @@ The corrected model:
   "event_type": "text_display",
   "message_id": "abc123",
   "timestamp": 1752080123.45,
-  "sent_at": 1752000000.0
+  "received_at": 1752000000.0
 }
 ```
 
-`sent_at` is denormalized from the message so a debug consumer can filter and sort without joining. `favorite` is intentionally NOT in the schema — favorite is a current-state property of the message (it can change between events), so it should be sourced from the message record at pick time, not captured in the historical log. `event_type` is the discriminator; supported values in v1 are `text_display`, with `image_display` and `video_display` reserved for future pattern types.
+`received_at` is denormalized from the message so a debug consumer can filter and sort without joining. `favorite` is intentionally NOT in the schema — favorite is a current-state property of the message (it can change between events), so it should be sourced from the message record at pick time, not captured in the historical log. `event_type` is the discriminator; supported values in v1 are `text_display`, with `image_display` and `video_display` reserved for future pattern types.
 
 ### Decision 6 — Determinism via a stable tie-breaker
 
-Two messages with identical scores must pick deterministically. The selector sorts by `(−score, sent_at, message.id)` so the tie-breaker is: lower score first, then older message first, then lower message-id first. This guarantees the same input set always yields the same output — important for testing and for the dashboard preview agreeing with itself.
+Two messages with identical scores must pick deterministically. The selector sorts by `(−score, received_at, message.id)` so the tie-breaker is: lower score first, then older message first, then lower message-id first. This guarantees the same input set always yields the same output — important for testing and for the dashboard preview agreeing with itself.
 
 ### Decision 7 — Pre-emption is a separate code path
 
@@ -118,7 +118,7 @@ The selector is only invoked during the regular rotation loop. The MQTT subscrib
 
 ### Decision 8 — Bounded ring of the most recent N events
 
-The event log is a bounded ring of the most recent N entries (default 100, configurable via `EVENT_LOG_MAX_ENTRIES`). When the log is at capacity, appending a new event drops the oldest entry (FIFO eviction). The file on disk is rewritten in full on each eviction so the on-disk file always holds exactly the most recent N entries — there is no archive, no compression, no size-based rotation. `sent_at` is the only "context" field carried per event, which is enough for a future debug consumer to filter the log by sender recency.
+The event log is a bounded ring of the most recent N entries (default 100, configurable via `EVENT_LOG_MAX_ENTRIES`). When the log is at capacity, appending a new event drops the oldest entry (FIFO eviction). The file on disk is rewritten in full on each eviction so the on-disk file always holds exactly the most recent N entries — there is no archive, no compression, no size-based rotation. `received_at` is the only "context" field carried per event, which is enough for a future debug consumer to filter the log by sender recency.
 
 Rationale for bounded ring vs. file-size/age rotation: the display-recency computation only cares about recent events. Once an event is more than N entries behind the head, it cannot affect any future `display_recency` value (the message's slot is already outside the cache). Truncating to N entries makes the disk usage predictable (N × ~80 bytes ≈ 8 KB at N=100), makes the on-disk file trivially small enough to read entirely on boot, and removes the operational complexity of archives + retention windows.
 

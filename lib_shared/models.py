@@ -99,6 +99,38 @@ class Message:
             "media": self.media,
         }
 
+    def received_at_epoch(self) -> float:
+        """Return the message's `received_at` as epoch seconds (float).
+
+        Used by the message selector (issue #26) to compute the
+        eligibility filter (via `build_eligible_messages`'s
+        `lookback_seconds` cutoff) and the send-recency normalization.
+        The Message dataclass stores
+        `received_at` as an ISO 8601 UTC string; this method is the
+        canonical conversion to epoch seconds for selectors and event-log
+        writes (the event schema carries `received_at` as a float, see
+        `heart-matrix-controller/event_log.py`).
+
+        Returns 0.0 on parse failure so a malformed `received_at`
+        causes the message to be filtered out of the eligible set
+        (the rotation pauses on None rather than crashing). Returns
+        a non-negative float on success.
+        """
+        raw = self.received_at
+        if not raw or not isinstance(raw, str):
+            return 0.0
+        try:
+            # `fromisoformat` accepts the trailing "Z" only on 3.11+;
+            # normalize for 3.10 (the project's pinned runtime is 3.12
+            # per `.python-version`, but tests may run elsewhere).
+            normalized = raw.replace("Z", "+00:00") if raw.endswith("Z") else raw
+            from datetime import datetime
+
+            dt = datetime.fromisoformat(normalized)
+            return dt.timestamp()
+        except (ValueError, TypeError, ImportError):
+            return 0.0
+
 
 class MessageView:
     """Message with source and computed suppression status."""
@@ -239,11 +271,27 @@ def _default_effects_list() -> List[dict]:
 
 
 class EffectsSettings:
-    """Effects subsystem config: rotation list + pacing + recent_count.
+    """Effects subsystem config: rotation list + pacing + selector knobs.
 
     Groups every input the `EffectsCoordinator` consumes so the coordinator
     takes one focused argument instead of the full SignConfig.
     """
+
+    # Selector registry mirrors `lib_shared.selector.VALID_SELECTOR_ALGORITHMS`.
+    # Re-exported here so `EffectsSettings.validate` can sanity-check the
+    # wire value without crossing the lib_shared selector module boundary.
+    # New algorithms require updating both lists.
+    VALID_SELECTOR_ALGORITHMS = ("weighted", "random")
+    DEFAULT_SELECTOR_ALGORITHM = "weighted"
+
+    # Eligibility-window bounds. The admin UI surfaces `lookback_days`
+    # directly; the lower bound (1) keeps the operator from accidentally
+    # filtering every message out, and the upper bound (365) caps the
+    # effective window at the ring-buffer's natural `maxlen=100` —
+    # anything larger is a config smell (no messages survive that long).
+    MIN_LOOKBACK_DAYS = 1
+    MAX_LOOKBACK_DAYS = 365
+    DEFAULT_LOOKBACK_DAYS = 14
 
     def __init__(
         self,
@@ -252,7 +300,8 @@ class EffectsSettings:
         hold_seconds: Optional[float] = None,
         intro_seconds: Optional[float] = None,
         idle_seconds: Optional[float] = None,
-        recent_count: Optional[int] = None,
+        lookback_days: Optional[int] = None,
+        selector_algorithm: Optional[str] = None,
     ):
         """Initialize EffectsSettings.
 
@@ -269,8 +318,15 @@ class EffectsSettings:
                 `None` falls through to the loader.
             idle_seconds: Seconds of idleness before a random message
                 plays. Default `None` falls through to the loader.
-            recent_count: Size of the idle-rotation recent-messages pool.
-                Default `None` falls through to the loader.
+            lookback_days: Eligibility window (days) for the candidate
+                pool — messages older than `now - lookback_days` are
+                filtered out of the eligible set before any selector
+                runs. Default `None` falls through to the loader.
+                Bounds: 1..365. Shared by every selection algorithm.
+            selector_algorithm: Which `MessageSelector` subclass the
+                coordinator dispatches to via `make_selector(...)`.
+                One of `VALID_SELECTOR_ALGORITHMS`. Default
+                `DEFAULT_SELECTOR_ALGORITHM` ("weighted").
 
         The loader-driven defaults are what make an operator's override
         file (env var or `config_overrides/effects_settings.json`) take
@@ -291,7 +347,24 @@ class EffectsSettings:
         self.hold_seconds = hold_seconds if hold_seconds is not None else loader_cfg.get("hold_seconds", 15.0)
         self.intro_seconds = intro_seconds if intro_seconds is not None else loader_cfg.get("intro_seconds", 5.0)
         self.idle_seconds = idle_seconds if idle_seconds is not None else loader_cfg.get("idle_seconds", 300.0)
-        self.recent_count = recent_count if recent_count is not None else loader_cfg.get("recent_count", 5)
+        self.lookback_days = (
+            lookback_days if lookback_days is not None else loader_cfg.get("lookback_days", self.DEFAULT_LOOKBACK_DAYS)
+        )
+        self.selector_algorithm = (
+            selector_algorithm
+            if selector_algorithm is not None
+            else loader_cfg.get("selector_algorithm", self.DEFAULT_SELECTOR_ALGORITHM)
+        )
+
+    @property
+    def lookback_seconds(self) -> float:
+        """The eligibility window expressed in seconds (for arithmetic).
+
+        `lookback_days` is the operator-facing knob; the selector code
+        operates on epoch-seconds offsets. Multiply through this
+        property rather than inlining the constant.
+        """
+        return float(self.lookback_days) * 86_400.0
 
     @classmethod
     def from_dict(cls, d):
@@ -299,7 +372,7 @@ class EffectsSettings:
 
         Args:
             d: dict with optional keys: effects, fade_seconds, hold_seconds,
-                intro_seconds, idle_seconds, recent_count.
+                intro_seconds, idle_seconds, lookback_days, selector_algorithm.
 
         Returns:
             A new EffectsSettings instance.
@@ -317,6 +390,7 @@ class EffectsSettings:
             for n in effects
         ):
             raise ValueError("effects must be a list of {name: str, enabled: bool} objects")
+
         # Pacing fields are passed as `None` when absent so `__init__`
         # can fall through to the loader (canonical or operator
         # override). This way an empty wire envelope (`{}`) on a device
@@ -340,7 +414,8 @@ class EffectsSettings:
             hold_seconds=_f("hold_seconds"),
             intro_seconds=_f("intro_seconds"),
             idle_seconds=_f("idle_seconds"),
-            recent_count=_i("recent_count"),
+            lookback_days=_i("lookback_days"),
+            selector_algorithm=d.get("selector_algorithm"),
         )
 
     def to_dict(self):
@@ -351,20 +426,32 @@ class EffectsSettings:
             "hold_seconds": self.hold_seconds,
             "intro_seconds": self.intro_seconds,
             "idle_seconds": self.idle_seconds,
-            "recent_count": self.recent_count,
+            "lookback_days": self.lookback_days,
+            "selector_algorithm": self.selector_algorithm,
         }
 
     def validate(self):
         """Raise ValueError on out-of-range values.
 
         Raises:
-            ValueError: on negative pacing durations, recent_count < 1, or
-                a malformed effects list.
+            ValueError: on negative pacing durations, lookback_days
+                outside [MIN_LOOKBACK_DAYS, MAX_LOOKBACK_DAYS], an unknown
+                selector_algorithm, or a malformed effects list.
         """
         if self.fade_seconds < 0 or self.hold_seconds < 0 or self.intro_seconds < 0 or self.idle_seconds < 0:
             raise ValueError("pacing durations must be non-negative")
-        if self.recent_count < 1:
-            raise ValueError("recent_count must be a positive integer")
+        if not isinstance(self.lookback_days, int) or isinstance(self.lookback_days, bool):
+            raise ValueError(f"lookback_days must be an integer, got {type(self.lookback_days).__name__}")
+        if not (self.MIN_LOOKBACK_DAYS <= self.lookback_days <= self.MAX_LOOKBACK_DAYS):
+            raise ValueError(
+                f"lookback_days must be in {self.MIN_LOOKBACK_DAYS}..{self.MAX_LOOKBACK_DAYS}, "
+                f"got {self.lookback_days}"
+            )
+        if self.selector_algorithm not in self.VALID_SELECTOR_ALGORITHMS:
+            raise ValueError(
+                f"selector_algorithm must be one of {self.VALID_SELECTOR_ALGORITHMS}, "
+                f"got {self.selector_algorithm!r}"
+            )
         if not isinstance(self.effects, list) or not all(
             isinstance(n, dict) and isinstance(n.get("name"), str) and isinstance(n.get("enabled"), bool)
             for n in self.effects
@@ -638,11 +725,7 @@ class SignConfig:
         # shallow-copy before pop.
         from lib_shared.effects_loader import is_effects_settings_override_active
 
-        if (
-            is_effects_settings_override_active()
-            and isinstance(data, dict)
-            and "effects_settings" in data
-        ):
+        if is_effects_settings_override_active() and isinstance(data, dict) and "effects_settings" in data:
             data = dict(data)
             data.pop("effects_settings", None)
             log.debug("SignConfig.update_from_dict: dropped wire effects_settings (override active)")
