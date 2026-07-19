@@ -164,6 +164,13 @@ class Metaballs(Effect):
             self._bounce()
             self._accum -= self._step
             steps += 1
+        # Hitting the work cap means a real stall dumped a large backlog into
+        # _accum. The cap only bounds work per frame, not the accumulator, so a
+        # leftover backlog would drain at 100 steps/frame across the following
+        # frames — the blobs visibly fast-forward for a while, then settle. Drop
+        # the remainder so a long pause costs at most this one burst frame.
+        if steps == 100:
+            self._accum = 0.0
         self._compute()
 
     def render(self, canvas):
