@@ -21,9 +21,11 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 # --- stubs ------------------------------------------------------------------
 
+
 class _StubCanvas:
     width = 64
     height = 64
+
 
 class _StubDisplay:
     def __init__(self):
@@ -37,6 +39,7 @@ class _StubDisplay:
 
     def render(self, effect, scroller):
         self.render_calls.append((effect, scroller))
+
 
 class _StubScroller:
     def __init__(self):
@@ -81,6 +84,7 @@ class _StubScroller:
     def render(self, canvas):
         self.render_calls.append(canvas)
 
+
 def _make_effect(name):
     """Create a stub Effect class with the given class name."""
 
@@ -101,6 +105,7 @@ def _make_effect(name):
 
     _Fx.__name__ = name
     return _Fx
+
 
 class _StubMessageManager:
     """Minimal MessageManager stub for coordinator tests.
@@ -185,12 +190,15 @@ class _StubMessageManager:
 
     def take_next_new_message(self):
         from collections import deque
+
         try:
             return self._new_messages_queue.popleft()
         except IndexError:
             return None
 
+
 # --- fixtures / helpers -----------------------------------------------------
+
 
 class _Clock:
     """A controllable time source monkey-patches over time.monotonic."""
@@ -203,6 +211,7 @@ class _Clock:
 
     def advance(self, dt):
         self.t += dt
+
 
 def _build(
     fade_seconds=0.05,
@@ -264,6 +273,7 @@ def _build(
     coord = _coord_mod.EffectsCoordinator(**coord_kwargs)
     return coord, display, scroller, fx_a, fx_b, heart
 
+
 def _build_unbound(
     fade_seconds=0.05,
     intro_seconds=0.0,
@@ -294,6 +304,7 @@ def _build_unbound(
     )
     return coord
 
+
 def _drive(clock, coord, seconds, step=0.01):
     """Advance clock by `seconds` in `step` increments, calling tick() each step."""
     elapsed = 0.0
@@ -302,7 +313,9 @@ def _drive(clock, coord, seconds, step=0.01):
         coord.tick()
         elapsed += step
 
+
 # --- state-machine tests ----------------------------------------------------
+
 
 def test_intro_then_out_then_in_then_background():
     """Mode progresses intro → out → in → background when no text is pulled."""
@@ -691,6 +704,7 @@ def test_hold_mode_replaces_on_deck_on_new_message_not_interrupt():
     assert coord.current_message.id == "m1"
     monkey.undo()
 
+
 def test_brightness_ramp_endpoints():
     """Out completes with set_brightness(0.0); in completes with set_brightness(1.0)."""
     clock = _Clock()
@@ -706,6 +720,7 @@ def test_brightness_ramp_endpoints():
     assert scroller._brightness == pytest.approx(1.0, abs=1e-6)
     monkey.undo()
 
+
 def test_tick_calls_display_render_exactly_once():
     """Each tick() calls display.render exactly once after the state-machine step."""
     clock = _Clock()
@@ -719,6 +734,7 @@ def test_tick_calls_display_render_exactly_once():
     assert len(display.render_calls) == 3
     for effect, scr in display.render_calls:
         assert scr is scroller
+
 
 def test_current_effect_name_and_text():
     """current_effect_name / current_text mirror the active effect + scroller text."""
@@ -850,6 +866,7 @@ def test_rotation_advances_through_enabled_effects_across_cycles():
 
 # --- optional render layer (bind / unbound) ---------------------------------
 
+
 def test_unbound_coordinator_starts_unbound():
     """A coordinator constructed without a render layer is unbound."""
     coord = _build_unbound()
@@ -858,6 +875,7 @@ def test_unbound_coordinator_starts_unbound():
     assert coord.scroller is None
     assert coord.effects == []
     assert coord.heart is None
+
 
 def test_tick_is_noop_when_unbound():
     """tick() on an unbound coordinator returns without touching state or crashing.
@@ -880,6 +898,7 @@ def test_tick_is_noop_when_unbound():
     assert coord.idx == -1
     monkey.undo()
 
+
 def test_start_is_noop_when_unbound():
     """start() is a no-op on an unbound coordinator.
 
@@ -891,6 +910,7 @@ def test_start_is_noop_when_unbound():
     coord = _build_unbound()
     coord.start()
     assert coord.mode == "intro"
+
 
 def test_bind_attaches_render_layer():
     """bind(display, scroller, effects, heart) makes is_bound() True and
@@ -909,6 +929,7 @@ def test_bind_attaches_render_layer():
     assert coord.current is heart
     assert heart.brightness == pytest.approx(1.0, abs=1e-6)
 
+
 def test_bind_defaults_heart_to_first_effect():
     """When heart= is omitted, bind() defaults it to the head of effects.
 
@@ -924,6 +945,7 @@ def test_bind_defaults_heart_to_first_effect():
     fx_b = _make_effect("B")()
     coord.bind(display=display, scroller=scroller, effects=[fx_a, fx_b])
     assert coord.heart is fx_a
+
 
 def test_bind_swaps_render_layer_mid_life():
     """bind() called again replaces the render layer; the next tick
@@ -968,6 +990,7 @@ def test_bind_swaps_render_layer_mid_life():
     assert len(display1.render_calls) == render_count_before
     monkey.undo()
 
+
 # --- observability tests (sign lifecycle must log at INFO) ------------------
 #
 # The Pi can't toggle LOG_LEVEL at runtime — every sign-lifecycle event
@@ -975,11 +998,14 @@ def test_bind_swaps_render_layer_mid_life():
 # contract: if a future refactor moves one of these log lines back to
 # DEBUG, the operator diagnostic story degrades and the test fails.
 
+
 def _info_records(caplog, *substrings):
     """Return caplog INFO records whose message contains every substring."""
     return [r for r in caplog.records if r.levelno == logging.INFO and all(sub in r.getMessage() for sub in substrings)]
 
+
 import logging  # noqa: E402 — kept at module level for the helpers below
+
 
 def test_begin_out_emits_info_log(caplog):
     """`_begin_out` fires for boot's intro→out + every new-SMS interrupt
@@ -1005,6 +1031,7 @@ def test_begin_out_emits_info_log(caplog):
     # The log line carries the from-mode and the active effect for context.
     assert "from mode=intro" in matches[0].getMessage()
     monkey.undo()
+
 
 def test_hold_does_not_interrupt_on_random_picks_from_shown_set(caplog):
     """v2 hold semantics: a fresh, un-shown SMS (head.id differs from
@@ -1181,6 +1208,7 @@ def test_background_replaces_on_deck_on_fresh_id(caplog):
     assert coord.on_deck.id == "m2", f"expected on_deck.id = 'm2' after fresh-id replacement; got {coord.on_deck.id!r}"
     monkey.undo()
 
+
 def test_background_does_not_repick_before_idle_seconds(caplog):
     """Regression: random_pick_changed must NOT trigger a fade-out
     before idle_seconds has elapsed.
@@ -1249,6 +1277,7 @@ def test_background_does_not_repick_before_idle_seconds(caplog):
         "If this fires, the idle_elapsed gate on random_pick_changed was removed."
     )
     monkey.undo()
+
 
 def test_get_display_message_not_called_every_tick():
     """Coordinator must NOT call get_display_message() (the one with
@@ -1324,6 +1353,7 @@ def test_get_display_message_not_called_every_tick():
         f"with no transition — should be 0. The 250ms timer is back."
     )
     monkey.undo()
+
 
 def test_pick_runs_once_per_out_to_in_transition(monkeypatch):
     """The selector pull runs ONCE per `out→in` transition (not per
@@ -1407,5 +1437,6 @@ def test_pick_runs_once_per_out_to_in_transition(monkeypatch):
         f"{picks_after_two_windows - picks_after_one_window}"
     )
     monkey.undo()
+
 
 # --- round 3 (debug-visibility): pick-first at every transition site ------
