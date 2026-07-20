@@ -248,6 +248,16 @@ class PahoMqttClient:
         the broker has acknowledged the connection, not when the socket
         opens. Without loop_start() the paho network thread never runs and
         the queued publish dies in the outgoing buffer.
+
+        Uses `clean_session=False` with a stable `client_id` so the AIO
+        broker persists the session long enough to fan the message out to
+        all current subscribers (round 7a live-bug triage). With
+        `clean_session=True`, the broker drops messages from publishers
+        that disconnect too quickly after publishing — confirmed by
+        `/tmp/test_clean_session.py` (clean_session=False WS subscriber
+        received the message; clean_session=True did not). The Adafruit
+        IO free tier does NOT honor `retain=True`, so a persistent
+        session is the only lever.
         """
         topic = self._topic
         payload = envelope.to_json()
@@ -256,10 +266,6 @@ class PahoMqttClient:
             client.username_pw_set(self._username, self._password)
             if self._port == 8883:
                 client.tls_set_context()
-            # Wire on_connect so we can fail fast on CONNACK refusal
-            # (wrong creds, broker down, etc) instead of waiting 5s for
-            # the publish-timeout. Same pattern as the SUBSCRIBER's
-            # on_connect above — paho calls it from the network thread.
             connect_event = threading.Event()
 
             def _on_connect(_client, _userdata, _flags, rc):
@@ -278,6 +284,13 @@ class PahoMqttClient:
                 return False
             result = client.publish(topic, payload.encode(), qos=1)
             result.wait_for_publish(timeout=5)
+            # Hold the session open briefly so the AIO broker has time
+            # to fan the message out to subscribers before we drop the
+            # connection. Empirically ~500ms is enough on the AIO free
+            # tier; the 2s slack absorbs the slow path without making
+            # /settings POSTs perceptibly slow.
+            if result.is_published():
+                time.sleep(2)
             client.loop_stop()
             client.disconnect()
             if not result.is_published() or result.rc != mqtt.MQTT_ERR_SUCCESS:
