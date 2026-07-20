@@ -537,6 +537,38 @@ def test_post_name_display_format_dropdown_writes_to_text_settings(app_with_real
     assert real_cfg.text_settings.name_display_format == "full"
 
 
+def test_post_text_settings_color_with_hash_prefix_parses(app_with_real_cfg, client):
+    """`#rrggbb` form input must parse — `int(..., 16)` rejects `#`-prefixed
+    input silently if not stripped, so the operator's typed color
+    silently didn't save. Regression pin for the 2026-07-19 incident."""
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post("/settings", data=_base_form(text_settings_color="#ff0000"))
+    assert response.status_code in (200, 302)
+    assert real_cfg.text_settings.color == 0xFF0000
+
+
+def test_post_text_settings_color_without_hash_prefix_parses(app_with_real_cfg, client):
+    """Bare `rrggbb` form input also parses — the picker sometimes POSTs
+    with the `#` stripped by browser normalization."""
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post("/settings", data=_base_form(text_settings_color="00ff00"))
+    assert response.status_code in (200, 302)
+    assert real_cfg.text_settings.color == 0x00FF00
+
+
+def test_post_text_settings_color_garbage_keeps_prior_value(app_with_real_cfg, client):
+    """A non-hex value must NOT corrupt the saved color — fall through
+    silently (with a warning) and keep the prior cfg.text_settings.color."""
+    flask_app, real_cfg = app_with_real_cfg
+    real_cfg.text_settings.color = 0x123456  # distinct from the default
+    _login(client)
+    response = client.post("/settings", data=_base_form(text_settings_color="not-a-color"))
+    assert response.status_code in (200, 302)
+    assert real_cfg.text_settings.color == 0x123456
+
+
 def test_post_sign_name_writes_to_sign_settings(app_with_real_cfg, client):
     """sign_name form field writes to sign_settings.sign_name."""
     flask_app, real_cfg = app_with_real_cfg

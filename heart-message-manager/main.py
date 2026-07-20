@@ -1299,9 +1299,14 @@ def settings():
         color = request.form.get("text_settings_color")
         if color is not None and color != "":
             try:
-                ts_form.color = int(color, 16) & 0xFFFFFF
+                # Strip a leading `#` so the form can post either `#rrggbb`
+                # or bare `rrggbb` — `int("...", 16)` rejects `#`-prefixed
+                # input silently, which previously meant a typed color
+                # silently didn't save.
+                color_str = color.lstrip("#")
+                ts_form.color = int(color_str, 16) & 0xFFFFFF
             except ValueError:
-                pass
+                logger.warning("[settings] text_settings_color: dropped non-hex value %r", color)
         te = request.form.get("text_settings_text_effect")
         if te:
             ts_form.text_effect = te
