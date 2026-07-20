@@ -57,14 +57,18 @@
     };
     console.log("[DEBUG base.html] APP_CONFIG =", JSON.stringify(window.APP_CONFIG, null, 2));
   </script>
-  <!-- Native JS shim for MQTT-over-WebSocket. The `?v=9` query string
+  <!-- Native JS shim for MQTT-over-WebSocket. The `?v=11` query string
        is a cache-buster — bump it whenever the shim changes so
        browsers don't pin to a stale copy (the WS packet-encode/decode
        changes in particular are easy to miss when the page is "Live"
-       with a broken client). The IndexedDB shim was dropped in
-       #39 — persistence is server-side (S3 + SQLite). -->
+       with a broken client). v11 = subscribe at QoS 1 + PUBACK reply
+       so Adafruit IO actually delivers the config envelope to the
+       browser (v10 subscribed at QoS 0 and Adafruit IO silently
+       dropped QoS-1 publishes to QoS-0 subscribers). The IndexedDB
+       shim was dropped in #39 — persistence is server-side
+       (S3 + SQLite). -->
   <script type="module">
-    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=10";
+    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=11";
     window.createMqttWsClient = createMqttWsClient;
   </script>
   <script src="{{ url_for('static', filename='app.js') }}?v=16"></script>
