@@ -284,13 +284,15 @@ class PahoMqttClient:
                 return False
             result = client.publish(topic, payload.encode(), qos=1)
             result.wait_for_publish(timeout=5)
-            # Hold the session open briefly so the AIO broker has time
-            # to fan the message out to subscribers before we drop the
+            # Hold the session open so the AIO broker has time to fan
+            # the message out to subscribers before we drop the
             # connection. Empirically ~500ms is enough on the AIO free
-            # tier; the 2s slack absorbs the slow path without making
-            # /settings POSTs perceptibly slow.
+            # tier against the WS bridge from a Mac, but Heroku's
+            # round-trip latency to AIO can stretch the fan-out to
+            # several seconds — 5s gives the broker plenty of margin
+            # without making /settings POSTs perceptibly slow on save.
             if result.is_published():
-                time.sleep(2)
+                time.sleep(5)
             client.loop_stop()
             client.disconnect()
             if not result.is_published() or result.rc != mqtt.MQTT_ERR_SUCCESS:
