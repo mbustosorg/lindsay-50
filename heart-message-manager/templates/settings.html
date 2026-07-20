@@ -382,9 +382,24 @@ function syncSenderAllowed(phoneInput) {
   // (parens, dashes, leading +1) are handled server-side; we copy the
   // raw input verbatim so the operator's typed format is preserved on
   // round-trip if the row is later edited.
+  //
+  // Issue #6 follow-up: the operator's "I'm adding this sender" intent
+  // is the typing of a phone number — when the field becomes
+  // non-empty, default the allowed flag to true. (If the operator
+  // blanks the phone, default it back to false.) This stops new senders
+  // from being saved with allowed=false just because the operator
+  // forgot to tick the box before saving.
   const tr = phoneInput.closest('tr');
   const allowed = tr.querySelector('input[name="sender_allowed"]');
-  if (allowed) allowed.value = phoneInput.value.trim();
+  if (!allowed) return;
+  const phone = phoneInput.value.trim();
+  allowed.value = phone;
+  if (phone) {
+    allowed.checked = true;
+  } else {
+    allowed.checked = false;
+  }
+}
 }
 
 function addSenderRow() {
