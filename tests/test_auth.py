@@ -589,9 +589,11 @@ class TestSettingsSaveFormFieldMerge:
 
     def test_post_settings_logs_raw_form_and_merge_summary(self, app, client, caplog):
         """The /settings handler MUST log the raw POST fields and a
-        per-field pacing merge summary at INFO level. Without that, the
-        next time a field-name bug shows up, there's no on-the-wire
-        evidence of what the form actually submitted."""
+        per-field pacing merge summary. The raw-form dump is at DEBUG
+        (it's noisy at INFO); the merge summary stays at INFO. Without
+        the debug dump, the next time a field-name bug shows up, there's
+        no on-the-wire evidence of what the form actually submitted —
+        flip the caplog level here if you need to inspect it."""
         import logging
         import sqlite as sqlite_mod
 
@@ -599,7 +601,8 @@ class TestSettingsSaveFormFieldMerge:
         sqlite_mod.get_config.return_value = baseline_cfg
 
         client.post("/login", data={"username": "admin", "password": "secret123"})
-        caplog.set_level(logging.INFO)
+        # DEBUG so the raw-form log line (at logger.debug) is captured.
+        caplog.set_level(logging.DEBUG)
 
         response = client.post(
             "/settings",
