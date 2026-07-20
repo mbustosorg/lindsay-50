@@ -1181,6 +1181,31 @@ def _unsuppress_message(msg_id: str) -> bool:
     return True
 
 
+def _resolve_sender_names(messages, cfg) -> dict:
+    """Map each message id to its sender's formatted display name.
+
+    Uses the same helper + configured format the display path uses
+    (name_utils.format_display_name against cfg.senders and
+    text_settings.name_display_format), so the admin UI shows names the
+    way the sign does. The value is an empty string when the number isn't
+    in the senders list. `all_first_names` is precomputed once so the
+    first_initial_if_duplicates format can disambiguate shared first names.
+    Shared by the dashboard and the messages list.
+    """
+    from lib_shared.phone_utils import normalize_phone
+    from lib_shared.name_utils import parse_name, format_display_name
+
+    senders = cfg.senders
+    name_format = cfg.text_settings.name_display_format
+    all_first_names = [parse_name((e or {}).get("name", ""))[0] for e in senders.values()]
+    names: dict[str, str] = {}
+    for m in messages:
+        entry = senders.get(normalize_phone(m.sender)) if isinstance(m.sender, str) else None
+        stored = (entry or {}).get("name", "") if entry else ""
+        names[m.id] = format_display_name(stored, name_format, all_first_names)
+    return names
+
+
 # UI Routes
 @app.route("/")
 @login_required
@@ -1199,6 +1224,7 @@ def dashboard():
         messages=msgs[:20],
         total_count=total,
         suppression_counts=suppression_counts,
+        sender_names=_resolve_sender_names(msgs[:20], cfg),
         sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         timezone=cfg.sign_settings.timezone,
         format_from_iso=format_from_iso,
@@ -1222,31 +1248,13 @@ def message_list():
 
     cfg = sqlite.get_config()
 
-    # Resolve each message's sender to its stored display name, using the
-    # same helper + configured format the display path uses (name_utils.
-    # format_display_name), so the admin messages view shows "Alice" the
-    # same way the sign does. Keyed by message id; empty string when the
-    # number isn't in the senders list. `all_first_names` is precomputed
-    # once so the first_initial_if_duplicates format can disambiguate.
-    from lib_shared.phone_utils import normalize_phone
-    from lib_shared.name_utils import parse_name, format_display_name
-
-    senders = cfg.senders
-    name_format = cfg.text_settings.name_display_format
-    all_first_names = [parse_name((e or {}).get("name", ""))[0] for e in senders.values()]
-    sender_names: dict[str, str] = {}
-    for m in page_msgs:
-        entry = senders.get(normalize_phone(m.sender)) if isinstance(m.sender, str) else None
-        stored = (entry or {}).get("name", "") if entry else ""
-        sender_names[m.id] = format_display_name(stored, name_format, all_first_names)
-
     return render_template(
         "messages.html",
         messages=page_msgs,
         page=page,
         total_pages=total_pages,
         cfg=cfg,
-        sender_names=sender_names,
+        sender_names=_resolve_sender_names(page_msgs, cfg),
         sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         format_from_iso=format_from_iso,
     )
