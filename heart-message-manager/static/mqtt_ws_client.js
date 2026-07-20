@@ -461,6 +461,13 @@ export function createMqttWsClient({
 
   function ingest(chunk) {
     // Concatenate chunk onto the buffer; try to parse out any full frames.
+    // First entry point after the WebSocket onmessage — log the raw
+    // first bytes of every chunk so an inbound frame that fails to
+    // parse is still visible (no silent drop below this line).
+    console.log(
+      "[mqtt-ws] ingest chunk bytes_len=" + chunk.length +
+      " first_hex=" + Array.from(chunk.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(' ')
+    );
     const next = new Uint8Array(buffer.length + chunk.length);
     next.set(buffer, 0);
     next.set(chunk, buffer.length);

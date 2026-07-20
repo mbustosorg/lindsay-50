@@ -73,10 +73,14 @@
        level) plus `PUBLISH ok type=... wire_version=...` and
        `PUBLISH payload is not valid JSON` for malformed payloads, so
        the "config didn't update" investigation can see whether frames
-       arrive and what shape they carry. The IndexedDB shim was
-       dropped in #39 — persistence is server-side (S3 + SQLite). -->
+       arrive and what shape they carry. v14 = `[mqtt-ws] ingest
+       chunk` log on the very first entry point after WS onmessage,
+       so a config envelope that arrives but fails to parse is still
+       visible — no silent drop below the socket boundary. The
+       IndexedDB shim was dropped in #39 — persistence is server-side
+       (S3 + SQLite). -->
   <script type="module">
-    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=13";
+    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=14";
     window.createMqttWsClient = createMqttWsClient;
   </script>
   <script src="{{ url_for('static', filename='app.js') }}?v=16"></script>
