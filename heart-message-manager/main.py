@@ -1384,19 +1384,46 @@ def settings():
             _json.dumps(pacing_summary, sort_keys=True),
         )
 
-        # Effect rotation list: the form posts the canonical order with each
-        # entry's `enabled` checkbox value (or absence). Rebuild the list
-        # preserving only known names.
-        enabled_map = {}
-        for name in request.form.getlist("effect_name"):
-            enabled_map[name] = True
-        # Any canonical name absent from the form list is treated as disabled
-        # (its checkbox wasn't ticked). We rebuild the list in the canonical
-        # order from the loader-driven defaults so ordering is preserved
-        # and the source of truth matches the JSON the Pi sees.
+        # Effect rotation list: the form's `effect_state` field carries
+        # `<name>:0|1` for every canonical entry — the form always POSTs
+        # the full list with explicit enabled state, so the handler is
+        # never asked to guess what an absent name means. Unknown /
+        # malformed entries are logged and dropped (the canonical JSON
+        # is the source of truth for the legal name set).
+        enabled_map: dict[str, bool] = {}
+        malformed_states: list[str] = []
+        for raw in request.form.getlist("effect_state"):
+            if ":" not in raw:
+                malformed_states.append(raw)
+                continue
+            name, _, flag = raw.partition(":")
+            name = name.strip()
+            if not name or flag not in ("0", "1"):
+                malformed_states.append(raw)
+                continue
+            enabled_map[name] = flag == "1"
+        if malformed_states:
+            logger.warning(
+                "[settings] effect_state POST dropped malformed entries: %s",
+                sorted(set(malformed_states)),
+            )
         new_effects = []
         for entry in load_effects_settings().get("effects", []):
-            new_effects.append({"name": entry["name"], "enabled": entry["name"] in enabled_map})
+            canonical_name = entry["name"]
+            if canonical_name in enabled_map:
+                new_effects.append({"name": canonical_name, "enabled": enabled_map[canonical_name]})
+            else:
+                # A canonical name that didn't appear in `effect_state`
+                # shouldn't normally happen (the form always POSTs all
+                # 10), but we fall back to the loader's default to keep
+                # the saved cfg aligned with the JSON rather than dropping
+                # the row silently.
+                logger.warning(
+                    "[settings] effect_state missing canonical entry %r; falling back to loader default enabled=%s",
+                    canonical_name,
+                    entry.get("enabled"),
+                )
+                new_effects.append({"name": canonical_name, "enabled": entry.get("enabled", True)})
         es_form.effects = new_effects
         cfg.effects_settings = es_form
 

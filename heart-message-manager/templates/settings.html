@@ -190,8 +190,18 @@
         <p class="text-sm text-slate-500 mb-3">Background effects that cycle between messages. Enabled effects are rotated in the order shown.</p>
         <div class="space-y-2">
           {% for entry in effects_settings.effects %}
-          <label class="flex items-center gap-3 px-4 py-2 rounded-xl border border-indigo-100 hover:bg-indigo-50/40 transition-colors cursor-pointer">
-            <input type="checkbox" name="effect_name" value="{{ entry.name }}"{% if entry.enabled %} checked{% endif %} class="w-4 h-4 rounded text-primary focus:ring-primary">
+          {# Full-list POST: each row carries BOTH a hidden input carrying
+             `name:0|1` and a visible checkbox. The visible checkbox carries
+             the row's `name` and the user's tick state; the hidden input is
+             the wire format. JS (`syncEffectsList`) onsubmit rewrites each
+             hidden input's value to match its checkbox's current state, so
+             the server always sees the full list with explicit enabled/disabled.
+             The visible checkbox name `effect_name` is suppressed from the
+             POST (no `name` attr) so we don't double-encode the same row.
+          #}
+          <label class="flex items-center gap-3 px-4 py-2 rounded-xl border border-indigo-100 hover:bg-indigo-50/40 transition-colors cursor-pointer" data-effect-row="{{ entry.name }}">
+            <input type="hidden" name="effect_state" value="{{ entry.name }}:{{ '1' if entry.enabled else '0' }}" data-effect-state="{{ entry.name }}">
+            <input type="checkbox" data-effect-checkbox="{{ entry.name }}"{% if entry.enabled %} checked{% endif %} class="w-4 h-4 rounded text-primary focus:ring-primary">
             <span class="font-medium text-dark">{{ entry.name }}</span>
             {% if entry.module or entry.class_name %}
             <span class="text-xs font-mono text-slate-400 ml-auto">{{ entry.module }}.{{ entry.class_name }}</span>
@@ -383,6 +393,26 @@ function addSenderRow() {
   tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567" oninput="syncSenderAllowed(this)"></td><td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="" checked></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
   tbody.appendChild(tr);
 }
+
+// Effects List submit-time sync (issue #6). HTML checkboxes POST only
+// when ticked — to keep the operator from silently disabling the rest
+// when they un-tick one, the Effects List form carries both a visible
+// checkbox AND a hidden `effect_state` input per row. Before submit we
+// walk every visible checkbox and rewrite its sibling hidden input's
+// value to `<name>:1` or `<name>:0`, so the server always sees the
+// full canonical list with explicit enabled state.
+(function () {
+  const form = document.querySelector('form[method="POST"]');
+  if (!form) return;
+  form.addEventListener('submit', function () {
+    const checkboxes = form.querySelectorAll('input[data-effect-checkbox]');
+    checkboxes.forEach(function (cb) {
+      const name = cb.getAttribute('data-effect-checkbox');
+      const hidden = form.querySelector('input[data-effect-state="' + name + '"]');
+      if (hidden) hidden.value = name + ':' + (cb.checked ? '1' : '0');
+    });
+  });
+})();
 
 // Bidirectional wiring for the text color control: <input type="color">
 // and the hex text field mirror each other. Only the hex field has

@@ -516,3 +516,106 @@ def test_post_filter_rule_add_disabled_status(app_with_real_cfg, client):
     matches = [f for f in real_cfg.filters if f.pattern == "bad"]
     assert len(matches) == 1
     assert matches[0].status == "disabled"
+
+
+def test_post_effects_full_list_enables_each_as_posted(app_with_real_cfg, client):
+    """POST effect_state=Hyperspace:1&effect_state=Honeycomb:0&... → cfg
+    reflects each entry's explicit :0/:1 flag.
+
+    Regression pin (issue #6 follow-up): the form's hidden `effect_state`
+    inputs always carry one row per canonical effect with explicit
+    enabled/disabled state. The handler trusts the form — missing entries
+    fall back to the loader's default enabled flag (the form always POSTs
+    the full list, so a true absence is a sign of a malformed client).
+    """
+    from lib_shared.effects_loader import load_effects_settings
+
+    canonical = load_effects_settings().get("effects", [])
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    state_values = [f"{e['name']}:{'1' if e['name'] in ('Hyperspace', 'NightSky') else '0'}" for e in canonical]
+    response = client.post(
+        "/settings",
+        data=_base_form(effect_state=state_values),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    by_name = {e["name"]: e for e in real_cfg.effects_settings.effects}
+    # Saved list mirrors the canonical order (loader drives order).
+    saved_order = [e["name"] for e in real_cfg.effects_settings.effects]
+    canonical_order = [e["name"] for e in canonical]
+    assert saved_order == canonical_order
+    assert by_name["Hyperspace"]["enabled"] is True
+    assert by_name["NightSky"]["enabled"] is True
+    assert by_name["Honeycomb"]["enabled"] is False
+    assert by_name["Fireworks"]["enabled"] is False
+
+
+def test_post_effects_disabled_all_clears_remaining(app_with_real_cfg, client):
+    """POST effect_state=*:0 for every row → all effects disabled.
+
+    The "form is the source of truth on save" model: an operator who
+    un-checks every Effects List row lands with all effects disabled,
+    mirroring how the senders list is now cleared on an empty POST.
+    """
+    from lib_shared.effects_loader import load_effects_settings
+
+    canonical = load_effects_settings().get("effects", [])
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    state_values = [f"{e['name']}:0" for e in canonical]
+    response = client.post(
+        "/settings",
+        data=_base_form(effect_state=state_values),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    assert all(e["enabled"] is False for e in real_cfg.effects_settings.effects)
+
+
+def test_post_effects_enabled_all_renders_full_list(app_with_real_cfg, client):
+    """POST effect_state=*:1 for every row → all effects enabled."""
+    from lib_shared.effects_loader import load_effects_settings
+
+    canonical = load_effects_settings().get("effects", [])
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    state_values = [f"{e['name']}:1" for e in canonical]
+    response = client.post(
+        "/settings",
+        data=_base_form(effect_state=state_values),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    assert all(e["enabled"] is True for e in real_cfg.effects_settings.effects)
+
+
+def test_post_effects_malformed_state_dropped_with_warning(app_with_real_cfg, client):
+    """An `effect_state` entry that's not `<name>:0|1` is dropped with a
+    log warning — the canonical entry it would have been paired with
+    falls back to the loader's default enabled state."""
+    from lib_shared.effects_loader import load_effects_settings
+
+    canonical = load_effects_settings().get("effects", [])
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    canonical_names = [e["name"] for e in canonical]
+    state_values = [
+        f"{canonical_names[0]}:1",  # well-formed: enables row 0
+        f"{canonical_names[1]}:2",  # bad flag (not 0 or 1)
+        "completelymalformed",  # missing colon
+    ]
+    response = client.post(
+        "/settings",
+        data=_base_form(effect_state=state_values),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    saved_names = {e["name"] for e in real_cfg.effects_settings.effects}
+    assert saved_names == set(canonical_names)
+    # The first canonical entry was enabled=1 by the well-formed form value.
+    assert real_cfg.effects_settings.effects[0]["enabled"] is True
