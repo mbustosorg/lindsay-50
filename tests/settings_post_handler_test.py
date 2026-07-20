@@ -385,6 +385,85 @@ def test_post_senders_duplicate_phone_preserves_prior_state(app_with_real_cfg, c
     assert real_cfg.senders[key]["name"] in ("Pre-existing",)
 
 
+def test_post_senders_js_failed_sync_still_allows_row(app_with_real_cfg, client):
+    """JS sync failed → `sender_allowed=[""]` (one empty string) AND a
+    populated `sender_phone` row. The handler must still land the row
+    with `allowed=True`, because the visible intent (still-checked
+    checkbox + freshly typed phone) is "add this sender."
+
+    Regression pin for the "new senders get allowed=False" bug: a
+    stale cached page (or paste-into-field mishap) keeps the
+    add-row's default `value=""` instead of writing the phone. The
+    original key-only lookup saw Adam's phone as absent from the
+    empty-string allowed_set, flipped the row to False, and the
+    operator got a silent surprise: a sender they thought they were
+    adding was saved as blocked.
+
+    The fix consumes the empty-string as a "JS failed for this row"
+    quota: when the row's key isn't in `allowed_set`, an empty
+    string in the POSTed list still means "the visible intent was
+    allowed."
+    """
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post(
+        "/settings",
+        data=_base_form(
+            sender_name=["Adam Rose"],
+            sender_phone=["+14152985015"],
+            # JS sync didn't fire: the box's value stayed at the
+            # add-row's default. The box IS checked; the value
+            # POSTed is empty.
+            sender_allowed=[""],
+        ),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    from lib_shared.phone_utils import normalize_phone
+
+    key = normalize_phone("+14152985015")
+    assert key in real_cfg.senders
+    # The visible intent was to add (still-checked box + typed phone):
+    # the row lands as allowed=True, NOT False.
+    assert real_cfg.senders[key]["allowed"] is True
+    assert real_cfg.senders[key]["name"] == "Adam Rose"
+
+
+def test_post_senders_operator_uncheck_empty_list_blocks_row(app_with_real_cfg, client):
+    """JS sync succeeded AND the operator un-checked the row →
+    `sender_allowed=[]` (browser omits un-checked checkboxes from
+    POST) AND a populated `sender_phone` row. The handler must land
+    the row with `allowed=False`.
+
+    Pairs with the JS-failed case above: a populated row with NO
+    `sender_allowed` entries is the operator's "block this sender"
+    intent — distinguish from "JS failed" (which contributes empty
+    strings, not absence of entries).
+    """
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post(
+        "/settings",
+        data=_base_form(
+            sender_name=["Adam Rose"],
+            sender_phone=["+14152985015"],
+            # Operator explicitly un-checked: no `sender_allowed`
+            # entry at all (browsers omit un-checked checkboxes
+            # from POST).
+            sender_allowed=[],
+        ),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    from lib_shared.phone_utils import normalize_phone
+
+    key = normalize_phone("+14152985015")
+    assert key in real_cfg.senders
+    assert real_cfg.senders[key]["allowed"] is False
+
+
 def test_post_enforcement_enabled_checkbox_writes_to_text_settings(app_with_real_cfg, client):
     """enforcement_enabled=1 → text_settings.enforcement_enabled=True."""
     flask_app, real_cfg = app_with_real_cfg

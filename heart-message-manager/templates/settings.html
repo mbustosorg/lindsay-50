@@ -408,6 +408,25 @@ function addSenderRow() {
   tbody.appendChild(tr);
 }
 
+// Robust delegated sync: catch paste / programmatic edits that
+// `oninput` may have missed for dynamically-added rows (issue #6).
+// The syncSenderAllowed handler above still runs on every native
+// `input` event; this listener is the safety net that ALSO rewrites
+// each sender_allowed checkbox's value at submit time, mirroring how
+// the effects list is handled. This way, even if a row's `<tr>` was
+// added by `addSenderRow()` and the operator typed but didn't blur
+// the phone field, the value still gets set before the POST.
+(function () {
+  const form = document.querySelector('form[method="POST"]');
+  if (!form) return;
+  form.addEventListener('submit', function () {
+    const phoneInputs = form.querySelectorAll('input[name="sender_phone"]');
+    phoneInputs.forEach(function (phoneInput) {
+      syncSenderAllowed(phoneInput);
+    });
+  });
+})();
+
 // Effects List submit-time sync (issue #6). HTML checkboxes POST only
 // when ticked — to keep the operator from silently disabling the rest
 // when they un-tick one, the Effects List form carries both a visible

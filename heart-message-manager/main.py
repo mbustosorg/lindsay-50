@@ -1255,11 +1255,16 @@ def settings():
         import json as _json
 
         form_keys = sorted(request.form.keys())
+        # Use `getlist` so multi-valued fields (sender_name, sender_phone,
+        # effect_state, filter_pattern) show ALL the values the form
+        # actually POSTed — `get(k)` returns only the first match and
+        # hides duplicates, which made a one-row POST look identical to
+        # a ten-row POST in the operator-visible log.
         logger.info(
             "[settings] POST /settings raw_form_keys=%d form=%s",
             len(form_keys),
             _json.dumps(
-                {k: request.form.get(k) for k in form_keys},
+                {k: request.form.getlist(k) for k in form_keys},
                 indent=2,
                 sort_keys=True,
                 default=str,
@@ -1448,16 +1453,51 @@ def settings():
         names = request.form.getlist("sender_name")
         phones = request.form.getlist("sender_phone")
         allowed_list = request.form.getlist("sender_allowed")
-        # Build the allowed-set as a set of normalized-phone strings.
-        # Unrecognized checkbox values (e.g. an unfilled new row whose
-        # `value=""`) are simply absent — the row is treated as
-        # not-allowed. The operator who clicks the checkbox before
-        # typing the phone gets `value=""` (unchecked) and is treated
-        # as allowed=False at save time, which matches what the
-        # checkbox actually says on the form.
+        # Build the allowed-set as a set of normalized-phone strings,
+        # counting empty-string entries separately. Issue #6 follow-up
+        # (defensive semantics): the form's `syncSenderAllowed` JS
+        # handler is supposed to keep each rendered row's
+        # `sender_allowed` checkbox value in sync with the row's phone
+        # (and tick the box to `checked=true` when the phone becomes
+        # non-empty). When the JS fails to fire — stale cached page,
+        # paste-into-field mishap, browser extension — the checkbox
+        # value stays at `""`, the box is still `checked` (the
+        # add-row's default), and the field POSTs with `value=""`.
+        #
+        # Three possible checkbox states per rendered row:
+        #   1. JS synced correctly: field POSTs `value=<phone>` and
+        #      is `checked`. (Operator intent: allowed.)
+        #   2. JS failed: field POSTs `value=""` and is `checked`
+        #      (the add-row's default). (Operator intent: allowed —
+        #      they typed a phone to add the sender; the visible box
+        #      is still checked.)
+        #   3. Operator un-checked: browser omits the field from POST.
+        #      (Operator intent: blocked.)
+        #
+        # We can't tell 2 and 3 apart per-row, but case 2 contributes
+        # an empty-string entry to `allowed_list` while case 3
+        # contributes nothing. So: build `allowed_set` from non-empty
+        # entries (case 1), count empty strings (case 2 quota), and a
+        # row whose key is missing from the set gets `allowed=True`
+        # if a quota slot remains and `allowed=False` otherwise
+        # (cases 2 vs 3).
         from lib_shared.phone_utils import normalize_phone
 
-        allowed_set = set(allowed_list)
+        allowed_set: set[str] = set()
+        empty_string_count = 0
+        for raw in allowed_list:
+            stripped = raw.strip()
+            if not stripped:
+                empty_string_count += 1
+                continue
+            try:
+                allowed_set.add(normalize_phone(stripped))
+            except Exception:  # noqa: BLE001 — defensive; bad values are dropped.
+                logger.warning(
+                    "[settings] senders POST dropped unparseable allowed checkbox value: %r",
+                    raw,
+                )
+
         new_senders: dict[str, dict] = {}
         seen_keys: set[str] = set()
         duplicate_phones: list[str] = []
@@ -1476,9 +1516,23 @@ def settings():
                 duplicate_phones.append(stripped_phone)
                 continue
             seen_keys.add(key)
+            if key in allowed_set:
+                row_allowed = True
+            elif empty_string_count > 0:
+                # JS sync failed for an add-row whose key isn't in the
+                # populated allowed_set. Honor the visible intent
+                # (still-checked box + freshly typed phone → allowed)
+                # and consume one empty-string slot.
+                empty_string_count -= 1
+                row_allowed = True
+            else:
+                # No matching checkbox for this row — the operator
+                # un-checked it (browsers omit un-checked checkboxes
+                # from POST). Honor that as blocked.
+                row_allowed = False
             new_senders[key] = {
                 "name": stripped_name or stripped_phone,
-                "allowed": key in allowed_set,
+                "allowed": row_allowed,
                 "phone": stripped_phone,
             }
         if duplicate_phones:
