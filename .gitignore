@@ -30,6 +30,7 @@ settings.toml
 
 secret_key
 db.sqlite
+db.init.lock
 
 # Agent Orchestrator runtime state
 .ao/

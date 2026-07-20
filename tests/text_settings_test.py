@@ -23,10 +23,10 @@ def test_text_effects_whitelist():
     assert TextSettings.TEXT_EFFECTS == ("scroll",)
 
 
-def test_to_dict_contains_only_three_fields():
-    """to_dict emits the three-field wire shape (no frame_delay / offset_seconds)."""
+def test_to_dict_contains_wire_fields():
+    """to_dict emits the wire fields including v3's name_display_format."""
     d = TextSettings().to_dict()
-    assert set(d.keys()) == {"speed", "color", "text_effect"}
+    assert set(d.keys()) == {"speed", "color", "text_effect", "name_display_format"}
 
 
 def test_round_trip_default():
@@ -164,5 +164,39 @@ def test_validate_color_max_accepted():
 def test_validate_unknown_text_effect_raises():
     """validate() raises on an unknown text_effect value."""
     s = TextSettings(text_effect="bounce")  # type: ignore[arg-type]
+    with pytest.raises(ValueError):
+        s.validate()
+
+
+# --- name_display_format (v3 field, moved from EffectsSettings) ---
+
+
+def test_default_name_display_format():
+    """TextSettings() defaults name_display_format to first_initial_if_duplicates."""
+    s = TextSettings()
+    assert s.name_display_format == "first_initial_if_duplicates"
+
+
+def test_constructor_accepts_name_display_format():
+    """TextSettings(name_display_format=...) honors the kwarg."""
+    s = TextSettings(name_display_format="full")
+    assert s.name_display_format == "full"
+
+
+def test_from_dict_accepts_name_display_format():
+    """from_dict reads name_display_format from the wire shape."""
+    s = TextSettings.from_dict({"name_display_format": "first"})
+    assert s.name_display_format == "first"
+
+
+def test_from_dict_rejects_unknown_name_display_format():
+    """from_dict raises ValueError on an unknown name_display_format value."""
+    with pytest.raises(ValueError):
+        TextSettings.from_dict({"name_display_format": "last_only"})
+
+
+def test_validate_unknown_name_display_format_raises():
+    """validate() raises on an unknown name_display_format value."""
+    s = TextSettings(name_display_format="last_only")  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         s.validate()

@@ -89,6 +89,11 @@ def _load_app_module(mock_cfg, paho_client_ctor):
     models_mod.SignConfig = MagicMock()  # type: ignore[attr-defined]
     models_mod.FilterRule = MagicMock()  # type: ignore[attr-defined]
     models_mod.Message = MagicMock()  # type: ignore[attr-defined]
+    # TextSettings was added to main.py's import line as part of the
+    # #6 senders-filtering refactor — the mock needs a stand-in so the
+    # `from lib_shared.models import EffectsSettings, TextSettings`
+    # import in main.py succeeds.
+    models_mod.TextSettings = MagicMock()  # type: ignore[attr-defined]
     effects_settings_mock = MagicMock()  # type: ignore[attr-defined]
     effects_settings_mock.MIN_LOOKBACK_DAYS = 1
     effects_settings_mock.MAX_LOOKBACK_DAYS = 365

@@ -92,6 +92,11 @@ def _load_app_module(mock_cfg, paho_client_ctor):
     models_mod.SignConfig = MagicMock()
     models_mod.FilterRule = MagicMock()
     models_mod.Message = MagicMock()
+    # TextSettings was added to main.py's import line as part of the
+    # #6 senders-filtering refactor — the mock needs a stand-in so the
+    # `from lib_shared.models import EffectsSettings, TextSettings`
+    # import in main.py succeeds.
+    models_mod.TextSettings = MagicMock()
 
     class _FakeEnvelope:
         def __init__(self, type, payload):

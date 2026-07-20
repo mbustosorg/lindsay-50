@@ -168,58 +168,61 @@ def sample_messages():
 @pytest.fixture
 def default_config():
     return SignConfig(
-        version=2,
+        version=3,
         filters=[],
         senders={},
         effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
-        sign=SignSettings(),
+        sign_settings=SignSettings(),
     )
 
 
 @pytest.fixture
 def config_with_keyword_filter():
     return SignConfig(
-        version=2,
+        version=3,
         filters=[FilterRule(type="keyword", pattern="badword", action="suppress")],
         senders={},
         effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
-        sign=SignSettings(),
+        sign_settings=SignSettings(),
     )
 
 
 @pytest.fixture
 def config_with_sender_filter():
+    # v3: sender-type FilterRule is REMOVED — sender matching now lives in
+    # the senders list. Build a config with a `+15550001111` senders entry
+    # that has `allowed=False` so the apply path suppresses this sender.
     return SignConfig(
-        version=2,
-        filters=[FilterRule(type="sender", pattern="+15550001111", action="suppress")],
-        senders={},
+        version=3,
+        filters=[],
+        senders={"+15550001111": {"name": "Block", "allowed": False, "phone": "+15550001111"}},
         effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
-        sign=SignSettings(),
+        sign_settings=SignSettings(),
     )
 
 
 @pytest.fixture
 def config_with_regex_filter():
     return SignConfig(
-        version=2,
+        version=3,
         filters=[FilterRule(type="regex", pattern=r"^\s*$", action="suppress")],
         senders={},
         effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
-        sign=SignSettings(),
+        sign_settings=SignSettings(),
     )
 
 
 @pytest.fixture
 def config_with_message_filter():
     return SignConfig(
-        version=2,
+        version=3,
         filters=[FilterRule(type="message", pattern="msg-002", action="suppress")],
         senders={},
         effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
-        sign=SignSettings(),
+        sign_settings=SignSettings(),
     )

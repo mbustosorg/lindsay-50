@@ -19,14 +19,17 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from lib_shared.messages import InMemoryMessages
 from lib_shared.message_manager import MessageManager
-from lib_shared.models import EffectsSettings, FilterRule, Message, SignConfig, TextSettings
+from lib_shared.models import EffectsSettings, FilterRule, Message, SignConfig, SignSettings, TextSettings
 
 
-def _make_config(timezone="America/Los_Angeles", filters=None, senders=None):
+def _make_config(timezone="America/Los_Angeles", filters=None, senders=None, enforce_allowed_senders=False):
+    """Build a SignConfig; defaults `enforce_allowed_senders=False` so the bare
+    "+1" senders in this file's tests don't get suppressed by the senders
+    allowlist (an empty senders dict + enforcement ON would suppress everything)."""
     return SignConfig(
         effects_settings=EffectsSettings(),
         text_settings=TextSettings(),
-        timezone=timezone,
+        sign_settings=SignSettings(timezone=timezone, enforce_allowed_senders=enforce_allowed_senders),
         filters=list(filters or []),
         senders=dict(senders or {}),
     )
@@ -44,6 +47,8 @@ def test_handle_message_enriches_only_new_entry():
         config_api_url="http://localhost/api/config",
         api_key="key",
     )
+    # Disable senders enforcement so the bare "+1" sender isn't suppressed.
+    mgr._config.sign_settings.enforce_allowed_senders = False
     mgr._handle_message(
         {
             "id": "a",
@@ -126,6 +131,8 @@ def test_handle_config_re_enriches_all_entries():
         config_api_url="http://localhost/api/config",
         api_key="key",
     )
+    # Disable senders enforcement so the bare "+1" sender isn't suppressed.
+    mgr._config.sign_settings.enforce_allowed_senders = False
     mgr._handle_message(
         {
             "id": "a",
@@ -153,10 +160,17 @@ def test_handle_config_re_enriches_all_entries():
             "filters": [{"type": "keyword", "pattern": "bad", "action": "suppress"}],
             "senders": [],
             "effects_settings": {"effects": [{"name": "Hyperspace", "enabled": True}]},
-            "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
-            "sign": {"name": "Lindsay's Heart"},
-            "timezone": "US/Pacific",
-            "version": 2,
+            "text_settings": {
+                "speed": 3,
+                "color": 16711680,
+                "text_effect": "scroll",
+            },
+            "sign_settings": {
+                "sign_name": "Lindsay's Heart",
+                "timezone": "US/Pacific",
+                "enforce_allowed_senders": False,
+            },
+            "version": 3,
         }
     )
     # The previously-stored MessageView now reports suppressed=True
@@ -212,6 +226,8 @@ def test_get_messages_does_not_invoke_filter_logic():
     """`get_messages()` is a thin read on the hot path: it must not
     invoke `_apply_filter` or `_matches`."""
     cfg = _make_config(filters=[FilterRule(type="keyword", pattern="bad", action="suppress")])
+    # Allowlist the test senders so the senders list doesn't suppress them.
+    cfg.senders["+1"] = {"name": "X", "allowed": True, "phone": "+1"}
     store = InMemoryMessages(cfg, maxlen=10)
     # Two entries with mixed suppressed / non-suppressed — the buffer
     # is pre-enriched at construction time. (In production this is the

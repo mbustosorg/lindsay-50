@@ -991,6 +991,66 @@ class EffectsCoordinator:
             return self.on_deck.body
         return None
 
+    def _compose_scrolled_text(self, message) -> str:
+        """Build the string handed to `scroller.set_text(...)` for the
+        given message: `{body}` plus, when the operator has a known
+        name registered for the sender, `        - {name}` (eight-space
+        gap, `- ` prefix).
+
+        The suffix comes from `cfg.senders[<normalized_phone>]["name"]`
+        rendered through `format_display_name` with the configured
+        `text_settings.name_display_format`. The leading eight-space
+        gap is fixed in the design — it visually separates the message
+        body from the sender attribution on the 8px-font scrolling
+        canvas. The format string is intentionally a constant here, not
+        a settings.toml knob: the layout is bound to the panel's font
+        widths and re-tuning would break the visual layout. Future
+        fixes should change the literal, not expose a config knob.
+
+        Returns the body alone (no suffix) when no sender entry exists
+        or the entry has no name — so unknown senders' messages scroll
+        exactly as before. Returns an empty string when `message.body`
+        is empty (the scroller's `set_text("")` clears the text state).
+        """
+        body = message.body or ""
+        if not body:
+            return ""
+        sender_phone = getattr(message, "sender", None)
+        if not isinstance(sender_phone, str) or not sender_phone:
+            return body
+        # Lazy import: `phone_utils` and `name_utils` are pure-Python
+        # and add a small import cost; the scroller's hot path doesn't
+        # need them when there's no current message.
+        from lib_shared.name_utils import format_display_name
+        from lib_shared.phone_utils import normalize_phone
+
+        senders = {}
+        name_format = ""
+        try:
+            cfg = self.message_manager.config
+            senders = dict(cfg.senders or {})
+            name_format = cfg.text_settings.name_display_format or "first_initial_if_duplicates"
+        except Exception:  # noqa: BLE001 — best-effort: missing cfg must not break the scroller.
+            return body
+
+        sender_entry = senders.get(normalize_phone(sender_phone))
+        if not sender_entry:
+            return body
+        stored_name = sender_entry.get("name", "") or ""
+        if not stored_name.strip():
+            return body
+        # Pre-build `all_first_names` so `first_initial_if_duplicates`
+        # can disambiguate two senders with the same first name. This
+        # mirrors `messages.py:_enrich_messages` — the same Python
+        # class produces the same answer.
+        from lib_shared.name_utils import parse_name
+
+        all_first_names = [parse_name((entry or {}).get("name", ""))[0] for entry in senders.values()]
+        display_name = format_display_name(stored_name, name_format, all_first_names)
+        if not display_name:
+            return body
+        return f"{body}        - {display_name}"
+
     def _pick_message_via_selector(
         self,
         exclude_id: str | None = None,
@@ -1266,7 +1326,7 @@ class EffectsCoordinator:
                     self.current = media_override
                     self.current.set_brightness(0.0)
 
-                text = self.current_message.body if self.current_message is not None else ""
+                text = self._compose_scrolled_text(self.current_message) if self.current_message is not None else ""
                 if text:
                     scroller.set_text(text, display.width)
                     scroller.set_brightness(0.0)

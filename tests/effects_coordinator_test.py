@@ -139,7 +139,7 @@ class _StubMessageManager:
     represent fresh arrivals and go through the queue drain.
     """
 
-    def __init__(self, messages=None, effects_settings=None, text_settings=None):
+    def __init__(self, messages=None, effects_settings=None, text_settings=None, senders=None):
         from collections import deque
         from lib_shared.models import EffectsSettings, TextSettings
 
@@ -166,6 +166,7 @@ class _StubMessageManager:
         self.config = SimpleNamespace(
             effects_settings=effective_settings,
             text_settings=text_settings or TextSettings(),
+            senders=senders if senders is not None else {},
         )
 
     def _get_messages(self, limit=100, suppress=True):
@@ -413,6 +414,95 @@ def test_current_message_advances_after_fresh_id_lifecycle(monkeypatch):
         f"message from on_deck; got id={coord.current_message.id!r}. "
         f"The fresh-id replacement is failing to surface at the next out→in."
     )
+
+
+def test_compose_scrolled_text_appends_sender_name_suffix():
+    """When the operator has registered a name for the message's sender,
+    the coordinator's scroller text is `{body}        - {name}` — eight
+    spaces, `- ` prefix. The wire format the LED panel sees rolls the
+    name attribution into the same scroller line as the body."""
+    from lib_shared.phone_utils import normalize_phone
+    from lib_shared.models import Message, MessageView
+
+    senders = {
+        normalize_phone("+15551234567"): {
+            "name": "Alice Smith",
+            "allowed": True,
+            "phone": "+15551234567",
+        }
+    }
+    msg = Message(
+        id="m1",
+        sender="+15551234567",
+        body="hi mom",
+        received_at="2026-05-01T10:00:00Z",
+    )
+    view = MessageView(message=msg)
+    message_manager = _StubMessageManager(messages=[view], senders=senders)
+    coord, _display, scroller, _fx_a, _fx_b, _heart = _build(message_manager=message_manager)
+
+    rendered = coord._compose_scrolled_text(msg)
+    # Eight-space gap before `-`. The display_name format is the
+    # default (`first_initial_if_duplicates`), with no duplicate first
+    # names in `senders`, so "Alice Smith" formats as just "Alice".
+    assert rendered == "hi mom        - Alice"
+
+
+def test_compose_scrolled_text_no_suffix_when_sender_unknown():
+    """A message from a phone not in `cfg.senders` scrolls with no
+    suffix — the operator hasn't named them. Matches the v3 behavior
+    for unknown senders."""
+    from lib_shared.models import Message
+
+    msg = Message(
+        id="m2",
+        sender="+15559999999",  # not in `senders`
+        body="anonymous hello",
+        received_at="2026-05-01T10:00:00Z",
+    )
+    message_manager = _StubMessageManager(messages=[])
+    coord, _display, _scroller, _fx_a, _fx_b, _heart = _build(message_manager=message_manager)
+    assert coord._compose_scrolled_text(msg) == "anonymous hello"
+
+
+def test_compose_scrolled_text_no_suffix_when_name_blank():
+    """A registered sender with a blank operator-supplied name gets
+    no suffix. The operator may have keyed them in just to BLOCK them
+    (allowed=False), with no display name to attach."""
+    from lib_shared.phone_utils import normalize_phone
+    from lib_shared.models import Message
+
+    senders = {
+        normalize_phone("+15551234567"): {
+            "name": "",  # blank
+            "allowed": False,
+            "phone": "+15551234567",
+        }
+    }
+    msg = Message(
+        id="m3",
+        sender="+15551234567",
+        body="blocked again",
+        received_at="2026-05-01T10:00:00Z",
+    )
+    message_manager = _StubMessageManager(senders=senders)
+    coord, _display, _scroller, _fx_a, _fx_b, _heart = _build(message_manager=message_manager)
+    assert coord._compose_scrolled_text(msg) == "blocked again"
+
+
+def test_compose_scrolled_text_empty_body_returns_empty():
+    """An empty body produces an empty scroller text (no orphan suffix)."""
+    from lib_shared.models import Message
+
+    msg = Message(
+        id="m4",
+        sender="+15551234567",
+        body="",
+        received_at="2026-05-01T10:00:00Z",
+    )
+    message_manager = _StubMessageManager(senders={})
+    coord, _display, _scroller, _fx_a, _fx_b, _heart = _build(message_manager=message_manager)
+    assert coord._compose_scrolled_text(msg) == ""
 
 
 def test_out_to_in_does_not_pick_same_message_back_to_back():

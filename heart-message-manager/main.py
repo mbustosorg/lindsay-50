@@ -59,7 +59,7 @@ from lib_shared.boot_config import BootConfig, from_heroku_or_git as _boot_confi
 from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.effects_loader import load_effects_settings
 from lib_shared.models import SignConfig, FilterRule, Message
-from lib_shared.models import EffectsSettings
+from lib_shared.models import EffectsSettings, TextSettings
 from lib_shared.models import MessageEnvelope
 from lib_shared.scroller_base import ScrollerBase
 from lib_shared.sign_status import LatestSignStatus, REQUIRED_SNAPSHOT_KEYS
@@ -387,7 +387,7 @@ def _process_inbound_message(req) -> Response:
 
     # 204 short-circuited above; from here on we always respond 200.
     cfg = sqlite.get_config()
-    sign_name = cfg.sign.name if cfg.sign else "Lindsay's Heart"
+    sign_name = cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart"
     reply_body = body if body else "(no message)"
     reply = f"{sign_name} got your message: {html.escape(reply_body)}"
     twiml = Response(
@@ -1177,8 +1177,8 @@ def dashboard():
         messages=msgs[:20],
         total_count=total,
         suppression_counts=suppression_counts,
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
-        timezone=cfg.timezone,
+        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
+        timezone=cfg.sign_settings.timezone,
         format_from_iso=format_from_iso,
     )
 
@@ -1206,7 +1206,7 @@ def message_list():
         page=page,
         total_pages=total_pages,
         cfg=cfg,
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
+        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         format_from_iso=format_from_iso,
     )
 
@@ -1225,13 +1225,18 @@ def settings():
     cfg = sqlite.get_config()
 
     if request.method == "POST":
-        # Filter rules (before general settings so saves happen once)
+        # Filter rules (before general settings so saves happen once).
+        # v3 (issue #6): `filter_status` checkbox drives the new rule's
+        # `status` field ("on" → "enabled", absent → "disabled"). The
+        # `type` selector no longer offers `sender` (sender matching is
+        # the senders list's job — see FilterRule.VALID_TYPES).
         filter_action = request.form.get("filter_action")
         if filter_action == "add":
             ftype = request.form.get("filter_type", "").strip()
             pattern = request.form.get("filter_pattern", "").strip()
-            if ftype in ("keyword", "regex", "sender", "message") and pattern:
-                cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress"))
+            if ftype in ("keyword", "regex", "message") and pattern:
+                new_status = "enabled" if request.form.get("filter_status") == "on" else "disabled"
+                cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress", status=new_status))
                 _save_and_publish(cfg)
                 return redirect(url_for("settings"))
         elif filter_action == "delete":
@@ -1250,11 +1255,16 @@ def settings():
         import json as _json
 
         form_keys = sorted(request.form.keys())
+        # Use `getlist` so multi-valued fields (sender_name, sender_phone,
+        # sender_state, effect_state, filter_pattern) show ALL the values
+        # the form actually POSTed — `get(k)` returns only the first match
+        # and hides duplicates, which made a one-row POST look identical
+        # to a ten-row POST in the operator-visible log.
         logger.info(
             "[settings] POST /settings raw_form_keys=%d form=%s",
             len(form_keys),
             _json.dumps(
-                {k: request.form.get(k) for k in form_keys},
+                {k: request.form.getlist(k) for k in form_keys},
                 indent=2,
                 sort_keys=True,
                 default=str,
@@ -1263,17 +1273,20 @@ def settings():
 
         sign_name = request.form.get("sign_name", "").strip()
         if sign_name:
-            cfg.sign.name = sign_name
+            cfg.sign_settings.sign_name = sign_name
 
         timezone = request.form.get("timezone", "").strip()
         if timezone:
             try:
                 ZoneInfo(timezone)
-                cfg.timezone = timezone
+                cfg.sign_settings.timezone = timezone
             except ZoneInfoNotFoundError:
                 pass  # ignore invalid timezone, keep current value
 
-        # Text settings: speed (1..5), color, text effect.
+        # Text settings: speed (1..5), color, text effect, AND the new
+        # `name_display_format` field (issue #6 — controls how the
+        # operator-supplied name is rendered in the admin UI and on the
+        # sign).
         ts_form = cfg.text_settings
         speed_raw = request.form.get("text_settings_speed")
         if speed_raw is not None and speed_raw != "":
@@ -1286,17 +1299,41 @@ def settings():
         color = request.form.get("text_settings_color")
         if color is not None and color != "":
             try:
-                ts_form.color = int(color, 16) & 0xFFFFFF
+                # Strip a leading `#` so the form can post either `#rrggbb`
+                # or bare `rrggbb` — `int("...", 16)` rejects `#`-prefixed
+                # input silently, which previously meant a typed color
+                # silently didn't save.
+                color_str = color.lstrip("#")
+                ts_form.color = int(color_str, 16) & 0xFFFFFF
             except ValueError:
-                pass
+                logger.warning("[settings] text_settings_color: dropped non-hex value %r", color)
         te = request.form.get("text_settings_text_effect")
         if te:
             ts_form.text_effect = te
+        # `name_display_format` (issue #6): one of the four valid
+        # display formats. Unknown / missing values fall back to the
+        # default (`first_initial_if_duplicates`) so a partial form
+        # never corrupts the config.
+        ndf_raw = request.form.get("name_display_format")
+        if ndf_raw in TextSettings.VALID_NAME_DISPLAY_FORMATS:
+            ts_form.name_display_format = ndf_raw
+        else:
+            ts_form.name_display_format = TextSettings.DEFAULT_NAME_DISPLAY_FORMAT
         cfg.text_settings = ts_form
 
+        # Sign settings: `sign_name` + `timezone` (already handled above)
+        # plus the new `enforce_allowed_senders` master toggle (issue #6
+        # — controls whether the senders list gates rendering). The
+        # checkbox lands as "1" when ticked; absent form field (or
+        # anything other than "1") is treated as False (defensive
+        # default — the operator must explicitly check the box to
+        # enable the filter).
+        ss_form = cfg.sign_settings
+        ss_form.enforce_allowed_senders = request.form.get("enforce_allowed_senders") == "1"
+        cfg.sign_settings = ss_form
+
         # Effect settings: pacing (fade/hold/intro/idle seconds),
-        # `lookback_days`, `selector_algorithm`, and the rotation list
-        # (handled by the multi-effect form below).
+        # `lookback_days`, `selector_algorithm`, AND the rotation list.
         #
         # BUGFIX (2026-07-07): the previous handler built field names as
         # `f"effects_settings{field}"` which produced `effects_settingsfade_seconds`
@@ -1360,30 +1397,177 @@ def settings():
             _json.dumps(pacing_summary, sort_keys=True),
         )
 
-        # Effect rotation list: the form posts the canonical order with each
-        # entry's `enabled` checkbox value (or absence). Rebuild the list
-        # preserving only known names.
-        enabled_map = {}
-        for name in request.form.getlist("effect_name"):
-            enabled_map[name] = True
-        # Any canonical name absent from the form list is treated as disabled
-        # (its checkbox wasn't ticked). We rebuild the list in the canonical
-        # order from the loader-driven defaults so ordering is preserved
-        # and the source of truth matches the JSON the Pi sees.
+        # Effect rotation list: the form's `effect_state` field carries
+        # `<name>:0|1` for every canonical entry — the form always POSTs
+        # the full list with explicit enabled state, so the handler is
+        # never asked to guess what an absent name means. Unknown /
+        # malformed entries are logged and dropped (the canonical JSON
+        # is the source of truth for the legal name set).
+        enabled_map: dict[str, bool] = {}
+        malformed_states: list[str] = []
+        for raw in request.form.getlist("effect_state"):
+            if ":" not in raw:
+                malformed_states.append(raw)
+                continue
+            name, _, flag = raw.partition(":")
+            name = name.strip()
+            if not name or flag not in ("0", "1"):
+                malformed_states.append(raw)
+                continue
+            enabled_map[name] = flag == "1"
+        if malformed_states:
+            logger.warning(
+                "[settings] effect_state POST dropped malformed entries: %s",
+                sorted(set(malformed_states)),
+            )
         new_effects = []
         for entry in load_effects_settings().get("effects", []):
-            new_effects.append({"name": entry["name"], "enabled": entry["name"] in enabled_map})
+            canonical_name = entry["name"]
+            if canonical_name in enabled_map:
+                new_effects.append({"name": canonical_name, "enabled": enabled_map[canonical_name]})
+            else:
+                # A canonical name that didn't appear in `effect_state`
+                # shouldn't normally happen (the form always POSTs all
+                # 10), but we fall back to the loader's default to keep
+                # the saved cfg aligned with the JSON rather than dropping
+                # the row silently.
+                logger.warning(
+                    "[settings] effect_state missing canonical entry %r; falling back to loader default enabled=%s",
+                    canonical_name,
+                    entry.get("enabled"),
+                )
+                new_effects.append({"name": canonical_name, "enabled": entry.get("enabled", True)})
         es_form.effects = new_effects
         cfg.effects_settings = es_form
 
+        # Senders list (issue #6 / implement-senders-filtering).
+        # Form posts parallel `sender_name` / `sender_phone` lists plus
+        # a `sender_allowed` checkbox list — each checked box's `value`
+        # carries the row's normalized phone (kept in sync by the
+        # template's `syncSenderAllowed` JS handler as the operator types).
+        # Build a new `cfg.senders` dict keyed by `normalize_phone(phone)`.
+        # Empty rows are dropped; an empty entries list does NOT wipe the
+        # existing senders (defensive partial-post handling).
+        #
+        # Pairing by phone (not by enumerate index) avoids the
+        # index-drift bug where removing a row from the DOM left
+        # surviving rows' `sender_allowed` values out of sync with
+        # their new enumerate positions — a removed row's checkbox
+        # would no longer be in the form data, and any surviving row
+        # whose original index no longer matched its new DOM position
+        # would have its allowed flag flipped. Phone is the natural
+        # unique key; if two rows carry the same phone, the handler
+        # rejects the duplicate so the operator's intent is preserved.
         names = request.form.getlist("sender_name")
         phones = request.form.getlist("sender_phone")
-        new_senders = {}
+        state_list = request.form.getlist("sender_state")
+        # Pair each populated `sender_phone` row with an allowed flag.
+        #
+        # Issue #6 follow-up (defensive semantics): the form's
+        # `syncSenderAllowed` JS handler keeps each rendered row's
+        # `sender_allowed` checkbox value in sync with the row's
+        # phone (and ticks the box to `checked=true` when the phone
+        # becomes non-empty). When the JS fails to fire — stale
+        # cached page, paste-into-field mishap, browser extension
+        # — the checkbox value stays at `""`, the box is still
+        # `checked` (the add-row's default), and the field POSTs
+        # with `value=""`.
+        #
+        # Three possible checkbox states per rendered row:
+        #   1. JS synced correctly: field POSTs `value=<phone>` and
+        #      is `checked`. (Operator intent: allowed.)
+        #   2. JS failed: field POSTs `value=""` and is `checked`
+        #      (the add-row's default). (Operator intent: allowed
+        #      — they typed a phone to add the sender; the visible
+        #      box is still checked.)
+        #   3. Operator un-checked: browser omits the field from
+        #      POST. (Operator intent: blocked.)
+        #
+        # Cases 2 and 3 are both "row's key is not in `allowed_set`"
+        # but they're distinguishable globally: case 2 contributes
+        # an empty-string entry to `allowed_list`, while case 3
+        # contributes nothing. So we use `empty_string_seen` as a
+        # global "JS failed for at least one row" flag — any row
+        # whose key isn't matched defaults to allowed=True, since
+        # the operator's visible intent (typed phone + checked box)
+        # was to add.
+        # Parse `phone:0|1` pairs into a phone-keyed map. Empty values
+        # come from the trailing add-row before the operator types a
+        # phone; drop them quietly. Malformed entries log a warning
+        # with the dropped values.
+        from lib_shared.phone_utils import normalize_phone
+
+        enabled_map: dict[str, bool] = {}
+        malformed_states: list[str] = []
+        for raw in state_list:
+            stripped = raw.strip()
+            if not stripped or ":" not in stripped:
+                continue
+            phone_part, _, flag = stripped.partition(":")
+            phone_part = phone_part.strip()
+            flag = flag.strip()
+            if not phone_part or flag not in ("0", "1"):
+                malformed_states.append(stripped)
+                continue
+            try:
+                enabled_map[normalize_phone(phone_part)] = flag == "1"
+            except Exception:  # noqa: BLE001 — defensive; bad values are dropped.
+                logger.warning(
+                    "[settings] senders POST dropped unparseable sender_state entry: %r",
+                    raw,
+                )
+        if malformed_states:
+            logger.warning(
+                "[settings] senders POST dropped malformed sender_state entries: %s",
+                sorted(set(malformed_states)),
+            )
+
+        new_senders: dict[str, dict] = {}
+        seen_keys: set[str] = set()
+        duplicate_phones: list[str] = []
         for name, phone in zip(names, phones):
-            name = name.strip()
-            phone = phone.strip()
-            if phone:
-                new_senders[phone] = name or phone
+            stripped_name = name.strip()
+            stripped_phone = phone.strip()
+            if not stripped_phone:
+                # Empty phone = unfilled row, preserve operator intent.
+                continue
+            key = normalize_phone(stripped_phone)
+            if key in seen_keys:
+                # Duplicate phone on the form — refuse silently so the
+                # operator's UI doesn't surprise them with a half-saved
+                # list. Keep the existing senders; the operator can fix
+                # the duplicate and re-submit.
+                duplicate_phones.append(stripped_phone)
+                continue
+            seen_keys.add(key)
+            # The row's allowed flag comes directly from the form's
+            # hidden `sender_state` entry. The trailing add-row's
+            # empty-phone entry is filtered out above; rows without a
+            # matching state (a removed row that left a stray phone,
+            # or a JS-malformed entry) land as False — the operator
+            # can re-check and re-save.
+            new_senders[key] = {
+                "name": stripped_name or stripped_phone,
+                "allowed": enabled_map.get(key, False),
+                "phone": stripped_phone,
+            }
+        if duplicate_phones:
+            # Duplicate-phone rows on the form were skipped (see above).
+            # Log them so an operator wondering "why didn't my entry
+            # save?" can grep for the cause. The first occurrence of each
+            # phone wins — the row that's actually saved is the one whose
+            # position in the form list is earliest, regardless of which
+            # row the operator intended.
+            logger.warning(
+                "[settings] senders POST dropped duplicate phone(s): %s " "(first occurrence wins)",
+                sorted(set(duplicate_phones)),
+            )
+        # The form is the source of truth on save. If the operator posted
+        # zero filled senders (e.g. clicked Remove on every row, leaving
+        # only the trailing blank add-row), save an empty dict — they
+        # explicitly emptied the list. The earlier `if not stripped_phone:
+        # continue` strips the add-row's empty phone, so an empty POST
+        # is unambiguous.
         cfg.senders = new_senders
 
         _save_and_publish(cfg)
@@ -1393,7 +1577,7 @@ def settings():
         "settings.html",
         cfg=cfg,
         effects_settings=load_effects_settings(),
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
+        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         speed_labels=ScrollerBase.SPEED_LABELS,
         # Deployed SHA: what Flask expects the Pi to be running.
         # This is the last-deployed commit, not the Pi's literal live
@@ -1416,8 +1600,8 @@ def preview():
         "preview.html",
         result=all_msgs,
         include_filtered=include_filtered,
-        sign_name=cfg.sign.name if cfg.sign else "Lindsay's Heart",
-        timezone=cfg.timezone,
+        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
+        timezone=cfg.sign_settings.timezone,
         format_from_iso=format_from_iso,
     )
 
@@ -1430,7 +1614,7 @@ def testing():
     twilio_token = _cfg.if_exists("TWILIO_AUTH_TOKEN")
     return render_template(
         "testing.html",
-        sign_name=cfg.sign.name,
+        sign_name=cfg.sign_settings.sign_name,
         twilio_token=twilio_token or "",
     )
 

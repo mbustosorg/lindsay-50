@@ -54,9 +54,7 @@ def _s3_mime_table():
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
-        if not any(
-            isinstance(t, ast.Name) and t.id == "_MIME_EXT_TABLE" for t in node.targets
-        ):
+        if not any(isinstance(t, ast.Name) and t.id == "_MIME_EXT_TABLE" for t in node.targets):
             continue
         if not isinstance(node.value, ast.Dict):
             continue
@@ -72,9 +70,7 @@ def _s3_mime_table():
                 continue
             out[k.value] = (first.value,)
         return out
-    raise AssertionError(
-        "could not find `_MIME_EXT_TABLE` constant in s3.py — has the literal form changed?"
-    )
+    raise AssertionError("could not find `_MIME_EXT_TABLE` constant in s3.py — has the literal form changed?")
 
 
 def test_s3_mime_table_3gpp():
@@ -127,8 +123,7 @@ def test_cycler_and_s3_tables_agree_on_common_video_mimes():
         s3_ext = s3[mime][0]
         cycler_ext = _ext_for_mime(mime)
         assert s3_ext == cycler_ext, (
-            f"extension mismatch for {mime!r}: "
-            f"s3={s3_ext!r} cycler={cycler_ext!r} expected={expected_ext!r}"
+            f"extension mismatch for {mime!r}: " f"s3={s3_ext!r} cycler={cycler_ext!r} expected={expected_ext!r}"
         )
         assert s3_ext == expected_ext
 
@@ -188,7 +183,7 @@ def test_s3_safe_ext_strips_parameters():
     # reliably hits the boundary between this function and whatever
     # follows it (regardless of whether there's a blank line).
     safe_ext_start = src.index("def _safe_ext(")
-    m = _re.search(r"^def ", src[safe_ext_start + 1:], _re.MULTILINE)
+    m = _re.search(r"^def ", src[safe_ext_start + 1 :], _re.MULTILINE)
     assert m is not None, "no following top-level `def ` found — file shape changed?"
     safe_ext_end = safe_ext_start + 1 + m.start()
     body = src[safe_ext_start:safe_ext_end]

@@ -34,6 +34,11 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 # preview (with `static/event_log.py`).
 "lib_shared/selector.py" = "/static/preview/lib_shared/selector.py"
 "lib_shared/config_migrations.py" = "/static/preview/lib_shared/config_migrations.py"
+# Senders-filter helpers (issue #6). `phone_utils.normalize_phone`
+# backs the in-memory sender lookup key; `name_utils.format_display_name`
+# resolves the operator-supplied name per `effects_settings.name_display_format`.
+"lib_shared/phone_utils.py" = "/static/preview/lib_shared/phone_utils.py"
+"lib_shared/name_utils.py" = "/static/preview/lib_shared/name_utils.py"
 "lib_shared/patterns/__init__.py" = "/static/preview/lib_shared/patterns/__init__.py"
 "lib_shared/patterns/fireworks.py" = "/static/preview/lib_shared/patterns/fireworks.py"
 "lib_shared/patterns/nightsky.py" = "/static/preview/lib_shared/patterns/nightsky.py"

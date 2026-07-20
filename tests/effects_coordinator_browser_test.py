@@ -312,7 +312,7 @@ def test_preview_fallback_triggers_fade_when_browser_overlay_exhausted():
     # The helper triggered the fade-out — overlay is still current
     # and the coordinator's mode is `out` so `_step_fade` will
     # ramp the overlay's brightness to 0 on the next tick.
-    assert (
-        coord.current is overlay
-    ), "BrowserMediaOverlay should still be current until fade completes; got %r" % (coord.current,)
+    assert coord.current is overlay, "BrowserMediaOverlay should still be current until fade completes; got %r" % (
+        coord.current,
+    )
     assert coord.mode == "out"

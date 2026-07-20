@@ -103,7 +103,8 @@ def init_db() -> None:
     except OSError as exc:
         logger.warning(
             "init_db: could not open lock file %s (%s); proceeding without lock",
-            lock_path, exc,
+            lock_path,
+            exc,
         )
 
     got_lock = False
@@ -165,10 +166,7 @@ def _create_schema(db: Path) -> None:
             )
         """)
         # Index for time-ordered retrieval
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_messages_received_at "
-            "ON messages(received_at)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_received_at " "ON messages(received_at)")
         conn.commit()
     finally:
         conn.close()
@@ -369,7 +367,8 @@ def rebuild_from_s3(s3_load_messages, s3_load_config) -> None:
     except OSError as exc:
         logger.warning(
             "rebuild_from_s3: could not open lock file %s (%s); proceeding without lock",
-            lock_path, exc,
+            lock_path,
+            exc,
         )
     got_lock = False
     if lock_fd is not None:

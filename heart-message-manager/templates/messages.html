@@ -42,7 +42,7 @@
       {% set is_suppressed = cfg.filters|selectattr('type', 'equalto', 'message')|selectattr('pattern', 'equalto', msg.id)|list %}
       {% set msg_media = msg.media if msg.media is defined and msg.media else [] %}
       <tr class="hover:bg-indigo-50/30 transition-colors {% if is_suppressed %}opacity-50{% endif %}">
-        <td class="px-6 py-4 text-sm text-slate-500 font-mono whitespace-nowrap">{{ format_from_iso(msg.received_at, cfg.timezone) }}</td>
+        <td class="px-6 py-4 text-sm text-slate-500 font-mono whitespace-nowrap">{{ format_from_iso(msg.received_at, cfg.sign_settings.timezone) }}</td>
         <td class="px-6 py-4 text-sm text-dark font-medium">{{ msg.sender }}</td>
         <td class="px-6 py-4 text-sm text-slate-600 truncate max-w-md">{{ msg.body }}</td>
         <td class="px-6 py-4">
