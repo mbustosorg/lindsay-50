@@ -150,16 +150,29 @@ function parsePublish(bytes) {
   // Fixed header byte 0: high nibble = packet type (3), low nibble = flags.
   const type = (bytes[0] >> 4) & 0x0f;
   if (type !== 3) return null;
-  // Skip the multi-byte remaining length. We don't need the value here
-  // — the bytes we want to parse (topic + payload) start right after
-  // the remaining-length field and run to the end of the buffer.
+  // QoS lives in bits 1-2 of the flags byte. QoS>0 means there's a
+  // 2-byte packet ID in the variable header that we MUST skip before
+  // the payload begins — otherwise we'd hand the caller a string that
+  // starts with two raw bytes (NUL + low byte of the packet ID) and
+  // the downstream json.loads in Python fails with "Expecting value".
+  // This bug only surfaces under QoS=1 because QoS=0 PUBLISH frames
+  // have no packet ID — the prior code worked at QoS=0 and silently
+  // broke when we bumped the browser subscribe to QoS=1.
+  const flags = bytes[0] & 0x0f;
+  const qos = (flags >> 1) & 0x03;
+  // Skip the multi-byte remaining length.
   const decoded = decodeRemainingLength(bytes);
   if (!decoded) return null;
-  let payloadStart = decoded.bytesUsed;
+  let off = decoded.bytesUsed;
   // Variable header: Topic Name (2-byte length + string)
-  const { value: topic, next: afterTopic } = decodeString(bytes, payloadStart);
+  const { value: topic, next: afterTopic } = decodeString(bytes, off);
+  off = afterTopic;
+  // Variable header: Packet ID (2 bytes), ONLY when QoS > 0.
+  if (qos > 0) {
+    off += 2;
+  }
   // Payload follows to end of frame.
-  const payloadBytes = bytes.slice(afterTopic);
+  const payloadBytes = bytes.slice(off);
   return { topic, payload: utf8Decode(payloadBytes) };
 }
 
