@@ -90,6 +90,13 @@ ADMIN_PASSWORD = "your-browser-password"
 API_SECRET_KEY = "your-esp32-api-key"
 # Session inactivity timeout in minutes (sliding window).
 ADMIN_SESSION_TIMEOUT_MINS = 60
+# Flask session-cookie signing key. REQUIRED on any multi-process deploy
+# (Heroku dynos / gunicorn workers): every process must sign cookies with the
+# SAME key or sessions set by one worker fail on another and users get bounced
+# to /login. Set to a long random string, e.g. `python -c "import secrets;
+# print(secrets.token_hex(32))"`. On Heroku: `heroku config:set FLASK_SECRET_KEY=…`.
+# If unset, a single local process falls back to an on-disk `secret_key` file.
+FLASK_SECRET_KEY = "change-me-to-a-long-random-string"
 
 # -----------------------------------------------------------------------------
 # MQTT-over-WebSocket (browser-side)

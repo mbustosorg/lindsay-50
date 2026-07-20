@@ -66,12 +66,34 @@ from lib_shared.sign_status import LatestSignStatus, REQUIRED_SNAPSHOT_KEYS
 
 # App setup
 app = Flask(__name__)
+# Session-cookie signing key. Every web process MUST sign with the SAME key:
+# Heroku runs several dynos/gunicorn workers, and a session cookie set by one
+# process fails signature verification on another — Flask then silently drops
+# the session and `@login_required` bounces the browser to /login. The old
+# per-process fallback below (a `uuid4()` written to a gitignored `secret_key`
+# file that never ships in the Heroku slug) regenerated a DIFFERENT key in
+# each process, surfacing as intermittent "logged out → /login" redirects —
+# most visibly on /preview, whose PyScript boot fires a burst of concurrent
+# requests that scatter across workers and readily hit a mismatched one.
+#
+# Prefer a stable, shared key from config/env (`FLASK_SECRET_KEY`, or
+# `SECRET_KEY`); on Heroku set it once with `heroku config:set FLASK_SECRET_KEY=…`
+# so all dynos agree. Fall back to the on-disk file (stable for a single local
+# process) and finally an ephemeral random key for first-run local dev.
+_configured_secret = _cfg.if_exists("FLASK_SECRET_KEY") or _cfg.if_exists("SECRET_KEY")
 _secret_key_path = Path(__file__).parent / "secret_key"
-if _secret_key_path.exists():
+if _configured_secret:
+    app.secret_key = _configured_secret
+elif _secret_key_path.exists():
     app.secret_key = _secret_key_path.read_text()
 else:
     app.secret_key = uuid.uuid4().hex
-    _secret_key_path.write_text(str(app.secret_key))
+    try:
+        _secret_key_path.write_text(app.secret_key)
+    except OSError:
+        # Read-only filesystem — keep the key in memory for this process.
+        # On a multi-process deploy set FLASK_SECRET_KEY to make it shared.
+        pass
 
 # Init auth (Flask-Login + API key + sliding session)
 import auth
