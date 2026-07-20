@@ -115,10 +115,26 @@ function buildConnect(username, password) {
 }
 
 function buildSubscribe(topic) {
-  // Variable header: Packet ID (0x0001), then topic filter + requested QoS (0).
+  // Variable header: Packet ID (0x0001), then topic filter + requested QoS.
+  // The single most useful line in this file: `0x01` (not `0x00`).
+  // Adafruit IO's MQTT broker silently drops QoS-1 PUBLISH frames when
+  // the browser subscribes at QoS-0 — even though the MQTT 3.1.1 spec
+  // (§3.3.2.4 Server → Client delivery) says "Maximum QoS" may be lower
+  // than the subscription's, real brokers can refuse to downgrade and
+  // drop instead. Local Mosquitto downgrades silently (works at QoS-0),
+  // so this bug only manifests against Adafruit IO and only on Heroku.
+  // The "config didn't update on save" reports with no console SUBSCRIBE
+  // error are this bug.
   const vh = new Uint8Array([0x00, 0x01]);
-  const filter = concat(encodeString(topic), new Uint8Array([0x00])); // QoS 0
+  const filter = concat(encodeString(topic), new Uint8Array([0x01])); // QoS 1
   return packet(8, 0x02, vh, filter);
+}
+
+function buildPubAck(packetId) {
+  // Reply to the broker's QoS-1 PUBLISH so it doesn't requeue.
+  // §3.4 PUBACK has just the packet ID in its variable header.
+  const vh = new Uint8Array([(packetId >> 8) & 0xff, packetId & 0xff]);
+  return packet(4, 0, vh);
 }
 
 function buildPingReq() {
@@ -308,7 +324,10 @@ export function createMqttWsClient({
         }
       }
     } else if (type === 3) {
-      // PUBLISH
+      // PUBLISH — emit the payload and, for QoS=1, ack the packet ID
+      // back to the broker so it doesn't requeue + retry.
+      const flags = bytes[0] & 0x0f;
+      const qos = (flags >> 1) & 0x03;
       let parsed = null;
       try {
         parsed = parsePublish(bytes);
@@ -325,10 +344,43 @@ export function createMqttWsClient({
             .join(" ")
         );
       }
+      if (qos === 1) {
+        // Extract packet ID from the variable header: topic name length
+        // (2 bytes) + topic name + packet ID (2 bytes). The packet ID
+        // position varies with topic length, so walk the remaining
+        // length first to know where the variable header starts.
+        const decoded = decodeRemainingLength(bytes);
+        if (decoded) {
+          let off = decoded.bytesUsed;
+          const topicLen = (bytes[off] << 8) | bytes[off + 1];
+          off += 2 + topicLen;
+          if (off + 1 < bytes.length) {
+            const packetId = (bytes[off] << 8) | bytes[off + 1];
+            try {
+              ws && ws.send(buildPubAck(packetId));
+            } catch (e) {
+              console.warn("[mqtt-ws] PUBACK send failed:", e);
+            }
+          }
+        }
+      }
     } else if (type === 9) {
-      // SUBACK — no-op. Granted QoS is in bytes[3]; we don't need to act
-      // on it because QoS 0 is fine for our local UI and the broker
-      // reports success (0x00) for both granted-QoS-0 and granted-QoS-1.
+      // SUBACK. Granted QoS is variable-length: walk past the
+      // remaining-length field (skipping it), then the 2-byte packet
+      // ID, then read one QoS byte per topic filter in the matching
+      // SUBSCRIBE. A value of 0x80 means the broker refused the
+      // subscription entirely. Logging both halves so "config never
+      // updates" reports show whether the broker ever accepted us.
+      const decoded = decodeRemainingLength(bytes);
+      const grantedStart = decoded ? decoded.bytesUsed + 2 /* packet ID */ : 3;
+      const granted = [];
+      for (let i = grantedStart; i < bytes.length; i++) {
+        granted.push(bytes[i]);
+      }
+      console.log("[mqtt-ws] SUBACK granted_qos=" + JSON.stringify(granted));
+      if (granted.indexOf(0x80) !== -1) {
+        console.warn("[mqtt-ws] SUBACK rejected by broker (granted_qos=0x80)");
+      }
     } else if (type === 13) {
       // PINGRESP — no action
     } else if (type !== 0) {

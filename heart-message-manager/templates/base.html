@@ -68,7 +68,7 @@
        shim was dropped in #39 — persistence is server-side
        (S3 + SQLite). -->
   <script type="module">
-    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=11";
+    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=12";
     window.createMqttWsClient = createMqttWsClient;
   </script>
   <script src="{{ url_for('static', filename='app.js') }}?v=16"></script>
