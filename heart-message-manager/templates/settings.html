@@ -269,6 +269,12 @@
       </div>
     </div>
     <p class="text-sm text-slate-500 mb-2">Phone numbers are normalized to +1XXXXXXXXXX.</p>
+    {% set unlisted = unlisted_senders|default([]) %}
+    {% if unlisted %}
+    <p class="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-2">
+      {{ unlisted|length }} number{{ '' if unlisted|length == 1 else 's' }} that texted the sign {{ 'is' if unlisted|length == 1 else 'are' }} listed below (highlighted). Add a name and press <span class="font-semibold">Save Settings</span> to keep {{ 'it' if unlisted|length == 1 else 'them' }}, or <span class="font-semibold">Remove</span> any you don't want.
+    </p>
+    {% endif %}
     <div class="overflow-x-auto">
       <table class="w-full" id="senders-table">
         <thead>
@@ -291,6 +297,24 @@
             <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ entry.name }}"></td>
             <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ key }}" oninput="syncSenderState(this)"></td>
             <td class="px-4 py-3"><input type="hidden" name="sender_state" value="{{ key }}:{{ '1' if entry.allowed else '0' }}" data-sender-state="{{ key }}"><input type="checkbox" data-sender-checkbox{% if entry.allowed %} checked{% endif %} class="w-4 h-4 rounded text-primary focus:ring-primary"></td>
+            <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
+          </tr>
+          {% endfor %}
+          {# Prepopulated rows (issue #6 follow-up): numbers that have
+             texted the sign but aren't named yet. Phone is prefilled
+             (normalized key); the operator types a name and Saves. These
+             carry `data-sender-row` so the submit-time JS serializes
+             their `sender_state` from the phone + checkbox exactly like
+             any other row — no special POST handling needed. Allowed
+             defaults to checked (same as a fresh add-row) so naming a
+             sender never hides messages that currently render; un-tick
+             to block. Highlighted amber to distinguish from saved
+             senders. #}
+          {% for s in unlisted %}
+          <tr data-sender-row data-sender-suggested>
+            <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td>
+            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-amber-300 bg-amber-50 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ s.key }}" oninput="syncSenderState(this)"></td>
+            <td class="px-4 py-3"><input type="hidden" name="sender_state" value="{{ s.key }}:1"><input type="checkbox" data-sender-checkbox checked class="w-4 h-4 rounded text-primary focus:ring-primary"></td>
             <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
           </tr>
           {% endfor %}

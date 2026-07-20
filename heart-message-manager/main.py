@@ -1573,9 +1573,27 @@ def settings():
         _save_and_publish(cfg)
         return redirect(url_for("settings"))
 
+    # Prepopulate the senders table with numbers that have texted the
+    # sign but aren't in the allowlist yet, so the operator can name them
+    # (issue #6 follow-up). Dedupe against the existing senders by
+    # normalized key; the normalized number is shown so the row's phone
+    # matches the key the POST handler will compute on save.
+    from lib_shared.phone_utils import normalize_phone
+
+    existing_keys = set(cfg.senders.keys())
+    unlisted_senders: list[dict] = []
+    seen_keys: set[str] = set()
+    for raw in sqlite.get_distinct_senders():
+        key = normalize_phone(raw)
+        if key in existing_keys or key in seen_keys:
+            continue
+        seen_keys.add(key)
+        unlisted_senders.append({"key": key, "phone": raw})
+
     return render_template(
         "settings.html",
         cfg=cfg,
+        unlisted_senders=unlisted_senders,
         effects_settings=load_effects_settings(),
         sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         speed_labels=ScrollerBase.SPEED_LABELS,

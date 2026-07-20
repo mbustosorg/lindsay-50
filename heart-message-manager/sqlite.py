@@ -258,6 +258,25 @@ def get_all_messages() -> list[Message]:
     ]
 
 
+def get_distinct_senders() -> list[str]:
+    """Return the distinct raw sender phone strings across all stored
+    messages, most-recently-seen first.
+
+    The raw `messages.sender` value is returned verbatim (as Twilio
+    delivered it, e.g. "+15551234567"); callers that need to compare
+    against the `SignConfig.senders` keys should run each through
+    `lib_shared.phone_utils.normalize_phone`. Used by the /settings page
+    to prepopulate the senders table with numbers that have texted the
+    sign but aren't named yet (issue #6 follow-up).
+    """
+    conn = sqlite3.connect(_db_path())
+    rows = conn.execute(
+        "SELECT sender, MAX(received_at) AS last FROM messages " "GROUP BY sender ORDER BY last DESC"
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows if r[0]]
+
+
 def get_messages_since(timestamp: str) -> list[Message]:
     """Return messages with received_at strictly after the given ISO 8601 timestamp.
 
