@@ -461,12 +461,24 @@ export function createMqttWsClient({
 
   function ingest(chunk) {
     // Concatenate chunk onto the buffer; try to parse out any full frames.
-    // First entry point after the WebSocket onmessage — log the raw
-    // first bytes of every chunk so an inbound frame that fails to
-    // parse is still visible (no silent drop below this line).
+    // First entry point after the WebSocket onmessage — log the FULL
+    // raw payload bytes BEFORE any MQTT frame parsing or JSON parsing,
+    // so an inbound envelope that fails to parse downstream is still
+    // visible (no silent drop below this line). Use try/utf8-decode so
+    // text payloads are printable; binary garbage still appears as
+    // best-effort replacement chars. Round 7a/triage — the operator's
+    // "are we sure it isn't arriving at all?" question demands we
+    // confirm at the byte boundary, not trust downstream parse success.
+    let payloadStr = "";
+    try {
+      payloadStr = new TextDecoder("utf-8", { fatal: false }).decode(chunk);
+    } catch (e) {
+      payloadStr = "<decode-error: " + (e && e.message) + ">";
+    }
     console.log(
       "[mqtt-ws] ingest chunk bytes_len=" + chunk.length +
-      " first_hex=" + Array.from(chunk.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(' ')
+      " first_hex=" + Array.from(chunk.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(' ') +
+      " raw_payload=" + JSON.stringify(payloadStr)
     );
     const next = new Uint8Array(buffer.length + chunk.length);
     next.set(buffer, 0);
