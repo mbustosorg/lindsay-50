@@ -675,17 +675,108 @@ class MessageManager:
         AND the pacing fields — so the wire's block is silently discarded.
         Top-level `text_settings`, `filters`, `senders`, `sign`, and
         `timezone` still come from the wire as normal.
+
+        Investigation aid (issue #6 / v2→v3): log wire-shape metadata
+        and the BEFORE/AFTER diff of key fields on every dispatch. The
+        "config didn't update on save" reports had no diagnostic signal
+        distinguishing "envelope never arrived" from "envelope arrived
+        but `_config.update_from_dict` silently ignored it". Without
+        these lines, a v2 envelope landing in a v3-only handler would
+        round-trip through `_handle_config` with no visible error.
         """
         from lib_shared.effects_loader import is_effects_settings_override_active
 
+        # Wire-shape metadata — visible to grep as `[debug-dispatch]
+        # CONFIG_ENVELOPE_RECEIVED`. Top-level keys and the `version`
+        # field both matter: a v2 envelope (`version: 2`) arriving on
+        # a v3 handler should never silently coerce.
+        wire_version = payload.get("version") if isinstance(payload, dict) else None
+        top_keys = sorted(payload.keys()) if isinstance(payload, dict) else []
+        sender_phones = sorted(
+            s.get("phone", "") for s in (payload.get("senders") or []) if isinstance(s, dict)
+        )
+        ss = payload.get("sign_settings") if isinstance(payload, dict) else None
+        enforce = ss.get("enforce_allowed_senders") if isinstance(ss, dict) else None
+        logger.info(
+            "[debug-dispatch] CONFIG_ENVELOPE_RECEIVED wire_version=%s top_keys=%s "
+            "sign_name=%r sign_timezone=%r enforce=%s senders=%s filters=%d",
+            wire_version,
+            top_keys,
+            (ss or {}).get("sign_name") if isinstance(ss, dict) else None,
+            (ss or {}).get("timezone") if isinstance(ss, dict) else None,
+            enforce,
+            sender_phones,
+            len(payload.get("filters") or []) if isinstance(payload, dict) else 0,
+        )
+
+        # BEFORE snapshot of the in-memory state — so the trailing
+        # CONFIG_APPLIED line can describe which fields actually moved.
+        # Without this, a successful-looking apply might have been a
+        # no-op (every field already matched) and we wouldn't know.
+        # `sign_settings` is a `SignSettings` dataclass with a
+        # `to_dict()` accessor; `senders` is a `dict[str, dict]`
+        # keyed by normalized phone; `filters` is a `list[FilterRule]`.
+        _ss_before = getattr(self._config, "sign_settings", None)
+        before_sign_settings = (
+            _ss_before.to_dict() if _ss_before is not None and hasattr(_ss_before, "to_dict") else {}
+        )
+        before_sender_phones = sorted((getattr(self._config, "senders", {}) or {}).keys())
+        before_filters = [
+            f.pattern for f in (getattr(self._config, "filters", []) or [])
+            if getattr(f, "type", None) == "message"
+        ]
+
         payload = dict(payload) if isinstance(payload, dict) else payload
         if isinstance(payload, dict) and is_effects_settings_override_active() and "effects_settings" in payload:
-            logger.debug("MessageManager dropping wire effects_settings (override active)")
+            logger.info(
+                "[debug-dispatch] CONFIG_OVERRIDE_STRIP dropping wire effects_settings "
+                "(EFFECTS_SETTINGS_OVERRIDE active on this runtime)"
+            )
             payload.pop("effects_settings", None)
+        # Schema migration hook: if a v2 envelope reaches a v3-only
+        # handler, log it loudly. We don't run the migration here
+        # (Flask is the only publisher and always writes v3) — but if
+        # a v2 envelope somehow arrives (cached browser? legacy broker
+        # forwarder?) we want to know rather than silently coerce.
+        if isinstance(payload, dict) and wire_version == 2:
+            logger.warning(
+                "[debug-dispatch] CONFIG_MIGRATION received v2 envelope on a v3-only handler; "
+                "applying raw (no _v2_to_v3 migration runs here — Flask should never publish v2)"
+            )
         self._config.update_from_dict(payload or {})
         self._messages._enrich_messages(list(self._messages._msgs))
         post_filters = list(self._config.filters)
         post_suppressed = sum(1 for m in self._messages._msgs if getattr(m, "suppressed", False))
+
+        # AFTER snapshot — diff against BEFORE so the operator sees
+        # exactly what changed (or didn't).
+        _ss_after = getattr(self._config, "sign_settings", None)
+        after_sign_settings = (
+            _ss_after.to_dict() if _ss_after is not None and hasattr(_ss_after, "to_dict") else {}
+        )
+        after_sender_phones = sorted((getattr(self._config, "senders", {}) or {}).keys())
+        after_filters = [
+            f.pattern for f in (getattr(self._config, "filters", []) or [])
+            if getattr(f, "type", None) == "message"
+        ]
+
+        sign_changed = sorted(k for k in after_sign_settings if before_sign_settings.get(k) != after_sign_settings.get(k))
+        sender_added = sorted(set(after_sender_phones) - set(before_sender_phones))
+        sender_removed = sorted(set(before_sender_phones) - set(after_sender_phones))
+        filters_added = sorted(set(after_filters) - set(before_filters))
+        filters_removed = sorted(set(before_filters) - set(after_filters))
+
+        logger.info(
+            "[debug-dispatch] CONFIG_APPLIED sign_changed=%s sender_added=%s sender_removed=%s "
+            "filters_added=%s filters_removed=%d buffer_size=%d suppressed=%d",
+            sign_changed,
+            sender_added,
+            sender_removed,
+            filters_added,
+            len(filters_removed),
+            len(self._messages._msgs),
+            post_suppressed,
+        )
         logger.info(
             "[debug-dispatch] HANDLE_CONFIG_DONE filter_count=%d filter_ids=%s suppressed_in_buffer=%d buffer_size=%d",
             len(post_filters),

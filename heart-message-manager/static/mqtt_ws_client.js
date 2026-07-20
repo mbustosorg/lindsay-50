@@ -328,13 +328,57 @@ export function createMqttWsClient({
       // back to the broker so it doesn't requeue + retry.
       const flags = bytes[0] & 0x0f;
       const qos = (flags >> 1) & 0x03;
+      // Diagnostic: log every inbound PUBLISH at the wire level so the
+      // operator can see frame arrival even if downstream parsing fails.
+      // Without this, a frame whose payload becomes invalid JSON after
+      // a v2→v3 migration would silently disappear — only the
+      // Python-side `ENVELOPE_RECEIVED` log would fire (and only if
+      // JSON.parse succeeded). This is the upstream of that chain.
+      console.log(
+        "[mqtt-ws] PUBLISH received flags=" + flags + " qos=" + qos +
+        " bytes_len=" + bytes.length
+      );
       let parsed = null;
       try {
         parsed = parsePublish(bytes);
       } catch (e) {
-        console.error("[mqtt-ws] PUBLISH parse threw:", e && e.message, e);
+        console.error(
+          "[mqtt-ws] PUBLISH parse threw:", e && e.message, e,
+          "bytes_hex=", Array.from(bytes.slice(0, 32))
+            .map((b) => b.toString(16).padStart(2, "0")).join(" ")
+        );
       }
       if (parsed) {
+        // Diagnostic: decode the payload as JSON at this layer so we
+        // can see whether the wire shape is what `_handle_config`
+        // expects (`{type: "config", payload: {...}}`). Surface the
+        // envelope type and wire `version` field (when present) so a
+        // v2 envelope dropped into a v3-only handler shows up here
+        // with `wire_version=2` instead of vanishing.
+        let jsonOk = false;
+        let wireType = null;
+        let wireVersion = null;
+        try {
+          const obj = JSON.parse(parsed.payload);
+          jsonOk = true;
+          wireType = obj && obj.type;
+          wireVersion = obj && obj.payload && obj.payload.version;
+        } catch (e) {
+          console.warn(
+            "[mqtt-ws] PUBLISH payload is not valid JSON — type=",
+            typeof parsed.payload,
+            "len=", parsed.payload && parsed.payload.length,
+            "preview=", (parsed.payload || "").slice(0, 200),
+            "parse_err=", e && e.message
+          );
+        }
+        if (jsonOk) {
+          console.log(
+            "[mqtt-ws] PUBLISH ok type=" + wireType +
+            " wire_version=" + (wireVersion === undefined ? "missing" : wireVersion) +
+            " topic=" + parsed.topic
+          );
+        }
         emitEnvelope(parsed.payload);
       } else {
         console.warn(
