@@ -252,7 +252,7 @@
     <div class="grid grid-cols-2 gap-6 mb-4">
       <div>
         <label class="block text-sm font-medium text-slate-600 mb-2">
-          <input type="checkbox" name="enforcement_enabled" value="1"{% if cfg.text_settings.enforcement_enabled %} checked{% endif %} class="mr-2 align-middle">
+          <input type="checkbox" name="enforce_allowed_senders" value="1"{% if cfg.sign_settings.enforce_allowed_senders %} checked{% endif %} class="mr-2 align-middle">
           Enforce senders filter
         </label>
         <p class="text-xs text-slate-500">When checked, only senders with "Allowed" ticked render on the display. When unchecked, every message renders (display names still resolve).</p>
@@ -260,10 +260,10 @@
       <div>
         <label class="block text-sm font-medium text-slate-600 mb-2">Name display format</label>
         <select name="name_display_format" class="w-full px-4 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none">
-          <option value="full"{% if cfg.effects_settings.name_display_format == 'full' %} selected{% endif %}>Full name (First Last)</option>
-          <option value="first_initial"{% if cfg.effects_settings.name_display_format == 'first_initial' %} selected{% endif %}>First name + last initial (Alice S.)</option>
-          <option value="first"{% if cfg.effects_settings.name_display_format == 'first' %} selected{% endif %}>First name only (Alice)</option>
-          <option value="first_initial_if_duplicates"{% if cfg.effects_settings.name_display_format == 'first_initial_if_duplicates' %} selected{% endif %}>First name; last initial only if duplicate (default)</option>
+          <option value="full"{% if cfg.text_settings.name_display_format == 'full' %} selected{% endif %}>Full name (First Last)</option>
+          <option value="first_initial"{% if cfg.text_settings.name_display_format == 'first_initial' %} selected{% endif %}>First name + last initial (Alice S.)</option>
+          <option value="first"{% if cfg.text_settings.name_display_format == 'first' %} selected{% endif %}>First name only (Alice)</option>
+          <option value="first_initial_if_duplicates"{% if cfg.text_settings.name_display_format == 'first_initial_if_duplicates' %} selected{% endif %}>First name; last initial only if duplicate (default)</option>
         </select>
         <p class="text-xs text-slate-500 mt-1">How sender names appear on the display and in the admin UI. The default adds a last initial only when two or more senders share a first name.</p>
       </div>

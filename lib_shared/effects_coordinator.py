@@ -999,7 +999,7 @@ class EffectsCoordinator:
 
         The suffix comes from `cfg.senders[<normalized_phone>]["name"]`
         rendered through `format_display_name` with the configured
-        `effects_settings.name_display_format`. The leading eight-space
+        `text_settings.name_display_format`. The leading eight-space
         gap is fixed in the design — it visually separates the message
         body from the sender attribution on the 8px-font scrolling
         canvas. The format string is intentionally a constant here, not
@@ -1029,7 +1029,7 @@ class EffectsCoordinator:
         try:
             cfg = self.message_manager.config
             senders = dict(cfg.senders or {})
-            name_format = cfg.effects_settings.name_display_format or "first_initial_if_duplicates"
+            name_format = cfg.text_settings.name_display_format or "first_initial_if_duplicates"
         except Exception:  # noqa: BLE001 — best-effort: missing cfg must not break the scroller.
             return body
 

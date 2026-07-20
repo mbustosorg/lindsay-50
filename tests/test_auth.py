@@ -76,6 +76,11 @@ def _load_app_module(mock_cfg):
     models_mod.Message = MagicMock()
     models_mod.MessageEnvelope = MagicMock()
     models_mod.MessageView = MagicMock()
+    # TextSettings was added to main.py's import line as part of the
+    # #6 senders-filtering refactor — when the mock replaces
+    # lib_shared.models, main.py's `from lib_shared.models import
+    # EffectsSettings, TextSettings` would fail without a stand-in here.
+    models_mod.TextSettings = MagicMock()
     # New after the #26 effects-settings redesign — `main.py`'s
     # `_build_sign_config_from_request` validator consults
     # `EffectsSettings.MIN_LOOKBACK_DAYS`, `MAX_LOOKBACK_DAYS`, and

@@ -3,11 +3,11 @@
 Covers:
 - v3 senders wire shape: list[{phone, name, allowed}] → in-memory dict-of-dict
   keyed by normalize_phone(phone)
-- Defaults: empty dict, sign_settings, text_settings.enforcement_enabled,
-  effects_settings.name_display_format
+- Defaults: empty dict, sign_settings (incl. enforce_allowed_senders),
+  text_settings (incl. name_display_format)
 - from_dict / to_dict / round-trip with the new shape
 - No `status` field on senders entries (lifecycle is the LIST-level
-  text_settings.enforcement_enabled toggle)
+  sign_settings.enforce_allowed_senders toggle)
 - `allowed_senders` parameter is REMOVED
 - should_render_sender scenarios end-to-end through MessageManager
 - Unknown name_display_format is rejected
@@ -34,16 +34,16 @@ def test_default_sign_settings():
     assert c.sign_settings.timezone == "US/Pacific"
 
 
-def test_default_enforcement_enabled_true():
-    """Default text_settings.enforcement_enabled is True (senders master toggle on)."""
+def test_default_enforce_allowed_senders_true():
+    """Default sign_settings.enforce_allowed_senders is True (senders master toggle on)."""
     c = SignConfig()
-    assert c.text_settings.enforcement_enabled is True
+    assert c.sign_settings.enforce_allowed_senders is True
 
 
 def test_default_name_display_format():
-    """Default effects_settings.name_display_format is "first_initial_if_duplicates"."""
+    """Default text_settings.name_display_format is "first_initial_if_duplicates"."""
     c = SignConfig()
-    assert c.effects_settings.name_display_format == "first_initial_if_duplicates"
+    assert c.text_settings.name_display_format == "first_initial_if_duplicates"
 
 
 def test_from_dict_senders_list_shape():
@@ -84,13 +84,13 @@ def test_to_dict_emits_list_shape_sorted_by_phone():
 
 
 def test_to_dict_includes_all_v3_blocks():
-    """to_dict includes sign_settings, effects_settings (with name_display_format),
-    and text_settings (with enforcement_enabled)."""
+    """to_dict includes sign_settings (with enforce_allowed_senders),
+    text_settings (with name_display_format), and effects_settings."""
     c = SignConfig()
     d = c.to_dict()
     assert "sign_settings" in d
-    assert d["text_settings"]["enforcement_enabled"] is True
-    assert d["effects_settings"]["name_display_format"] == "first_initial_if_duplicates"
+    assert d["sign_settings"]["enforce_allowed_senders"] is True
+    assert d["text_settings"]["name_display_format"] == "first_initial_if_duplicates"
 
 
 def test_round_trip_senders_preserves_original_phone():
@@ -121,20 +121,20 @@ def test_sign_config_rejects_legacy_allowed_senders_kwarg():
 def test_from_dict_rejects_unknown_name_display_format():
     """from_dict raises ValueError on an unknown name_display_format value."""
     with pytest.raises(ValueError):
-        SignConfig.from_dict({"effects_settings": {"name_display_format": "last_only"}})
+        SignConfig.from_dict({"text_settings": {"name_display_format": "last_only"}})
 
 
 def test_from_dict_accepts_valid_name_display_format():
     """from_dict accepts the four valid format values."""
     for fmt in ("full", "first_initial", "first", "first_initial_if_duplicates"):
-        c = SignConfig.from_dict({"effects_settings": {"name_display_format": fmt}})
-        assert c.effects_settings.name_display_format == fmt
+        c = SignConfig.from_dict({"text_settings": {"name_display_format": fmt}})
+        assert c.text_settings.name_display_format == fmt
 
 
-def test_from_dict_rejects_non_bool_enforcement_enabled():
-    """from_dict raises ValueError when enforcement_enabled is not a bool."""
+def test_from_dict_rejects_non_bool_enforce_allowed_senders():
+    """from_dict raises ValueError when enforce_allowed_senders is not a bool."""
     with pytest.raises(ValueError):
-        SignConfig.from_dict({"text_settings": {"enforcement_enabled": "yes"}})
+        SignConfig.from_dict({"sign_settings": {"enforce_allowed_senders": "yes"}})
 
 
 # --- should_render_sender scenarios (Section 5.5) ---
@@ -236,7 +236,7 @@ def test_message_manager_renders_allowed_sender_when_enforcement_on():
 
 
 def test_message_manager_enforcement_off_bypasses_senders_allowlist():
-    """When enforcement_enabled=False, every sender renders regardless of senders list."""
+    """When enforce_allowed_senders=False, every sender renders regardless of senders list."""
     from lib_shared.message_manager import MessageManager
 
     mgr = MessageManager(
@@ -245,7 +245,7 @@ def test_message_manager_enforcement_off_bypasses_senders_allowlist():
         api_key="key",
     )
     # No senders entries — enforcement off → every sender renders
-    mgr.config.text_settings.enforcement_enabled = False
+    mgr.config.sign_settings.enforce_allowed_senders = False
     mgr._handle_message(
         {
             "id": "m1",

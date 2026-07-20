@@ -242,13 +242,12 @@ class TestSchema:
     def test_top_level_keys_subset_of_EffectsSettings_plus_schema_version(self):
         """Top-level keys ⊆ EffectsSettings dataclass fields ∪ {schema_version}.
 
-        Most fields live in the JSON; a few (`name_display_format`)
-        are code-side constants that fall through the loader when the
-        JSON omits them — see `EffectsSettings.__init__` and the
-        feedback memory `behavioral_knobs_in_code.md`. So we test
-        subset here, not equality: every JSON key must be a known
-        EffectsSettings field (or `schema_version`), but the canonical
-        JSON doesn't have to enumerate every behavioral knob.
+        Behavioral knobs (e.g. selector weights, eligibility windows)
+        live in code rather than the JSON — see the feedback memory
+        `behavioral_knobs_in_code.md`. So we test subset here, not
+        equality: every JSON key must be a known EffectsSettings
+        field (or `schema_version`), but the canonical JSON doesn't
+        have to enumerate every behavioral knob.
         """
         cfg = load_effects_settings()
         from lib_shared.models import EffectsSettings

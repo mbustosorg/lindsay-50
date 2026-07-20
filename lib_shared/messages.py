@@ -18,7 +18,7 @@ from lib_shared.phone_utils import normalize_phone
 def should_render_sender(
     sender: object,
     senders: dict,
-    enforcement_enabled: bool = True,
+    enforce_allowed_senders: bool = True,
 ) -> bool:
     """Decide whether a message from `sender` should render.
 
@@ -29,11 +29,12 @@ def should_render_sender(
       - `senders` — the allowlist dict (`cfg.senders`):
         `dict[str, dict]` mapping normalized phone to
         `{"name", "allowed", "phone"}`.
-      - `enforcement_enabled` — the master toggle (cfg.text_settings.enforcement_enabled).
+      - `enforce_allowed_senders` — the master toggle
+        (cfg.sign_settings.enforce_allowed_senders).
 
     The decision rule:
 
-      1. `not enforcement_enabled` → True (master toggle off; every
+      1. `not enforce_allowed_senders` → True (master toggle off; every
          sender renders, regardless of per-entry state — names still
          resolve for display).
       2. sender NOT in `senders` → False (allowlist mode is exclusive
@@ -46,13 +47,13 @@ def should_render_sender(
             via `phone_utils.normalize_phone` before lookup).
         senders: The `cfg.senders` dict (mapping normalized phone → value
             dict with `"allowed"` field).
-        enforcement_enabled: The master enforcement toggle (default True).
+        enforce_allowed_senders: The master enforcement toggle (default True).
 
     Returns:
         True iff the message should render; False if the sender list
         decided to suppress it.
     """
-    if not enforcement_enabled:
+    if not enforce_allowed_senders:
         return True
     if not isinstance(sender, str):
         return False
@@ -139,7 +140,7 @@ class FilteredMessages:
 
         v3 (issue #6): no `type == "sender"` branch — sender matching
         moved to `cfg.senders` (per-entry `allowed` + master
-        `text_settings.enforcement_enabled` toggle). A rule whose
+        `sign_settings.enforce_allowed_senders` toggle). A rule whose
         `type` is `"sender"` will fall through to `False` here; the
         `_v2_to_v3` migration converts such rules into senders list
         entries before they reach this code.
@@ -164,12 +165,12 @@ class FilteredMessages:
         populated on the buffered views. Override to customize.
 
         v3 (issue #6): after the FilterRule pass, consults
-        `should_render_sender` to apply the master `enforcement_enabled`
+        `should_render_sender` to apply the master `enforce_allowed_senders`
         toggle + per-entry `allowed` flag. When the senders list
         suppresses a message AND no FilterRule matched, appends a
         synthetic `sender_action` rule to `entry.rules` so the admin
         UI can render a "Suppressed by sender action" badge. When
-        `enforcement_enabled` is False, no suppression decision is
+        `enforce_allowed_senders` is False, no suppression decision is
         made (the master toggle bypasses the filter); no synthetic
         marker is added.
 
@@ -178,9 +179,9 @@ class FilteredMessages:
         produces) for disallowed senders in the admin UI.
         """
         timezone = self._config.sign_settings.timezone
-        enforcement_enabled = bool(self._config.text_settings.enforcement_enabled)
+        enforce_allowed_senders = bool(self._config.sign_settings.enforce_allowed_senders)
         senders = self._config.senders
-        name_format = self._config.effects_settings.name_display_format
+        name_format = self._config.text_settings.name_display_format
         # Precompute `all_first_names` once per call — stable across
         # the buffer's messages. Empty/missing names contribute an
         # empty string to the list (no name to format either way).
@@ -198,7 +199,7 @@ class FilteredMessages:
             entry.sender_name = format_display_name(stored_name, name_format, all_first_names)
 
             # Apply senders list decision (master toggle + per-entry allowed).
-            sender_passes = should_render_sender(sender, senders, enforcement_enabled)
+            sender_passes = should_render_sender(sender, senders, enforce_allowed_senders)
             if not sender_passes:
                 entry.suppressed = True
                 if not suppressing:

@@ -22,14 +22,14 @@ from lib_shared.message_manager import MessageManager
 from lib_shared.models import EffectsSettings, FilterRule, Message, SignConfig, SignSettings, TextSettings
 
 
-def _make_config(timezone="America/Los_Angeles", filters=None, senders=None, enforcement_enabled=False):
-    """Build a SignConfig; defaults `enforcement_enabled=False` so the bare
+def _make_config(timezone="America/Los_Angeles", filters=None, senders=None, enforce_allowed_senders=False):
+    """Build a SignConfig; defaults `enforce_allowed_senders=False` so the bare
     "+1" senders in this file's tests don't get suppressed by the senders
     allowlist (an empty senders dict + enforcement ON would suppress everything)."""
     return SignConfig(
         effects_settings=EffectsSettings(),
-        text_settings=TextSettings(enforcement_enabled=enforcement_enabled),
-        sign_settings=SignSettings(timezone=timezone),
+        text_settings=TextSettings(),
+        sign_settings=SignSettings(timezone=timezone, enforce_allowed_senders=enforce_allowed_senders),
         filters=list(filters or []),
         senders=dict(senders or {}),
     )
@@ -48,7 +48,7 @@ def test_handle_message_enriches_only_new_entry():
         api_key="key",
     )
     # Disable senders enforcement so the bare "+1" sender isn't suppressed.
-    mgr._config.text_settings.enforcement_enabled = False
+    mgr._config.sign_settings.enforce_allowed_senders = False
     mgr._handle_message(
         {
             "id": "a",
@@ -132,7 +132,7 @@ def test_handle_config_re_enriches_all_entries():
         api_key="key",
     )
     # Disable senders enforcement so the bare "+1" sender isn't suppressed.
-    mgr._config.text_settings.enforcement_enabled = False
+    mgr._config.sign_settings.enforce_allowed_senders = False
     mgr._handle_message(
         {
             "id": "a",
@@ -164,9 +164,12 @@ def test_handle_config_re_enriches_all_entries():
                 "speed": 3,
                 "color": 16711680,
                 "text_effect": "scroll",
-                "enforcement_enabled": False,
             },
-            "sign_settings": {"sign_name": "Lindsay's Heart", "timezone": "US/Pacific"},
+            "sign_settings": {
+                "sign_name": "Lindsay's Heart",
+                "timezone": "US/Pacific",
+                "enforce_allowed_senders": False,
+            },
             "version": 3,
         }
     )

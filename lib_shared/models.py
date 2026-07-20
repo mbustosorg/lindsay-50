@@ -282,7 +282,8 @@ class FilterRule:
 
 
 class SignSettings:
-    """Sign configuration: identity (sign_name) and operational metadata (timezone).
+    """Sign configuration: identity (sign_name), operational metadata (timezone),
+    and the senders-allowlist master toggle.
 
     v3 layout (issue #6 / implement-senders-filtering):
       - `name` was renamed to `sign_name` (matches the HTML form
@@ -290,6 +291,11 @@ class SignSettings:
         "name" in the context of `SignConfig`).
       - `timezone` moved from a top-level field on `SignConfig`
         into this nested block.
+      - `enforce_allowed_senders` (formerly `text_settings.enforcement_enabled`)
+        is the master toggle for the senders allowlist filter. Lives here —
+        alongside `sign_name` / `timezone` — because it's a sign-level policy
+        knob (per-deployment), not a presentation knob (which live with the
+        text/effects blocks).
 
     The block is renamed `SignSettings` → `SignConfig.sign_settings`
     (was `SignConfig.sign`) to match the `effects_settings` /
@@ -298,24 +304,33 @@ class SignSettings:
     Attributes:
         sign_name: Display name shown on the sign (default "Lindsay's Heart").
         timezone: IANA timezone string (default "US/Pacific").
+        enforce_allowed_senders: Master toggle for the senders allowlist
+            filter. True (default) means `cfg.senders` governs which
+            senders render; False bypasses the filter entirely (every
+            message renders, display names still resolve).
     """
 
     DEFAULT_SIGN_NAME = "Lindsay's Heart"
     DEFAULT_TIMEZONE = "US/Pacific"
+    DEFAULT_ENFORCE_ALLOWED_SENDERS = True
 
     def __init__(
         self,
         sign_name: str = DEFAULT_SIGN_NAME,
         timezone: str = DEFAULT_TIMEZONE,
+        enforce_allowed_senders: bool = DEFAULT_ENFORCE_ALLOWED_SENDERS,
     ) -> None:
         """Initialize SignSettings.
 
         Args:
             sign_name: Display name shown on the sign (default "Lindsay's Heart").
             timezone: IANA timezone string (default "US/Pacific").
+            enforce_allowed_senders: Master toggle for the senders
+                allowlist filter (default True).
         """
         self.sign_name = sign_name
         self.timezone = timezone
+        self.enforce_allowed_senders = enforce_allowed_senders
 
     @classmethod
     def from_dict(cls, d):
@@ -323,20 +338,29 @@ class SignSettings:
 
         Args:
             d: dict with optional keys: sign_name (default "Lindsay's Heart"),
-                timezone (default "US/Pacific"). May also be `None`.
+                timezone (default "US/Pacific"),
+                enforce_allowed_senders (default True). May also be `None`.
 
         Returns:
             A new SignSettings instance.
         """
         if d is None:
             return cls()
+        enforce = d.get("enforce_allowed_senders", cls.DEFAULT_ENFORCE_ALLOWED_SENDERS)
+        if not isinstance(enforce, bool):
+            raise ValueError(f"enforce_allowed_senders must be a bool, got {type(enforce).__name__}")
         return cls(
             sign_name=d.get("sign_name", cls.DEFAULT_SIGN_NAME),
             timezone=d.get("timezone", cls.DEFAULT_TIMEZONE),
+            enforce_allowed_senders=enforce,
         )
 
     def to_dict(self):
-        return {"sign_name": self.sign_name, "timezone": self.timezone}
+        return {
+            "sign_name": self.sign_name,
+            "timezone": self.timezone,
+            "enforce_allowed_senders": self.enforce_allowed_senders,
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -382,22 +406,6 @@ class EffectsSettings:
     VALID_SELECTOR_ALGORITHMS = ("weighted", "random")
     DEFAULT_SELECTOR_ALGORITHM = "weighted"
 
-    # Name display format (issue #6 / implement-senders-filtering).
-    # The field governs how `MessageView.sender_name` is computed from
-    # the stored `name` field. The format lives here in
-    # `effects_settings` (alongside the effects list and pacing fields)
-    # because it's a presentation knob — display-format knobs group
-    # with other presentation knobs. See
-    # `lib_shared/name_utils.format_display_name` for the per-format
-    # semantics.
-    VALID_NAME_DISPLAY_FORMATS = (
-        "full",
-        "first_initial",
-        "first",
-        "first_initial_if_duplicates",
-    )
-    DEFAULT_NAME_DISPLAY_FORMAT = "first_initial_if_duplicates"
-
     # Eligibility-window bounds. The admin UI surfaces `lookback_days`
     # directly; the lower bound (1) keeps the operator from accidentally
     # filtering every message out, and the upper bound (365) caps the
@@ -416,7 +424,6 @@ class EffectsSettings:
         idle_seconds: Optional[float] = None,
         lookback_days: Optional[int] = None,
         selector_algorithm: Optional[str] = None,
-        name_display_format: Optional[str] = None,
     ):
         """Initialize EffectsSettings.
 
@@ -470,11 +477,6 @@ class EffectsSettings:
             if selector_algorithm is not None
             else loader_cfg.get("selector_algorithm", self.DEFAULT_SELECTOR_ALGORITHM)
         )
-        self.name_display_format = (
-            name_display_format
-            if name_display_format is not None
-            else loader_cfg.get("name_display_format", self.DEFAULT_NAME_DISPLAY_FORMAT)
-        )
 
     @property
     def lookback_seconds(self) -> float:
@@ -511,12 +513,6 @@ class EffectsSettings:
         ):
             raise ValueError("effects must be a list of {name: str, enabled: bool} objects")
 
-        name_display_format = d.get("name_display_format")
-        if name_display_format is not None and name_display_format not in cls.VALID_NAME_DISPLAY_FORMATS:
-            raise ValueError(
-                f"name_display_format must be one of {cls.VALID_NAME_DISPLAY_FORMATS}, " f"got {name_display_format!r}"
-            )
-
         # Pacing fields are passed as `None` when absent so `__init__`
         # can fall through to the loader (canonical or operator
         # override). This way an empty wire envelope (`{}`) on a device
@@ -542,7 +538,6 @@ class EffectsSettings:
             idle_seconds=_f("idle_seconds"),
             lookback_days=_i("lookback_days"),
             selector_algorithm=d.get("selector_algorithm"),
-            name_display_format=name_display_format,
         )
 
     def to_dict(self):
@@ -555,7 +550,6 @@ class EffectsSettings:
             "idle_seconds": self.idle_seconds,
             "lookback_days": self.lookback_days,
             "selector_algorithm": self.selector_algorithm,
-            "name_display_format": self.name_display_format,
         }
 
     def validate(self):
@@ -580,11 +574,6 @@ class EffectsSettings:
                 f"selector_algorithm must be one of {self.VALID_SELECTOR_ALGORITHMS}, "
                 f"got {self.selector_algorithm!r}"
             )
-        if self.name_display_format not in self.VALID_NAME_DISPLAY_FORMATS:
-            raise ValueError(
-                f"name_display_format must be one of {self.VALID_NAME_DISPLAY_FORMATS}, "
-                f"got {self.name_display_format!r}"
-            )
         if not isinstance(self.effects, list) or not all(
             isinstance(n, dict) and isinstance(n.get("name"), str) and isinstance(n.get("enabled"), bool)
             for n in self.effects
@@ -593,7 +582,7 @@ class EffectsSettings:
 
 
 class TextSettings:
-    """Text rendering config: scroll speed, color, text_effect.
+    """Text rendering config: scroll speed, color, text_effect, name format.
 
     `speed` is the user-facing knob (1=Low to 5=High). The underlying
     `frame_delay` / `offset_seconds` are derived from it by the scroller
@@ -602,7 +591,11 @@ class TextSettings:
 
     Named "text_settings" (not "scroller_settings") because the scroller
     is just one text effect — future text effects (swirl, bounce) will
-    share the same block.
+    share the same block. The `name_display_format` field lives here
+    alongside `color` / `text_effect` because it governs how sender names
+    render (a presentation knob — pairs with the text rendering knobs).
+    The senders allowlist master toggle is a sign-level policy gate (not
+    a presentation knob) and lives in `sign_settings.enforce_allowed_senders`.
     """
 
     # v1 supports "scroll" only; more values land as future text effects.
@@ -611,22 +604,26 @@ class TextSettings:
     MAX_SPEED = 5
     DEFAULT_SPEED = 3
 
-    # Senders-filter master toggle (issue #6 / implement-senders-filtering).
-    # Lives inside `text_settings` because it's the policy gate for
-    # which messages reach the display; display-side policy knobs group
-    # here alongside `speed` / `color` / `text_effect`. See the
-    # `senders-status` capability — when False, every message renders
-    # regardless of `cfg.senders[<phone>]["allowed"]`; when True, only
-    # `allowed=True` senders render (and unlisted senders are
-    # suppressed).
-    DEFAULT_ENFORCEMENT_ENABLED = True
+    # Name display format (issue #6 / implement-senders-filtering).
+    # Governs how `MessageView.sender_name` is computed from the stored
+    # `name` field. Lives here (next to `color` / `text_effect`) because
+    # it's a presentation knob — display-format knobs group with other
+    # presentation knobs. See `lib_shared/name_utils.format_display_name`
+    # for the per-format semantics.
+    VALID_NAME_DISPLAY_FORMATS = (
+        "full",
+        "first_initial",
+        "first",
+        "first_initial_if_duplicates",
+    )
+    DEFAULT_NAME_DISPLAY_FORMAT = "first_initial_if_duplicates"
 
     def __init__(
         self,
         speed: int = DEFAULT_SPEED,
         color: int = 0xFF0000,
         text_effect: str = "scroll",
-        enforcement_enabled: bool = DEFAULT_ENFORCEMENT_ENABLED,
+        name_display_format: Optional[str] = None,
     ):
         """Initialize TextSettings.
 
@@ -634,34 +631,34 @@ class TextSettings:
             speed: 1..5 scroll speed (1=Low, 3=Medium default, 5=High).
             color: 24-bit RGB color value (default 0xFF0000 red).
             text_effect: One of TEXT_EFFECTS (currently "scroll").
-            enforcement_enabled: Master toggle for the senders
-                allowlist filter. True (default) means `cfg.senders`
-                governs which senders render; False bypasses the
-                filter entirely (every message renders, display names
-                still resolve).
+            name_display_format: One of VALID_NAME_DISPLAY_FORMATS.
+                Default `None` falls through to DEFAULT_NAME_DISPLAY_FORMAT.
         """
         self.speed = speed
         self.color = color
         self.text_effect = text_effect
-        self.enforcement_enabled = enforcement_enabled
+        self.name_display_format = (
+            name_display_format if name_display_format is not None else self.DEFAULT_NAME_DISPLAY_FORMAT
+        )
 
     @classmethod
     def from_dict(cls, d):
         """Parse from a dict (wire shape).
 
         Args:
-            d: dict with optional keys: speed, color, text_effect. Legacy
-                `frame_delay` / `offset_seconds` keys are silently ignored —
-                the new defaults are sensible and the user said v2 payloads
-                are disposable.
+            d: dict with optional keys: speed, color, text_effect,
+                name_display_format. Legacy `frame_delay` / `offset_seconds`
+                keys are silently ignored — the new defaults are sensible
+                and the user said v2 payloads are disposable.
 
         Returns:
             A new TextSettings instance.
 
         Raises:
-            ValueError: on an unknown text_effect, or on an out-of-range
-                or non-integer `speed` (callers like the admin validation
-                helper catch and translate to a 400).
+            ValueError: on an unknown text_effect or name_display_format,
+                or on an out-of-range or non-integer `speed` (callers
+                like the admin validation helper catch and translate
+                to a 400).
         """
         d = d or {}
         text_effect = d.get("text_effect", "scroll")
@@ -670,14 +667,16 @@ class TextSettings:
         speed = d.get("speed", cls.DEFAULT_SPEED)
         if isinstance(speed, bool) or not isinstance(speed, int) or not cls.MIN_SPEED <= speed <= cls.MAX_SPEED:
             raise ValueError(f"speed must be an integer in {cls.MIN_SPEED}..{cls.MAX_SPEED}, got {speed!r}")
-        enforcement_enabled = d.get("enforcement_enabled", cls.DEFAULT_ENFORCEMENT_ENABLED)
-        if not isinstance(enforcement_enabled, bool):
-            raise ValueError(f"enforcement_enabled must be a bool, got {type(enforcement_enabled).__name__}")
+        name_display_format = d.get("name_display_format", cls.DEFAULT_NAME_DISPLAY_FORMAT)
+        if name_display_format not in cls.VALID_NAME_DISPLAY_FORMATS:
+            raise ValueError(
+                f"name_display_format must be one of {cls.VALID_NAME_DISPLAY_FORMATS}, " f"got {name_display_format!r}"
+            )
         return cls(
             speed=speed,
             color=int(d.get("color", 0xFF0000)),
             text_effect=text_effect,
-            enforcement_enabled=enforcement_enabled,
+            name_display_format=name_display_format,
         )
 
     def to_dict(self):
@@ -686,7 +685,7 @@ class TextSettings:
             "speed": self.speed,
             "color": self.color,
             "text_effect": self.text_effect,
-            "enforcement_enabled": self.enforcement_enabled,
+            "name_display_format": self.name_display_format,
         }
 
     def validate(self):
@@ -694,7 +693,7 @@ class TextSettings:
 
         Raises:
             ValueError: on speed outside 1..5, color outside 0..0xFFFFFF,
-                an unknown text_effect, or a non-bool enforcement_enabled.
+                an unknown text_effect, or an unknown name_display_format.
         """
         if (
             isinstance(self.speed, bool)
@@ -706,8 +705,11 @@ class TextSettings:
             raise ValueError("color must be in range 0..0xFFFFFF")
         if self.text_effect not in self.TEXT_EFFECTS:
             raise ValueError(f"text_effect must be one of {self.TEXT_EFFECTS}")
-        if not isinstance(self.enforcement_enabled, bool):
-            raise ValueError(f"enforcement_enabled must be a bool, got {type(self.enforcement_enabled).__name__}")
+        if self.name_display_format not in self.VALID_NAME_DISPLAY_FORMATS:
+            raise ValueError(
+                f"name_display_format must be one of {self.VALID_NAME_DISPLAY_FORMATS}, "
+                f"got {self.name_display_format!r}"
+            )
 
 
 class SignConfig:
@@ -715,17 +717,18 @@ class SignConfig:
 
     v3 layout (issue #6 / implement-senders-filtering):
       - `sign_settings` (was `sign`) holds `sign_name` (was `name`) and
-        `timezone` (was a top-level field).
-      - `text_settings` gains `enforcement_enabled` (was a top-level
-        field in the draft schema).
-      - `effects_settings` gains `name_display_format`.
+        `timezone` (was a top-level field), and the senders-allowlist
+        master toggle `enforce_allowed_senders` (was a draft-schema
+        top-level field).
+      - `text_settings` gains `name_display_format` (presentation knob
+        alongside `speed` / `color` / `text_effect`).
       - `senders` is a `dict[str, dict]` mapping NORMALIZED phone →
         `{"name", "allowed", "phone"}` (was `dict[str, str]`).
       - `filters` use `FilterRule.status: "enabled" | "disabled"` (was
         `enabled: bool`) and `type` is restricted to `keyword`, `regex`,
         `message` (sender type REMOVED — sender matching moved to the
         senders list).
-      - No top-level `sign`, `timezone`, `enforcement_enabled`, or
+      - No top-level `sign`, `timezone`, `enforce_allowed_senders`, or
         `name_display_format` keys. No top-level `allowed_senders` (it
         was already deprecated).
 
@@ -759,7 +762,8 @@ class SignConfig:
             effects_settings: EffectsSettings instance or dict (default
                 built from empty dict).
             text_settings: TextSettings instance or dict (default built
-                from empty dict — enforcement_enabled=True by default).
+                from empty dict — name_display_format=
+                "first_initial_if_duplicates" by default).
         """
         self.filters = filters or []
         self.senders = senders if senders is not None else {}
@@ -855,7 +859,7 @@ class SignConfig:
         Returns:
             dict with keys: filters, senders, sign_settings, effects_settings,
             text_settings, version. No top-level `sign`, `timezone`,
-            `enforcement_enabled`, or `name_display_format` keys (all
+            `enforce_allowed_senders`, or `name_display_format` keys (all
             live inside their respective nested settings blocks).
         """
         return self._with_lock(

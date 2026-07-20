@@ -41,7 +41,7 @@ def _v1_to_v2(d: dict) -> dict:
 
 
 def _v2_to_v3(d: dict) -> dict:
-    """v2 → v3: nest `sign`/`timezone`/`enforcement_enabled`/`name_display_format`,
+    """v2 → v3: nest `sign`/`timezone`/`enforce_allowed_senders`/`name_display_format`,
     convert `type=sender` filters into senders list entries, rename `enabled: bool`
     → `status: "enabled"|"disabled"` on remaining rules, and map legacy
     `status="allowed"|"blocked"` on senders entries → `allowed: bool`.
@@ -54,8 +54,9 @@ def _v2_to_v3(d: dict) -> dict:
     1. Structural moves:
         - top-level `sign` block → `sign_settings` (renamed `name` → `sign_name`)
         - top-level `timezone` → `sign_settings.timezone`
-        - top-level `enforcement_enabled` → `text_settings.enforcement_enabled`
-        - top-level `name_display_format` → `effects_settings.name_display_format`
+        - top-level `enforce_allowed_senders` →
+          `sign_settings.enforce_allowed_senders`
+        - top-level `name_display_format` → `text_settings.name_display_format`
        Existing `sign_settings` / `text_settings` / `effects_settings` blocks
        are preserved (the merge is additive — pre-existing values win; the
        new field is only added if absent).
@@ -76,7 +77,7 @@ def _v2_to_v3(d: dict) -> dict:
     """
     out = dict(d)
 
-    # --- Step 1a: build sign_settings ---
+    # --- Step 1a: build sign_settings (incl. enforce_allowed_senders) ---
     existing_sign = out.get("sign_settings")
     if isinstance(existing_sign, dict):
         # Existing block wins; only fill in missing fields.
@@ -100,43 +101,45 @@ def _v2_to_v3(d: dict) -> dict:
         out.pop("timezone")  # drop top-level; sign_settings already has one
     if "timezone" not in sign_block:
         sign_block["timezone"] = SignSettings.DEFAULT_TIMEZONE
+    # The master toggle lands in `sign_settings.enforce_allowed_senders`.
+    # Top-level legacy `enforcement_enabled` is dropped on the floor —
+    # no v3 S3 payload has ever been deployed with that key, so the
+    # migration doesn't need to translate the old name.
+    if "enforce_allowed_senders" in out and "enforce_allowed_senders" not in sign_block:
+        sign_block["enforce_allowed_senders"] = out.pop("enforce_allowed_senders")
+    else:
+        out.pop("enforce_allowed_senders", None)
+        out.pop("enforcement_enabled", None)
+    if "enforce_allowed_senders" not in sign_block:
+        sign_block["enforce_allowed_senders"] = SignSettings.DEFAULT_ENFORCE_ALLOWED_SENDERS
     out["sign_settings"] = sign_block
 
-    # --- Step 1b: build text_settings with enforcement_enabled ---
+    # --- Step 1b: build text_settings with name_display_format ---
     existing_text = out.get("text_settings")
     if isinstance(existing_text, dict):
         text_block = dict(existing_text)
-        # Only merge new fields when the existing block is a real dict.
-        if "enforcement_enabled" in out and "enforcement_enabled" not in text_block:
-            text_block["enforcement_enabled"] = out.pop("enforcement_enabled")
+        if "name_display_format" in out and "name_display_format" not in text_block:
+            text_block["name_display_format"] = out.pop("name_display_format")
         else:
-            out.pop("enforcement_enabled", None)
-        if "enforcement_enabled" not in text_block:
-            text_block["enforcement_enabled"] = TextSettings.DEFAULT_ENFORCEMENT_ENABLED
+            out.pop("name_display_format", None)
+        if "name_display_format" not in text_block:
+            text_block["name_display_format"] = TextSettings.DEFAULT_NAME_DISPLAY_FORMAT
         out["text_settings"] = text_block
     else:
         # Non-dict existing value (None, str, list, etc.) — preserve it
         # verbatim so the upstream validator can return 400. We still
-        # drop the top-level `enforcement_enabled` (the new field) so
+        # drop the top-level `name_display_format` (the new field) so
         # it doesn't leak as a stray top-level key.
-        out.pop("enforcement_enabled", None)
-
-    # --- Step 1c: build effects_settings with name_display_format ---
-    existing_effects = out.get("effects_settings")
-    if isinstance(existing_effects, dict):
-        effects_block = dict(existing_effects)
-        if "name_display_format" in out and "name_display_format" not in effects_block:
-            effects_block["name_display_format"] = out.pop("name_display_format")
-        else:
-            out.pop("name_display_format", None)
-        if "name_display_format" not in effects_block:
-            effects_block["name_display_format"] = EffectsSettings.DEFAULT_NAME_DISPLAY_FORMAT
-        out["effects_settings"] = effects_block
-    else:
-        # Non-dict existing value — preserve verbatim so the upstream
-        # validator can return 400. We still drop the top-level
-        # `name_display_format` (the new field).
         out.pop("name_display_format", None)
+
+    # --- Step 1c: effects_settings (no v3 additions to this block) ---
+    # `_v1_to_v2` already constructed a default `effects_settings`
+    # block when one was missing from a v1 payload, and any v2
+    # payload carried the block. After both migrations run, an absent
+    # or non-dict `effects_settings` is invalid and should be left
+    # for the upstream `/api/config` validator to reject — never
+    # silently coerce it into a default here (that would mask
+    # malformed wire payloads).
 
     # --- Step 2: senders entry migration ---
     senders = out.get("senders", [])

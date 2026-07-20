@@ -10,8 +10,8 @@ shape via sqlite.put_config.call_args.
 Covers:
 - POST parses parallel `sender_name` / `sender_phone` / `sender_state`
   lists into cfg.senders keyed by normalize_phone(phone)
-- POST `enforcement_enabled` checkbox → cfg.text_settings.enforcement_enabled
-- POST `name_display_format` dropdown → cfg.effects_settings.name_display_format
+- POST `enforce_allowed_senders` checkbox → cfg.sign_settings.enforce_allowed_senders
+- POST `name_display_format` dropdown → cfg.text_settings.name_display_format
 - POST sign_name → cfg.sign_settings.sign_name
 - POST timezone → cfg.sign_settings.timezone (when valid)
 - POST filter_rule add (filter_action=add) creates a new FilterRule
@@ -238,22 +238,22 @@ def _base_form(**overrides):
         "sender_name": [""],
         "sender_phone": [""],
         "sender_state": [":1"],
-        # Sign identity
+        # Sign identity + senders master toggle
         "sign_name": "Test Sign",
         "timezone": "US/Pacific",
-        # Text settings
+        "enforce_allowed_senders": "1",
+        # Text settings (incl. name_display_format)
         "text_settings_speed": "3",
         "text_settings_color": "16711680",
         "text_settings_text_effect": "scroll",
-        "enforcement_enabled": "1",
-        # Effects settings (pacing + lookback + selector + display format)
+        "name_display_format": "first_initial_if_duplicates",
+        # Effects settings (pacing + lookback + selector)
         "effects_settings_fade_seconds": "2.0",
         "effects_settings_hold_seconds": "15.0",
         "effects_settings_intro_seconds": "5.0",
         "effects_settings_idle_seconds": "300.0",
         "effects_settings_lookback_days": "14",
         "effects_settings_selector_algorithm": "weighted",
-        "name_display_format": "first_initial_if_duplicates",
         # Filter rules — one empty row by default
         "filter_pattern": [""],
         "filter_type": ["keyword"],
@@ -508,33 +508,33 @@ def test_post_senders_malformed_state_dropped_with_warning(app_with_real_cfg, cl
     assert real_cfg.senders[key]["allowed"] is True
 
 
-def test_post_enforcement_enabled_checkbox_writes_to_text_settings(app_with_real_cfg, client):
-    """enforcement_enabled=1 → text_settings.enforcement_enabled=True."""
+def test_post_enforce_allowed_senders_checkbox_writes_to_sign_settings(app_with_real_cfg, client):
+    """enforce_allowed_senders=1 → sign_settings.enforce_allowed_senders=True."""
     flask_app, real_cfg = app_with_real_cfg
     _login(client)
-    response = client.post("/settings", data=_base_form(enforcement_enabled="1"))
+    response = client.post("/settings", data=_base_form(enforce_allowed_senders="1"))
     assert response.status_code in (200, 302)
-    assert real_cfg.text_settings.enforcement_enabled is True
+    assert real_cfg.sign_settings.enforce_allowed_senders is True
 
 
-def test_post_enforcement_enabled_unchecked_keeps_default(app_with_real_cfg, client):
-    """When the checkbox is absent, enforcement_enabled is False."""
+def test_post_enforce_allowed_senders_unchecked_keeps_default(app_with_real_cfg, client):
+    """When the checkbox is absent, enforce_allowed_senders is False."""
     flask_app, real_cfg = app_with_real_cfg
     _login(client)
     form = _base_form()
-    form.pop("enforcement_enabled")
+    form.pop("enforce_allowed_senders")
     response = client.post("/settings", data=form)
     assert response.status_code in (200, 302)
-    assert real_cfg.text_settings.enforcement_enabled is False
+    assert real_cfg.sign_settings.enforce_allowed_senders is False
 
 
-def test_post_name_display_format_dropdown_writes_to_effects_settings(app_with_real_cfg, client):
-    """name_display_format=full → effects_settings.name_display_format='full'."""
+def test_post_name_display_format_dropdown_writes_to_text_settings(app_with_real_cfg, client):
+    """name_display_format=full → text_settings.name_display_format='full'."""
     flask_app, real_cfg = app_with_real_cfg
     _login(client)
     response = client.post("/settings", data=_base_form(name_display_format="full"))
     assert response.status_code in (200, 302)
-    assert real_cfg.effects_settings.name_display_format == "full"
+    assert real_cfg.text_settings.name_display_format == "full"
 
 
 def test_post_sign_name_writes_to_sign_settings(app_with_real_cfg, client):

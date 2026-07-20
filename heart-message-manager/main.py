@@ -59,7 +59,7 @@ from lib_shared.boot_config import BootConfig, from_heroku_or_git as _boot_confi
 from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.effects_loader import load_effects_settings
 from lib_shared.models import SignConfig, FilterRule, Message
-from lib_shared.models import EffectsSettings
+from lib_shared.models import EffectsSettings, TextSettings
 from lib_shared.models import MessageEnvelope
 from lib_shared.scroller_base import ScrollerBase
 from lib_shared.sign_status import LatestSignStatus, REQUIRED_SNAPSHOT_KEYS
@@ -1284,8 +1284,9 @@ def settings():
                 pass  # ignore invalid timezone, keep current value
 
         # Text settings: speed (1..5), color, text effect, AND the new
-        # `enforcement_enabled` master toggle (issue #6 — controls
-        # whether the senders list gates rendering).
+        # `name_display_format` field (issue #6 — controls how the
+        # operator-supplied name is rendered in the admin UI and on the
+        # sign).
         ts_form = cfg.text_settings
         speed_raw = request.form.get("text_settings_speed")
         if speed_raw is not None and speed_raw != "":
@@ -1304,18 +1305,30 @@ def settings():
         te = request.form.get("text_settings_text_effect")
         if te:
             ts_form.text_effect = te
-        # `enforcement_enabled` is True when the checkbox is posted with
-        # value "1"; absent form field (or anything other than "1") is
-        # treated as False (defensive default — the operator must
-        # explicitly check the box to enable the filter).
-        ts_form.enforcement_enabled = request.form.get("enforcement_enabled") == "1"
+        # `name_display_format` (issue #6): one of the four valid
+        # display formats. Unknown / missing values fall back to the
+        # default (`first_initial_if_duplicates`) so a partial form
+        # never corrupts the config.
+        ndf_raw = request.form.get("name_display_format")
+        if ndf_raw in TextSettings.VALID_NAME_DISPLAY_FORMATS:
+            ts_form.name_display_format = ndf_raw
+        else:
+            ts_form.name_display_format = TextSettings.DEFAULT_NAME_DISPLAY_FORMAT
         cfg.text_settings = ts_form
 
+        # Sign settings: `sign_name` + `timezone` (already handled above)
+        # plus the new `enforce_allowed_senders` master toggle (issue #6
+        # — controls whether the senders list gates rendering). The
+        # checkbox lands as "1" when ticked; absent form field (or
+        # anything other than "1") is treated as False (defensive
+        # default — the operator must explicitly check the box to
+        # enable the filter).
+        ss_form = cfg.sign_settings
+        ss_form.enforce_allowed_senders = request.form.get("enforce_allowed_senders") == "1"
+        cfg.sign_settings = ss_form
+
         # Effect settings: pacing (fade/hold/intro/idle seconds),
-        # `lookback_days`, `selector_algorithm`, the rotation list, AND
-        # the new `name_display_format` field (issue #6 — controls how
-        # the operator-supplied name is rendered in the admin UI and on
-        # the sign).
+        # `lookback_days`, `selector_algorithm`, AND the rotation list.
         #
         # BUGFIX (2026-07-07): the previous handler built field names as
         # `f"effects_settings{field}"` which produced `effects_settingsfade_seconds`
@@ -1374,16 +1387,6 @@ def settings():
                 )
         else:
             pacing_summary["selector_algorithm"] = "absent"
-        # `name_display_format` (issue #6): one of the four valid
-        # display formats. Unknown / missing values fall back to the
-        # default (`first_initial_if_duplicates`) so a partial form
-        # never corrupts the config.
-        ndf_raw = request.form.get("name_display_format")
-        if ndf_raw in EffectsSettings.VALID_NAME_DISPLAY_FORMATS:
-            es_form.name_display_format = ndf_raw
-        else:
-            es_form.name_display_format = EffectsSettings.DEFAULT_NAME_DISPLAY_FORMAT
-        pacing_summary["name_display_format"] = f"POST={ndf_raw!r} saved={es_form.name_display_format}"
         logger.info(
             "[settings] effect pacing merge: %s",
             _json.dumps(pacing_summary, sort_keys=True),

@@ -81,23 +81,23 @@ def test_format_display_time_empty_string():
 # --- InMemoryMessages timezone-driven display_time ---
 
 
-def _make_config(timezone="America/Los_Angeles", enforcement_enabled=False):
+def _make_config(timezone="America/Los_Angeles", enforce_allowed_senders=False):
     """Build a SignConfig with the given timezone.
 
-    `enforcement_enabled=False` by default so the bare "+1" senders in
+    `enforce_allowed_senders=False` by default so the bare "+1" senders in
     these tests don't get suppressed by the senders allowlist (an empty
     senders dict + enforcement ON would suppress every message here).
     """
     return SignConfig(
         effects_settings=EffectsSettings(),
-        text_settings=TextSettings(enforcement_enabled=enforcement_enabled),
-        sign_settings=SignSettings(timezone=timezone),
+        text_settings=TextSettings(),
+        sign_settings=SignSettings(timezone=timezone, enforce_allowed_senders=enforce_allowed_senders),
     )
 
 
 def test_in_memory_messages_enriches_display_time():
     """Each entry's display_time reflects the config's timezone, not tz_offset_mins."""
-    cfg = _make_config(timezone="America/New_York", enforcement_enabled=False)
+    cfg = _make_config(timezone="America/New_York", enforce_allowed_senders=False)
     store = InMemoryMessages(cfg, maxlen=10)
     msg = Message(
         id="m1",

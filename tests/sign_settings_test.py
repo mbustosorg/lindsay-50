@@ -12,24 +12,29 @@ from lib_shared.models import SignConfig, SignSettings
 
 
 def test_constructor_defaults():
-    """SignSettings() carries the canonical sign_name + timezone."""
+    """SignSettings() carries the canonical sign_name + timezone + enforce_allowed_senders."""
     s = SignSettings()
     assert s.sign_name == "Lindsay's Heart"
     assert s.timezone == "US/Pacific"
+    assert s.enforce_allowed_senders is True
 
 
 def test_constructor_custom_values():
-    """SignSettings(sign_name=..., timezone=...) honors both kwargs."""
-    s = SignSettings(sign_name="Custom", timezone="UTC")
+    """SignSettings(sign_name=..., timezone=..., enforce_allowed_senders=...) honors all three kwargs."""
+    s = SignSettings(sign_name="Custom", timezone="UTC", enforce_allowed_senders=False)
     assert s.sign_name == "Custom"
     assert s.timezone == "UTC"
+    assert s.enforce_allowed_senders is False
 
 
 def test_from_dict_with_values():
-    """SignSettings.from_dict reads both keys."""
-    s = SignSettings.from_dict({"sign_name": "Alice's Sign", "timezone": "Europe/Paris"})
+    """SignSettings.from_dict reads all three keys."""
+    s = SignSettings.from_dict(
+        {"sign_name": "Alice's Sign", "timezone": "Europe/Paris", "enforce_allowed_senders": False}
+    )
     assert s.sign_name == "Alice's Sign"
     assert s.timezone == "Europe/Paris"
+    assert s.enforce_allowed_senders is False
 
 
 def test_from_dict_empty_uses_defaults():
@@ -37,6 +42,7 @@ def test_from_dict_empty_uses_defaults():
     s = SignSettings.from_dict({})
     assert s.sign_name == "Lindsay's Heart"
     assert s.timezone == "US/Pacific"
+    assert s.enforce_allowed_senders is True
 
 
 def test_from_dict_none_uses_defaults():
@@ -44,20 +50,26 @@ def test_from_dict_none_uses_defaults():
     s = SignSettings.from_dict(None)
     assert s.sign_name == "Lindsay's Heart"
     assert s.timezone == "US/Pacific"
+    assert s.enforce_allowed_senders is True
 
 
-def test_to_dict_contains_both_keys():
-    """to_dict always emits both keys (no conditional omission)."""
+def test_to_dict_contains_all_three_keys():
+    """to_dict always emits all three keys (no conditional omission)."""
     s = SignSettings()
-    assert s.to_dict() == {"sign_name": "Lindsay's Heart", "timezone": "US/Pacific"}
+    assert s.to_dict() == {
+        "sign_name": "Lindsay's Heart",
+        "timezone": "US/Pacific",
+        "enforce_allowed_senders": True,
+    }
 
 
 def test_round_trip_lossless():
     """from_dict(to_dict(s)) == s."""
-    s = SignSettings(sign_name="X", timezone="America/Chicago")
+    s = SignSettings(sign_name="X", timezone="America/Chicago", enforce_allowed_senders=False)
     s2 = SignSettings.from_dict(s.to_dict())
     assert s2.sign_name == s.sign_name
     assert s2.timezone == s.timezone
+    assert s2.enforce_allowed_senders == s.enforce_allowed_senders
 
 
 # --- SignConfig wiring with the new sign_settings kwarg ---
@@ -102,22 +114,28 @@ def test_sign_config_rejects_legacy_name_display_format_kwarg():
 
 
 def test_to_dict_sign_settings_block_emitted():
-    """to_dict on SignConfig emits sign_settings with both keys, no top-level sign/timezone."""
+    """to_dict on SignConfig emits sign_settings with all three keys, no top-level sign/timezone."""
     c = SignConfig(sign_settings=SignSettings(sign_name="Wire", timezone="US/Eastern"))
     d = c.to_dict()
-    assert d["sign_settings"] == {"sign_name": "Wire", "timezone": "US/Eastern"}
+    assert d["sign_settings"]["sign_name"] == "Wire"
+    assert d["sign_settings"]["timezone"] == "US/Eastern"
+    assert d["sign_settings"]["enforce_allowed_senders"] is True
     assert "sign" not in d
     assert "timezone" not in d
     assert "enforcement_enabled" not in d
+    assert "enforce_allowed_senders" not in d
     assert "name_display_format" not in d
 
 
 def test_to_dict_includes_text_and_effects_blocks():
-    """to_dict also includes the v3 text_settings (with enforcement_enabled)
-    and effects_settings (with name_display_format)."""
+    """to_dict also includes the v3 text_settings (with name_display_format)
+    and effects_settings (no v3-specific extras)."""
     c = SignConfig()
     d = c.to_dict()
-    assert "enforcement_enabled" in d["text_settings"]
-    assert d["text_settings"]["enforcement_enabled"] is True
-    assert "name_display_format" in d["effects_settings"]
-    assert d["effects_settings"]["name_display_format"] == "first_initial_if_duplicates"
+    assert "name_display_format" in d["text_settings"]
+    assert d["text_settings"]["name_display_format"] == "first_initial_if_duplicates"
+    # effects_settings block has no v3-specific extras; the basic pacing
+    # fields are still there.
+    assert "fade_seconds" in d["effects_settings"]
+    assert "name_display_format" not in d["effects_settings"]
+    assert "enforcement_enabled" not in d["effects_settings"]

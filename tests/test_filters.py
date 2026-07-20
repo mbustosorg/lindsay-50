@@ -2,7 +2,7 @@
 
 v3 (issue #6): sender-type FilterRule is REMOVED — sender matching lives in
 the `cfg.senders` allowlist (`allowed: bool` per entry + master
-`text_settings.enforcement_enabled` toggle). The `test_sender_*` cases here
+`sign_settings.enforce_allowed_senders` toggle). The `test_sender_*` cases here
 exercise the v3 senders list path via `_enrich_messages`, not the
 `type="sender"` branch in `_matches`.
 """
@@ -160,7 +160,7 @@ def config_with_message_filter():
 
 class TestApply:
     def test_no_filters_passes(self, sample_messages, default_config):
-        # With senders={} and enforcement_enabled=True (default), every
+        # With senders={} and enforce_allowed_senders=True (default), every
         # sender is unlisted → senders list suppresses everything. Add
         # explicit allowlist entries so the sample messages render.
         for m in sample_messages:
@@ -267,9 +267,9 @@ class TestApply:
         assert rule is None
 
     def test_enforcement_disabled_bypasses_senders_list(self, default_config):
-        """When enforcement_enabled=False, the senders list is bypassed entirely."""
+        """When enforce_allowed_senders=False, the senders list is bypassed entirely."""
         # Empty senders dict, enforcement off → everything renders.
-        default_config.text_settings.enforcement_enabled = False
+        default_config.sign_settings.enforce_allowed_senders = False
         msg = Message(id="1", sender="+15559999999", body="hi", received_at="")
         suppressed, rule = apply(msg, default_config)
         assert not suppressed

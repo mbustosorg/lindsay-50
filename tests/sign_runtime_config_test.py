@@ -40,16 +40,18 @@ def test_default_sign_config_has_no_legacy_top_level_fields():
     assert not hasattr(c, "sign") or isinstance(getattr(c, "sign", None), type(None))
     assert not hasattr(c, "timezone")
     assert not hasattr(c, "allowed_senders")
+    assert not hasattr(c, "enforce_allowed_senders")
     assert not hasattr(c, "enforcement_enabled")
     assert not hasattr(c, "name_display_format")
 
 
 def test_to_dict_omits_legacy_fields():
-    """to_dict does not emit top-level sign/timezone/enforcement_enabled/name_display_format."""
+    """to_dict does not emit top-level sign/timezone/enforce_allowed_senders/name_display_format."""
     c = SignConfig()
     d = c.to_dict()
     assert "sign" not in d
     assert "timezone" not in d
+    assert "enforce_allowed_senders" not in d
     assert "enforcement_enabled" not in d
     assert "name_display_format" not in d
     assert "allowed_senders" not in d
@@ -65,17 +67,18 @@ def test_default_text_settings_speed_is_3():
     assert c.text_settings.speed == 3
 
 
-def test_default_text_settings_enforcement_enabled_true():
-    """Default TextSettings has enforcement_enabled=True (senders master toggle on)."""
+def test_default_text_settings_name_display_format():
+    """Default TextSettings carries name_display_format='first_initial_if_duplicates'."""
     c = SignConfig()
-    assert c.text_settings.enforcement_enabled is True
+    assert c.text_settings.name_display_format == "first_initial_if_duplicates"
 
 
 def test_default_sign_settings():
-    """Default SignSettings carries the canonical sign_name + timezone."""
+    """Default SignSettings carries the canonical sign_name + timezone + enforce_allowed_senders."""
     c = SignConfig()
     assert c.sign_settings.sign_name == "Lindsay's Heart"
     assert c.sign_settings.timezone == "US/Pacific"
+    assert c.sign_settings.enforce_allowed_senders is True
 
 
 def test_from_dict_default():

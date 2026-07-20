@@ -2,7 +2,7 @@
 
 Covers:
 - senders.items() iteration renders one <tr> per sender entry
-- enforcement_enabled checkbox pre-checks when cfg.text_settings.enforcement_enabled is True
+- enforce_allowed_senders checkbox pre-checks when cfg.sign_settings.enforce_allowed_senders is True
 - name_display_format dropdown marks the cfg value as `selected`
 - Filter Rules: status column + per-row `filter_status_<idx>` checkbox
   pre-checks when f.status == 'enabled'
@@ -168,15 +168,13 @@ def cfg_factory():
             sign_settings=SignSettings(
                 sign_name=overrides.get("sign_name", "Lindsay's Heart"),
                 timezone=overrides.get("timezone", "US/Pacific"),
+                enforce_allowed_senders=overrides.get("enforce_allowed_senders", True),
             ),
             text_settings=TextSettings(
                 speed=overrides.get("text_speed", 3),
                 color=overrides.get("text_color", 16711680),
                 text_effect=overrides.get("text_effect", "scroll"),
-                enforcement_enabled=overrides.get("enforcement_enabled", True),
-            ),
-            effects_settings=EffectsSettings(
-                name_display_format=overrides.get("name_display_format", "first_initial_if_duplicates")
+                name_display_format=overrides.get("name_display_format", "first_initial_if_duplicates"),
             ),
             filters=overrides.get("filters", []),
             senders=overrides.get("senders", {}),
@@ -275,33 +273,33 @@ def test_template_renders_empty_senders_with_blank_row(client):
     assert "+15551234567" in body  # placeholder text
 
 
-def test_template_enforcement_enabled_checkbox_checked_when_true(client):
-    """enforcement_enabled=True → <input ... checked>"""
+def test_template_enforce_allowed_senders_checkbox_checked_when_true(client):
+    """enforce_allowed_senders=True → <input ... checked>"""
     client_obj, real_cfg, _ = client
-    real_cfg.text_settings.enforcement_enabled = True
+    real_cfg.sign_settings.enforce_allowed_senders = True
     _login(client_obj)
     body = _get_settings_body(client_obj)
     # The enforcement checkbox is checked
-    assert 'name="enforcement_enabled" value="1" checked' in body
+    assert 'name="enforce_allowed_senders" value="1" checked' in body
 
 
-def test_template_enforcement_enabled_checkbox_unchecked_when_false(client):
-    """enforcement_enabled=False → no `checked` on the enforcement checkbox."""
+def test_template_enforce_allowed_senders_checkbox_unchecked_when_false(client):
+    """enforce_allowed_senders=False → no `checked` on the enforcement checkbox."""
     client_obj, real_cfg, _ = client
-    real_cfg.text_settings.enforcement_enabled = False
+    real_cfg.sign_settings.enforce_allowed_senders = False
     _login(client_obj)
     body = _get_settings_body(client_obj)
     # The enforcement checkbox is NOT checked (still rendered with value="1")
-    assert 'name="enforcement_enabled" value="1"' in body
+    assert 'name="enforce_allowed_senders" value="1"' in body
     # But the `checked` attribute is absent immediately after value="1"
-    # Use a stricter check: confirm no occurrence of 'name="enforcement_enabled" value="1" checked'
-    assert 'name="enforcement_enabled" value="1" checked' not in body
+    # Use a stricter check: confirm no occurrence of 'name="enforce_allowed_senders" value="1" checked'
+    assert 'name="enforce_allowed_senders" value="1" checked' not in body
 
 
 def test_template_name_display_format_dropdown_pre_selects_cfg_value(client):
     """name_display_format='full' → <option value="full" selected>"""
     client_obj, real_cfg, _ = client
-    real_cfg.effects_settings.name_display_format = "full"
+    real_cfg.text_settings.name_display_format = "full"
     _login(client_obj)
     body = _get_settings_body(client_obj)
     # The matching option is selected

@@ -7,7 +7,7 @@ Two public functions:
     multi-word last names.
 
   - `format_display_name(name, fmt, all_first_names=None)` — apply a
-    chosen display format (one of `EffectsSettings.VALID_NAME_DISPLAY_FORMATS`)
+    chosen display format (one of `TextSettings.VALID_NAME_DISPLAY_FORMATS`)
     to a stored name. The optional `all_first_names` list carries the
     full sender set's first names so the `first_initial_if_duplicates`
     format can disambiguate two senders named "Alice" by appending the
@@ -15,7 +15,7 @@ Two public functions:
 
 Used by `FilteredMessages._enrich_messages` to compute `MessageView.sender_name`
 from `cfg.senders[<normalized>]["name"]` and
-`cfg.effects_settings.name_display_format`. The format is a pure function of
+`cfg.text_settings.name_display_format`. The format is a pure function of
 the stored name; the stored name is NEVER mutated (the operator can flip
 formats without retyping names).
 """
