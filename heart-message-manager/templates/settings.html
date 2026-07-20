@@ -281,17 +281,28 @@
         </thead>
         <tbody class="divide-y divide-indigo-50">
           {% for key, entry in cfg.senders.items() %}
-          <tr>
+          {# Each row carries BOTH a hidden `sender_state="phone:0|1"`
+             and a visible (name-less) checkbox. The visible box is the
+             click target; the hidden input is the wire value.
+             Submit-time JS rewrites every `sender_state` from its
+             sibling checkbox's state, so the server always sees the
+             full table with explicit per-row `phone:0|1`. #}
+          <tr data-sender-row>
             <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ entry.name }}"></td>
-            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ key }}" oninput="syncSenderAllowed(this)"></td>
-            <td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="{{ key }}"{% if entry.allowed %} checked{% endif %}></td>
+            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" value="{{ key }}" oninput="syncSenderState(this)"></td>
+            <td class="px-4 py-3"><input type="hidden" name="sender_state" value="{{ key }}:{{ '1' if entry.allowed else '0' }}" data-sender-state="{{ key }}"><input type="checkbox" data-sender-checkbox{% if entry.allowed %} checked{% endif %} class="w-4 h-4 rounded text-primary focus:ring-primary"></td>
             <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
           </tr>
           {% endfor %}
-          <tr>
+          {# Trailing add-row: blank phone + a default-checked hidden
+             state `:1`. The submit-time JS rewrites this to the typed
+             phone (or `:0` if the operator un-checks). The server
+             skips rows with empty phones, so an un-touched add-row's
+             `:1` is harmless even though there's no phone key. #}
+          <tr data-sender-row>
             <td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td>
-            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567" oninput="syncSenderAllowed(this)"></td>
-            <td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="" checked></td>
+            <td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567" oninput="syncSenderState(this)"></td>
+            <td class="px-4 py-3"><input type="hidden" name="sender_state" value=":1"><input type="checkbox" data-sender-checkbox checked class="w-4 h-4 rounded text-primary focus:ring-primary"></td>
             <td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest('tr').remove()">Remove</button></td>
           </tr>
         </tbody>
@@ -374,55 +385,52 @@
 </div>
 
 <script>
-function syncSenderAllowed(phoneInput) {
-  // Keep the row's sender_allowed checkbox value in sync with the
-  // normalized phone field. The /settings POST handler keys allowed by
-  // normalize_phone(phone) — so when the operator types a new phone,
-  // the matching checkbox's value must follow. Phone-format edge cases
-  // (parens, dashes, leading +1) are handled server-side; we copy the
-  // raw input verbatim so the operator's typed format is preserved on
-  // round-trip if the row is later edited.
+function syncSenderState(phoneInput) {
+  // Update the row's hidden `sender_state` value to match the typed
+  // phone and the visible checkbox's checked state. Wire format is
+  // `phone:0|1` (phone may be empty before the operator types).
   //
-  // Issue #6 follow-up: the operator's "I'm adding this sender" intent
-  // is the typing of a phone number — when the field becomes
-  // non-empty, default the allowed flag to true. (If the operator
-  // blanks the phone, default it back to false.) This stops new senders
-  // from being saved with allowed=false just because the operator
-  // forgot to tick the box before saving.
+  // Default rule for new rows: typing a phone flips the visible
+  // checkbox to `checked=true` (so the operator's "I'm adding this
+  // sender" intent is recorded). Blanking the phone un-checks the
+  // box. Saved rows do whatever the operator sets via direct click —
+  // this oninput handler only flips for typed edits.
   const tr = phoneInput.closest('tr');
-  const allowed = tr.querySelector('input[name="sender_allowed"]');
-  if (!allowed) return;
+  const state = tr.querySelector('input[name="sender_state"]');
+  const checkbox = tr.querySelector('input[data-sender-checkbox]');
+  if (!state || !checkbox) return;
   const phone = phoneInput.value.trim();
-  allowed.value = phone;
   if (phone) {
-    allowed.checked = true;
+    checkbox.checked = true;
   } else {
-    allowed.checked = false;
+    checkbox.checked = false;
   }
+  state.value = phone + ':' + (checkbox.checked ? '1' : '0');
 }
 
 function addSenderRow() {
   const tbody = document.querySelector('#senders-table tbody');
   const tr = document.createElement('tr');
-  tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567" oninput="syncSenderAllowed(this)"></td><td class="px-4 py-3"><input type="checkbox" name="sender_allowed" value="" checked></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
+  tr.setAttribute('data-sender-row', '');
+  tr.innerHTML = '<td class="px-4 py-3"><input type="text" name="sender_name" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="Name"></td><td class="px-4 py-3"><input type="text" name="sender_phone" class="w-full px-3 py-2 rounded-lg border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none" placeholder="+15551234567" oninput="syncSenderState(this)"></td><td class="px-4 py-3"><input type="hidden" name="sender_state" value=":1"><input type="checkbox" data-sender-checkbox checked class="w-4 h-4 rounded text-primary focus:ring-primary"></td><td class="px-4 py-3"><button type="button" class="px-3 py-1.5 rounded-lg bg-red-100 text-red-700 text-sm font-semibold hover:bg-red-200 transition-colors cursor-pointer" onclick="this.closest(\'tr\').remove()">Remove</button></td>';
   tbody.appendChild(tr);
 }
 
-// Robust delegated sync: catch paste / programmatic edits that
-// `oninput` may have missed for dynamically-added rows (issue #6).
-// The syncSenderAllowed handler above still runs on every native
-// `input` event; this listener is the safety net that ALSO rewrites
-// each sender_allowed checkbox's value at submit time, mirroring how
-// the effects list is handled. This way, even if a row's `<tr>` was
-// added by `addSenderRow()` and the operator typed but didn't blur
-// the phone field, the value still gets set before the POST.
+// Submit-time safety net: re-emit every row's `sender_state` from its
+// visible checkbox just before the form POSTs. Catches anything the
+// per-row `oninput` may have missed (paste, programmatic edits,
+// scripted toggle). This mirrors the effects-list sync just below.
 (function () {
   const form = document.querySelector('form[method="POST"]');
   if (!form) return;
   form.addEventListener('submit', function () {
-    const phoneInputs = form.querySelectorAll('input[name="sender_phone"]');
-    phoneInputs.forEach(function (phoneInput) {
-      syncSenderAllowed(phoneInput);
+    form.querySelectorAll('tr[data-sender-row]').forEach(function (tr) {
+      const state = tr.querySelector('input[name="sender_state"]');
+      const checkbox = tr.querySelector('input[data-sender-checkbox]');
+      const phoneInput = tr.querySelector('input[name="sender_phone"]');
+      if (!state || !checkbox || !phoneInput) return;
+      const phone = phoneInput.value.trim();
+      state.value = phone + ':' + (checkbox.checked ? '1' : '0');
     });
   });
 })();

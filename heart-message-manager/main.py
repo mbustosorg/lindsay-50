@@ -1246,21 +1246,21 @@ def settings():
                 _save_and_publish(cfg)
                 return redirect(url_for("settings"))
 
-        # Pretty-print the raw POST at DEBUG so an operator (or the next
-        # debugging session) can see EXACTLY what the /settings form
-        # submitted. The diagnostics loop is rarely needed day-to-day
-        # and writes a lot of noise at INFO, so it stays at DEBUG;
-        # what was actually saved is visible via `_save_and_publish`'s
-        # INFO log, and the live config table itself.
+        # Pretty-print the raw POST so an operator (or the next debugging
+        # session) can see EXACTLY what the /settings form submitted.
+        # Without this, form field-name mismatches look like "the value
+        # silently didn't save" with no on-the-wire evidence. We log at
+        # INFO because the volume is low (1 POST per settings save) and
+        # the diagnostic value is high.
         import json as _json
 
         form_keys = sorted(request.form.keys())
         # Use `getlist` so multi-valued fields (sender_name, sender_phone,
-        # effect_state, filter_pattern) show ALL the values the form
-        # actually POSTed — `get(k)` returns only the first match and
-        # hides duplicates, which made a one-row POST look identical to
-        # a ten-row POST in the operator-visible log.
-        logger.debug(
+        # sender_state, effect_state, filter_pattern) show ALL the values
+        # the form actually POSTed — `get(k)` returns only the first match
+        # and hides duplicates, which made a one-row POST look identical
+        # to a ten-row POST in the operator-visible log.
+        logger.info(
             "[settings] POST /settings raw_form_keys=%d form=%s",
             len(form_keys),
             _json.dumps(
@@ -1452,7 +1452,7 @@ def settings():
         # rejects the duplicate so the operator's intent is preserved.
         names = request.form.getlist("sender_name")
         phones = request.form.getlist("sender_phone")
-        allowed_list = request.form.getlist("sender_allowed")
+        state_list = request.form.getlist("sender_state")
         # Pair each populated `sender_phone` row with an allowed flag.
         #
         # Issue #6 follow-up (defensive semantics): the form's
@@ -1483,22 +1483,36 @@ def settings():
         # whose key isn't matched defaults to allowed=True, since
         # the operator's visible intent (typed phone + checked box)
         # was to add.
+        # Parse `phone:0|1` pairs into a phone-keyed map. Empty values
+        # come from the trailing add-row before the operator types a
+        # phone; drop them quietly. Malformed entries log a warning
+        # with the dropped values.
         from lib_shared.phone_utils import normalize_phone
 
-        empty_string_seen = False
-        allowed_set: set[str] = set()
-        for raw in allowed_list:
+        enabled_map: dict[str, bool] = {}
+        malformed_states: list[str] = []
+        for raw in state_list:
             stripped = raw.strip()
-            if not stripped:
-                empty_string_seen = True
+            if not stripped or ":" not in stripped:
+                continue
+            phone_part, _, flag = stripped.partition(":")
+            phone_part = phone_part.strip()
+            flag = flag.strip()
+            if not phone_part or flag not in ("0", "1"):
+                malformed_states.append(stripped)
                 continue
             try:
-                allowed_set.add(normalize_phone(stripped))
+                enabled_map[normalize_phone(phone_part)] = flag == "1"
             except Exception:  # noqa: BLE001 — defensive; bad values are dropped.
                 logger.warning(
-                    "[settings] senders POST dropped unparseable allowed checkbox value: %r",
+                    "[settings] senders POST dropped unparseable sender_state entry: %r",
                     raw,
                 )
+        if malformed_states:
+            logger.warning(
+                "[settings] senders POST dropped malformed sender_state entries: %s",
+                sorted(set(malformed_states)),
+            )
 
         new_senders: dict[str, dict] = {}
         seen_keys: set[str] = set()
@@ -1518,22 +1532,15 @@ def settings():
                 duplicate_phones.append(stripped_phone)
                 continue
             seen_keys.add(key)
-            if key in allowed_set:
-                row_allowed = True
-            elif empty_string_seen:
-                # JS sync failed for at least one row — default the
-                # unmatched row to allowed=True (the operator's
-                # visible intent was to add).
-                row_allowed = True
-            else:
-                # No matching checkbox for this row, and no JS-fail
-                # signal — the operator un-checked it (browsers omit
-                # un-checked checkboxes from POST). Honor that as
-                # blocked.
-                row_allowed = False
+            # The row's allowed flag comes directly from the form's
+            # hidden `sender_state` entry. The trailing add-row's
+            # empty-phone entry is filtered out above; rows without a
+            # matching state (a removed row that left a stray phone,
+            # or a JS-malformed entry) land as False — the operator
+            # can re-check and re-save.
             new_senders[key] = {
                 "name": stripped_name or stripped_phone,
-                "allowed": row_allowed,
+                "allowed": enabled_map.get(key, False),
                 "phone": stripped_phone,
             }
         if duplicate_phones:

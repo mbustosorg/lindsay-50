@@ -8,7 +8,7 @@ POST through the test client, and assert the persisted SignConfig
 shape via sqlite.put_config.call_args.
 
 Covers:
-- POST parses parallel `sender_name` / `sender_phone` / `sender_allowed`
+- POST parses parallel `sender_name` / `sender_phone` / `sender_state`
   lists into cfg.senders keyed by normalize_phone(phone)
 - POST `enforcement_enabled` checkbox → cfg.text_settings.enforcement_enabled
 - POST `name_display_format` dropdown → cfg.effects_settings.name_display_format
@@ -230,9 +230,14 @@ def _base_form(**overrides):
     """A /settings POST body that satisfies every required field, with
     one empty sender row and one empty filter rule."""
     base = {
-        # Senders — one empty row by default
+        # Senders — one empty row by default. The trailing add-row's
+        # hidden `sender_state` defaults to `:1` because the rendered
+        # template emits a checked default for that row's visible
+        # checkbox. The handler skips empty-phone rows so the value
+        # is harmless even with no phone key to match.
         "sender_name": [""],
         "sender_phone": [""],
+        "sender_state": [":1"],
         # Sign identity
         "sign_name": "Test Sign",
         "timezone": "US/Pacific",
@@ -265,10 +270,10 @@ def _base_form(**overrides):
 
 
 def test_post_senders_parses_parallel_lists(app_with_real_cfg, client):
-    """sender_name / sender_phone / sender_allowed lists parse into a dict-of-dict.
+    """sender_name / sender_phone / sender_state lists parse into a dict-of-dict.
 
-    The handler pairs `sender_allowed` to its row by phone (the row's
-    `value="<phone>"`), not by enumerate index — so removing a row
+    The handler pairs `sender_state` to its row by phone (the row's
+    `value="<phone>:0|1"`), not by enumerate index — so removing a row
     doesn't shift surviving rows' allowed flags.
     """
     flask_app, real_cfg = app_with_real_cfg
@@ -279,7 +284,7 @@ def test_post_senders_parses_parallel_lists(app_with_real_cfg, client):
             sender_name=["Alice", "Bob"],
             sender_phone=["+15551234567", "+15559999999"],
             # Only Alice is allowed: checkbox value = Alice's phone.
-            sender_allowed=["+15551234567"],
+            sender_state=["+15551234567:1"],
         ),
         follow_redirects=False,
     )
@@ -301,10 +306,10 @@ def test_post_senders_remove_surviving_rows_preserve_their_allowed_flag(app_with
     """Removing a row from the form (e.g. operator clicks Remove on the
     first of three rows) does NOT flip the surviving rows' allowed flags.
 
-    Regression test for the index-drift bug: the previous handler paired
-    `sender_allowed` by enumerate index, so removing row 0 left row 1's
-    checkbox at `value="1"` while the handler checked `str(0) in
-    allowed_set` — flipping it to False. The fix pairs by phone.
+    The new `sender_state` wire format keys by phone, so removing
+    Alice (omitting her `sender_state` entry from the POST) leaves
+    Bob and Carol's `:1` flags intact and Alice lands as False (no
+    matching state).
     """
     flask_app, real_cfg = app_with_real_cfg
     _login(client)
@@ -312,13 +317,13 @@ def test_post_senders_remove_surviving_rows_preserve_their_allowed_flag(app_with
         "/settings",
         data=_base_form(
             # Three rows; the first is "removed" by simply not including
-            # its phone's checkbox in `sender_allowed`. (In the browser
-            # the Remove button does `tr.remove()` which omits the row
+            # its phone's state in `sender_state`. (In the browser the
+            # Remove button does `tr.remove()` which omits the row
             # entirely; here we exercise the same end-state by including
-            # only Bob and Carol's checkbox values.)
+            # only Bob and Carol's state entries.)
             sender_name=["Alice", "Bob", "Carol"],
             sender_phone=["+15551111111", "+15552222222", "+15553333333"],
-            sender_allowed=["+15552222222", "+15553333333"],
+            sender_state=["+15552222222:1", "+15553333333:1"],
         ),
         follow_redirects=False,
     )
@@ -328,8 +333,8 @@ def test_post_senders_remove_surviving_rows_preserve_their_allowed_flag(app_with
 
     assert real_cfg.senders[normalize_phone("+15552222222")]["allowed"] is True
     assert real_cfg.senders[normalize_phone("+15553333333")]["allowed"] is True
-    # Alice's row was excluded from `sender_allowed` — she's not in the
-    # checked list, so her allowed flag is False.
+    # Alice's row was excluded from `sender_state` — she's not in the
+    # state list, so her allowed flag defaults to False.
     assert real_cfg.senders[normalize_phone("+15551111111")]["allowed"] is False
 
 
@@ -344,7 +349,7 @@ def test_post_senders_unfilled_add_row_skipped(app_with_real_cfg, client):
             # The form always has one trailing empty row (the add-row).
             sender_name=["Alice", ""],
             sender_phone=["+15551234567", ""],
-            sender_allowed=["+15551234567"],
+            sender_state=["+15551234567:1"],
         ),
         follow_redirects=False,
     )
@@ -374,7 +379,7 @@ def test_post_senders_duplicate_phone_preserves_prior_state(app_with_real_cfg, c
         data=_base_form(
             sender_name=["Pre-existing", "Duplicate"],
             sender_phone=["+15551234567", "+15551234567"],
-            sender_allowed=[key],
+            sender_state=[key + ":1"],
         ),
         follow_redirects=False,
     )
@@ -385,61 +390,15 @@ def test_post_senders_duplicate_phone_preserves_prior_state(app_with_real_cfg, c
     assert real_cfg.senders[key]["name"] in ("Pre-existing",)
 
 
-def test_post_senders_js_failed_sync_still_allows_row(app_with_real_cfg, client):
-    """JS sync failed → `sender_allowed=[""]` (one empty string) AND a
-    populated `sender_phone` row. The handler must still land the row
-    with `allowed=True`, because the visible intent (still-checked
-    checkbox + freshly typed phone) is "add this sender."
-
-    Regression pin for the "new senders get allowed=False" bug: a
-    stale cached page (or paste-into-field mishap) keeps the
-    add-row's default `value=""` instead of writing the phone. The
-    original key-only lookup saw Adam's phone as absent from the
-    empty-string allowed_set, flipped the row to False, and the
-    operator got a silent surprise: a sender they thought they were
-    adding was saved as blocked.
-
-    The fix consumes the empty-string as a "JS failed for this row"
-    quota: when the row's key isn't in `allowed_set`, an empty
-    string in the POSTed list still means "the visible intent was
-    allowed."
-    """
-    flask_app, real_cfg = app_with_real_cfg
-    _login(client)
-    response = client.post(
-        "/settings",
-        data=_base_form(
-            sender_name=["Adam Rose"],
-            sender_phone=["+14152985015"],
-            # JS sync didn't fire: the box's value stayed at the
-            # add-row's default. The box IS checked; the value
-            # POSTed is empty.
-            sender_allowed=[""],
-        ),
-        follow_redirects=False,
-    )
-    assert response.status_code in (200, 302)
-
-    from lib_shared.phone_utils import normalize_phone
-
-    key = normalize_phone("+14152985015")
-    assert key in real_cfg.senders
-    # The visible intent was to add (still-checked box + typed phone):
-    # the row lands as allowed=True, NOT False.
-    assert real_cfg.senders[key]["allowed"] is True
-    assert real_cfg.senders[key]["name"] == "Adam Rose"
-
-
-def test_post_senders_operator_uncheck_empty_list_blocks_row(app_with_real_cfg, client):
-    """JS sync succeeded AND the operator un-checked the row →
-    `sender_allowed=[]` (browser omits un-checked checkboxes from
-    POST) AND a populated `sender_phone` row. The handler must land
+def test_post_senders_explicit_zero_blocks_row(app_with_real_cfg, client):
+    """A `sender_state` entry of `<phone>:0` (explicit un-check) saves
     the row with `allowed=False`.
 
-    Pairs with the JS-failed case above: a populated row with NO
-    `sender_allowed` entries is the operator's "block this sender"
-    intent — distinguish from "JS failed" (which contributes empty
-    strings, not absence of entries).
+    Regression pin for the "all three got enabled" bug — the previous
+    handler conflated explicit un-checks with JS-failed checkbox
+    state. The new wire format (`phone:0|1`) carries the operator's
+    un-check intent explicitly, so `+15551111111:0` lands as False
+    without ambiguity.
     """
     flask_app, real_cfg = app_with_real_cfg
     _login(client)
@@ -448,10 +407,7 @@ def test_post_senders_operator_uncheck_empty_list_blocks_row(app_with_real_cfg, 
         data=_base_form(
             sender_name=["Adam Rose"],
             sender_phone=["+14152985015"],
-            # Operator explicitly un-checked: no `sender_allowed`
-            # entry at all (browsers omit un-checked checkboxes
-            # from POST).
-            sender_allowed=[],
+            sender_state=["+14152985015:0"],
         ),
         follow_redirects=False,
     )
@@ -462,6 +418,94 @@ def test_post_senders_operator_uncheck_empty_list_blocks_row(app_with_real_cfg, 
     key = normalize_phone("+14152985015")
     assert key in real_cfg.senders
     assert real_cfg.senders[key]["allowed"] is False
+
+
+def test_post_senders_explicit_one_allows_row(app_with_real_cfg, client):
+    """A `sender_state` entry of `<phone>:1` (explicit check) saves
+    the row with `allowed=True`. The handler trusts the form's
+    explicit state — there is no JS-failed / un-checked ambiguity
+    in the new wire format.
+    """
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post(
+        "/settings",
+        data=_base_form(
+            sender_name=["Adam Rose"],
+            sender_phone=["+14152985015"],
+            sender_state=["+14152985015:1"],
+        ),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    from lib_shared.phone_utils import normalize_phone
+
+    key = normalize_phone("+14152985015")
+    assert key in real_cfg.senders
+    assert real_cfg.senders[key]["allowed"] is True
+
+
+def test_post_senders_mixed_states_per_phone(app_with_real_cfg, client):
+    """Three rows posted with mixed `:1`/`:0` flags — exactly what
+    the operator's form does after the new wire format change. The
+    handler matches by phone key, so the explicit per-row state is
+    preserved without index-drift or empty-string voodoo.
+    """
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post(
+        "/settings",
+        data=_base_form(
+            sender_name=["Alice", "Bob", "Carol"],
+            sender_phone=["+15551111111", "+15552222222", "+15553333333"],
+            sender_state=[
+                "+15551111111:1",
+                "+15552222222:0",
+                "+15553333333:1",
+            ],
+        ),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    from lib_shared.phone_utils import normalize_phone
+
+    assert real_cfg.senders[normalize_phone("+15551111111")]["allowed"] is True
+    assert real_cfg.senders[normalize_phone("+15552222222")]["allowed"] is False
+    assert real_cfg.senders[normalize_phone("+15553333333")]["allowed"] is True
+
+
+def test_post_senders_malformed_state_dropped_with_warning(app_with_real_cfg, client):
+    """Malformed `sender_state` entries (no `:`, bad flag, empty
+    phone) are dropped with a log warning — the row's allowed flag
+    falls back to False. Mirrors `test_post_effects_malformed_state_*`.
+    """
+    flask_app, real_cfg = app_with_real_cfg
+    _login(client)
+    response = client.post(
+        "/settings",
+        data=_base_form(
+            sender_name=["Alice"],
+            sender_phone=["+15551111111"],
+            sender_state=[
+                "+15551111111:1",  # well-formed
+                "completelymalformed",  # missing colon
+                "+15551111111:2",  # bad flag
+                ":1",  # empty phone
+            ],
+        ),
+        follow_redirects=False,
+    )
+    assert response.status_code in (200, 302)
+
+    from lib_shared.phone_utils import normalize_phone
+
+    key = normalize_phone("+15551111111")
+    assert key in real_cfg.senders
+    # The well-formed `:1` entry wins; the other three drop with
+    # warnings and don't land.
+    assert real_cfg.senders[key]["allowed"] is True
 
 
 def test_post_enforcement_enabled_checkbox_writes_to_text_settings(app_with_real_cfg, client):
@@ -547,7 +591,7 @@ def test_post_only_blanks_then_add_row_with_filled_phone_saves(app_with_real_cfg
         data=_base_form(
             sender_name=["Alice"],
             sender_phone=["+15551234567"],
-            sender_allowed=["+15551234567"],
+            sender_state=["+15551234567:1"],
         ),
         follow_redirects=False,
     )

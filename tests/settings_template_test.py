@@ -370,14 +370,11 @@ def test_template_filter_rule_status_filter_type_does_not_include_sender(client)
     assert '<option value="message">message</option>' in body
 
 
-def test_template_sender_allowed_checkbox_value_is_phone(client):
-    """The sender_allowed checkbox `value` attribute is the row's phone,
-    NOT the row's enumerate index — so removing a row doesn't shift
-    surviving rows' allowed flags (the handler pairs by phone).
-
-    Regression pin: this is the field that broke when the index-based
-    pairing was in place. The test sends a real cfg with two senders
-    and asserts the rendered HTML carries `value="<phone>"` for each.
+def test_template_sender_state_hidden_input_carries_phone_and_flag(client):
+    """Each rendered sender row's hidden `sender_state` carries the
+    row's phone plus an explicit `:0`/`:1` flag — the wire format
+    the server parses. Mirrors `test_template_effect_state_*` for the
+    effects list.
     """
     client_obj, real_cfg, _ = client
     real_cfg.senders["+15551234567"] = {
@@ -392,14 +389,13 @@ def test_template_sender_allowed_checkbox_value_is_phone(client):
     }
     _login(client_obj)
     body = _get_settings_body(client_obj)
-    # Each row's checkbox value is the row's phone, not 0/1
-    assert 'name="sender_allowed" value="+15551234567"' in body
-    assert 'name="sender_allowed" value="+15559999999"' in body
+    assert 'name="sender_state" value="+15551234567:1"' in body
+    assert 'name="sender_state" value="+15559999999:0"' in body
 
 
 def test_template_sender_phone_input_has_sync_handler(client):
     """Each sender_phone input has an `oninput` handler that keeps its
-    row's sender_allowed checkbox value in sync."""
+    row's `sender_state` hidden input in sync."""
     client_obj, real_cfg, _ = client
     real_cfg.senders["+15551234567"] = {
         "name": "Alice",
@@ -409,7 +405,7 @@ def test_template_sender_phone_input_has_sync_handler(client):
     _login(client_obj)
     body = _get_settings_body(client_obj)
     # The phone input wires up the sync handler
-    assert 'oninput="syncSenderAllowed(this)"' in body
+    assert 'oninput="syncSenderState(this)"' in body
 
 
 def test_template_effects_list_full_state_post(client):
