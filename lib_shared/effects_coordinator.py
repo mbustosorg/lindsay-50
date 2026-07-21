@@ -994,15 +994,15 @@ class EffectsCoordinator:
     def _compose_scrolled_text(self, message) -> str:
         """Build the string handed to `scroller.set_text(...)` for the
         given message: `{body}` plus, when the operator has a known
-        name registered for the sender, `        - {name}` (eight-space
-        gap, `- ` prefix).
+        name registered for the sender, ` - {name}` (single-space gap,
+        `- ` prefix).
 
         The suffix comes from `cfg.senders[<normalized_phone>]["name"]`
         rendered through `format_display_name` with the configured
-        `text_settings.name_display_format`. The leading eight-space
-        gap is fixed in the design — it visually separates the message
-        body from the sender attribution on the 8px-font scrolling
-        canvas. The format string is intentionally a constant here, not
+        `text_settings.name_display_format`. The leading single-space
+        gap is fixed in the design — it separates the message body from
+        the sender attribution on the scrolling canvas. The format
+        string is intentionally a constant here, not
         a settings.toml knob: the layout is bound to the panel's font
         widths and re-tuning would break the visual layout. Future
         fixes should change the literal, not expose a config knob.

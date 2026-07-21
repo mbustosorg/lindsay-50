@@ -418,8 +418,8 @@ def test_current_message_advances_after_fresh_id_lifecycle(monkeypatch):
 
 def test_compose_scrolled_text_appends_sender_name_suffix():
     """When the operator has registered a name for the message's sender,
-    the coordinator's scroller text is `{body}        - {name}` — eight
-    spaces, `- ` prefix. The wire format the LED panel sees rolls the
+    the coordinator's scroller text is `{body} - {name}` — a single-space
+    gap, `- ` prefix. The wire format the LED panel sees rolls the
     name attribution into the same scroller line as the body."""
     from lib_shared.phone_utils import normalize_phone
     from lib_shared.models import Message, MessageView
@@ -442,10 +442,10 @@ def test_compose_scrolled_text_appends_sender_name_suffix():
     coord, _display, scroller, _fx_a, _fx_b, _heart = _build(message_manager=message_manager)
 
     rendered = coord._compose_scrolled_text(msg)
-    # Eight-space gap before `-`. The display_name format is the
+    # Single-space gap before `-`. The display_name format is the
     # default (`first_initial_if_duplicates`), with no duplicate first
     # names in `senders`, so "Alice Smith" formats as just "Alice".
-    assert rendered == "hi mom        - Alice"
+    assert rendered == "hi mom - Alice"
 
 
 def test_compose_scrolled_text_no_suffix_when_sender_unknown():
