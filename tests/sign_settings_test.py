@@ -54,13 +54,26 @@ def test_from_dict_none_uses_defaults():
 
 
 def test_to_dict_contains_all_three_keys():
-    """to_dict always emits all three keys (no conditional omission)."""
+    """to_dict always emits all three keys (no conditional omission).
+
+    v2 (issue #51): adds `target_version` as a fourth key. The default
+    resolves to Flask's running short SHA at construction time — the
+    expected value is whatever `short_sha(git rev-parse HEAD)` returns,
+    so the test asserts the four-field shape and that `target_version`
+    is a non-empty string.
+    """
     s = SignSettings()
-    assert s.to_dict() == {
-        "sign_name": "Lindsay's Heart",
-        "timezone": "US/Pacific",
-        "enforce_allowed_senders": True,
+    out = s.to_dict()
+    assert set(out.keys()) == {
+        "sign_name",
+        "timezone",
+        "enforce_allowed_senders",
+        "target_version",
     }
+    assert out["sign_name"] == "Lindsay's Heart"
+    assert out["timezone"] == "US/Pacific"
+    assert out["enforce_allowed_senders"] is True
+    assert isinstance(out["target_version"], str) and out["target_version"]
 
 
 def test_round_trip_lossless():

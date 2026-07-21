@@ -282,8 +282,9 @@ class FilterRule:
 
 
 class SignSettings:
-    """Sign configuration: identity (sign_name), operational metadata (timezone),
-    and the senders-allowlist master toggle.
+    """Sign configuration: identity (sign_name), operational metadata
+    (timezone), the senders-allowlist master toggle
+    (`enforce_allowed_senders`), and the Pi upgrade pin (`target_version`).
 
     v3 layout (issue #6 / implement-senders-filtering):
       - `name` was renamed to `sign_name` (matches the HTML form
@@ -297,6 +298,11 @@ class SignSettings:
         knob (per-deployment), not a presentation knob (which live with the
         text/effects blocks).
 
+      - `target_version` (issue #51) is the Pi's intended running SHA
+        in short form. The persisted value is never empty because the
+        construction-time default falls back to Flask's running short
+        SHA (HEROKU_SLUG_COMMIT preferred, `git rev-parse HEAD` fallback).
+
     The block is renamed `SignSettings` → `SignConfig.sign_settings`
     (was `SignConfig.sign`) to match the `effects_settings` /
     `text_settings` naming convention.
@@ -308,6 +314,9 @@ class SignSettings:
             filter. True (default) means `cfg.senders` governs which
             senders render; False bypasses the filter entirely (every
             message renders, display names still resolve).
+        target_version: The Pi's intended running short SHA (issue #51).
+            Defaults to Flask's running short SHA at construction time
+            when None — the field is never empty on the wire.
     """
 
     DEFAULT_SIGN_NAME = "Lindsay's Heart"
@@ -319,6 +328,7 @@ class SignSettings:
         sign_name: str = DEFAULT_SIGN_NAME,
         timezone: str = DEFAULT_TIMEZONE,
         enforce_allowed_senders: bool = DEFAULT_ENFORCE_ALLOWED_SENDERS,
+        target_version: Optional[str] = None,
     ) -> None:
         """Initialize SignSettings.
 
@@ -327,10 +337,46 @@ class SignSettings:
             timezone: IANA timezone string (default "US/Pacific").
             enforce_allowed_senders: Master toggle for the senders
                 allowlist filter (default True).
+            target_version: The Pi's intended running SHA (short form).
+                Defaults to Flask's running short SHA at construction
+                time when None — the field is never empty on the wire.
         """
         self.sign_name = sign_name
         self.timezone = timezone
         self.enforce_allowed_senders = enforce_allowed_senders
+        self.target_version = (
+            target_version if target_version is not None else self._default_target_version()
+        )
+
+    # Class-level cache for the default target_version. Flask's running
+    # SHA changes once per deploy, so we resolve it lazily and cache the
+    # result for the process lifetime. Without caching, every SignSettings
+    # construction (in seed-fetch paths, defaults, etc.) would shell out
+    # to `git rev-parse HEAD` — measurable cost on the request hot path.
+    _default_target_version_cache: Optional[str] = None
+
+    @classmethod
+    def _default_target_version(cls) -> str:
+        """Return Flask's running short SHA at construction time.
+
+        Falls back to an empty string when neither HEROKU_SLUG_COMMIT
+        nor the local git HEAD can be resolved — callers must never
+        persist that empty value (Flask's request path normalizes
+        empty input to the freshly-resolved Flask SHA at response
+        time, so the Pi never sees `target_version=""` on the wire).
+        """
+        if cls._default_target_version_cache is not None:
+            return cls._default_target_version_cache
+        try:
+            from lib_shared.boot_config import from_heroku_or_git, short_sha
+            from pathlib import Path
+
+            config = from_heroku_or_git(Path.cwd())
+            result = short_sha(config.expected_sha) if config.expected_sha else ""
+        except Exception:
+            result = ""
+        cls._default_target_version_cache = result
+        return result
 
     @classmethod
     def from_dict(cls, d):
@@ -339,7 +385,9 @@ class SignSettings:
         Args:
             d: dict with optional keys: sign_name (default "Lindsay's Heart"),
                 timezone (default "US/Pacific"),
-                enforce_allowed_senders (default True). May also be `None`.
+                enforce_allowed_senders (default True),
+                target_version (default Flask's running short SHA).
+                May also be `None`.
 
         Returns:
             A new SignSettings instance.
@@ -349,10 +397,15 @@ class SignSettings:
         enforce = d.get("enforce_allowed_senders", cls.DEFAULT_ENFORCE_ALLOWED_SENDERS)
         if not isinstance(enforce, bool):
             raise ValueError(f"enforce_allowed_senders must be a bool, got {type(enforce).__name__}")
+        # A pre-#51 Flask publishes payloads without `target_version`.
+        # Fall through to the construction-time default (Flask's running
+        # short SHA) so the Pi reads a concrete value, not None or "".
+        target = d.get("target_version")
         return cls(
             sign_name=d.get("sign_name", cls.DEFAULT_SIGN_NAME),
             timezone=d.get("timezone", cls.DEFAULT_TIMEZONE),
             enforce_allowed_senders=enforce,
+            target_version=target if target is not None else None,
         )
 
     def to_dict(self):
@@ -360,6 +413,7 @@ class SignSettings:
             "sign_name": self.sign_name,
             "timezone": self.timezone,
             "enforce_allowed_senders": self.enforce_allowed_senders,
+            "target_version": self.target_version,
         }
 
 

@@ -3,8 +3,8 @@
 This is the systemd `ExecStart`. On every boot it:
 
   1. Resolves the local active SHA (resolved through `current/`).
-  2. Queries Flask for the expected SHA via `/api/sign/boot-config`
-     (using the shared `lib_shared.boot_config.fetch_boot_config`).
+  2. Queries Flask for the resolved target via `/api/sign/settings`
+     (using `lib_shared.boot_config.fetch_sign_settings`).
   3. If they match, execs `current/heart-matrix-controller/main.py`
      with the env vars the app needs (LINDSAY50_ACTIVE_SHA, etc.).
   4. If they differ, stages the new SHA into a worktree, spawns
@@ -13,6 +13,10 @@ This is the systemd `ExecStart`. On every boot it:
      then execs the new version. The loader is gone after exec —
      systemd's `StartLimitBurst=3` bounds crash loops, and
      `heroku rollback v<N>` is the operator's rollback primitive.
+
+The legacy `/api/sign/boot-config` endpoint is RETAINED — it
+serves pre-this-change Pis that haven't migrated to the new boot
+fetch path. The new code uses `/api/sign/settings` exclusively.
 
 Failure modes — Flask unreachable, status.json probe fails, worktree
 create fails — all fall through to "exec the existing
@@ -46,6 +50,7 @@ from lib_shared.boot_config import (
     BootConfig,
     current_sha,
     fetch_boot_config,
+    fetch_sign_settings,
     short_sha,
 )
 
@@ -664,6 +669,48 @@ def _is_status_healthy(
 # ---------------------------------------------------------------------------
 
 
+def fetch_target_version(
+    *,
+    api_url: str,
+    api_key: str,
+    requests_module=None,
+    timeout: float = 5.0,
+) -> Optional[str]:
+    """GET `/api/sign/settings` from Flask, return the resolved target_version or None.
+
+    Issue #51: the loader uses the new `/api/sign/settings` endpoint
+    (replacing `/api/sign/boot-config`). The endpoint guarantees
+    `target_version` is always a concrete 7-char short SHA — Flask
+    resolves operator-empty input to its own running short SHA
+    before responding. The wire form is therefore always concrete;
+    the loader never sees null.
+
+    Returns None on any failure (network error, non-200 status,
+    malformed JSON, missing `target_version`) — the caller falls
+    through to "boot the existing current/.../main.py" without
+    staging. A Pi that can't reach Flask keeps running on the last
+    good version.
+
+    Args:
+        api_url: The Flask messages endpoint URL (e.g.
+            `https://example.com/api/messages`); the loader derives
+            the settings origin from this.
+        api_key: X-API-Key header value (same key as /api/config).
+        requests_module: Test override for the `requests` module.
+        timeout: HTTP timeout in seconds.
+    """
+    return fetch_sign_settings(
+        api_url=api_url,
+        api_key=api_key,
+        timeout=timeout,
+        requests_module=requests_module,
+    )
+
+
+# Kept for the transitional period: pre-this-change Pis (and the
+# `force_upgrade` path's local-resolution safety net) still call
+# `/api/sign/boot-config`. Removing it would break the legacy
+# path during the rollout — issue #51 spec retains it explicitly.
 def fetch_expected_sha(
     *,
     api_url: str,
@@ -673,19 +720,16 @@ def fetch_expected_sha(
 ) -> Optional[str]:
     """GET `/api/sign/boot-config` from Flask, return the SHA or None.
 
-    Thin wrapper around `lib_shared.boot_config.fetch_boot_config`
-    so the loader shares the URL parsing + auth header logic with
-    the app-side `check_for_update` handler. Returns None on any
-    failure (network error, non-200 status, missing key, malformed
-    JSON) — the caller falls through to "boot the existing
-    current/.../main.py" without staging. A Pi that can't reach
-    Flask keeps running on the last good version.
+    LEGACY: pre-issue-#51 Pis still call `/api/sign/boot-config`.
+    New code uses `fetch_target_version` (the `/api/sign/settings`
+    endpoint) instead. This wrapper is kept for any code path that
+    needs the legacy contract during the transitional period and
+    will be removed in a follow-up change once all deployed Pis
+    have rolled forward.
 
     Args:
-        api_url: The Flask messages endpoint URL (e.g.
-            `https://example.com/api/messages`); the loader derives
-            the boot-config origin from this.
-        api_key: X-API-Key header value (same key as /api/config).
+        api_url: The Flask messages endpoint URL.
+        api_key: X-API-Key header value.
         requests_module: Test override for the `requests` module.
         timeout: HTTP timeout in seconds.
     """
@@ -708,7 +752,7 @@ def run_upgrade_flow(
     *,
     api_url: str,
     api_key: str,
-    fetch_fn: Callable[..., Optional[str]] = fetch_expected_sha,
+    fetch_fn: Callable[..., Optional[str]] = fetch_target_version,
     refresh_fn: Callable[[Path], bool] = refresh_bare_repo,
     stage_fn: Callable[[Path, str], Path] = stage_version,
     probe_fn: Callable[..., bool] = probe,
@@ -718,6 +762,13 @@ def run_upgrade_flow(
 ) -> None:
     """Decide whether to stage + probe + swap + exec, or fall through.
 
+    Issue #51: the default `fetch_fn` is `fetch_target_version`, which
+    calls `/api/sign/settings`. The endpoint returns a concrete
+    7-char short SHA. We compare `short_sha(local) == target` (was
+    `local == expected_sha` in v1). The comparison is short-vs-short
+    because the wire form is short — `local` is a full 40-char SHA
+    from `git rev-parse HEAD`.
+
     Does not return: either we exec the new version, or we exec
     the existing `current/.../main.py` — `exec_fn` is
     `os.execvpe`-based and does not return. The function is split
@@ -726,17 +777,23 @@ def run_upgrade_flow(
     `swap_fn` etc. and assert on the call sequence.
     """
     local = current_sha(repo_dir)
-    logger.info("loader: local SHA = %s", short_sha(local) if local else "(none)")
+    local_short = short_sha(local) if local else ""
+    logger.info("loader: local SHA = %s", local_short or "(none)")
 
-    expected = fetch_fn(api_url=api_url, api_key=api_key)
-    if expected is None:
-        logger.warning("loader: could not fetch expected SHA; using existing current")
+    target = fetch_fn(api_url=api_url, api_key=api_key)
+    if target is None:
+        logger.warning("loader: could not fetch target version; using existing current")
         exec_fn(repo_dir, local or "")
         return
-    logger.info("loader: expected SHA = %s", short_sha(expected))
+    logger.info("loader: target version = %s", target)
 
-    if local == expected:
-        logger.info("loader: local SHA matches expected; no upgrade needed")
+    # Short-vs-short comparison: `local` is the full 40-char SHA,
+    # `target` is already the 7-char short form Flask returns.
+    if local_short and local_short == target:
+        logger.info(
+            "loader: local SHA matches target (%s); no upgrade needed",
+            target,
+        )
         exec_fn(repo_dir, local or "")
         return
 
@@ -746,39 +803,73 @@ def run_upgrade_flow(
     # AFTER the Pi was installed isn't reachable via `git worktree add`
     # until we fetch. Refreshing before staging is the fix.
     # On failure, fall through to existing current — same posture as a
-    # failed boot-config fetch above.
+    # failed target fetch above.
     if not refresh_fn(repo_dir):
         exec_fn(repo_dir, local or "")
         return
 
-    # Mismatch — stage the new version.
+    # Mismatch — stage the new version. `stage_version` and
+    # `atomic_swap` accept the full SHA, so we resolve the full
+    # form of `target` via `git rev-parse <target>^{commit}`.
+    # Until we resolve, we pass `target` directly — the bare repo
+    # accepts both forms in `git worktree add` and `ln -sfn`.
+    full_target = _resolve_full_sha(repo_dir, target) or target
     try:
-        stage_fn(repo_dir, expected)
+        stage_fn(repo_dir, full_target)
     except StageError as e:
-        logger.error("loader: staging %s failed: %s; using existing current", expected, e)
+        logger.error("loader: staging %s failed: %s; using existing current", target, e)
         exec_fn(repo_dir, local or "")
         return
     except Exception as e:
-        logger.error("loader: staging %s raised: %s; using existing current", expected, e)
+        logger.error("loader: staging %s raised: %s; using existing current", target, e)
         exec_fn(repo_dir, local or "")
         return
 
-    if not probe_fn(repo_dir, expected):
+    if not probe_fn(repo_dir, full_target):
         logger.error(
             "loader: probe for %s reported unhealthy; NOT swapping; using existing current",
-            expected,
+            target,
         )
         exec_fn(repo_dir, local or "")
         return
 
-    swap_fn(repo_dir, expected)
+    swap_fn(repo_dir, full_target)
     # Cap the on-disk worktree count to `keep` after a successful
     # swap — every successful deploy is the natural cadence for
     # cleanup, and we always keep `current` (just swapped) so the
     # prune can never undo the deploy that just happened.
     prune_fn(repo_dir)
-    logger.info("loader: swapped to %s; exec'ing", short_sha(expected))
-    exec_fn(repo_dir, expected)
+    logger.info("loader: swapped to %s; exec'ing", target)
+    exec_fn(repo_dir, full_target)
+
+
+def _resolve_full_sha(repo_dir: Path, target: str) -> Optional[str]:
+    """Resolve a short or full SHA to its full 40-char form via the bare repo.
+
+    `git worktree add <dir> <commit>` accepts both forms; `ln -sfn`
+    needs the directory name which `worktree_dir_for` derives via
+    `short_sha(expected_sha)`. We resolve to the full form once so
+    `stage_version` and `atomic_swap` agree on the same string for
+    logging and worktree directory naming.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-parse", "--verify", f"{target}^{{commit}}"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5.0,
+        )
+        sha = result.stdout.strip()
+        return sha or None
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError) as exc:
+        logger.warning(
+            "loader: git rev-parse %s^{commit} failed: %s; using %s as-is",
+            target,
+            exc,
+            target,
+        )
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -793,7 +884,14 @@ def main() -> int:
     version. Returns 0 only if exec did not happen (which means
     something went wrong upstream of exec_active); exec_active
     itself does not return.
+
+    Issue #51: when `LINDSAY50_FORCE_UPGRADE=1` is in the env (set
+    by `command_handlers.force_upgrade` via `os.execvpe`), dispatch
+    to `force_upgrade_main()` instead — same upgrade flow with the
+    AUTO_UPDATE gate skipped.
     """
+    if os.environ.get("LINDSAY50_FORCE_UPGRADE", "").strip() == "1":
+        return force_upgrade_main()
     repo_dir = resolve_repo_dir()
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
     logger.info("loader: starting; repo_dir=%s", repo_dir)
@@ -840,6 +938,65 @@ def main() -> int:
         exec_active(repo_dir, current_sha(repo_dir) or "")
         return 0
 
+    run_upgrade_flow(
+        repo_dir,
+        api_url=api_url,
+        api_key=api_key,
+    )
+    # run_upgrade_flow always exec's — reaching here means something
+    # threw without being caught. Fall through to a safe default.
+    exec_active(repo_dir, current_sha(repo_dir) or "")
+    return 0
+
+
+def force_upgrade_main() -> int:
+    """Force-upgrade loader entrypoint (issue #51).
+
+    Triggered when the operator clicks "Force upgrade" on the
+    Settings page — the Pi's `command_handlers.force_upgrade`
+    `os.execvpe`s into THIS entrypoint. Differs from `main()` in
+    exactly one way: the AUTO_UPDATE check is bypassed. The
+    force-upgrade semantics is "I know what I'm doing, swap to
+    the resolved target no matter what AUTO_UPDATE says."
+
+    The SHA-check + stage + probe + swap logic is IDENTICAL to
+    the regular flow (`run_upgrade_flow` with the default
+    `fetch_target_version` fetcher). On any failure inside the
+    upgrade path the loader falls through to running the existing
+    `current/.../main.py` so the Pi cannot brick itself.
+    """
+    repo_dir = resolve_repo_dir()
+    logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+    logger.info("loader: force-upgrade starting; repo_dir=%s", repo_dir)
+
+    # Same config-resolve posture as `main()` — caller's force-upgrade
+    # click is presumed authorized at the Flask-side (X-API-Key auth)
+    # and at the operator-confirm side, so we trust the config and
+    # skip the AUTO_UPDATE gate.
+    try:
+        from lib_shared.config_reader import get_config  # type: ignore[import-not-found]
+    except ImportError:
+        logger.warning("loader: force-upgrade: cannot import config_reader; using existing current")
+        exec_active(repo_dir, current_sha(repo_dir) or "")
+        return 0
+
+    required = {"CONFIG_API_URL", "API_SECRET_KEY"}
+    try:
+        cfg = get_config(required)
+    except Exception as e:
+        logger.warning("loader: force-upgrade: config_reader failed: %s", e)
+        exec_active(repo_dir, current_sha(repo_dir) or "")
+        return 0
+
+    api_url = cfg.if_exists("CONFIG_API_URL") or ""
+    api_key = cfg.if_exists("API_SECRET_KEY") or ""
+
+    if not api_url or not api_key:
+        logger.warning("loader: force-upgrade: missing CONFIG_API_URL or API_SECRET_KEY; using existing current")
+        exec_active(repo_dir, current_sha(repo_dir) or "")
+        return 0
+
+    logger.info("loader: force-upgrade: AUTO_UPDATE is bypassed; running upgrade flow unconditionally")
     run_upgrade_flow(
         repo_dir,
         api_url=api_url,

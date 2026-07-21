@@ -243,6 +243,39 @@ class MessageManager:
         self._config_api_url = config_api_url
         self._api_key = api_key
         self._is_browser = is_browser
+        # Command-handler registry (issue #51). Each action maps to a
+        # zero-arg callable. `register_handler(action, fn)` is the
+        # public surface — call sites don't mutate the dict directly.
+        # The registry starts empty; `heart-matrix-controller/main.py`
+        # registers `force-upgrade`, `restart`, `shutdown`, and the
+        # legacy `check-for-update` at boot.
+        self._command_handlers: dict[str, Callable[[], None]] = {}
+
+    def register_handler(self, action: str, handler: Callable[[], None]) -> None:
+        """Register a handler for a `type=command` envelope action.
+
+        Issue #51: the v2 dispatcher had a single hardcoded action
+        (`check-for-update`) wired via `on_check_for_update`; v3
+        adds `force-upgrade`, `restart`, and `shutdown`. Rather than
+        grow a chain of `if/elif`, we use a per-action registry.
+
+        Args:
+            action: The action string from the envelope payload
+                (e.g. `"force-upgrade"`).
+            handler: Zero-arg callable invoked when a matching
+                envelope arrives. Exceptions are caught and logged
+                by `_handle_command`; a faulty handler must never
+                interrupt the paho network thread.
+
+        Re-registering an action replaces the previous handler — there
+        is no "first wins" semantics. Tests rely on this to swap in
+        mocks after the real handlers have been wired at boot.
+        """
+        if not isinstance(action, str) or not action:
+            raise ValueError(f"register_handler: action must be a non-empty string, got {action!r}")
+        if not callable(handler):
+            raise ValueError(f"register_handler: handler must be callable, got {type(handler).__name__}")
+        self._command_handlers[action] = handler
 
     def _emit_change(self) -> None:
         """Fire the `on_change` callback if registered, then persist to sessionStorage.
@@ -513,18 +546,24 @@ class MessageManager:
     def _handle_command(self, payload) -> None:
         """Handle a type=command envelope by dispatching on the `action` field.
 
-        v2 supports exactly one action: `check-for-update` (Flask publishes
-        a one-shot hint at startup; the running app compares its
-        `LINDSAY50_ACTIVE_SHA` env var to Flask's expected SHA and
-        `os.execvpe`s into the loader on mismatch). The handler is the
-        `on_check_for_update` callable wired at construction time — a
-        simple switch, not a registry, because we have one command.
+        v3 (issue #51): supports the full set of actions registered via
+        `register_handler`. The registry starts empty; the Pi registers
+        `force-upgrade`, `restart`, `shutdown`, and the legacy
+        `check-for-update` at boot. The browser registers nothing.
+
+        Lookup order:
+          1. `self._command_handlers[action]` — the per-action registry.
+          2. (legacy compat) `self._on_check_for_update` — only when the
+             action is `check-for-update` and the registry has no entry.
+             This is the v2 transition path: pre-issue-#51 Pi builds
+             wired `_on_check_for_update` at construction time and never
+             reached `register_handler`. We honor it so a code path that
+             hasn't migrated yet still routes correctly.
+          3. Otherwise: log and drop.
 
         Malformed payloads (None, non-dict, missing or non-string `action`)
         are logged and dropped: a buggy publisher must never brick the
-        device's render loop. Unknown actions are also logged and dropped
-        — adding a new command is a one-line `elif` plus a constructor
-        kwarg, not a registry mutation.
+        device's render loop. Unknown actions are also logged and dropped.
 
         Handler exceptions are caught and logged — a faulty handler is a
         deployment bug, not a render-loop bug, and raising here would
@@ -537,26 +576,28 @@ class MessageManager:
         if not isinstance(action, str) or not action:
             logger.warning("MessageManager dropped command: missing or invalid 'action': %r", payload)
             return
-        if action == "check-for-update":
-            callback = self._on_check_for_update
-            if callback is None:
-                # Debug-level, not warning: the only runtime that registers
-                # a handler is the Pi (`heart-matrix-controller/main.py`),
-                # because `os.execvpe` into the loader only makes sense
-                # there. Flask publishes this envelope at startup to the
-                # shared MQTT topic, so the browser preview's MessageManager
-                # sees it too — but the browser has nothing to act on, and
-                # warning-level logs on every Flask restart would be pure
-                # noise. Developers who want to verify the dispatch
-                # contract can enable debug logging.
+
+        handler = self._command_handlers.get(action)
+        if handler is None and action == "check-for-update":
+            # Legacy compat: a v2 build wired `_on_check_for_update` at
+            # construction time but did not call `register_handler`. Fall
+            # through to that callback so existing Pis continue to work.
+            handler = self._on_check_for_update
+
+        if handler is None:
+            # Debug-level when the action is `check-for-update` (browser
+            # preview never registers this — the action is Pi-only) and
+            # warning-level for everything else. This mirrors the prior
+            # log shape so existing log-watch tooling sees the same field.
+            if action == "check-for-update":
                 logger.debug("MessageManager dropped check-for-update: no handler registered")
-                return
-            try:
-                callback()
-            except Exception as exc:
-                logger.exception("MessageManager on_check_for_update raised: %s", exc)
+            else:
+                logger.warning("MessageManager dropped unknown command action: %r", action)
             return
-        logger.warning("MessageManager dropped unknown command action: %r", action)
+        try:
+            handler()
+        except Exception as exc:
+            logger.exception("MessageManager command handler for %r raised: %s", action, exc)
 
     def _handle_message(self, payload: dict) -> None:
         """Convert payload dict to Message, store it, enrich it, and emit change.

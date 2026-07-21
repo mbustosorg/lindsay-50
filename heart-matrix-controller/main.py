@@ -86,6 +86,53 @@ def _on_check_for_update() -> None:
     )
 
 
+def _register_command_handlers(manager: "MessageManager") -> None:
+    """Wire the four command-action handlers into the manager.
+
+    Issue #51: register `force-upgrade`, `restart`, `shutdown`, and
+    (for transitional compatibility) `check-for-update` via the new
+    `MessageManager.register_handler(action, fn)` registry. Each
+    handler is a zero-arg callable; the dispatcher catches and logs
+    any exception so a faulty handler never breaks the paho loop.
+
+    The four handlers live in two modules:
+      - `check_for_update.check_for_update` — legacy, retained.
+      - `command_handlers.{force_upgrade,restart,shutdown}` — new.
+
+    Import is local because `command_handlers` is a sibling module
+    that pulls in `subprocess` / `os.execvpe` only on the Pi — the
+    browser preview's `MessageManager` doesn't need them and we want
+    to keep that surface area clean.
+    """
+    from check_for_update import check_for_update as _cfu
+    from command_handlers import force_upgrade, restart, shutdown
+
+    def _force_upgrade() -> None:
+        force_upgrade()
+
+    def _restart() -> None:
+        restart()
+
+    def _shutdown() -> None:
+        shutdown()
+
+    def _check_for_update() -> None:
+        _cfu(
+            api_url=cfg.MESSAGES_API_URL,
+            api_key=cfg.API_SECRET_KEY,
+        )
+
+    manager.register_handler("force-upgrade", _force_upgrade)
+    manager.register_handler("restart", _restart)
+    manager.register_handler("shutdown", _shutdown)
+    # `check-for-update` registration is RETAINED (transitional
+    # compat — the dispatcher also honors the v2
+    # `on_check_for_update` kwarg as a fallback for any pre-#51 Pi
+    # build that never reached this `register_handler` call).
+    manager.register_handler("check-for-update", _check_for_update)
+    logging.info("Registered command handlers: force-upgrade, restart, shutdown, check-for-update")
+
+
 # Build the manager first — the coordinator needs it as a constructor
 # arg, and the manager doesn't depend on the display.
 manager = MessageManager(
@@ -95,6 +142,13 @@ manager = MessageManager(
     on_change=_on_change,
     on_check_for_update=_on_check_for_update,
 )
+
+# Wire the post-#51 command handlers (force-upgrade, restart, shutdown)
+# alongside the legacy check-for-update path. The dispatcher honors
+# BOTH the registry AND the `on_check_for_update` kwarg, so a
+# transitional period where one or the other is wired still routes
+# correctly.
+_register_command_handlers(manager)
 
 asyncio.run(manager.seed())
 

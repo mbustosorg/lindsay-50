@@ -37,7 +37,9 @@ lindsay-50/
 │   │   │                       #   on exhausted)
 │   │   ├── honeycomb.py        # Pixelblaze HSV pattern port (numpy + SetImage)
 │   │   ├── hyperspace.py       # Star Wars-style jump: 3D starfield → tunnel of streaks
-│   │   └── browser_media_overlay.py  # preview-only: drives DOM <img>/<video>
+│   │   ├── browser_media_overlay.py  # preview-only: drives DOM <img>/<video>
+│   │   └── command_handlers.py # issue #51: force-upgrade / restart / shutdown
+│   │                           #   registered via MessageManager.register_handler
 │   └── settings.toml            # Local config (gitignored)
 ├── lib_shared/                  # Shared code (Flask + Pi device + browser preview)
 │   ├── models.py               # Message, SignConfig, FilterRule, RenderingSettings
@@ -229,6 +231,61 @@ Pi 4 → StatusWriter.tick() ─┬─→ .status.json (loader probe signal)
 - `lib_shared/selector.py` — `MessageSelector` (issue #26). The Pi and the browser preview both call `pick(messages, now, event_log, current_event_type, favorites)` — identical class, identical algorithm. Reads `display_recency` from the event log, normalizes `send_recency` over the eligible set, applies an additive `W_DISPLAY * disp + W_SEND * send + W_FAVORITE * (1 if fav else 0)` score, and breaks ties on `(-score, received_at, message.id)`. Behavioral knobs (`W_DISPLAY`, `W_SEND`, `W_FAVORITE`, `SATURATION_SECONDS`, `OFFSET_SECONDS`, `USE_WEIGHTED_SELECTOR`) are module-level constants — NOT in `settings.toml`. Ships dark with `USE_WEIGHTED_SELECTOR=False`.
 - `lib_shared/message_manager.py` — Shared `MessageManager`; Flask seeds from REST API, the Pi seeds from Flask's REST API.
 - `heart-message-manager/static/sign_status.js` — Browser-side module: load-time `fetch('/api/sign-status')` (one-shot) + a second `createMqttWsClient` for the status topic + 5s `setInterval` re-render. Renders the Dashboard pill (4 states: live-healthy | live-degraded | unknown | offline) and the Settings-page Sign Health section. No-op on pages with neither `#sign-live-pill` nor `[data-sign-status-field]`.
+
+## Pi upgrade controls (issue #51)
+
+The Settings page exposes three operator-driven commands that publish
+to the existing `MQTT_TOPIC` and one new endpoint for the resolver
+the loader queries on boot.
+
+- `GET /api/sign/settings` (Flask) — returns `{target_version, timezone}`.
+  `target_version` is always a concrete 7-char short SHA: operator-pinned
+  `cfg.sign.target_version` or, when empty, Flask's own running short
+  SHA (HEROKU_SLUG_COMMIT preferred, git rev-parse fallback). The
+  endpoint serializes via `_short_sha` so the wire form is deterministic.
+- `POST /api/sign/commands/<action>` — publishes `type=command`
+  envelopes (valid: `force-upgrade`, `restart`, `shutdown`). Returns
+  202 on publish, 503 on broker failure, 404 on unknown action.
+- `lib_shared/boot_config.py:SIGN_SETTINGS_PATH` — canonical endpoint
+  constant imported by both the loader and Flask; renaming is caught
+  at import time.
+- `lib_shared/boot_config.py:fetch_sign_settings` — typed wrapper; returns
+  the resolved 7-char short SHA, or None on any failure (network,
+  non-200, malformed JSON, missing/empty `target_version`).
+- `heart-matrix-controller/command_handlers.py` — three handlers
+  registered via `MessageManager.register_handler` (action-str, zero-arg
+  callable contract). `force_upgrade` uses `os.execvpe` with
+  `LINDSAY50_FORCE_UPGRADE=1` to enter the loader's force-upgrade
+  entrypoint which bypasses the AUTO_UPDATE gate.
+- `heart-matrix-controller/loader.py:force_upgrade_main` — bypasses
+  AUTO_UPDATE but uses the same SHA-check + stage + probe + swap logic
+  as the regular `main()`. The dispatch happens at the top of
+  `main()` via the `LINDSAY50_FORCE_UPGRADE` env var.
+- Legacy `/api/sign/boot-config` is RETAINED for pre-issue-#51 Pis.
+  The new loader code uses `/api/sign/settings` exclusively; the
+  legacy `fetch_expected_sha` is a transitional safety net.
+- AUTO_UPDATE stays in `settings.toml` (env override: `AUTO_UPDATE=false`).
+  No UI checkbox in v1.
+- `heart-message-manager/static/pi_upgrade_settings.js` — Settings-page
+  JS shim: wires the three command buttons in `[data-upgrade-settings-field]`
+  (Force upgrade, Restart, Shut down) and POSTs to
+  `/api/sign/commands/<action>` with `X-API-Key` from
+  `window.APP_CONFIG.auth.API_SECRET_KEY`. Each command is gated by a
+  `confirm()` modal. No-op when the section is absent.
+- `heart-message-manager/static/pi_apply_settings.js` — Settings-page
+  JS shim for the Apply button + click-to-edit on the Target Pi
+  version input. Reads `data-saved-value` (persisted
+  `target_version`) and `data-flask-version-placeholder`
+  (`placeholder` attribute) to drive dirty-state and focus-clear;
+  Apply click submits the surrounding `<form method="POST">` via
+  `form.requestSubmit(applyBtn)`. No-op when the section is absent.
+
+The short-vs-short target comparison replaces the legacy full-SHA
+match: `local = git rev-parse HEAD` (full 40 chars) versus
+`target_version` (always 7 chars). `local_short = short_sha(local)` is
+compared against `target`. The `_resolve_full_sha` helper then expands
+the short back to full via `git rev-parse <sha>^{commit}` for the
+`git worktree add` step.
 
 ## Browser runtime: PyScript, not a separate JS app
 

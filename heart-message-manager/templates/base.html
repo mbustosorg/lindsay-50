@@ -92,6 +92,20 @@
     that have neither #sign-live-pill nor [data-sign-status-field].
   -->
   <script src="{{ url_for('static', filename='sign_status.js') }}?v=1"></script>
+  <!--
+    pi_upgrade_settings.js — Settings-page Pi Upgrade Control section
+    (issue #51). Loaded on every authenticated page; the script is a
+    no-op when [data-upgrade-settings-field] is absent. `?v=2` cleared
+    the Clear-button handler after the UI rework removed it from the
+    template; bump on any future change.
+  -->
+  <script src="{{ url_for('static', filename='pi_upgrade_settings.js') }}?v=2"></script>
+  <!--
+    pi_apply_settings.js — Apply button + click-to-edit for the
+    Target Pi version input (issue #51 follow-up). Same no-op-when-
+    absent contract as pi_upgrade_settings.js.
+  -->
+  <script src="{{ url_for('static', filename='pi_apply_settings.js') }}?v=1"></script>
   <script>
     // PyScript 2024.9.x fires `py:error` on each <py-script>
     // element when its main module raises during evaluation

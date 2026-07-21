@@ -56,6 +56,7 @@ _cfg = get_config(REQUIRED_KEYS)
 import sqlite, s3
 from server_time import format_from_iso, now_utc_iso
 from lib_shared.boot_config import BootConfig, from_heroku_or_git as _boot_config_from_heroku_or_git
+from lib_shared.boot_config import SIGN_SETTINGS_PATH, short_sha as _short_sha
 from lib_shared.config_migrations import migrate, migrate_on_startup
 from lib_shared.effects_loader import load_effects_settings
 from lib_shared.models import SignConfig, FilterRule, Message
@@ -812,6 +813,112 @@ def api_sign_boot_config():
     )
 
 
+@app.route(SIGN_SETTINGS_PATH, methods=["GET"])
+@api_login_required
+def api_sign_settings():
+    """GET /api/sign/settings — return the resolved sign settings (issue #51).
+
+    Wire shape (both fields always concrete on success):
+        {
+            "target_version": "<7-char short SHA>",
+            "timezone": "US/Pacific"
+        }
+
+    `target_version` is resolved server-side: if the persisted
+    `SignSettings.target_version` is operator-pinned, the endpoint
+    returns that value verbatim (truncated to 7 chars to match the
+    worktree directory naming convention); if empty, Flask resolves
+    to its own running short SHA before responding. The wire form is
+    therefore always a concrete short SHA — the Pi never sees null
+    or empty.
+
+    `timezone` is read from `SignConfig.timezone` (top-level;
+    pre-existing) and defaults to `"US/Pacific"`.
+
+    The endpoint runs in parallel with the existing
+    `GET /api/sign/boot-config` (legacy Pis continue to call that).
+    New Pis call this endpoint; the legacy endpoint is unchanged.
+
+    Auth: same `X-API-Key` as `/api/config`. Returns 401 on bad key;
+    500 only when Flask cannot resolve its own running short SHA
+    (no env var, no git, no dyno metadata).
+    """
+    cfg = sqlite.get_config()
+    persisted = cfg.sign_settings.target_version or ""
+    if persisted:
+        target = _short_sha(persisted)
+    else:
+        # Resolve empty persisted value to Flask's own running short SHA.
+        flask_config = _resolve_boot_config()
+        target = flask_config.short_sha
+    if not target:
+        return jsonify({"error": "could not resolve target_version"}), 500
+    return jsonify(
+        {
+            "target_version": target,
+            "timezone": cfg.sign_settings.timezone if cfg.sign_settings else "US/Pacific",
+        }
+    )
+
+
+# Issue #51: command endpoints publish a `type=command` envelope on the
+# existing `MQTT_TOPIC` for the Pi to dispatch. We deliberately share
+# one helper across all three — the wire shape differs ONLY in the
+# `action` field. Returns 202 on successful publish, 503 when the
+# broker rejected the publish (Flask still keeps running; the operator
+# can retry).
+_VALID_COMMAND_ACTIONS = {"force-upgrade", "restart", "shutdown"}
+
+
+def _publish_sign_command(action: str) -> tuple:
+    """Publish `{"action": <action>}` on MQTT_TOPIC and return a Flask response.
+
+    Returns `(response, status)`. `response` is `None` when the action
+    is invalid (caller maps that to 404). On a successful publish,
+    `status` is 202 and `response` is a JSON body with the published
+    envelope for the operator's UI. On a publish failure, `status` is
+    503 and `response` carries the error message.
+
+    The publish itself is fire-and-forget — Flask does NOT wait for
+    the Pi to acknowledge. The Pi's MQTT receive thread routes the
+    envelope to its registered handler (see `command_handlers.py`).
+    """
+    assert _mqtt_client is not None
+    try:
+        envelope = MessageEnvelope("command", {"action": action})
+        ok = _mqtt_client.publish_envelope(envelope)
+    except Exception as exc:
+        logger.warning("[flask] publish sign command %s raised: %s", action, exc)
+        return jsonify({"error": "publish failed", "action": action}), 503
+
+    if not ok:
+        logger.warning("[flask] publish sign command %s returned False", action)
+        return jsonify({"error": "publish failed", "action": action}), 503
+
+    logger.info("[flask] published sign command: action=%s", action)
+    return jsonify({"status": "published", "action": action}), 202
+
+
+@app.route("/api/sign/commands/<action>", methods=["POST"])
+@api_login_required
+def api_sign_command(action: str):
+    """POST /api/sign/commands/<action> — publish a sign command (issue #51).
+
+    The three valid actions are `force-upgrade`, `restart`, and
+    `shutdown`. Any other value returns 404. On success, returns 202
+    Accepted with the published envelope; on publish failure, 503.
+
+    Auth: same `X-API-Key` as `/api/config`. The Pi's MQTT thread
+    routes the envelope to its registered handler
+    (`command_handlers.{force_upgrade,restart,shutdown}`); Flask
+    does not wait for acknowledgment.
+    """
+    if action not in _VALID_COMMAND_ACTIONS:
+        return jsonify({"error": "unknown action", "action": action}), 404
+    response, status = _publish_sign_command(action)
+    return response, status
+
+
 @app.route("/api/sign-status", methods=["GET"])
 def api_sign_status():
     """GET /api/sign-status — return the most recent snapshot Flask has.
@@ -1267,11 +1374,49 @@ def filter_rules():
     return redirect(url_for("settings"))
 
 
+def _nudge_pi_check_for_update(cfg: SignConfig, prior_target_version: str) -> None:
+    """Publish a `command=check-for-update` hint after a settings save.
+
+    The Pi's `MessageManager.register_handler("check-for-update", ...)`
+    (heart-matrix-controller/main.py) already routes this action to the
+    same AUTO_UPDATE-gated check that runs at Flask startup — so a
+    `/settings` POST that only mutates filters/effects/text still gets
+    re-routed through the same SHA reconciliation path. The settings-save
+    route now mirrors the startup-publish route: same envelope, same Pi
+    handler. Force-upgrade stays reserved for the AUTO_UPDATE-off path.
+    """
+    new_target = (cfg.sign_settings.target_version or "") if cfg.sign_settings else ""
+    if new_target == prior_target_version:
+        return
+    try:
+        envelope = MessageEnvelope("command", {"action": "check-for-update"})
+        ok = _mqtt_client.publish_envelope(envelope)
+        logger.info(
+            "[settings] nudge_pi_check_for_update: published (prior=%r new=%r publish_ok=%s)",
+            prior_target_version,
+            new_target,
+            ok,
+        )
+    except Exception as exc:
+        logger.warning("[settings] nudge_pi_check_for_update raised: %s", exc)
+
+
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 def settings():
     """Allowed senders, rendering defaults, sign name, and filter rules."""
     cfg = sqlite.get_config()
+    # Snapshot the pre-POST target_version BEFORE the form handler mutates
+    # `cfg.sign_settings.target_version`. We use this below to decide whether the
+    # new config is "different enough" to warrant a check-for-update
+    # nudge on the Pi (operator instruction: "either path should cause
+    # the Pi to update"). The empty-vs-empty case is a no-op; a real
+    # change to the pin (including clearing it back to empty) is a nudge.
+    prior_target_version = (
+        (cfg.sign_settings.target_version or "")
+        if cfg.sign_settings and getattr(cfg.sign_settings, "target_version", None) is not None
+        else ""
+    )
 
     if request.method == "POST":
         # Filter rules (before general settings so saves happen once).
@@ -1287,12 +1432,17 @@ def settings():
                 new_status = "enabled" if request.form.get("filter_status") == "on" else "disabled"
                 cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress", status=new_status))
                 _save_and_publish(cfg)
+                # Even filter-only saves nudge — the route is
+                # `/settings POST ⇒ publish on the wire`, regardless of
+                # which fields were touched (any save is a config save).
+                _nudge_pi_check_for_update(cfg, prior_target_version)
                 return redirect(url_for("settings"))
         elif filter_action == "delete":
             idx = int(request.form.get("filter_index", -1))
             if 0 <= idx < len(cfg.filters):
                 cfg.filters.pop(idx)
                 _save_and_publish(cfg)
+                _nudge_pi_check_for_update(cfg, prior_target_version)
                 return redirect(url_for("settings"))
 
         # Pretty-print the raw POST so an operator (or the next debugging
@@ -1323,6 +1473,17 @@ def settings():
         sign_name = request.form.get("sign_name", "").strip()
         if sign_name:
             cfg.sign_settings.sign_name = sign_name
+
+        # Issue #51 §6: operator-pinned `sign_settings.target_version`. The pin is
+        # a *string of either length* (full or short); GET /api/sign/settings
+        # truncates to 7 chars before responding. Always write the raw
+        # value — including the empty string when the operator clears
+        # the field — so the post-POST `cfg.sign_settings.target_version`
+        # reflects the form exactly. The `prior_target_version`
+        # snapshot at function entry determines whether the nudge
+        # fires below.
+        target_version_raw = request.form.get("sign_target_version", "").strip()
+        cfg.sign_settings.target_version = target_version_raw
 
         timezone = request.form.get("timezone", "").strip()
         if timezone:
@@ -1620,6 +1781,13 @@ def settings():
         cfg.senders = new_senders
 
         _save_and_publish(cfg)
+        # Nudge the Pi to reconcile against the freshly-saved config
+        # (operator instruction: "either path should cause the Pi to
+        # update"). The hint goes through the existing
+        # `command=check-for-update` envelope → handler, which respects
+        # `AUTO_UPDATE` and falls back to Flask's running short SHA when
+        # `target_version` is empty. Failures are logged not raised.
+        _nudge_pi_check_for_update(cfg, prior_target_version)
         return redirect(url_for("settings"))
 
     # Prepopulate the senders table with numbers that have texted the
@@ -1646,12 +1814,13 @@ def settings():
         effects_settings=load_effects_settings(),
         sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         speed_labels=ScrollerBase.SPEED_LABELS,
-        # Deployed SHA: what Flask expects the Pi to be running.
-        # This is the last-deployed commit, not the Pi's literal live
-        # running SHA (those differ during the ~12s swap window). See
-        # ISA.md ISC-A3 — querying the Pi's live SHA is out of scope.
+        # Flask self-version (running short SHA): shown in the Pi
+        # Upgrade Control card's "Flask version" column. Resolved the
+        # same way /api/sign/boot-config does — HEROKU_SLUG_COMMIT
+        # preferred, `git rev-parse HEAD` fallback. The Pi's live
+        # running SHA differs briefly during the self-upgrade swap;
+        # see ISA.md ISC-A3.
         deployed_sha_short=_resolve_boot_config().short_sha or None,
-        deployed_sha_full=_resolve_boot_config().expected_sha or None,
     )
 
 
