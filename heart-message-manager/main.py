@@ -1814,12 +1814,13 @@ def settings():
         effects_settings=load_effects_settings(),
         sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         speed_labels=ScrollerBase.SPEED_LABELS,
-        # Deployed SHA: what Flask expects the Pi to be running.
-        # This is the last-deployed commit, not the Pi's literal live
-        # running SHA (those differ during the ~12s swap window). See
-        # ISA.md ISC-A3 — querying the Pi's live SHA is out of scope.
+        # Flask self-version (running short SHA): shown in the Pi
+        # Upgrade Control card's "Flask version" column. Resolved the
+        # same way /api/sign/boot-config does — HEROKU_SLUG_COMMIT
+        # preferred, `git rev-parse HEAD` fallback. The Pi's live
+        # running SHA differs briefly during the self-upgrade swap;
+        # see ISA.md ISC-A3.
         deployed_sha_short=_resolve_boot_config().short_sha or None,
-        deployed_sha_full=_resolve_boot_config().expected_sha or None,
     )
 
 

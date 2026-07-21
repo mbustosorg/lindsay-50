@@ -62,6 +62,11 @@ checkbox in v1.
     so the operator can type (handled by `pi_apply_settings.js`).
     The Apply button is disabled by default and enabled when the
     input differs from its saved value.
+  - v2.1 update: the standalone "Deployed SHA" card was removed —
+    its value (`_resolve_boot_config().short_sha`) is identical to
+    the new "Flask version" column in Pi Upgrade Control, so the
+    card was redundant. The `/api/sign/boot-config` JSON endpoint
+    is unchanged.
 
 **New static JS module:**
 
