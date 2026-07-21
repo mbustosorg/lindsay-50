@@ -1,29 +1,29 @@
 ## 1. Dashboard Runtime Lifecycle
 
-- [ ] 1.1 Add browser-Python unit tests for lifecycle states, initial auto-start, Stop idempotence, and Stop-then-Start creating a new generation
-- [ ] 1.2 Implement/refactor the PyScript dashboard runtime controller with explicit generation records and `starting`/`running`/`stopping`/`stopped`/`error` state
-- [ ] 1.3 Add tests proving delayed REST, MQTT, status, and render callbacks from an old generation cannot mutate a newer generation
-- [ ] 1.4 Add generation-discriminator checks to every asynchronous dashboard-runtime callback and release callback proxies during teardown
-- [ ] 1.5 Add tests that Stop disconnects the MQTT subscription, releases the shared Python `MessageManager` and its in-memory ring, cancels rendering, discards the in-memory browser selector event log, releases timers/listeners, and prevents post-stop message/config dispatch
+- [x] 1.1 Add browser-Python unit tests for lifecycle states, initial auto-start, Stop idempotence, and Stop-then-Start creating a new generation
+- [x] 1.2 Implement/refactor the PyScript dashboard runtime controller with explicit generation records and `starting`/`running`/`stopping`/`stopped`/`error` state
+- [x] 1.3 Add tests proving delayed REST, MQTT, status, and render callbacks from an old generation cannot mutate a newer generation
+- [x] 1.4 Add generation-discriminator checks to every asynchronous dashboard-runtime callback and release callback proxies during teardown
+- [x] 1.5 Add tests that Stop disconnects the MQTT subscription, releases the shared Python `MessageManager` and its in-memory ring, cancels rendering, discards the in-memory browser selector event log, releases timers/listeners, and prevents post-stop message/config dispatch
 - [ ] 1.6 Implement complete Stop teardown across `preview.js`, the MQTT-WS wrapper, `MessageManager`, coordinator/canvas bindings, in-memory browser selector event log, and Python callback proxies
-- [ ] 1.7 Add tests for partial startup failures at REST seed, MQTT connect, and coordinator construction, including cleanup and retry
+- [x] 1.7 Add tests for partial startup failures at REST seed, MQTT connect, and coordinator construction, including cleanup and retry
 - [ ] 1.8 Implement failure cleanup and actionable error-state rendering; allow Start to create a clean retry generation
 
 ## 2. Fresh Runtime State and Persistence Removal
 
 - [ ] 2.1 Add tests that every fresh generation creates a new `MessageManager`/`InMemoryMessages`, a new in-memory browser selector event log, REST-seeds messages and config, and then connects a fresh MQTT client
 - [ ] 2.2 Refactor `app_main.py`/the dashboard controller from module-lifetime singletons to per-generation shared-Python runtime construction
-- [ ] 2.3 Add tests that initial load, refresh, and Stop-then-Start do not hydrate message/config state from `sessionStorage` or IndexedDB
-- [ ] 2.4 Remove the versioned `sessionStorage` message/config cache helpers and every-page hydrate/fallback bootstrap after the fresh seed path is in place
+- [x] 2.3 Add tests that initial load, refresh, and Stop-then-Start do not hydrate message/config state from `sessionStorage` or IndexedDB (covered by `TestNoCrossNavigationPersistence` in `test_message_manager.py`)
+- [x] 2.4 Remove the versioned `sessionStorage` message/config cache helpers and every-page hydrate/fallback bootstrap after the fresh seed path is in place
 - [ ] 2.5 Add tests that each fresh generation constructs a new in-memory browser selector event log and discards the previous generation's queue before message selection begins
-- [ ] 2.6 Add a bounded in-memory `EventLog` browser subclass (default cap 100 entries, FIFO drop-oldest) implementing the same `EventLog` contract the Pi's JSONL `EventLog` exposes, without changing the immutable `{event_type, message_id, timestamp, received_at}` schema
+- [x] 2.6 Add a bounded in-memory `EventLog` browser subclass (default cap 100 entries, FIFO drop-oldest) implementing the same `EventLog` contract the Pi's JSONL `EventLog` exposes, without changing the immutable `{event_type, message_id, timestamp, received_at}` schema
 - [ ] 2.7 Remove the prior `IndexedDBEventLog` browser mirror and its IndexedDB shim, and stop referencing IndexedDB from the dashboard runtime controller
 - [ ] 2.8 Update mirrored browser copies for every changed `lib_shared/` Python file and extend parity/manifest tests to prevent canonical/browser drift
 
 ## 3. In-Memory Browser Event Log
 
 - [ ] 3.1 Add unit tests covering the in-memory browser event log: `append` adds an immutable row, `query(event_type, message_id, since)` filters correctly, `last_for(message_id, event_type)` returns the most recent matching entry, and the bounded `deque(maxlen=N)` drops oldest at the cap (default 100)
-- [ ] 3.2 Implement a browser-side `EventLog` subclass backed by `collections.deque(maxlen=N)` matching the Pi JSONL `EventLog` contract; reuse the canonical immutable `{event_type, message_id, timestamp, received_at}` row schema
+- [x] 3.2 Implement a browser-side `EventLog` subclass backed by `collections.deque(maxlen=N)` matching the Pi JSONL `EventLog` contract; reuse the canonical immutable `{event_type, message_id, timestamp, received_at}` row schema
 - [ ] 3.3 Add tests that the in-memory log is empty immediately after Stop and immediately after fresh Start, and that the prior generation's log is not retained on the new generation
 - [ ] 3.4 Construct a fresh in-memory `EventLog` for every fresh runtime generation and release the prior generation's queue during Stop without keeping a reference
 - [ ] 3.5 Remove the prior `IndexedDBEventLog` browser mirror, its shim, and any references in `app_main.py` and the runtime controller
