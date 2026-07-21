@@ -1049,7 +1049,7 @@ class EffectsCoordinator:
         display_name = format_display_name(stored_name, name_format, all_first_names)
         if not display_name:
             return body
-        return f"{body}        - {display_name}"
+        return f"{body} - {display_name}"
 
     def _pick_message_via_selector(
         self,
