@@ -82,6 +82,53 @@ print("[app-py] lib_shared.message_manager / effects_coordinator / models import
 from js import createMqttWsClient  # type: ignore[import-not-found]
 
 
+# ---------------------------------------------------------------------------
+# Python `logging` → browser console
+# ---------------------------------------------------------------------------
+#
+# PyScript 2024.9.x captures `print(...)` calls and routes them to the
+# browser console (you see `[app-py]` prefixed lines). Python's `logging`
+# module is separate — by default its records go nowhere visible. Without
+# this wire-through, the diagnostic lines in `lib_shared/` (e.g.
+# `[debug-dispatch] CONFIG_ENVELOPE_RECEIVED`, `[select-mq] ENQUEUED`,
+# `MQTT_INCOMING`) silently disappear, and the operator has no way to
+# distinguish "Python never saw the envelope" from "Python saw it but
+# downstream parsing failed".
+#
+# The handler below is a thin StreamHandler that re-emits every record
+# as `console.log`. Severity → console method (`warning` → warn, etc.)
+# so the records get the right icon in DevTools. Format is the standard
+# `%(name)s-%(levelname)s-%(message)s` so a single grep on
+# `[debug-dispatch]` still finds dispatch lines.
+import logging as _logging  # type: ignore[import-not-found]
+
+
+class _BrowserConsoleHandler(_logging.Handler):
+    def emit(self, record: _logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            method = {
+                _logging.DEBUG: js.console.debug,
+                _logging.INFO: js.console.log,
+                _logging.WARNING: js.console.warn,
+                _logging.ERROR: js.console.error,
+                _logging.CRITICAL: js.console.error,
+            }.get(record.levelno, js.console.log)
+            method(f"[py-log] {msg}")
+        except Exception:
+            pass  # never let logging itself break the page
+
+    def format(self, record: _logging.LogRecord) -> str:
+        # Mirror the PyScript `print(...)` line shape: logger-line-message.
+        return f"{record.name}-{record.lineno}-{record.getMessage()}"
+
+
+_browser_handler = _BrowserConsoleHandler()
+_browser_handler.setLevel(_logging.INFO)
+_logging.getLogger().addHandler(_browser_handler)
+_logging.getLogger().setLevel(_logging.INFO)
+
+
 def _app_config() -> dict:
     """Read the server-inlined `window.APP_CONFIG` block.
 
