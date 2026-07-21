@@ -219,6 +219,16 @@ class MediaCycler(Effect):
         # coordinator's global brightness ramp handles the cross-fade.
         self._phase: str = "hold"
         self._phase_start: float = time.monotonic()
+        # Wall-clock start of the whole cycler (all items), NOT reset on
+        # per-item advance the way `_phase_start` is. Used to flip
+        # `complete` once we've filled the coordinator's hold window —
+        # the backstop that stops a single item whose natural duration
+        # outlives `hold_seconds` (e.g. a video longer than the hold) or
+        # a many-item set that can't show everything in time from being
+        # rebuilt and looping forever. Without it, the coordinator's
+        # hold clock cuts the message off but `complete` never flips, so
+        # the next out→in rebuilds this same cycler and the media loops.
+        self._started: float = time.monotonic()
         # When True, the cycler has nothing left to render — the
         # coordinator should fall back to `self.effects[self.idx]`
         # on the next fade. For a single-item list this stays False
@@ -553,6 +563,20 @@ class MediaCycler(Effect):
         except Exception as exc:  # noqa: BLE001 — cv2/PIL can raise on decode
             self._drop_active(exc)
             return
+
+        # Whole-cycler cutoff: once we've been active for the
+        # coordinator's hold window, report `complete` so the
+        # coordinator fades us out for the rotation effect (and arms its
+        # rebuild-suppress guard) instead of the next out→in
+        # reconstructing this same cycler. This is the backstop for a
+        # single item whose natural duration outlives `hold_seconds`
+        # (e.g. a video longer than the hold) and for multi-item sets
+        # that can't cycle through everything within the window — in
+        # both cases the per-item `complete` logic below never fires, so
+        # without this the media would loop forever. `hold_seconds == 0`
+        # falls through to the per-item logic (no artificial cutoff).
+        if self._hold_seconds > 0 and (time.monotonic() - self._started) >= self._hold_seconds:
+            self.complete = True
 
         if len(self._items) <= 1:
             # 1-item case — never advance internally, but DO flip

@@ -238,6 +238,42 @@ def test_media_cycler_image_item_uses_image_display(tmp_path, cfg_stub):
     assert type(cycler._active).__name__ == "ImageDisplay"
 
 
+def test_media_cycler_completes_at_hold_cutoff_when_item_outlives_hold(tmp_path, cfg_stub):
+    """Regression: an item whose natural window outlives `hold_seconds`
+    must still flip `complete` at the hold cutoff.
+
+    Without this, the coordinator's hold clock cuts the message off but
+    the cycler never reports done, so the next out→in rebuilds this same
+    cycler and the media loops forever instead of yielding to the
+    rotation effect. An image's natural window is `_MIN_ITEM_SECONDS`
+    (10s); with `hold_seconds=4` the per-item logic wouldn't flip
+    `complete` until 10s, but the whole-cycler cutoff flips it at ~4s.
+    Time is simulated by shifting the cycler's internal clocks back so
+    the test never sleeps.
+    """
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+    key = "media/images/2026-07/a.jpg"
+    _prep_cache_for_jpeg(cache_dir, key)
+    cycler = _make_cycler(
+        "msg-cutoff",
+        [{"type": "image/jpeg", "url": key}],
+        cache_dir=cache_dir,
+        hold_seconds=4.0,
+    )
+    assert cycler.complete is False
+    # 3s elapsed — before the 4s cutoff and before the 10s natural window.
+    cycler._started -= 3.0
+    cycler._phase_start -= 3.0
+    cycler.tick()
+    assert cycler.complete is False, "flipped complete before the hold cutoff"
+    # 5s elapsed — past the 4s hold cutoff (still short of the 10s natural
+    # window), so ONLY the whole-cycler backstop can flip complete here.
+    cycler._started -= 2.0
+    cycler.tick()
+    assert cycler.complete is True
+
+
 def test_media_cycler_video_item_uses_video_display(tmp_path):
     """A `video/mp4` item constructs a `VideoDisplay` inner renderer.
 

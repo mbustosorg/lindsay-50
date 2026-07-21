@@ -1405,7 +1405,14 @@ class EffectsCoordinator:
                     "Coordinator hold: fresh SMS replaces on-deck (no interrupt) message_id=%s",
                     fresh.id,
                 )
-            if now - self.phase_start >= effects_settings.hold_seconds:
+            # `self.mode == "hold"` guard: `_maybe_fall_back_to_rotation`
+            # above may have already begun the fade-out (mode → "out")
+            # for a completed/exhausted media cycler. Re-checking
+            # `self.mode` (not the local snapshot `mode`) keeps the
+            # hold_seconds cutoff from clobbering that transition back to
+            # `text_out` — which would otherwise defer the rotation
+            # swap by an extra text_out/background cycle.
+            if self.mode == "hold" and now - self.phase_start >= effects_settings.hold_seconds:
                 log.info(
                     "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
                     self.current_effect_name,
