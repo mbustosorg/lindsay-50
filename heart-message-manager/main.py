@@ -1374,11 +1374,49 @@ def filter_rules():
     return redirect(url_for("settings"))
 
 
+def _nudge_pi_check_for_update(cfg: SignConfig, prior_target_version: str) -> None:
+    """Publish a `command=check-for-update` hint after a settings save.
+
+    The Pi's `MessageManager.register_handler("check-for-update", ...)`
+    (heart-matrix-controller/main.py) already routes this action to the
+    same AUTO_UPDATE-gated check that runs at Flask startup — so a
+    `/settings` POST that only mutates filters/effects/text still gets
+    re-routed through the same SHA reconciliation path. The settings-save
+    route now mirrors the startup-publish route: same envelope, same Pi
+    handler. Force-upgrade stays reserved for the AUTO_UPDATE-off path.
+    """
+    new_target = (cfg.sign.target_version or "") if cfg.sign else ""
+    if new_target == prior_target_version:
+        return
+    try:
+        envelope = MessageEnvelope("command", {"action": "check-for-update"})
+        ok = _mqtt_client.publish_envelope(envelope)
+        logger.info(
+            "[settings] nudge_pi_check_for_update: published (prior=%r new=%r publish_ok=%s)",
+            prior_target_version,
+            new_target,
+            ok,
+        )
+    except Exception as exc:
+        logger.warning("[settings] nudge_pi_check_for_update raised: %s", exc)
+
+
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 def settings():
     """Allowed senders, rendering defaults, sign name, and filter rules."""
     cfg = sqlite.get_config()
+    # Snapshot the pre-POST target_version BEFORE the form handler mutates
+    # `cfg.sign.target_version`. We use this below to decide whether the
+    # new config is "different enough" to warrant a check-for-update
+    # nudge on the Pi (operator instruction: "either path should cause
+    # the Pi to update"). The empty-vs-empty case is a no-op; a real
+    # change to the pin (including clearing it back to empty) is a nudge.
+    prior_target_version = (
+        (cfg.sign.target_version or "")
+        if cfg.sign and getattr(cfg.sign, "target_version", None) is not None
+        else ""
+    )
 
     if request.method == "POST":
         # Filter rules (before general settings so saves happen once).
@@ -1394,12 +1432,17 @@ def settings():
                 new_status = "enabled" if request.form.get("filter_status") == "on" else "disabled"
                 cfg.filters.append(FilterRule(type=ftype, pattern=pattern, action="suppress", status=new_status))
                 _save_and_publish(cfg)
+                # Even filter-only saves nudge — the route is
+                # `/settings POST ⇒ publish on the wire`, regardless of
+                # which fields were touched (any save is a config save).
+                _nudge_pi_check_for_update(cfg, prior_target_version)
                 return redirect(url_for("settings"))
         elif filter_action == "delete":
             idx = int(request.form.get("filter_index", -1))
             if 0 <= idx < len(cfg.filters):
                 cfg.filters.pop(idx)
                 _save_and_publish(cfg)
+                _nudge_pi_check_for_update(cfg, prior_target_version)
                 return redirect(url_for("settings"))
 
         # Pretty-print the raw POST so an operator (or the next debugging
@@ -1431,15 +1474,16 @@ def settings():
         if sign_name:
             cfg.sign_settings.sign_name = sign_name
 
-        # Issue #51 §6: operator-pinned `sign.target_version`. Only update
-        # if a non-empty value is POSTed — when the input is empty, we
-        # treat it as "no override; default to Flask's running short SHA."
-        # The pin is a *string of either length* (full or short); GET /api/sign/settings
-        # truncates to 7 chars before responding, and the validation in
-        # the SignSettings model handles parsing.
+        # Issue #51 §6: operator-pinned `sign.target_version`. The pin is
+        # a *string of either length* (full or short); GET /api/sign/settings
+        # truncates to 7 chars before responding. Always write the raw
+        # value — including the empty string when the operator clears
+        # the field — so the post-POST `cfg.sign.target_version`
+        # reflects the form exactly. The `prior_target_version`
+        # snapshot at function entry determines whether the nudge
+        # fires below.
         target_version_raw = request.form.get("sign_target_version", "").strip()
-        if target_version_raw:
-            cfg.sign.target_version = target_version_raw
+        cfg.sign.target_version = target_version_raw
 
         timezone = request.form.get("timezone", "").strip()
         if timezone:
@@ -1737,6 +1781,13 @@ def settings():
         cfg.senders = new_senders
 
         _save_and_publish(cfg)
+        # Nudge the Pi to reconcile against the freshly-saved config
+        # (operator instruction: "either path should cause the Pi to
+        # update"). The hint goes through the existing
+        # `command=check-for-update` envelope → handler, which respects
+        # `AUTO_UPDATE` and falls back to Flask's running short SHA when
+        # `target_version` is empty. Failures are logged not raised.
+        _nudge_pi_check_for_update(cfg, prior_target_version)
         return redirect(url_for("settings"))
 
     # Prepopulate the senders table with numbers that have texted the

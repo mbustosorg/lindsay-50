@@ -143,8 +143,20 @@
      or short SHA); it truncates server-side. The three command buttons
      POST to /api/sign/commands/<action> with a confirm() gate. The form
      input lives inside the OUTER form (POST /settings) so the operator
-     pin survives the page save. The clear button only resets the input
-     field — it does NOT submit the form. #}
+     pin survives the page save.
+
+     UI rework (issue #51 follow-up):
+       - Three columns (Flask version / Target Pi version / Running Pi
+         version) on desktop, stacked on mobile. All three use the
+         thin-outline style (`border border-indigo-200 rounded-xl`).
+       - Clear button removed — operators can delete the text directly.
+       - Empty target shows the Flask version as muted placeholder
+         text (handled by JS click-to-edit on focus).
+       - Apply button below the columns, disabled by default, enabled
+         when the input differs from its saved value.
+       - Running Pi column is auto-populated by sign_status.js via
+         `data-sign-status-field="short_sha"`.
+   #}
   <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6"
        data-upgrade-settings-field>
     <h3 class="font-heading font-semibold text-dark text-lg mb-2 flex items-center gap-2">
@@ -156,29 +168,53 @@
       default when no override is set.
     </p>
 
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
       <div>
-        <label class="block text-sm font-medium text-slate-600 mb-2">
+        <label class="block text-xs font-medium text-slate-500 mb-1">
+          Flask version
+        </label>
+        <div class="px-3 py-2 rounded-xl border border-indigo-200 font-mono text-sm text-slate-700 truncate"
+             title="The short SHA Flask is running"
+             data-upgrade-flask-version
+             data-flask-version="{{ deployed_sha_short or '' }}">
+          {{ deployed_sha_short or "unknown" }}
+        </div>
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-500 mb-1">
           Target Pi version
         </label>
-        <div class="flex gap-2 items-center">
-          <input type="text" name="sign_target_version"
-                 class="flex-1 px-4 py-3 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-mono"
-                 value="{{ cfg.sign.target_version or '' }}"
-                 placeholder="e.g. abc1234 (short) or full SHA"
-                 data-upgrade-target-input>
-          <button type="button"
-                  class="px-4 py-3 rounded-xl bg-slate-100 text-slate-700 font-semibold hover:bg-slate-200 transition-colors cursor-pointer"
-                  data-action="clear-target"
-                  title="Clear the override; falls back to Flask self-version">
-            Clear
-          </button>
-        </div>
-        <p class="text-xs text-slate-500 mt-2">
-          When empty, the Pi targets Flask's running short SHA. The
-          value truncates to 7 characters on save.
+        <input type="text" name="sign_target_version"
+               class="w-full px-3 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-mono text-sm text-dark"
+               value="{{ cfg.sign.target_version or '' }}"
+               placeholder="{{ deployed_sha_short or 'unknown' }}"
+               data-upgrade-target-input
+               data-saved-value="{{ cfg.sign.target_version or '' }}"
+               data-flask-version-placeholder="{{ deployed_sha_short or '' }}">
+        <p class="text-xs text-slate-500 mt-1">
+          Empty = inherit Flask version (placeholder shown).
         </p>
       </div>
+      <div>
+        <label class="block text-xs font-medium text-slate-500 mb-1">
+          Running Pi version
+        </label>
+        <div class="px-3 py-2 rounded-xl border border-indigo-200 font-mono text-sm text-slate-700 truncate"
+             title="Live short SHA from the Pi's status publisher (updates every ~5s)"
+             data-sign-status-field="short_sha">
+          —
+        </div>
+      </div>
+    </div>
+
+    <div class="flex justify-end mb-6">
+      <button type="button"
+              class="px-5 py-2.5 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 hover:shadow-xl transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-lg"
+              data-upgrade-apply
+              disabled
+              title="Save and nudge the Pi to reconcile against the new target">
+        Apply
+      </button>
     </div>
 
     <div class="border-t border-indigo-50 pt-4">

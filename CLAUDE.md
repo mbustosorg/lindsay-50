@@ -267,11 +267,18 @@ the loader queries on boot.
 - AUTO_UPDATE stays in `settings.toml` (env override: `AUTO_UPDATE=false`).
   No UI checkbox in v1.
 - `heart-message-manager/static/pi_upgrade_settings.js` — Settings-page
-  JS shim: wires the four buttons in `[data-upgrade-settings-field]`
-  (Clear, Force upgrade, Restart, Shut down) and POSTs to
+  JS shim: wires the three command buttons in `[data-upgrade-settings-field]`
+  (Force upgrade, Restart, Shut down) and POSTs to
   `/api/sign/commands/<action>` with `X-API-Key` from
   `window.APP_CONFIG.auth.API_SECRET_KEY`. Each command is gated by a
   `confirm()` modal. No-op when the section is absent.
+- `heart-message-manager/static/pi_apply_settings.js` — Settings-page
+  JS shim for the Apply button + click-to-edit on the Target Pi
+  version input. Reads `data-saved-value` (persisted
+  `target_version`) and `data-flask-version-placeholder`
+  (`placeholder` attribute) to drive dirty-state and focus-clear;
+  Apply click submits the surrounding `<form method="POST">` via
+  `form.requestSubmit(applyBtn)`. No-op when the section is absent.
 
 The short-vs-short target comparison replaces the legacy full-SHA
 match: `local = git rev-parse HEAD` (full 40 chars) versus

@@ -2,11 +2,6 @@
 //
 // Wiring for `[data-upgrade-settings-field]`:
 //
-//   - "Clear" button (`data-action="clear-target"`): resets the
-//     target-version input to empty (does NOT submit the outer POST
-//     /settings form). Falling back to empty lets the server resolve
-//     to Flask's running short SHA on next /api/sign/settings request.
-//
 //   - Three command buttons (`data-action="force-upgrade"`,
 //     "restart", "shutdown"): each gates with `confirm()` (a small
 //     operator-actionable signal — these are NOT reversible from the UI),
@@ -77,22 +72,10 @@
     }, 4000);
   }
 
-  // ---- Clear button ----
-
-  const clearBtn = root.querySelector('[data-action="clear-target"]');
-  if (clearBtn) {
-    clearBtn.addEventListener("click", () => {
-      const input = root.querySelector("[data-upgrade-target-input]");
-      if (input) input.value = "";
-      showToast("ok", "Target cleared (falls back to Flask self-version)");
-    });
-  }
-
   // ---- Command buttons ----
 
   root.querySelectorAll("[data-action]").forEach((btn) => {
     const action = btn.getAttribute("data-action");
-    if (action === "clear-target") return; // handled above
     const spec = COMMANDS[action];
     if (!spec) return;
 

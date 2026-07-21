@@ -2,25 +2,30 @@
 
 These tests cover the Flask/template/JS integration:
 
-  - Settings page renders the new `[data-upgrade-settings-field]` section.
+  - Settings page renders the new `[data-upgrade-settings-field]` section
+    with three columns (Flask / Target / Running) styled consistently.
   - The Target Pi version input posts back to /settings and the value
     lands on `cfg.sign.target_version` (with `_short_sha` truncation
     when over 7 chars — but the WHOLE string may be longer; we keep
     it verbatim on the Python side and only truncate at the /api/sign/settings
     serialization point).
-  - Clear button (`data-action="clear-target"`) renders; command buttons
-    render with the right action values.
-  - The `pi_upgrade_settings.js` script exists, declares the right
-    DOM hooks, and the script tag is wired into base.html.
+  - The Apply button is rendered (disabled by default) and the
+    placeholder text matches the Flask-version SHA so operators see
+    "inherit Flask version" when the field is empty.
+  - Three command buttons render with the right action values
+    (force-upgrade, restart, shutdown).
+  - The `pi_upgrade_settings.js` and `pi_apply_settings.js` scripts
+    exist, declare the right DOM hooks, and the script tags are
+    wired into base.html.
 
-Browser-side testing note (issue #51 §8.7). The `pi_upgrade_settings.js`
-module is a pure-browser JS shim (uses `fetch`, `confirm`, `document.*`)
-— there is no Python class to mirror, so the "browser test" is a
-smoke that verifies the static file exists, exposes the expected
-data-action data hooks, and the HTML template emits the expected
-DOM scaffolding for it. The DOM-event handler behavior is small and
-DOM-bound; we verify it indirectly by reading the script text for the
-key wiring (URLs, headers, action names).
+Browser-side testing note (issue #51 §8.7). The JS modules are pure
+browser shims (uses `fetch`, `confirm`, `document.*`) — there is no
+Python class to mirror, so the "browser test" is a smoke that verifies
+the static files exist, expose the expected data-action / data-upgrade-*
+hooks, and the HTML template emits the expected DOM scaffolding for
+them. The DOM-event handler behavior is small and DOM-bound; we verify
+it indirectly by reading the script text for the key wiring (URLs,
+headers, action names, focus-clearing logic).
 """
 
 from __future__ import annotations
@@ -356,10 +361,95 @@ class TestUpgradeSectionRendered:
         assert 'name="sign_target_version"' in body
         assert "data-upgrade-target-input" in body
 
-    def test_clear_button_renders(self, client):
+    def test_apply_button_renders_disabled_by_default(self, client):
+        """Apply is the new commit path — disabled until input dirty.
+
+        The Clear button was removed in the UI rework; Apply replaces
+        it as the operator's "save & apply" surface. Spec: enabled only
+        when the input's value differs from `data-saved-value`.
+        """
         resp = client.get("/settings")
         body = resp.data.decode("utf-8")
-        assert 'data-action="clear-target"' in body
+        assert "data-upgrade-apply" in body
+        # `disabled` is rendered as a bare attribute (no value). The
+        # template emits `data-upgrade-apply\n              disabled\n...`
+        # because each attribute is on its own line — squash whitespace
+        # so adjacent attributes collapse into the same slice.
+        import re
+        squashed = re.sub(r"\s+", " ", body)
+        assert "data-upgrade-apply disabled" in squashed
+
+    def test_target_input_renders_flask_version_as_placeholder(self, client):
+        """Empty target field shows Flask-version as muted placeholder text.
+
+        Spec: "if inheriting the Flask version, ie. the field is empty,
+        let's show the flask version in grey/lighter text." We pass the
+        Flask version through both the HTML `placeholder=` attribute
+        AND the `data-flask-version-placeholder` attribute so
+        `pi_apply_settings.js` can match on it for click-to-edit.
+        """
+        resp = client.get("/settings")
+        body = resp.data.decode("utf-8")
+        assert "data-upgrade-target-input" in body
+        assert "data-flask-version-placeholder" in body
+        # Both attributes should be populated with the Flask-version
+        # short SHA from `_resolve_boot_config()`. In the test harness
+        # the env var `HEROKU_SLUG_COMMIT` is not set, so this resolves
+        # from local git HEAD — we just verify the same value flows to
+        # both attributes.
+        import re
+        ph_match = re.search(
+            r'data-upgrade-target-input[^>]*?data-flask-version-placeholder="([^"]+)"',
+            body,
+        )
+        # Some templates emit attrs in any order; fall back to two
+        # separate lookups.
+        if ph_match is None:
+            placeholder_attr = re.search(
+                r'data-flask-version-placeholder="([^"]+)"', body
+            )
+            assert placeholder_attr is not None, (
+                "Target input must carry data-flask-version-placeholder= for "
+                "click-to-edit to work"
+            )
+            flask_from_input = placeholder_attr.group(1)
+        else:
+            flask_from_input = ph_match.group(1)
+        # And the `placeholder=` HTML attribute should carry the same value.
+        placeholder_html = re.search(
+            r'name="sign_target_version"[^>]*?placeholder="([^"]+)"',
+            body,
+        )
+        # Some templates emit attrs in any order; fall back.
+        if placeholder_html is None:
+            placeholder_html = re.search(
+                r'placeholder="([^"]+)"[^>]*?name="sign_target_version"',
+                body,
+            )
+        assert placeholder_html is not None, (
+            "Target input must have a placeholder attribute set to the Flask version"
+        )
+        assert flask_from_input == placeholder_html.group(1), (
+            "data-flask-version-placeholder and HTML placeholder= must agree"
+        )
+
+    def test_three_columns_render_with_thin_outline_styling(self, client):
+        """All three columns (Flask / Target / Running) use the thin-outline style.
+
+        Spec: "the formatting on the three boxes should be consistent.
+        the current formatting on the target Pi version is good, ie.
+        thin outline." The Flask and Running cells are now divs (not
+        inputs) but use the same `border border-indigo-200 rounded-xl`
+        treatment. We verify the Flask cell renders the deployed SHA
+        and the Running cell exposes the `data-sign-status-field`
+        hook for sign_status.js to populate.
+        """
+        resp = client.get("/settings")
+        body = resp.data.decode("utf-8")
+        # Flask version cell
+        assert "data-upgrade-flask-version" in body
+        # Running Pi version cell — auto-populated by sign_status.js.
+        assert 'data-sign-status-field="short_sha"' in body
 
     def test_force_upgrade_button_renders(self, client):
         resp = client.get("/settings")
@@ -380,10 +470,12 @@ class TestUpgradeSectionRendered:
     def test_command_buttons_are_type_button_not_submit(self, client):
         """Each command button must be `type="button"` so it does NOT submit
         the outer /settings POST — the JS handler intercepts and does its
-        own POST /api/sign/commands/<action>."""
+        own POST /api/sign/commands/<action>. The Apply button is a
+        separate concern (it submits the outer form intentionally) and
+        is NOT in this loop."""
         resp = client.get("/settings")
         body = resp.data.decode("utf-8")
-        for action in ("force-upgrade", "restart", "shutdown", "clear-target"):
+        for action in ("force-upgrade", "restart", "shutdown"):
             needle = f'data-action="{action}"'
             idx = body.find(needle)
             assert idx != -1
@@ -402,6 +494,171 @@ class TestUpgradeSectionRendered:
 # ---------------------------------------------------------------------------
 # 8.2 — POST /settings persists target_version
 # ---------------------------------------------------------------------------
+
+
+class TestSettingsPostPublishesCheckForUpdate:
+    """`/settings` POST must publish a `command=check-for-update` envelope.
+
+    Operator instruction: "either path should cause the Pi to update."
+    Both the startup publish AND the settings-save publish route through
+    the same handler (`MessageManager.register_handler("check-for-update", ...)`
+    in heart-matrix-controller/main.py), gated by the AUTO_UPDATE flag on
+    the Pi. The nudge fires only when `cfg.sign.target_version` actually
+    changed between snapshot-at-entry and the post-POST value — a /settings
+    POST that doesn't touch the pin (or sets it to the same value) is a
+    no-op for the nudge.
+    """
+
+    def _patch_capture(self, monkeypatch):
+        """Wire a capturing publish_envelope onto the live `_mqtt_client`.
+
+        The `_RecordingPaho` test harness (`tests/test_settings_upgrade_form_and_js.py:281`)
+        instantiates a mock with `self.publish_envelope = MagicMock(return_value=True)`.
+        Flask's `main.py` constructs `_mqtt_client = PahoMqttClient(...)` at module
+        load, so the test's Paho instance IS the module's `_mqtt_client` (a single
+        shared mock). We replace the mock's `publish_envelope` with a real callable
+        that records each envelope passed to it.
+        """
+        captured = {"envelopes": []}
+
+        def _capture_publish_envelope(envelope):
+            captured["envelopes"].append(envelope)
+            return True
+
+        # `heart-message-manager.main` is the loaded module from
+        # `_load_app_module`; it carries the live `_mqtt_client` mock instance.
+        app_module = sys.modules.get("heart-message-manager.main")
+        assert app_module is not None, (
+            "_load_app_module must run before _patch_capture (sets the "
+            "module that owns _mqtt_client)"
+        )
+        monkeypatch.setattr(
+            app_module._mqtt_client,
+            "publish_envelope",
+            _capture_publish_envelope,
+        )
+        return captured
+
+    def test_post_publishes_check_for_update_when_target_changed(self, app, client, monkeypatch):
+        sqlite_mod = sys.modules["sqlite"]
+        original_get = sqlite_mod.get_config
+        existing_cfg = sqlite_mod._FakeSignConfig(sign={"target_version": "abc1234"})
+        sqlite_mod.get_config = MagicMock(return_value=existing_cfg)
+        try:
+            captured = self._patch_capture(monkeypatch)
+            resp = client.post(
+                "/settings",
+                data={
+                    "sign_name": "Test sign",
+                    "sign_target_version": "def5678",  # changed!
+                    "timezone": "America/Los_Angeles",
+                    "text_settings_speed": "3",
+                    "text_settings_color": "#ffffff",
+                    "text_settings_text_effect": "scroll",
+                    "effects_settings_fade_seconds": "0.5",
+                    "effects_settings_hold_seconds": "7.0",
+                    "effects_settings_intro_seconds": "0.5",
+                    "effects_settings_idle_seconds": "2.0",
+                    "effects_settings_lookback_days": "30",
+                    "effects_settings_selector_algorithm": "weighted",
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code in (302, 303)
+        finally:
+            sqlite_mod.get_config = original_get
+        # The check-for-update envelope is the LAST one we publish;
+        # `_save_and_publish` publishes the config envelope first, the
+        # nudge comes after.
+        check_envelopes = [
+            e for e in captured["envelopes"] if getattr(e, "type", None) == "command"
+        ]
+        assert len(check_envelopes) >= 1, (
+            "expected at least one command envelope on /settings POST with pin change"
+        )
+        assert check_envelopes[-1].payload == {"action": "check-for-update"}
+
+    def test_post_does_not_publish_check_for_update_when_target_unchanged(
+        self, app, client, monkeypatch
+    ):
+        sqlite_mod = sys.modules["sqlite"]
+        original_get = sqlite_mod.get_config
+        existing_cfg = sqlite_mod._FakeSignConfig(sign={"target_version": "abc1234"})
+        sqlite_mod.get_config = MagicMock(return_value=existing_cfg)
+        try:
+            captured = self._patch_capture(monkeypatch)
+            resp = client.post(
+                "/settings",
+                data={
+                    "sign_name": "Test sign",
+                    "sign_target_version": "abc1234",  # same as before
+                    "timezone": "America/Los_Angeles",
+                    "text_settings_speed": "3",
+                    "text_settings_color": "#ffffff",
+                    "text_settings_text_effect": "scroll",
+                    "effects_settings_fade_seconds": "0.5",
+                    "effects_settings_hold_seconds": "7.0",
+                    "effects_settings_intro_seconds": "0.5",
+                    "effects_settings_idle_seconds": "2.0",
+                    "effects_settings_lookback_days": "30",
+                    "effects_settings_selector_algorithm": "weighted",
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code in (302, 303)
+        finally:
+            sqlite_mod.get_config = original_get
+        check_envelopes = [
+            e for e in captured["envelopes"] if getattr(e, "type", None) == "command"
+        ]
+        assert check_envelopes == [], (
+            "no check-for-update envelope should be published when target_version unchanged"
+        )
+
+    def test_post_publishes_check_for_update_when_target_cleared_to_empty(
+        self, app, client, monkeypatch
+    ):
+        """Clearing the pin (empty POST) is also a 'change' worth a nudge.
+
+        Goes from a pinned value to empty (the spec calls both transitions
+        a "change" — both should trigger the Pi to upgrade: the cleared
+        pin becomes the Flask-version fallback, which may itself differ
+        from the Pi's running SHA).
+        """
+        sqlite_mod = sys.modules["sqlite"]
+        original_get = sqlite_mod.get_config
+        existing_cfg = sqlite_mod._FakeSignConfig(sign={"target_version": "abc1234"})
+        sqlite_mod.get_config = MagicMock(return_value=existing_cfg)
+        try:
+            captured = self._patch_capture(monkeypatch)
+            resp = client.post(
+                "/settings",
+                data={
+                    "sign_name": "Test sign",
+                    "sign_target_version": "",  # explicit clear
+                    "timezone": "America/Los_Angeles",
+                    "text_settings_speed": "3",
+                    "text_settings_color": "#ffffff",
+                    "text_settings_text_effect": "scroll",
+                    "effects_settings_fade_seconds": "0.5",
+                    "effects_settings_hold_seconds": "7.0",
+                    "effects_settings_intro_seconds": "0.5",
+                    "effects_settings_idle_seconds": "2.0",
+                    "effects_settings_lookback_days": "30",
+                    "effects_settings_selector_algorithm": "weighted",
+                },
+                follow_redirects=False,
+            )
+            assert resp.status_code in (302, 303)
+        finally:
+            sqlite_mod.get_config = original_get
+        check_envelopes = [
+            e for e in captured["envelopes"] if getattr(e, "type", None) == "command"
+        ]
+        assert len(check_envelopes) >= 1, (
+            "expected check-for-update envelope when target_version is cleared"
+        )
+        assert check_envelopes[-1].payload == {"action": "check-for-update"}
 
 
 class TestTargetVersionPosts:
@@ -442,14 +699,24 @@ class TestTargetVersionPosts:
         assert "cfg" in captured
         assert captured["cfg"].sign.target_version == "abc1234"
 
-    def test_empty_target_version_does_not_clobber_existing(self, app, client, monkeypatch):
-        """An empty POST preserves the previously-saved target_version."""
+    def test_empty_target_version_saves_empty_string(self, app, client, monkeypatch):
+        """An empty POST ALWAYS writes an empty string, even when the
+        previously-persisted value was non-empty.
+
+        Pre-#51-follow-up behavior was: empty POST preserved the
+        previous saved value (`if target_version_raw:` guard). The new
+        behavior: empty POST clobbers to empty, so the operator's
+        explicit clearing of the pin reflects in `cfg.sign.target_version`
+        — they can then re-pin or leave empty (Flask-version fallback).
+        The change in saved value (was-non-empty, now-empty) IS a real
+        change for the check-for-update nudge.
+        """
         sqlite_mod = sys.modules["sqlite"]
         original_get = sqlite_mod.get_config
 
-        # Pre-populate target_version in the in-memory config that the
-        # handler will read.
-        existing_cfg = sqlite_mod._FakeSignConfig(target_version="abc1234")
+        # Pre-populate sign.target_version in the in-memory config. The
+        # _FakeSignConfig harness exposes nested `sign` via `sign=` kwarg.
+        existing_cfg = sqlite_mod._FakeSignConfig(sign={"target_version": "abc1234"})
         sqlite_mod.get_config = MagicMock(return_value=existing_cfg)
         captured = {}
         original_put = sqlite_mod.put_config
@@ -479,9 +746,9 @@ class TestTargetVersionPosts:
                 follow_redirects=False,
             )
             assert resp.status_code in (302, 303)
-            # Empty form input ⇒ we DO save the empty string, so the
-            # next /api/sign/settings request falls back to Flask's
-            # running short SHA. Documented in the spec.
+            # Empty form input clobbers to empty — the operator's clear
+            # is a real edit and persists. The /api/sign/settings route
+            # does the Flask-fallback resolution on the wire.
             assert captured["cfg"].sign.target_version == ""
         finally:
             sqlite_mod.get_config = original_get
@@ -585,3 +852,58 @@ class TestUpgradeJsStatic:
         assert "pi_upgrade_settings.js" in base_html
         # And it's properly routed through Flask's static helper.
         assert "url_for('static', filename='pi_upgrade_settings.js')" in base_html
+
+
+class TestApplySettingsJsStatic:
+    """`pi_apply_settings.js` — Apply button + click-to-edit (issue #51 follow-up).
+
+    Same testing posture as `pi_upgrade_settings.js`: smoke tests on the
+    static JS source for the right hooks + base.html wiring. No DOM
+    harness — the file is a pure-browser module that's not importable
+    in a PyScript test env without the full PyScript stack.
+    """
+
+    def test_script_file_exists(self):
+        assert (
+            _STATIC_DIR / "pi_apply_settings.js"
+        ).exists(), "static/pi_apply_settings.js must exist for the Apply button to wire"
+
+    def test_script_short_circuits_when_section_absent(self):
+        """IIFE no-ops when `[data-upgrade-settings-field]` is missing."""
+        text = (_STATIC_DIR / "pi_apply_settings.js").read_text(encoding="utf-8")
+        assert "data-upgrade-settings-field" in text
+        assert "if (!root) return" in text
+
+    def test_script_reads_saved_value_and_flask_placeholder(self):
+        """The dirty-state compare reads `data-saved-value`; the focus-clear
+        reads `data-flask-version-placeholder`. Both come from Jinja-
+        rendered attributes on the input."""
+        text = (_STATIC_DIR / "pi_apply_settings.js").read_text(encoding="utf-8")
+        assert "data-saved-value" in text
+        assert "data-flask-version-placeholder" in text
+
+    def test_script_toggles_apply_disabled_on_dirty(self):
+        """Apply is enabled only when `input.value.trim() !== savedValue`."""
+        text = (_STATIC_DIR / "pi_apply_settings.js").read_text(encoding="utf-8")
+        assert "data-upgrade-apply" in text
+        assert "applyBtn.disabled" in text
+        # Dirty comparison appears at least once.
+        assert "currentIsDirty" in text or "savedValue" in text
+
+    def test_script_clears_value_on_focus_when_placeholder_shown(self):
+        """Click-to-edit semantics: focus with placeholder visible → clear."""
+        text = (_STATIC_DIR / "pi_apply_settings.js").read_text(encoding="utf-8")
+        assert '"focus"' in text or "'focus'" in text
+        assert "input.value = " in text
+
+    def test_script_submits_form_on_apply_click(self):
+        """Apply click submits the surrounding `<form method="POST">`."""
+        text = (_STATIC_DIR / "pi_apply_settings.js").read_text(encoding="utf-8")
+        assert "requestSubmit" in text or "form.submit" in text
+        assert "input.closest(\"form\")" in text or "input.closest('form')" in text
+
+    def test_base_html_includes_script_tag(self):
+        """base.html must include pi_apply_settings.js via url_for('static', ...)."""
+        base_html = (_TEMPLATES_DIR / "base.html").read_text(encoding="utf-8")
+        assert "pi_apply_settings.js" in base_html
+        assert "url_for('static', filename='pi_apply_settings.js')" in base_html

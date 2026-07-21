@@ -50,16 +50,44 @@ checkbox in v1.
 **UI:**
 
 - New "Pi Upgrade Control" section on `templates/settings.html` with
-  a Target Pi version input + Clear button, plus three command buttons
+  a Target Pi version input + Apply button + three command buttons
   (force upgrade / restart / shutdown) that POST to the new Flask
   endpoints via `static/pi_upgrade_settings.js`. Each command is
   gated behind a `confirm()` modal.
+  - v2 update: 3-column layout (Flask / Target / Running) with
+    thin-outline styling on all three cells. The legacy Clear
+    button was removed — operators delete text directly. When the
+    Target field is empty the Flask version is shown as muted
+    grey placeholder text. Clicking the empty field clears it
+    so the operator can type (handled by `pi_apply_settings.js`).
+    The Apply button is disabled by default and enabled when the
+    input differs from its saved value.
+
+**New static JS module:**
+
+- `static/pi_apply_settings.js` — Apply button + click-to-edit for
+  the Target Pi version input. The script reads
+  `data-saved-value` (the persisted target_version) and
+  `data-flask-version-placeholder` (the rendered HTML `placeholder`)
+  to drive dirty-state and focus-clear. Click on Apply submits the
+  surrounding `<form method="POST">` via `form.requestSubmit(applyBtn)`,
+  reusing Flask's existing `/settings` handler.
 
 **Behaviour:**
 
+- `/settings` POST now publishes a `command=check-for-update` envelope
+  on the same topic when `cfg.sign.target_version` changed between
+  pre-POST snapshot and post-POST value (including explicit clearing).
+  This mirrors the startup-time hint and routes the Pi through the
+  same `MessageManager.register_handler("check-for-update", ...)`
+  handler — AUTO_UPDATE-gated, falls back to Flask's running short SHA
+  on empty. Force-upgrade remains the AUTO_UPDATE-bypass path.
 - `sign.target_version` is `cfg.sign.target_version` on the Flask side.
-  An empty form value means "no override; fall back to Flask's self-SHA"
-  — not "null" or "missing" (the wire form is always concrete).
+  An empty form value clobbers to empty (no longer preserves the prior
+  pinned value) so the operator's explicit clear is honored end-to-end
+  on the wire. The /api/sign/settings handler still does the
+  Flask-version fallback at read time, so the wire form is always
+  concrete.
 - `force-upgrade` preserves signal handling via `os.execvpe` so the
   systemd unit sees the loader as the PID's direct child.
 - AUTO_UPDATE remains operator-only — no checkbox is rendered.
