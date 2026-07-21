@@ -154,10 +154,10 @@
         </label>
         <input type="text" name="sign_target_version"
                class="w-full px-3 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-mono text-sm text-dark"
-               value="{{ cfg.sign.target_version or '' }}"
+               value="{{ cfg.sign_settings.target_version or '' }}"
                placeholder="{{ deployed_sha_short or 'unknown' }}"
                data-upgrade-target-input
-               data-saved-value="{{ cfg.sign.target_version or '' }}"
+               data-saved-value="{{ cfg.sign_settings.target_version or '' }}"
                data-flask-version-placeholder="{{ deployed_sha_short or '' }}">
         <p class="text-xs text-slate-500 mt-1">
           Empty = inherit Flask version (placeholder shown).

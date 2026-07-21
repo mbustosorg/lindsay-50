@@ -104,6 +104,15 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
     effects_settings_mock.MAX_LOOKBACK_DAYS = 365
     effects_settings_mock.VALID_SELECTOR_ALGORITHMS = ("weighted", "random")
     models_mod.EffectsSettings = effects_settings_mock
+    # TextSettings imported at module-load by main.py (line 63). Any
+    # module-level usage of TextSettings.<CONSTANT> needs constants on
+    # the MagicMock; `MagicMock` exposes attribute access for anything,
+    # so the constants resolve transparently when `main.py` does
+    # `TextSettings.VALID_NAME_DISPLAY_FORMATS` etc.
+    text_settings_mock = MagicMock()
+    text_settings_mock.VALID_NAME_DISPLAY_FORMATS = ("full", "first-initial")
+    text_settings_mock.DEFAULT_NAME_DISPLAY_FORMAT = "full"
+    models_mod.TextSettings = text_settings_mock
 
     class _FakeEnvelope:
         def __init__(self, type, payload):
@@ -146,14 +155,22 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
     sqlite_mod = types.ModuleType("sqlite")
 
     class _FakeSignSettings:
-        """In-memory SignSettings — has `.name`, `.target_version`, etc."""
+        """In-memory SignSettings (v3: sign_name/timezone/enforce_allowed_senders/target_version)."""
 
         def __init__(self, **kwargs):
-            self.name = kwargs.get("name", "Test")
+            self.sign_name = kwargs.get("sign_name", "Test")
+            self.name = self.sign_name  # legacy alias for any pre-v3 callers
+            self.timezone = kwargs.get("timezone", "US/Pacific")
+            self.enforce_allowed_senders = kwargs.get("enforce_allowed_senders", True)
             self.target_version = kwargs.get("target_version", "")
 
         def to_dict(self):
-            return {"name": self.name, "target_version": self.target_version}
+            return {
+                "sign_name": self.sign_name,
+                "timezone": self.timezone,
+                "enforce_allowed_senders": self.enforce_allowed_senders,
+                "target_version": self.target_version,
+            }
 
     class _FakeTextSettings:
         def __init__(self, **kwargs):
@@ -190,13 +207,14 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
             }
 
     class _FakeSignConfig:
-        """In-memory SignConfig — has `.sign.target_version`, etc."""
+        """In-memory SignConfig — exposes both `.sign_settings` (v3 canonical) and `.sign` (back-compat alias)."""
 
         def __init__(self, **kwargs):
-            self.sign = _FakeSignSettings(**kwargs.get("sign", {}))
+            sign_settings = _FakeSignSettings(**kwargs.get("sign_settings", kwargs.get("sign", {})))
+            self.sign_settings = sign_settings
+            self.sign = sign_settings  # back-compat alias for any pre-v3 callers
             self.filters = kwargs.get("filters", []) or []
             self.senders = kwargs.get("senders", {}) or {}
-            self.timezone = kwargs.get("timezone", "US/Pacific")
             self.text_settings = _FakeTextSettings(**(kwargs.get("text_settings", {}) or {}))
             self.effects_settings = _FakeEffectsSettings(**(kwargs.get("effects_settings", {}) or {}))
             self.effects = []
@@ -205,11 +223,10 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
             return {
                 "filters": [f.to_dict() if hasattr(f, "to_dict") else f for f in self.filters],
                 "senders": dict(self.senders),
-                "sign": (
-                    self.sign.to_dict() if hasattr(self.sign, "to_dict") else {"name": "Test", "target_version": ""}
+                "sign_settings": (
+                    self.sign_settings.to_dict() if hasattr(self.sign_settings, "to_dict") else {}
                 ),
-                "timezone": self.timezone,
-                "version": 2,
+                "version": 3,
                 "effects_settings": (
                     self.effects_settings.to_dict() if hasattr(self.effects_settings, "to_dict") else {}
                 ),
@@ -226,6 +243,9 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
     sqlite_mod.message_count = MagicMock(return_value=0)
     sqlite_mod.put_message = MagicMock()
     sqlite_mod.get_message = MagicMock(return_value=None)
+    # Settings template calls `sqlite.get_distinct_senders()` at render
+    # time (line 1803 of main.py, after implement-senders-filtering).
+    sqlite_mod.get_distinct_senders = MagicMock(return_value=[])
     sys.modules["sqlite"] = sqlite_mod
 
     s3_mod = types.ModuleType("s3")

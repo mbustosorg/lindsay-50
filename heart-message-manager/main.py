@@ -844,7 +844,7 @@ def api_sign_settings():
     (no env var, no git, no dyno metadata).
     """
     cfg = sqlite.get_config()
-    persisted = cfg.sign.target_version or ""
+    persisted = cfg.sign_settings.target_version or ""
     if persisted:
         target = _short_sha(persisted)
     else:
@@ -856,7 +856,7 @@ def api_sign_settings():
     return jsonify(
         {
             "target_version": target,
-            "timezone": cfg.timezone or "US/Pacific",
+            "timezone": cfg.sign_settings.timezone if cfg.sign_settings else "US/Pacific",
         }
     )
 
@@ -1385,7 +1385,7 @@ def _nudge_pi_check_for_update(cfg: SignConfig, prior_target_version: str) -> No
     route now mirrors the startup-publish route: same envelope, same Pi
     handler. Force-upgrade stays reserved for the AUTO_UPDATE-off path.
     """
-    new_target = (cfg.sign.target_version or "") if cfg.sign else ""
+    new_target = (cfg.sign_settings.target_version or "") if cfg.sign_settings else ""
     if new_target == prior_target_version:
         return
     try:
@@ -1407,14 +1407,14 @@ def settings():
     """Allowed senders, rendering defaults, sign name, and filter rules."""
     cfg = sqlite.get_config()
     # Snapshot the pre-POST target_version BEFORE the form handler mutates
-    # `cfg.sign.target_version`. We use this below to decide whether the
+    # `cfg.sign_settings.target_version`. We use this below to decide whether the
     # new config is "different enough" to warrant a check-for-update
     # nudge on the Pi (operator instruction: "either path should cause
     # the Pi to update"). The empty-vs-empty case is a no-op; a real
     # change to the pin (including clearing it back to empty) is a nudge.
     prior_target_version = (
-        (cfg.sign.target_version or "")
-        if cfg.sign and getattr(cfg.sign, "target_version", None) is not None
+        (cfg.sign_settings.target_version or "")
+        if cfg.sign_settings and getattr(cfg.sign_settings, "target_version", None) is not None
         else ""
     )
 
@@ -1474,16 +1474,16 @@ def settings():
         if sign_name:
             cfg.sign_settings.sign_name = sign_name
 
-        # Issue #51 §6: operator-pinned `sign.target_version`. The pin is
+        # Issue #51 §6: operator-pinned `sign_settings.target_version`. The pin is
         # a *string of either length* (full or short); GET /api/sign/settings
         # truncates to 7 chars before responding. Always write the raw
         # value — including the empty string when the operator clears
-        # the field — so the post-POST `cfg.sign.target_version`
+        # the field — so the post-POST `cfg.sign_settings.target_version`
         # reflects the form exactly. The `prior_target_version`
         # snapshot at function entry determines whether the nudge
         # fires below.
         target_version_raw = request.form.get("sign_target_version", "").strip()
-        cfg.sign.target_version = target_version_raw
+        cfg.sign_settings.target_version = target_version_raw
 
         timezone = request.form.get("timezone", "").strip()
         if timezone:

@@ -17,7 +17,7 @@ checkbox in v1.
 
 - `GET /api/sign/settings` — returns `{target_version, timezone}` where
   `target_version` is always a concrete 7-char short SHA. Reads the
-  operator-pinned value from `cfg.sign.target_version`; if empty,
+  operator-pinned value from `cfg.sign_settings.target_version`; if empty,
   falls back to the Flask's own running short SHA. Backend truncates
   to 7 chars at serialization time so the wire form is deterministic.
 - `POST /api/sign/commands/<action>` — publishes a `type=command`
@@ -81,13 +81,13 @@ checkbox in v1.
 **Behaviour:**
 
 - `/settings` POST now publishes a `command=check-for-update` envelope
-  on the same topic when `cfg.sign.target_version` changed between
+  on the same topic when `cfg.sign_settings.target_version` changed between
   pre-POST snapshot and post-POST value (including explicit clearing).
   This mirrors the startup-time hint and routes the Pi through the
   same `MessageManager.register_handler("check-for-update", ...)`
   handler — AUTO_UPDATE-gated, falls back to Flask's running short SHA
   on empty. Force-upgrade remains the AUTO_UPDATE-bypass path.
-- `sign.target_version` is `cfg.sign.target_version` on the Flask side.
+- `sign.target_version` is `cfg.sign_settings.target_version` on the Flask side.
   An empty form value clobbers to empty (no longer preserves the prior
   pinned value) so the operator's explicit clear is honored end-to-end
   on the wire. The /api/sign/settings handler still does the
