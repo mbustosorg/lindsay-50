@@ -22,7 +22,7 @@
 
 ## 3. In-Memory Browser Event Log
 
-- [ ] 3.1 Add unit tests covering the in-memory browser event log: `append` adds an immutable row, `query(event_type, message_id, since)` filters correctly, `last_for(message_id, event_type)` returns the most recent matching entry, and the bounded `deque(maxlen=N)` drops oldest at the cap (default 100)
+- [x] 3.1 Add unit tests covering the in-memory browser event log: `append` adds an immutable row, `query(event_type, message_id, since)` filters correctly, `last_for(message_id, event_type)` returns the most recent matching entry, and the bounded `deque(maxlen=N)` drops oldest at the cap (default 100)
 - [x] 3.2 Implement a browser-side `EventLog` subclass backed by `collections.deque(maxlen=N)` matching the Pi JSONL `EventLog` contract; reuse the canonical immutable `{event_type, message_id, timestamp, received_at}` row schema
 - [x] 3.3 Add tests that the in-memory log is empty immediately after Stop and immediately after fresh Start, and that the prior generation's log is not retained on the new generation
 - [x] 3.4 Construct a fresh in-memory `EventLog` for every fresh runtime generation and release the prior generation's queue during Stop without keeping a reference
@@ -41,7 +41,7 @@
 - [ ] 4.9 Add template tests that simulated-Pi APP_CONFIG, PyScript entrypoints, preview JS, and message-topic MQTT bootstrap load only on `/`
 - [ ] 4.10 Make the base shell lightweight and dashboard-scope simulator assets while retaining the independent physical-sign status client on its supported pages
 
-## 4. Dashboard Canvas and Controls
+## 5. Dashboard Canvas and Controls
 
 - [ ] 5.1 Add UI/controller tests for control availability and status rendering in `starting`, `running`, `stopping`, `stopped`, and `error`
 - [ ] 5.2 Wire Start/Stop controls to the Python runtime controller, disable invalid transitions, and preserve the last frame only as a clearly stopped view
@@ -50,7 +50,7 @@
 - [ ] 5.5 Add initialization-order tests that the render loop cannot start before the dashboard Python runtime is ready
 - [ ] 5.6 Replace the current polling race between app and preview PyScript entrypoints with one deterministic ready hook/promise
 
-## 5. Test Injection and Diagnostic Modals
+## 6. Test Injection and Diagnostic Modals
 
 - [ ] 6.1 Add tests that dashboard injection reports Flask acceptance separately from matching MQTT dispatch and never creates an optimistic message on HTTP failure
 - [ ] 6.2 Reuse the existing `/api/test-messages` flow on the dashboard and correlate the accepted message with the running generation's live MQTT receipt
@@ -60,7 +60,7 @@
 - [ ] 6.6 Implement the three dashboard modals using the current runtime config/filter getters and existing authenticated S3 APIs
 - [ ] 6.7 Add tests that opening, updating, and closing each modal leaves runtime generation, render loop, coordinator state, and MQTT connection unchanged
 
-## 6. Recent-100 Dashboard Message Management
+## 7. Recent-100 Dashboard Message Management
 
 - [ ] 7.1 Add Python/browser-bridge tests that the dashboard requests up to 100 messages with suppressed records included and preserves `MessageView.source`, rules, media, sender, and display-time fields
 - [ ] 7.2 Wire the dashboard table directly to the shared Python `MessageManager` view and existing change-notification bridge without a parallel JavaScript message model
@@ -71,7 +71,7 @@
 - [ ] 7.7 Add tests for single-flight suppress/unsuppress actions, successful authoritative refresh, and non-destructive error handling
 - [ ] 7.8 Implement dashboard suppress/unsuppress fetch actions without document reload or simulator reset
 
-## 7. All-Message Archive
+## 8. All-Message Archive
 
 - [ ] 8.1 Extend route tests to prove `/messages` returns all canonical SQLite records beyond 100, newest first, in server-controlled pages of 50
 - [ ] 8.2 Preserve/refine the SQLite-backed `/messages` pagination contract and safely handle malformed, below-range, and beyond-final page values
@@ -80,7 +80,7 @@
 - [ ] 8.5 Add tests that `/messages` does not load the simulated-Pi PyScript runtime or message-topic MQTT subscriber
 - [ ] 8.6 Keep the archive server-rendered and independent from the dashboard's 100-record browser ring
 
-## 8. Secondary Pages and Transitional Testing
+## 9. Secondary Pages and Transitional Testing
 
 - [ ] 9.1 Add regression tests that Settings and Testing retain their current supported forms, diagnostics, and auth behavior when opened directly
 - [ ] 9.2 Keep Settings and Testing functional as standalone pages while removing their dependency on the every-page simulated-Pi bootstrap
@@ -88,7 +88,7 @@
 - [ ] 9.4 Document Testing as transitional in the UI/docs without removing its route or template in this change
 - [ ] 9.5 Add regression tests that the physical-sign status pill/Settings health section still receive the physical status topic independently of simulator lifecycle
 
-## 9. Verification and Check-In
+## 10. Verification and Check-In
 
 - [ ] 10.1 Bump every changed static JavaScript `?v=N` import in `templates/base.html` and add/update cache-buster assertions
 - [ ] 10.2 Run `PYTHONPATH=. pytest tests/ -v` and resolve all failures
