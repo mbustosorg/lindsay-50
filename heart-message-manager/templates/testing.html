@@ -8,6 +8,21 @@
   </div>
 </div>
 
+{# Transitional banner (§9.4): the standalone dashboard at `/` now
+   owns the simulator + MQTT live view + test injection. This page
+   is preserved for operators who reach it via a bookmark or
+   /messages→back nav; new sessions should default to the dashboard.
+   The route + template are intentionally retained — the spec §9.4
+   forbids removing them in this change. #}
+<div data-testing-transitional-banner
+     class="mb-6 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm flex items-center justify-between gap-3">
+  <span>
+    <strong class="font-semibold">Transitional:</strong>
+    the new <a href="{{ url_for('dashboard') }}" class="underline font-medium">Dashboard</a>
+    now owns the simulator + live feed. This page is preserved for direct access only.
+  </span>
+</div>
+
 {# --- Row 1: Inject + Info Cards --- #}
 <div class="grid grid-cols-12 gap-6 mb-6">
   {# --- Inject Test Message (left) --- #}
