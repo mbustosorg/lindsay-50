@@ -44,10 +44,10 @@ def _msg(message_id: str, received_at_iso: str, body: str = "hello") -> Message:
 
 
 class _FakeEventLog:
-    """In-memory fake of the Pi-side `EventLog` (and the browser-side IndexedDBEventLog).
+    """In-memory fake of the Pi-side JSONL `EventLog` (and the browser-side deque `EventLog`).
 
     Exposes the same surface the selector needs (`last_for`, `query`)
-    so tests can drive the selector without touching disk or IDB.
+    so tests can drive the selector without touching disk or the deque.
     """
 
     def __init__(self, events: list[dict] | None = None) -> None:
