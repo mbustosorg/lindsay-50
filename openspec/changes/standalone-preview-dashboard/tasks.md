@@ -5,14 +5,14 @@
 - [x] 1.3 Add tests proving delayed REST, MQTT, status, and render callbacks from an old generation cannot mutate a newer generation
 - [x] 1.4 Add generation-discriminator checks to every asynchronous dashboard-runtime callback and release callback proxies during teardown
 - [x] 1.5 Add tests that Stop disconnects the MQTT subscription, releases the shared Python `MessageManager` and its in-memory ring, cancels rendering, discards the in-memory browser selector event log, releases timers/listeners, and prevents post-stop message/config dispatch
-- [ ] 1.6 Implement complete Stop teardown across `preview.js`, the MQTT-WS wrapper, `MessageManager`, coordinator/canvas bindings, in-memory browser selector event log, and Python callback proxies
+- [x] 1.6 Implement complete Stop teardown across `preview.js`, the MQTT-WS wrapper, `MessageManager`, coordinator/canvas bindings, in-memory browser selector event log, and Python callback proxies
 - [x] 1.7 Add tests for partial startup failures at REST seed, MQTT connect, and coordinator construction, including cleanup and retry
 - [ ] 1.8 Implement failure cleanup and actionable error-state rendering; allow Start to create a clean retry generation
 
 ## 2. Fresh Runtime State and Persistence Removal
 
-- [ ] 2.1 Add tests that every fresh generation creates a new `MessageManager`/`InMemoryMessages`, a new in-memory browser selector event log, REST-seeds messages and config, and then connects a fresh MQTT client
-- [ ] 2.2 Refactor `app_main.py`/the dashboard controller from module-lifetime singletons to per-generation shared-Python runtime construction
+- [x] 2.1 Add tests that every fresh generation creates a new `MessageManager`/`InMemoryMessages`, a new in-memory browser selector event log, REST-seeds messages and config, and then connects a fresh MQTT client
+- [x] 2.2 Refactor `app_main.py`/the dashboard controller from module-lifetime singletons to per-generation shared-Python runtime construction
 - [x] 2.3 Add tests that initial load, refresh, and Stop-then-Start do not hydrate message/config state from `sessionStorage` or IndexedDB (covered by `TestNoCrossNavigationPersistence` in `test_message_manager.py`)
 - [x] 2.4 Remove the versioned `sessionStorage` message/config cache helpers and every-page hydrate/fallback bootstrap after the fresh seed path is in place
 - [x] 2.5 Add tests that each fresh generation constructs a new in-memory browser selector event log and discards the previous generation's queue before message selection begins
