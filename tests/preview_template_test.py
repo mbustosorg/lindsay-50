@@ -567,3 +567,87 @@ def test_pyscript_declared_files_all_serve_200():
             f"{len(failures)} py-config.toml [files] entries do not serve 200; "
             f"PyScript bootstrap will silently fail. First few: {failures[:3]}"
         )
+
+
+def test_pyscript_files_declares_every_app_main_import():
+    """Regression (issue #48): every Python module imported by
+    `app_main.py` must be declared in `py-config.toml` `[files]`.
+    PyScript's MEMFS only resolves modules that are listed in
+    `[files]` — any undeclared import crashes the bootstrap with
+    `ModuleNotFoundError` (browser console). The original
+    dashboard-controller + dashboard-bootstrap modules shipped
+    undeclared and the user saw the crash on every page load.
+
+    Walks `app_main.py`'s top-level `from X import Y` / `import X`
+    statements, normalizes each name to a py-config `[files]` key,
+    and asserts the key is present. Skips `pyodide_js` (PyScript-
+    provided), stdlib modules, and `js` / `window` (Pyodide proxies).
+    """
+    import ast
+    import tomllib
+
+    app_main_path = (
+        _PROJECT_ROOT
+        / "heart-message-manager"
+        / "app_main.py"
+    )
+    py_config_path = (
+        _PROJECT_ROOT
+        / "heart-message-manager"
+        / "static"
+        / "preview"
+        / "py-config.toml"
+    )
+
+    tree = ast.parse(app_main_path.read_text(encoding="utf-8"))
+    declared = tomllib.loads(py_config_path.read_text()).get("files", {})
+
+    # The `[files]` keys are full py-config paths like
+    # `"heart-message-manager/dashboard_controller.py"`. We accept a
+    # bare import name as "declared" if any declared key ends with
+    # `/{name}.py` — that matches the file naming convention the
+    # project uses (each module is a single file with a matching
+    # name).
+    declared_modules = {
+        key.split("/")[-1].removesuffix(".py")
+        for key in declared
+        if key.endswith(".py")
+    }
+
+    # Modules PyScript / Pyodide provides at runtime, plus the
+    # CPython stdlib (Pyodide ships with the whole stdlib by default).
+    # Any of these can be `import`ed without a [files] entry.
+    STDLIB_MODULES = frozenset(sys.stdlib_module_names) if hasattr(sys, "stdlib_module_names") else frozenset()
+    RUNTIME_PROVIDED = {
+        "pyodide_js",
+        "pyodide",
+        "js",
+        "pyscript",
+    } | STDLIB_MODULES
+
+    missing: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top in RUNTIME_PROVIDED:
+                    continue
+                if top not in declared_modules:
+                    missing.append(top)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is None or node.level > 0:
+                continue  # relative import — already in same dir as app_main.py
+            top = node.module.split(".")[0]
+            if top in RUNTIME_PROVIDED:
+                continue
+            if top not in declared_modules:
+                missing.append(top)
+
+    assert not missing, (
+        f"app_main.py imports {len(missing)} module(s) not declared in "
+        f"py-config.toml [files]: {missing!r}. PyScript's MEMFS will "
+        f"fail to resolve them at page-load and the dashboard will "
+        f"throw ModuleNotFoundError on bootstrap. Add each as a "
+        f"[files] entry mapping the source path to its "
+        f"/static/preview/ URL."
+    )
