@@ -1355,7 +1355,12 @@ def dashboard():
 @login_required
 def message_list():
     """Paginated message list with suppress/unsuppress buttons."""
-    page = max(1, int(request.args.get("page", 1)))
+    raw_page = request.args.get("page", "1")
+    try:
+        page = int(raw_page)
+    except (TypeError, ValueError):
+        page = 1
+    page = max(1, page)
     per_page = 50
 
     all_msgs = sqlite.get_all_messages()
