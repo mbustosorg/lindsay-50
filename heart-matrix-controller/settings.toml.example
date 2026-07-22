@@ -44,15 +44,16 @@ CONFIG_API_URL = "http://YOUR_FLASK_HOST/api/config"
 # value at process start.
 MEDIA_API_BASE_URL = "http://YOUR_FLASK_HOST"
 
-# BDF font for scrolling text. The repo ships two vendored options
-# (both public-domain Markus Kuhn fonts from the hzeller
+# BDF font for scrolling text. The repo ships three vendored options
+# (all public-domain Markus Kuhn fonts from the hzeller
 # rpi-rgb-led-matrix repo):
-#   fonts/8x13.bdf — 13 px tall, the default (more readable on long lines)
+#   fonts/9x15.bdf — 15 px tall, the default (slightly larger text)
+#   fonts/8x13.bdf — 13 px tall (more characters on screen per line)
 #   fonts/6x9.bdf  — 9 px tall, smaller / denser text
-# Point FONT_PATH at either one, or any BDF font you copy onto the
+# Point FONT_PATH at one, or any BDF font you copy onto the
 # Pi. Path is relative to the working directory the app is launched
 # from.
-FONT_PATH = "fonts/8x13.bdf"
+FONT_PATH = "fonts/9x15.bdf"
 
 # HUB75 panel geometry (hzeller rpi-rgb-led-matrix RGBMatrixOptions).
 # Defaults: 64x64 logical panel from two 64x32 panels, serpentine-wired

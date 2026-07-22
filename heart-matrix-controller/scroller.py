@@ -42,7 +42,7 @@ class MatrixScroller(ScrollerBase):
         self.display = display
 
         cfg = get_config()
-        path = font_path or cfg.if_exists("FONT_PATH") or "fonts/8x13.bdf"
+        path = font_path or cfg.if_exists("FONT_PATH") or "fonts/9x15.bdf"
         self.font = graphics.Font()
         try:
             self.font.LoadFont(path)
