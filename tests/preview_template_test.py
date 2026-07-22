@@ -73,7 +73,7 @@ def _load_test_auth():
 
 def test_preview_template_has_sign_canvas_element():
     """The preview template renders a <canvas id='sign-canvas'> element."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert 'id="sign-canvas"' in template
     assert "<canvas" in template
 
@@ -87,7 +87,7 @@ def test_preview_template_uses_responsive_image_rendering():
     `image-rendering: pixelated`. The canvas is the sign-canvas element
     and declares an image-rendering style (the current value is `auto`).
     """
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert 'id="sign-canvas"' in template
     assert "image-rendering:" in template
 
@@ -107,7 +107,7 @@ def test_preview_template_layers_media_behind_canvas():
     gets re-hidden by the image as soon as the overlay's opacity
     reaches 1.0 during the fade-in hold.
     """
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert 'style="z-index: 0; opacity: 0;"' in template, (
         "Image and video must be at z-index 0 (behind canvas) so the "
         "transparent canvas can composite the scroller text on top of "
@@ -133,7 +133,7 @@ def test_preview_template_canvas_is_responsive():
     stays square via aspect-ratio. The inline pixel width/height were
     removed.
     """
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     # The dark div (the preview frame) must be width-constrained so it
     # shrinks with the card. `w-full max-w-full` is the Tailwind for
     # `width: 100%; max-width: 100%`.
@@ -190,7 +190,7 @@ def test_preview_template_media_overlay_matches_canvas_footprint():
     Lit LEDs still paint on top (canvas z-index 1 > media z-index 0);
     what changed is only the media's footprint.
     """
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
 
     # The image overlay must fill its parent wrapper (which owns the
     # 800px cap + aspect-square). `absolute inset-0 w-full h-full` is
@@ -264,21 +264,28 @@ def _extract_tag(template: str, element_id: str) -> str:
 
 def test_preview_template_has_status_block():
     """The template shows the current effect name and message body."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert 'id="preview-effect"' in template
     assert 'id="preview-message"' in template
 
 
 def test_preview_template_has_loading_indicator():
-    """A 'Loading preview…' indicator that hides once PyScript is ready."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
-    assert "Loading preview" in template
+    """A simulator-state indicator (#preview-loading) that hides once the
+    runtime is running and shows the lifecycle state otherwise.
+
+    Under #48 the canvas lives on `/` (dashboard), and the loading
+    overlay's text reflects the active lifecycle state (Starting /
+    Stopped / Error) rather than just "Loading preview…". The
+    `id="preview-loading"` selector is the contract that ties
+    `preview.js`'s `hideLoading()` to the DOM.
+    """
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert 'id="preview-loading"' in template
 
 
 def test_preview_template_includes_pyscript_runtime():
     """The PyScript runtime script + py-config link are present."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert "py-config" in template
     assert "py-script" in template
     assert "pyscript" in template.lower()
@@ -286,20 +293,23 @@ def test_preview_template_includes_pyscript_runtime():
 
 def test_preview_template_loads_preview_main():
     """The <py-script> tag points at the preview_main entry point."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert "preview_main.py" in template
 
 
 def test_preview_template_no_websocket():
     """v1 has no WebSocket — assert neither the JS nor template references one."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert "new WebSocket" not in template
     assert "WebSocket(" not in template
     assert "Flask-Sock" not in template
 
 
 def test_preview_template_loaded_by_app():
-    """GET /preview returns a 200 with the rendered canvas element."""
+    """GET /preview follows a 302 to `/` which renders the dashboard with
+    the canvas element (issue #48). `/preview` itself no longer renders
+    the simulator document — the route is a back-compat redirect.
+    """
     # Build the app via the same loader test_auth uses, so all heavy deps
     # are mocked but the template still renders through Jinja. The
     # _AppLoader wrapper snapshots and restores sys.modules so the
@@ -309,7 +319,7 @@ def test_preview_template_loaded_by_app():
         client = app.test_client()
         # Need to log in first
         client.post("/login", data={"username": "admin", "password": "secret123"})
-        response = client.get("/preview")
+        response = client.get("/", follow_redirects=True)
         assert response.status_code == 200
         body = response.data.decode()
         assert 'id="sign-canvas"' in body
@@ -317,7 +327,11 @@ def test_preview_template_loaded_by_app():
         # 9f5efb3 moved the LED look to a JS-side dot mask) — but the canvas
         # still declares an image-rendering style.
         assert "image-rendering:" in body
-        assert "Loading preview" in body
+        # The simulator-state overlay now lives on `/` with id
+        # `preview-loading`; the visible text reflects the lifecycle
+        # state (Starting / Stopped / Error) rather than "Loading
+        # preview…".
+        assert 'id="preview-loading"' in body
         # No WebSocket references in the rendered HTML
         assert "new WebSocket" not in body
         assert "Flask-Sock" not in body
@@ -331,7 +345,7 @@ def test_preview_template_csp_header_on_preview_route():
         client = app.test_client()
         client.post("/login", data={"username": "admin", "password": "secret123"})
 
-        response = client.get("/preview")
+        response = client.get("/")
         csp = response.headers.get("Content-Security-Policy", "")
         assert "wasm-unsafe-eval" in csp
         # PyScript CDN allowed in script-src
@@ -351,7 +365,7 @@ def test_preview_template_csp_allows_tailwind_cdn():
         client = app.test_client()
         client.post("/login", data={"username": "admin", "password": "secret123"})
 
-        response = client.get("/preview")
+        response = client.get("/")
         csp = response.headers.get("Content-Security-Policy", "")
         # The script-src directive must include the Tailwind CDN
         script_src = _extract_directive(csp, "script-src")
@@ -379,12 +393,45 @@ def _extract_directive(csp: str, name: str) -> str:
 
 
 def test_other_routes_have_no_csp_header():
-    """Non-/preview routes are unaffected — no CSP is set."""
+    """Non-dashboard routes are unaffected — no CSP is set.
+
+    The dashboard CSP hook (`_set_dashboard_csp`) only fires on `/`
+    and the legacy `/preview` (back-compat redirect). Routes outside
+    the simulator must not carry the wasm-unsafe-eval / PyScript-CDN
+    relaxations — they're irrelevant on /messages, /settings, etc.,
+    and broadening them widens the attack surface for no reason.
+    """
     auth = _load_test_auth()
     with _AppLoader(auth) as app:
         client = app.test_client()
         response = client.get("/health")
         assert response.headers.get("Content-Security-Policy", "") == ""
+
+
+def test_preview_route_redirects_to_dashboard():
+    """`/preview` is a 302 redirect to the dashboard `/` (issue #48 §4.5).
+
+    The legacy `/preview` URL must not render a second simulator
+    document — both runtime and operator confusion follow. The
+    redirect's target (`url_for("dashboard")`) is the SSOT: a future
+    route rename only needs to update one place.
+    """
+    auth = _load_test_auth()
+    with _AppLoader(auth) as app:
+        client = app.test_client()
+        client.post("/login", data={"username": "admin", "password": "secret123"})
+        # Don't follow the redirect — we want to assert it's a 302.
+        response = client.get("/preview")
+        assert response.status_code in (301, 302), (
+            f"/preview must redirect (got {response.status_code}); "
+            "issue #48 §4.6 requires a compatibility redirect to `/`."
+        )
+        location = response.headers.get("Location", "")
+        # Flask's test client preserves the full path; just check it
+        # points at the dashboard endpoint, not the legacy simulator.
+        assert location.endswith("/"), (
+            f"/preview must redirect to `/` (got Location={location!r})"
+        )
 
 
 def test_preview_csp_allows_s3_endpoint_when_explicit():
@@ -430,7 +477,7 @@ def test_preview_csp_allows_s3_endpoint_when_explicit():
         app.config["TESTING"] = True
         client = app.test_client()
         client.post("/login", data={"username": "admin", "password": "secret123"})
-        response = client.get("/preview")
+        response = client.get("/")
         csp = response.headers.get("Content-Security-Policy", "")
         img_src = _extract_directive(csp, "img-src")
         assert "http://localhost:9000" in img_src, f"img-src must allow the MinIO origin; got: {img_src!r}"
@@ -461,7 +508,7 @@ def test_preview_csp_allows_s3_endpoint_when_explicit():
         app.config["TESTING"] = True
         client = app.test_client()
         client.post("/login", data={"username": "admin", "password": "secret123"})
-        response = client.get("/preview")
+        response = client.get("/")
         csp = response.headers.get("Content-Security-Policy", "")
         img_src = _extract_directive(csp, "img-src")
         assert (

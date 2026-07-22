@@ -544,6 +544,20 @@
         // therefore reach `window.tick`, `window.get_frame_rgba`, etc.
         // — installed by preview_main.py when the <py-script> body runs.
         try {
+          // §5.5: the lifecycle controls toggle this flag. When
+          // the controller is `stopped` / `error` / `stopping`,
+          // the canvas freezes on the last frame and the Python
+          // `tick()` is skipped entirely. The default (no flag
+          // present) is enabled so older builds that don't ship
+          // `dashboard_controls.js` keep working.
+          if (typeof window.__PREVIEW_TICK_ENABLED__ !== "undefined" &&
+              !window.__PREVIEW_TICK_ENABLED__) {
+            // Don't update lastTick — when the gate flips back on,
+            // we want the next eligible frame to fire immediately,
+            // not after a 1-frame-throttled recovery.
+            requestAnimationFrame(frame);
+            return;
+          }
           if (typeof window.tick === "function") window.tick();
           const effectName = typeof window.get_current_effect_name === "function"
             ? window.get_current_effect_name() : "";

@@ -134,15 +134,11 @@
   }
 
   function clearMessageCache() {
-    // Wipe the in-browser MessageManager's sessionStorage cache.
-    // Called from base.html's logout link and from login.html on
-    // page load (defense-in-depth — a prior user's cache in this
-    // tab must never hydrate the next session). Centralized here
-    // so the "what counts as our cache" rule (any key with the
-    // `lindsay50:` prefix) lives in one place. Best-effort:
-    // sessionStorage can throw in private mode or quota-exceeded
-    // states, in which case the next page load's hydrate is
-    // already a no-op anyway.
+    // sessionStorage cache is gone (issue #48, §2.4). Kept as a
+    // no-op so legacy callers (`login.html` postMessage) don't
+    // throw. Any leftover keys with the `lindsay50:` prefix are
+    // wiped defensively — they shouldn't exist, but if an older
+    // build wrote them they're not load-bearing any more.
     let wiped = 0;
     try {
       for (let i = sessionStorage.length - 1; i >= 0; i--) {
@@ -152,56 +148,56 @@
           wiped += 1;
         }
       }
-      console.info("[app] cleared message cache (keys wiped:", wiped, ")");
+      if (wiped > 0) {
+        console.info("[app] cleared leftover message cache (keys wiped:", wiped, ")");
+      }
     } catch (e) {
       console.warn("[app] clearMessageCache failed:", e);
     }
   }
 
+  async function waitForDashboard(timeoutMs) {
+    // Poll for the dashboard controller installed by `app_main.py`.
+    // The previous version of this shim waited for
+    // `_hydrate_from_cache` and `_seed`; under #48 the bootstrap
+    // is owned by the per-generation controller, and the only
+    // proxy the JS side needs is the controller itself (the seed
+    // is awaited internally by `controller.start()`).
+    if (typeof timeoutMs !== "number") timeoutMs = 60000;
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (typeof window.Dashboard === "object" && window.Dashboard !== null) {
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+  }
+
   async function init() {
-    // Two-step boot. PyScript loads asynchronously, so we
-    // wait for the in-browser MessageManager proxies
-    // (`window._seed`, `window._hydrate_from_cache`) to be
-    // installed before doing anything. The polling caps at
-    // 60s — a normal cold load is a few seconds — but bounds
-    // a hung PyScript so the page doesn't sit forever on
-    // an empty testing/preview table.
+    // Wait for the dashboard controller (installed by `app_main.py`)
+    // and kick off the first generation. The controller's
+    // `start()` awaits its internal seed + WS connect; we don't
+    // need to do anything else here — `app_main.py` wires the
+    // MQTT-WS envelope fan-out into the per-generation manager,
+    // and the dashboard page's lifecycle controls own subsequent
+    // Stop / Restart transitions.
     //
-    // 1. Try the sessionStorage cache. If the previous page
-    //    load (within this tab) wrote a cache, this populates
-    //    the in-memory MessageManager and fires `on_change`,
-    //    so per-page `reRender` listeners paint the cached
-    //    state on the first frame. No network call.
-    // 2. On a cache miss (first page load this tab, after a
-    //    Logout/login cycle that cleared the cache, or after
-    //    a Testing-page Refresh that wiped it), call
-    //    `window._seed()` to do the network backfill. That
-    //    populates the buffer, fires `on_change` at the end
-    //    (which writes the new cache), done.
-    await waitForAppMain(60000);
-    if (
-      typeof window._hydrate_from_cache !== "function" &&
-      typeof window._seed !== "function"
-    ) {
-      console.warn("neither _hydrate_from_cache nor _seed ever appeared after 60s; skipping in-browser bootstrap");
+    // On pages WITHOUT the dashboard simulator (Settings, Testing,
+    // Messages, archive) `window.Dashboard` is still installed
+    // (it's a per-page singleton — `app_main.py` is loaded once
+    // per page). The runtime will still spin up; the rAF loop
+    // gate (`window.__PREVIEW_TICK_ENABLED__`) is false on those
+    // pages because `dashboard_controls.js` is absent.
+    await waitForDashboard(60000);
+    if (!window.Dashboard || typeof window.Dashboard.start !== "function") {
+      console.warn("[app] window.Dashboard not available after 60s; skipping auto-start");
       return;
     }
-    let hydrated = false;
     try {
-      hydrated = await window._hydrate_from_cache();
+      await window.Dashboard.start();
+      console.info("[app] dashboard runtime started");
     } catch (e) {
-      console.warn("[app] hydrate_from_cache failed:", e);
-    }
-    if (hydrated) {
-      console.info("[app] hydrated message manager from sessionStorage cache");
-    } else {
-      console.info("[app] no cache hit — re-seeding message manager from network");
-      try {
-        await window._seed();
-        console.info("[app] re-seed complete");
-      } catch (e) {
-        console.warn("[app] seed failed:", e);
-      }
+      console.warn("[app] dashboard start failed:", e);
     }
   }
 

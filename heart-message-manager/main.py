@@ -1317,7 +1317,20 @@ def _resolve_sender_names(messages, cfg) -> dict:
 @app.route("/")
 @login_required
 def dashboard():
-    """Dashboard: recent messages and counts."""
+    """Standalone preview dashboard (issue #48).
+
+    `/` is now the only route that hosts the simulated-Pi runtime.
+    The canvas + Start/Stop controls + recent-message region all live
+    on this page. The PyScript bootstrap (`app_main.py` +
+    `preview_main.py`) loads here, not on `/preview`.
+
+    The pre-#48 dashboard (recent-messages-only cards) is preserved
+    by the same template — `dashboard.html` now composes the canvas
+    region above the message region. The Flask view still passes the
+    same context variables the template needs (recent messages,
+    total count, suppression counts, sender names, sign name,
+    timezone, format helper).
+    """
     msgs = sqlite.get_all_messages()[:20]
     cfg = sqlite.get_config()
     total = sqlite.message_count()
@@ -1827,19 +1840,20 @@ def settings():
 @app.route("/preview")
 @login_required
 def preview():
-    """Preview: show what display_list() returns, with toggle for include_filtered."""
-    include_filtered = request.args.get("include_filtered", "false") == "true"
-    cfg = sqlite.get_config()
-    all_msgs = sqlite.get_all_messages()
+    """Compatibility redirect — `/preview` → `/` (issue #48).
 
-    return render_template(
-        "preview.html",
-        result=all_msgs,
-        include_filtered=include_filtered,
-        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
-        timezone=cfg.sign_settings.timezone,
-        format_from_iso=format_from_iso,
-    )
+    Pre-#48, `/preview` rendered a separate `preview.html` document
+    hosting the simulated-Pi canvas + rAF loop. The
+    standalone-preview-dashboard change moves that runtime onto `/`
+    (the dashboard) so the simulator is the dashboard, not a
+    separate page. `/preview` is retained as a 302 to `/` for any
+    bookmark / deep-link that still points at the old route.
+
+    No `include_filtered` toggle survives — the dashboard preview
+    always reflects the live in-memory view, not a server-rendered
+    snapshot of the SQLite store.
+    """
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/testing")
@@ -1861,7 +1875,7 @@ def health():
     return "ok"
 
 
-# CSP for the preview page: PyScript loads WebAssembly (needs
+# CSP for the dashboard (issue #48). PyScript loads WebAssembly (needs
 # wasm-unsafe-eval) and pulls its runtime + dependencies from
 # pyscript.net and cdn.jsdelivr.net. The same-origin allowance covers
 # the static files Flask ships under /static/ (the python source for the
@@ -1881,11 +1895,11 @@ def health():
 # Mosquitto, `wss://io.adafruit.com` for Adafruit IO). Without this,
 # the browser console fills with "Connecting to 'ws://<host>:<port>/mqtt'
 # violates the following Content Security Policy directive" errors and
-# the preview page never receives live envelopes.
-_PREVIEW_CSP_BASE = (
+# the dashboard never receives live envelopes.
+_DASHBOARD_CSP_BASE = (
     "default-src 'self'; "
     # 'unsafe-inline' + cdn.tailwindcss.com: base.html loads the Tailwind
-    # play CDN and an inline `tailwind.config = {...}` block. The /preview
+    # play CDN and an inline `tailwind.config = {...}` block. The /
     # route is login-protected, so allowing these is safe.
     "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' "
     "https://pyscript.net https://cdn.jsdelivr.net "
@@ -1898,7 +1912,7 @@ _PREVIEW_CSP_BASE = (
     # would otherwise be the fallback for `<video src=…>` loads
     # (the browser doesn't allow the S3 origin without an
     # explicit media-src, even though img-src is allowed). The
-    # S3 origin is spliced in by `_set_preview_csp` from the
+    # S3 origin is spliced in by `_set_dashboard_csp` from the
     # same config the S3 client reads.
     "media-src 'self'; "
     "connect-src 'self' "
@@ -1907,14 +1921,22 @@ _PREVIEW_CSP_BASE = (
 
 
 @app.after_request
-def _set_preview_csp(response):
-    """Set a permissive CSP on /preview so PyScript + WASM + MQTT-WS can run.
+def _set_dashboard_csp(response):
+    """Set the dashboard CSP on `/` so PyScript + WASM + MQTT-WS can run.
 
-    All other pages keep the browser's default CSP (none, since we don't
-    set one). Only the preview needs the wasm-unsafe-eval + PyScript CDN
-    + MQTT-WS exceptions; everywhere else is unaffected.
+    All other pages keep the browser's default CSP (none, since we
+    don't set one). Only `/` needs the wasm-unsafe-eval + PyScript
+    CDN + MQTT-WS exceptions; `/messages`, `/settings`, `/testing`,
+    `/auth/login`, `/health`, etc. are unaffected. The Settings,
+    Testing, and Messages pages do not load the simulated-Pi
+    runtime — they only carry the physical-sign status client
+    (`sign_status.js`), which uses the browser's fetch API against
+    `/api/sign-status` (same-origin, no CSP exception needed).
+
+    Renamed from `_set_preview_csp` in #48 (the dashboard now owns
+    the simulator; `/preview` is a redirect to `/`).
     """
-    if request.path == "/preview" or request.path.startswith("/preview/"):
+    if request.path == "/" or request.path == "/preview" or request.path.startswith("/preview/"):
         from urllib.parse import urlparse
 
         mqtt_ws_url = _derive_mqtt_ws_url()
@@ -1934,7 +1956,7 @@ def _set_preview_csp(response):
         # (`s3._s3_client`), so the CSP never disagrees with the
         # actual signed-URL origin.
         s3_origin = _derive_s3_origin()
-        csp = _PREVIEW_CSP_BASE
+        csp = _DASHBOARD_CSP_BASE
         if ws_origin:
             csp = csp.replace(
                 "connect-src 'self'",
