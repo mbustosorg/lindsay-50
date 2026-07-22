@@ -15,7 +15,7 @@
 - [ ] 2.2 Refactor `app_main.py`/the dashboard controller from module-lifetime singletons to per-generation shared-Python runtime construction
 - [x] 2.3 Add tests that initial load, refresh, and Stop-then-Start do not hydrate message/config state from `sessionStorage` or IndexedDB (covered by `TestNoCrossNavigationPersistence` in `test_message_manager.py`)
 - [x] 2.4 Remove the versioned `sessionStorage` message/config cache helpers and every-page hydrate/fallback bootstrap after the fresh seed path is in place
-- [ ] 2.5 Add tests that each fresh generation constructs a new in-memory browser selector event log and discards the previous generation's queue before message selection begins
+- [x] 2.5 Add tests that each fresh generation constructs a new in-memory browser selector event log and discards the previous generation's queue before message selection begins
 - [x] 2.6 Add a bounded in-memory `EventLog` browser subclass (default cap 100 entries, FIFO drop-oldest) implementing the same `EventLog` contract the Pi's JSONL `EventLog` exposes, without changing the immutable `{event_type, message_id, timestamp, received_at}` schema
 - [ ] 2.7 Remove the prior `IndexedDBEventLog` browser mirror and its IndexedDB shim, and stop referencing IndexedDB from the dashboard runtime controller
 - [ ] 2.8 Update mirrored browser copies for every changed `lib_shared/` Python file and extend parity/manifest tests to prevent canonical/browser drift
@@ -24,8 +24,8 @@
 
 - [ ] 3.1 Add unit tests covering the in-memory browser event log: `append` adds an immutable row, `query(event_type, message_id, since)` filters correctly, `last_for(message_id, event_type)` returns the most recent matching entry, and the bounded `deque(maxlen=N)` drops oldest at the cap (default 100)
 - [x] 3.2 Implement a browser-side `EventLog` subclass backed by `collections.deque(maxlen=N)` matching the Pi JSONL `EventLog` contract; reuse the canonical immutable `{event_type, message_id, timestamp, received_at}` row schema
-- [ ] 3.3 Add tests that the in-memory log is empty immediately after Stop and immediately after fresh Start, and that the prior generation's log is not retained on the new generation
-- [ ] 3.4 Construct a fresh in-memory `EventLog` for every fresh runtime generation and release the prior generation's queue during Stop without keeping a reference
+- [x] 3.3 Add tests that the in-memory log is empty immediately after Stop and immediately after fresh Start, and that the prior generation's log is not retained on the new generation
+- [x] 3.4 Construct a fresh in-memory `EventLog` for every fresh runtime generation and release the prior generation's queue during Stop without keeping a reference
 - [ ] 3.5 Remove the prior `IndexedDBEventLog` browser mirror, its shim, and any references in `app_main.py` and the runtime controller
 
 ## 4. Flask Shell, Routes, and Asset Scope
