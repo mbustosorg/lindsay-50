@@ -222,3 +222,133 @@ def test_event_log_append_failure_does_not_crash_coordinator(tmp_path):
     # Pinning the no-crash contract: even with a broken log, the
     # `displayed_message_ids()` accessor must not raise.
     assert coordinator.displayed_message_ids() == set()
+
+
+# --- Captionless MMS registers as shown (rotation-starvation guard) ---------
+
+
+class _StubCanvas:
+    width = 64
+    height = 64
+
+
+class _StubDisplay:
+    def __init__(self) -> None:
+        self.width = 64
+        self.height = 64
+        self.canvas = _StubCanvas()
+
+    def clear(self) -> None:  # pragma: no cover - trivial
+        pass
+
+    def render(self, effect, scroller) -> None:  # pragma: no cover - trivial
+        pass
+
+
+class _StubScroller:
+    def set_text(self, *a) -> None:  # pragma: no cover - trivial
+        pass
+
+    def set_brightness(self, *a) -> None:  # pragma: no cover - trivial
+        pass
+
+    def set_color(self, *a) -> None:  # pragma: no cover - trivial
+        pass
+
+    def set_speed(self, *a) -> None:  # pragma: no cover - trivial
+        pass
+
+    def tick(self, *a) -> None:  # pragma: no cover - trivial
+        pass
+
+    def render(self, *a) -> None:  # pragma: no cover - trivial
+        pass
+
+
+def _stub_effect(name: str):
+    cls = type(
+        "Fx",
+        (),
+        {
+            "tick": lambda self: None,
+            "render": lambda self, canvas: None,
+            "set_brightness": lambda self, b: None,
+        },
+    )
+    cls.__name__ = name
+    return cls()
+
+
+def test_coordinator_writes_event_for_captionless_media_message(tmp_path, monkeypatch):
+    """A media-only MMS (empty body) MUST register a `text_display` event.
+
+    Regression for the "stuck in mediacycler" bug: the out→in write was
+    gated on a non-empty caption (`... and text:`), so captionless MMS
+    never registered as shown. The WeightedSelector treats a missing
+    event as never-shown (`display_recency=1.0`, max weight), so two
+    recent captionless images out-scored everything and monopolized
+    every pick — every cycle became a MediaCycler override and the
+    rotation effects never rendered. The message is displayed whether
+    or not it has a caption, so it must be logged.
+
+    Drives a real intro→out→in with a single captionless message and
+    asserts the event lands. `_maybe_build_media_cycler` is stubbed to
+    None (the write is independent of the media override, and this keeps
+    PIL/cv2 out of the host test path); the settings-refresh rebuild is
+    stubbed out so the numpy-backed effect modules aren't imported.
+    """
+    import time as _time
+
+    log_path = tmp_path / "events.jsonl"
+    event_log = EventLog(path=str(log_path), max_entries=100)
+
+    # Captionless MMS: body="" with a non-empty media list.
+    msg = Message(
+        id="img-only",
+        sender="+15551234567",
+        body="",
+        received_at="2026-07-14T00:00:00Z",
+        media=[{"type": "image/jpeg", "url": "media/images/2026-07/x.jpg"}],
+    )
+    view = MessageView(message=msg, source="rest", suppressed=False, rules=[])
+
+    manager = _StubManager([view])
+    manager.config.effects_settings = EffectsSettings(
+        fade_seconds=2.0,
+        intro_seconds=5.0,
+        hold_seconds=30.0,
+        idle_seconds=300.0,
+        lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
+        selector_algorithm="weighted",
+    )
+    coordinator = EffectsCoordinator(
+        message_manager=manager,
+        display=_StubDisplay(),  # type: ignore[arg-type]
+        scroller=_StubScroller(),  # type: ignore[arg-type]
+        effects=[_stub_effect("A"), _stub_effect("B")],
+        heart=_stub_effect("Heart"),
+        event_log=event_log,
+    )
+    # Keep the rotation effect (no real MediaCycler → no PIL); the event
+    # write is independent of the media override.
+    coordinator._maybe_build_media_cycler = lambda: None  # type: ignore[method-assign]
+    # The cycle-boundary settings refresh rebuilds numpy-backed effect
+    # modules — irrelevant here, and unavailable in the host env.
+    coordinator._refresh_render_layer_from_settings = lambda display, scroller: None  # type: ignore[method-assign]
+
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(_time, "monotonic", lambda: clock["t"])
+    monkeypatch.setattr(_time, "time", lambda: clock["t"])
+
+    coordinator.start()
+    for _ in range(4000):
+        clock["t"] += 0.01
+        coordinator.tick()
+        if coordinator.current_message is not None and event_log.last_for("img-only", "text_display"):
+            break
+
+    assert event_log.last_for("img-only", "text_display") is not None, (
+        "a captionless media-only message must write a text_display event at "
+        "out→in — otherwise the WeightedSelector never penalizes it and it "
+        "monopolizes every pick"
+    )

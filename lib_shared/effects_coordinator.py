@@ -1350,7 +1350,20 @@ class EffectsCoordinator:
                 # `WeightedSelector` pick sees this and applies
                 # the new `display_recency` formula
                 # (just-shown → 0.0).
-                if self._event_log is not None and self.current_message is not None and text:
+                #
+                # The event MUST be written for captionless MMS
+                # (`text == ''`) too. The selector fixes
+                # `current_event_type="text_display"` and treats a
+                # missing event as never-shown (`display_recency=1.0`,
+                # the max weight). Gating this write on `text` left
+                # media-only messages permanently at max display-
+                # recency, so two recent captionless images out-scored
+                # everything and monopolized every pick — every cycle
+                # became a MediaCycler override and the rotation
+                # effects never rendered ("stuck in mediacycler"). The
+                # message was displayed regardless of whether it had a
+                # caption, so it must register as shown.
+                if self._event_log is not None and self.current_message is not None:
                     try:
                         self._event_log.append(
                             {
