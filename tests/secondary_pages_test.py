@@ -370,3 +370,36 @@ def test_testing_route_requires_auth():
         "/testing route must be @login_required — §9 forbids "
         "removing auth from the secondary pages."
     )
+
+
+def test_testing_includes_mqtt_header_partial():
+    """/testing includes the `_mqtt_header.html` partial.
+
+    Companion to `test_settings_does_not_render_mqtt_status_header`
+    (settings_template_test.py): the dashboard hosts the simulator,
+    the transitional Testing page still owns its own simulator, and
+    both surface the MQTT status pill at the top of the page. The
+    base shell went from "always render" to "never render"; pages
+    that need the pill now opt in by including the partial.
+    """
+    assert '{% include "_mqtt_header.html" %}' in _TESTING_SRC, (
+        "testing.html must include the _mqtt_header.html partial "
+        "explicitly (issue #48, §4.10) — the Testing page owns the "
+        "simulator runtime and surfaces the MQTT status pill."
+    )
+    # The partial itself must declare the elements — pin this so a
+    # user who deletes the partial source drops a useful error
+    # pointing at the actual contract instead of a vague "include
+    # didn't expand" failure.
+    partial_path = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
+    )
+    assert partial_path.exists(), (
+        "_mqtt_header.html partial must exist so testing.html (and "
+        "any future simulator-hosting page) can include the MQTT "
+        "status pill explicitly."
+    )
+    partial_src = partial_path.read_text(encoding="utf-8")
+    assert 'id="mqtt-status"' in partial_src
+    assert 'id="mqtt-ws-target"' in partial_src
+    assert 'id="mqtt-sub-topic"' in partial_src

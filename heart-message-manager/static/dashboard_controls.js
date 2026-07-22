@@ -1,17 +1,23 @@
 // Dashboard lifecycle controls + simulator status binding (issue #48, §5).
 //
 // Two responsibilities:
-//   1. Bind Start / Stop / Restart buttons to `window.Dashboard.start()`,
-//      `window.Dashboard.stop()`, `window.Dashboard.restart()`. The
-//      controller returns promises; the buttons stay disabled while
-//      transitions are in flight so the operator can't enqueue an
-//      invalid second click.
-//   2. Subscribe to the controller's `on_change` stream and keep the
+//   1. Wire a single toggle button (rendered TWICE in the page — once
+//      in the toolbar as `#sim-toggle-btn` and once floating over the
+//      preview canvas as `#sim-toggle-btn-canvas`) to
+//      `window.Dashboard.start()` / `.stop()`. Both buttons share the
+//      same `id` family and this shim attaches the click handler to
+//      every element that matches.
+//   2. Subscribe to the controller's state stream and keep the
 //      status badge (`#sim-status-badge`), the loading overlay
-//      (`#preview-loading`), and the inline error row
-//      (`#sim-error-row`) in sync with the active generation's
-//      lifecycle state (`starting`/`running`/`stopping`/`stopped`/
-//      `error`).
+//      (`#preview-loading`), the inline error row
+//      (`#sim-error-row`), and the toggle buttons themselves in sync
+//      with the active generation's lifecycle state
+//      (`starting`/`running`/`stopping`/`stopped`/`error`).
+//
+// The button label flips `Start` ⇄ `Stop` based on the runtime state
+// (mirror badge label = "Start" when `stopped`/`error`, "Stop" when
+// `running`/`starting`). It is disabled during `stopping` so the
+// operator can't enqueue a second transition.
 //
 // §5.5: the page-local rAF render loop in `preview.js` reads
 // `window.__PREVIEW_TICK_ENABLED__` before invoking `window.tick()`.
@@ -32,20 +38,37 @@
     return;
   }
 
-  const startBtn = document.getElementById("sim-start-btn");
-  const stopBtn = document.getElementById("sim-stop-btn");
-  const restartBtn = document.getElementById("sim-restart-btn");
+  const toggleBtns = Array.from(
+    document.querySelectorAll("#sim-toggle-btn, #sim-toggle-btn-canvas"),
+  );
   const badge = document.getElementById("sim-status-badge");
   const errorRow = document.getElementById("sim-error-row");
   const errorMsg = document.getElementById("sim-error-message");
   const errorRetryBtn = document.getElementById("sim-error-retry");
   const loadingEl = document.getElementById("preview-loading");
 
+  // Status → label / disabled / color of the TOGGLE BUTTON (Start vs Stop).
+  //
+  // The previous Start / Stop / Restart triplet encoded "intent to
+  // transition" by separate buttons. A single toggle button encodes
+  // "the next action" — given the current state, what should the
+  // button's click do? Stopped / Error → click triggers a Start.
+  // Running / Starting → click triggers a Stop. Stopping → disabled.
+  const TOGGLE_LABEL = {
+    stopped: "Start",
+    starting: "Stop",
+    running: "Stop",
+    stopping: "Stop",
+    error: "Start",
+  };
+
   // ---- Status → button / badge / error row ----
 
   function applyState(state, error) {
+    const normalized = state || "stopped";
+
     if (badge) {
-      badge.dataset.state = state || "stopped";
+      badge.dataset.state = normalized;
       const labels = {
         starting: "Starting…",
         running: "Running",
@@ -53,7 +76,7 @@
         stopped: "Stopped",
         error: "Error",
       };
-      badge.textContent = labels[state] || state || "Stopped";
+      badge.textContent = labels[normalized] || normalized || "Stopped";
       const colorClasses = {
         starting: "bg-amber-100 text-amber-700",
         running: "bg-green-100 text-green-700",
@@ -61,27 +84,24 @@
         stopped: "bg-slate-100 text-slate-600",
         error: "bg-red-100 text-red-700",
       };
-      // Drop prior state classes, then apply the new one.
       badge.classList.remove(
         "bg-amber-100", "text-amber-700",
         "bg-green-100", "text-green-700",
         "bg-slate-100", "text-slate-600",
         "bg-red-100", "text-red-700",
       );
-      const cls = colorClasses[state] || colorClasses.stopped;
+      const cls = colorClasses[normalized] || colorClasses.stopped;
       cls.split(" ").forEach((c) => badge.classList.add(c));
     }
 
-    // Buttons are enabled/disabled per state machine:
-    //   - starting / running → Stop (and Restart) enabled; Start disabled
-    //   - stopping            → nothing enabled (transition in flight)
-    //   - stopped             → Start enabled; Stop/Restart disabled
-    //   - error               → Start enabled (Retry); Stop/Restart disabled
-    const isRunning = state === "starting" || state === "running";
-    const isStopping = state === "stopping";
-    if (startBtn) startBtn.disabled = isRunning || isStopping;
-    if (stopBtn) stopBtn.disabled = !isRunning;
-    if (restartBtn) restartBtn.disabled = !isRunning || isStopping;
+    // Toggle button label + disabled state — encoded directly from
+    // the controller's lifecycle state.
+    toggleBtns.forEach((btn) => {
+      btn.textContent = TOGGLE_LABEL[normalized] || "Start";
+      // Only disabled during `stopping` — every other state accepts
+      // a click (the click does the right thing for each).
+      btn.disabled = normalized === "stopping";
+    });
 
     // §5.2: when stopped/error, preserve the last frame as a clearly
     // stopped view. The loading overlay text reverts to its initial
@@ -89,24 +109,25 @@
     // subsequent restarts (a brief blank flash on every restart is
     // bad UX).
     if (loadingEl) {
-      if (state === "stopped" || state === "error") {
+      if (normalized === "stopped" || normalized === "error") {
         loadingEl.style.display = "";
         loadingEl.textContent =
-          state === "error"
-            ? "Simulator error — see message below. Press Retry to start a new generation."
+          normalized === "error"
+            ? "Simulator error — see message below. Press Start to retry."
             : "Simulator stopped — press Start to begin.";
-      } else if (state === "starting") {
+      } else if (normalized === "starting") {
         loadingEl.style.display = "";
         loadingEl.textContent = "Starting simulator…";
       } else {
-        // running: hide the overlay; preview.js clears it on py:done.
+        // running / stopping: hide the overlay; preview.js clears it
+        // on py:done.
         loadingEl.style.display = "none";
       }
     }
 
     // §1.8: error-state row with actionable retry.
     if (errorRow && errorMsg) {
-      if (state === "error") {
+      if (normalized === "error") {
         errorMsg.textContent =
           (error && (error.message || String(error))) ||
           "Unknown error (see browser console).";
@@ -120,10 +141,37 @@
     // §5.5: gate the rAF render loop. `preview.js` reads this flag
     // before calling `window.tick()` so the canvas freezes cleanly
     // on Stop / Stopped / Error.
-    window.__PREVIEW_TICK_ENABLED__ = state === "running" || state === "starting";
+    window.__PREVIEW_TICK_ENABLED__ =
+      normalized === "running" || normalized === "starting";
   }
 
   // ---- Wire buttons to the controller ----
+
+  function handleClick() {
+    // Pick the right action from the current state. `state()` returns
+    // the raw lifecycle string; the click handler reads it once and
+    // dispatches. We avoid baking the decision into per-button
+    // listeners — both toolbar + canvas buttons share this handler.
+    const dashboard = window.Dashboard;
+    if (!dashboard || typeof dashboard.state !== "function") return;
+    let current = "stopped";
+    try {
+      current = dashboard.state();
+    } catch (e) {
+      console.warn("[dashboard-controls] state() failed:", e);
+      return;
+    }
+    const action =
+      current === "running" || current === "starting" ? "stop" : "start";
+    const fn = dashboard[action];
+    if (typeof fn !== "function") {
+      console.warn("[dashboard-controls] Dashboard." + action + " missing");
+      return;
+    }
+    Promise.resolve(fn.call(dashboard)).catch(function (err) {
+      console.error("[dashboard-controls] " + action + "() rejected:", err);
+    });
+  }
 
   function bind() {
     const dashboard = window.Dashboard;
@@ -135,43 +183,28 @@
       window.setTimeout(bind, 50);
       return;
     }
-    if (startBtn) {
-      startBtn.addEventListener("click", function () {
-        // `start()` is async; the button stays disabled until the
-        // state transitions back to a non-running state.
-        Promise.resolve(dashboard.start()).catch(function (err) {
-          console.error("[dashboard-controls] start() rejected:", err);
-        });
-      });
-    }
-    if (stopBtn) {
-      stopBtn.addEventListener("click", function () {
-        Promise.resolve(dashboard.stop()).catch(function (err) {
-          console.error("[dashboard-controls] stop() rejected:", err);
-        });
-      });
-    }
-    if (restartBtn) {
-      restartBtn.addEventListener("click", function () {
-        Promise.resolve(dashboard.restart()).catch(function (err) {
-          console.error("[dashboard-controls] restart() rejected:", err);
-        });
-      });
-    }
+    toggleBtns.forEach((btn) => {
+      btn.addEventListener("click", handleClick);
+    });
     if (errorRetryBtn) {
-      // The retry button is just a Start that the user finds from the
-      // error row rather than the toolbar. Same handler, same promise
-      // contract.
-      errorRetryBtn.addEventListener("click", function () {
-        Promise.resolve(dashboard.start()).catch(function (err) {
-          console.error("[dashboard-controls] retry start() rejected:", err);
-        });
-      });
+      // The Retry button is a Start that the operator finds from the
+      // error row rather than the toolbar. Same dispatch path.
+      errorRetryBtn.addEventListener("click", handleClick);
     }
     // Initial state pull + on-change subscription. The controller
-    // exposes `status()` returning a state string and `on_change(fn)`
-    // for push updates; both are part of the dashboard-controller
-    // surface installed by `app_main.py`.
+    // exposes `state()` returning a state string — older builds
+    // returned `{state, error}` via a `status()` / `subscribe`
+    // pair, so we accept either shape for forward/backward compat.
+    function snapshot() {
+      try {
+        const s = dashboard.state();
+        if (s && typeof s === "object") return s;
+        return { state: s, error: null };
+      } catch (e) {
+        console.warn("[dashboard-controls] state() failed:", e);
+        return { state: "stopped", error: null };
+      }
+    }
     if (typeof dashboard.status === "function") {
       try {
         const current = dashboard.status();
@@ -179,21 +212,25 @@
       } catch (e) {
         console.warn("[dashboard-controls] initial status() failed:", e);
       }
+    } else {
+      applyState((snapshot() || {}).state);
     }
     if (typeof dashboard.on_change === "function") {
-      dashboard.on_change(function (snapshot) {
-        applyState(snapshot && snapshot.state, snapshot && snapshot.error);
+      dashboard.on_change(function (snap) {
+        applyState(snap && snap.state, snap && snap.error);
       });
     } else if (typeof dashboard.subscribe === "function") {
       // Older controller builds used `subscribe`. Keep a fallback so
       // this shim survives a controller API rename.
-      dashboard.subscribe(function (snapshot) {
-        applyState(snapshot && snapshot.state, snapshot && snapshot.error);
+      dashboard.subscribe(function (snap) {
+        applyState(snap && snap.state, snap && snap.error);
       });
     } else {
+      // No push channel available — do one initial pull and let the
+      // first click re-pull. Not ideal, but doesn't crash the page.
       console.warn(
-        "[dashboard-controls] window.Dashboard exposes neither on_change nor subscribe; " +
-          "lifecycle UI will not update after the initial render."
+        "[dashboard-controls] window.Dashboard exposes neither on_change " +
+          "nor subscribe; badge will lag by one click.",
       );
     }
     // Initial gate: default to disabled until the controller reports

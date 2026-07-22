@@ -1,0 +1,43 @@
+{# Per-page MQTT status header (issue #48, §4.10).
+
+   Pages that surface the simulator runtime (the dashboard + the
+   transitional Testing page) include this partial so the operator
+   can see whether the WS connection is live. Pages that don't
+   host the simulator (Settings, Filters, Messages archive, etc.)
+   omit the partial — those pages aren't routing any MQTT traffic,
+   so an MQTT header would just be noise.
+
+   The wiring is unchanged: the same `#mqtt-status` / `#mqtt-ws-target`
+   / `#mqtt-sub-topic` element ids that `base.html` previously
+   emitted page-wide. `app.js`'s `_on_status_js` callback (installed
+   by the per-generation dashboard runtime) still updates the
+   `#mqtt-status` pill on pages that load this partial. #}
+{% if current_user.is_authenticated %}
+<div class="flex items-center gap-3 mb-4 flex-wrap">
+  <span class="text-xs text-slate-500 font-medium">MQTT:</span>
+  <span id="mqtt-status" class="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">Connecting…</span>
+  <span id="mqtt-ws-target" class="text-xs text-slate-400 font-mono"></span>
+  <span id="mqtt-sub-topic" class="hidden text-xs text-slate-400 font-mono"></span>
+</div>
+<script>
+  // Display the WS URL the browser is trying. Helps diagnose
+  // "WS connects from one machine but not another" — if the page
+  // shows e.g. ws://localhost:9002/mqtt but the user's browser
+  // is on a different host, that's the root cause.
+  // Also surface the MQTT topic the browser subscribes to (and
+  // that Flask publishes to) so the operator can confirm the
+  // page is wired to the same feed as the server.
+  (function () {
+    const cfg = window.APP_CONFIG || {};
+    const el = document.getElementById("mqtt-ws-target");
+    if (el && cfg.mqttWsUrl) {
+      el.textContent = "→ " + cfg.mqttWsUrl + " (host: " + window.location.host + ")";
+    }
+    const subEl = document.getElementById("mqtt-sub-topic");
+    if (subEl && typeof cfg.mqttTopic === "string" && cfg.mqttTopic) {
+      subEl.textContent = "SUB: " + cfg.mqttTopic;
+      subEl.classList.remove("hidden");
+    }
+  })();
+</script>
+{% endif %}

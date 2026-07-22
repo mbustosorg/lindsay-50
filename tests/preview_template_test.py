@@ -653,3 +653,64 @@ def test_pyscript_files_declares_every_app_main_import():
         f"[files] entry mapping the source path to its "
         f"/static/preview/ URL."
     )
+
+
+def test_dashboard_template_renders_mqtt_status_header():
+    """The dashboard MUST render the MQTT status header.
+
+    Companion to `test_settings_does_not_render_mqtt_status_header`:
+    the dashboard owns the simulator runtime and the MQTT-WS
+    envelope fan-out, so the operator expects the status pill at
+    the top of the page. Implemented as the `_mqtt_header.html`
+    partial — the dashboard includes it explicitly.
+
+    Pin: dashboard.html contains `{% include "_mqtt_header.html" %}`
+    AND the partial contains the `#mqtt-status` /
+    `#mqtt-ws-target` / `#mqtt-sub-topic` elements. The include is
+    evaluated server-side by Jinja; reading dashboard.html source
+    alone doesn't expand it, so we check the include line + the
+    partial contents in one go.
+    """
+    dashboard_src = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html"
+    ).read_text()
+    assert '{% include "_mqtt_header.html" %}' in dashboard_src, (
+        "dashboard.html must include the _mqtt_header.html partial — "
+        "the dashboard owns the simulator runtime so it must surface "
+        "the MQTT status pill."
+    )
+    partial = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
+    ).read_text()
+    assert 'id="mqtt-status"' in partial
+    assert 'id="mqtt-ws-target"' in partial
+    assert 'id="mqtt-sub-topic"' in partial
+
+
+def test_mqtt_header_partial_is_a_real_template():
+    """The `_mqtt_header.html` partial exists and is rendered only when
+    included — it does NOT live in the base shell anymore (issue #48,
+    §4.10). The base template went from "always render the MQTT pill"
+    to "never render the MQTT pill" — pages that need it now opt in
+    by including the partial.
+    """
+    partial_path = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
+    )
+    assert partial_path.exists(), (
+        "_mqtt_header.html partial must exist so dashboard.html, "
+        "testing.html, and any future simulator-hosting page can "
+        "include the MQTT status pill explicitly."
+    )
+    base = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "base.html").read_text()
+    # The base shell no longer contains the MQTT block. Pages opt in
+    # by including `_mqtt_header.html`. Regression: the previous
+    # base.html rendered the pill on every authenticated page (a
+    # recurring "but I thought it was running" complaint on the
+    # archive / settings pages).
+    assert 'id="mqtt-status"' not in base, (
+        "base.html must NOT render the MQTT status header — issue "
+        "#48, §4.10 moved the pill to `_mqtt_header.html` so each "
+        "page opts in explicitly. The dashboard + testing pages "
+        "include the partial; settings + messages archive do not."
+    )

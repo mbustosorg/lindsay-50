@@ -241,3 +241,48 @@ def test_shim_is_noop_without_dashboard_marker():
         "[data-dashboard-controls] is absent so the script is a "
         "no-op on /settings, /testing, /messages."
     )
+
+
+# --- Modal-body id contract (§6.5/§6.6) ----------------------------------
+
+
+def test_modal_body_ids_match_template():
+    """The `bodyId` passed to `fetchAndShow` for cfg + filters modals
+    must APPEND to `-body` and resolve to the actual `<...>` id the
+    template emits.
+
+    Regression (issue #48 round 3, 2026-07-22): the JS passed `"cfg"`
+    and `"filters"` as bodyId, so `setModalBody("cfg", ...)` looked
+    for `#cfg-body` — but the template emits `#cfg-modal-body`.
+    `document.getElementById` returned null, `setModalBody` early-
+    returned silently, and the modal opened with an empty body. The
+    cfg-modal and filters-modal appeared to never load anything.
+    Fix: pass `"cfg-modal"` and `"filters-modal"`. This test pins
+    that contract.
+    """
+    template = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "_dashboard_modals.html"
+    ).read_text(encoding="utf-8")
+    expected_body_ids = {
+        "cfg-modal": "cfg-modal-body",
+        "filters-modal": "filters-modal-body",
+        "s3-modal": "s3-modal-body",
+    }
+    for modal_id, body_id in expected_body_ids.items():
+        assert f'id="{body_id}"' in template, (
+            f"_dashboard_modals.html must declare id={body_id!r} "
+            f"so setModalBody('{modal_id}', …) resolves to a real "
+            f"element."
+        )
+        # The JS shim must reference the full bodyId, not a short
+        # prefix that doesn't match. The fetchAndShow calls above
+        # pass the second arg as `bodyId` (e.g. `"cfg-modal"`); the
+        # shim must NOT pass `"cfg"` (which would look for
+        # `#cfg-body`).
+        pattern = re.compile(rf'fetchAndShow\(\s*[\"\']{re.escape(modal_id)}[\"\']\s*,\s*[\"\']{re.escape(body_id)}[\"\']')
+        assert pattern.search(_SRC), (
+            f"dashboard_modals.js must call fetchAndShow("
+            f"{modal_id!r}, {body_id!r}, ...) — a bodyId that doesn't "
+            f"match the template's id={body_id!r} attribute makes "
+            f"setModalBody silently no-op (the modal opens empty)."
+        )

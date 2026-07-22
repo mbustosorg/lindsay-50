@@ -458,3 +458,57 @@ def test_template_effects_list_disabled_row_renders_state_0(client):
     assert 'name="effect_state" value="Hyperspace:1"' in body
     # The checkbox is checked (no `name=`, only data-effect-checkbox=).
     assert 'data-effect-checkbox="Hyperspace" checked' in body
+
+
+def test_settings_does_not_render_mqtt_status_header():
+    """`/settings` does NOT render the MQTT status header.
+
+    Regression (issue #48, §4.10): the MQTT pill lived in `base.html`
+    and rendered on every authenticated page, but the dashboard now
+    owns the simulator runtime and the Testing page is the only
+    transitional holdover. Settings / Filters / Messages archive
+    don't route any MQTT traffic, so a status pill there is just
+    noise — and it would mislead the operator into thinking the
+    simulator is running on a page where it isn't.
+
+    Static-source pin: settings.html must NOT include the partial,
+    and base.html must NOT contain the header block. (Reading the
+    raw template source instead of going through the `client`
+    fixture avoids pulling in `sqlite.get_distinct_senders`, which
+    the minimal-test-stack fixture doesn't mock.)
+    """
+    settings_src = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "settings.html"
+    ).read_text()
+    assert 'id="mqtt-status"' not in settings_src, (
+        "/settings must not render the MQTT status header — the "
+        "dashboard hosts the simulator now; Settings / Filters / "
+        "Messages archive pages don't route MQTT traffic."
+    )
+    assert "{% include \"_mqtt_header.html\" %}" not in settings_src, (
+        "settings.html must NOT include the _mqtt_header.html "
+        "partial — it doesn't route MQTT traffic."
+    )
+
+
+def test_messages_does_not_render_mqtt_status_header():
+    """`/messages` archive page does NOT render the MQTT status header."""
+    messages_src = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "messages.html"
+    ).read_text()
+    assert 'id="mqtt-status"' not in messages_src, (
+        "/messages archive page must not render the MQTT status header."
+    )
+    assert "{% include \"_mqtt_header.html\" %}" not in messages_src
+
+
+def test_filters_does_not_render_mqtt_status_header():
+    """`/filters` page does NOT render the MQTT status header."""
+    filters_path = (
+        _PROJECT_ROOT / "heart-message-manager" / "templates" / "filters.html"
+    )
+    if not filters_path.exists():
+        pytest.skip("/filters template not in this deploy")
+    filters_src = filters_path.read_text()
+    assert 'id="mqtt-status"' not in filters_src
+    assert "{% include \"_mqtt_header.html\" %}" not in filters_src

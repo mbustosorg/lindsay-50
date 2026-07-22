@@ -64,8 +64,12 @@
     }
   }
 
+  // The `id` must be the FULL body-element id as declared in the template
+  // (e.g. `cfg-modal-body`). `bodyId` callers pass must therefore include
+  // `-body`. The legacy `id + "-body"` concat silently no-op'd when a
+  // caller passed a fully-qualified id like `cfg-modal-body`.
   function setModalBody(id, text, isError) {
-    const body = document.getElementById(id + "-body");
+    const body = document.getElementById(id);
     if (!body) return;
     body.textContent = text;
     body.classList.toggle("text-red-600", !!isError);
@@ -102,7 +106,7 @@
 
   // ---- Diagnostic modal triggers -----------------------------------
 
-  async function fetchAndShow(modalId, bodyId, url, errorPrefix) {
+  async function fetchAndShow(modalId, bodyId, url, errorPrefix, transformFn) {
     setModalBody(bodyId, "Loading…", false);
     openModal(modalId);
     try {
@@ -114,7 +118,18 @@
         setModalBody(bodyId, `${errorPrefix}: HTTP ${res.status}\n${text}`, true);
         return;
       }
-      // Pretty-print JSON if it parses; otherwise show the raw body.
+      // Custom transform wins (used by S3 to render its list view); the
+      // default pretty-prints JSON or falls back to the raw body.
+      if (typeof transformFn === "function") {
+        try {
+          const out = transformFn(text);
+          if (out == null) return;
+          setModalBody(bodyId, String(out), false);
+        } catch (parseErr) {
+          setModalBody(bodyId, `${errorPrefix}: invalid JSON — ${(parseErr && parseErr.message) || parseErr}`, true);
+        }
+        return;
+      }
       try {
         const parsed = JSON.parse(text);
         setModalBody(bodyId, JSON.stringify(parsed, null, 2), false);
@@ -134,7 +149,7 @@
     btnCfg.addEventListener("click", function () {
       fetchAndShow(
         "cfg-modal",
-        "cfg",
+        "cfg-modal-body",
         "/api/admin/config",
         "Failed to fetch current config"
       );
@@ -144,56 +159,35 @@
     btnFilters.addEventListener("click", function () {
       fetchAndShow(
         "filters-modal",
-        "filters",
+        "filters-modal-body",
         "/api/admin/filters",
         "Failed to fetch active filters"
       );
     });
   }
   if (btnS3) {
-    btnS3.addEventListener("click", async function () {
-      setModalBody("s3-modal-body", "", false);
-      // Render the body as a flat list of object keys + sizes.
-      const target = document.getElementById("s3-modal-body");
-      if (target) target.textContent = "Loading…";
-      openModal("s3-modal");
-      try {
-        const res = await fetch("/api/admin/s3-objects", {
-          headers: { "X-API-Key": (window.APP_CONFIG || {}).apiKey || "" },
-        });
-        const text = await res.text();
-        if (!res.ok) {
-          if (target) {
-            target.classList.add("text-red-600");
-            target.textContent = `Failed to fetch S3 objects: HTTP ${res.status}\n${text}`;
-          }
-          return;
-        }
-        const parsed = JSON.parse(text);
-        const items = (parsed && parsed.objects) || parsed || [];
-        if (target) {
-          target.classList.remove("text-red-600");
-          if (!Array.isArray(items) || items.length === 0) {
-            target.textContent = "(no objects)";
-            return;
-          }
-          const list = items
+    btnS3.addEventListener("click", function () {
+      fetchAndShow(
+        "s3-modal",
+        "s3-modal-body",
+        "/api/admin/s3-objects",
+        "Failed to fetch S3 objects",
+        // Flat-list transform: render each object as `key    (size bytes)`.
+        // Returning null leaves the modal in its current state — used here
+        // for the empty-list case to short-circuit `setModalBody`.
+        function (rawText) {
+          const parsed = JSON.parse(rawText);
+          const items = (parsed && parsed.objects) || parsed || [];
+          if (!Array.isArray(items) || items.length === 0) return "(no objects)";
+          return items
             .map(function (o) {
               const key = (o && o.Key) || (o && o.key) || String(o);
               const size = (o && o.Size) || (o && o.size) || "";
-              return size
-                ? `${key}    (${size} bytes)`
-                : `${key}`;
+              return size ? `${key}    (${size} bytes)` : `${key}`;
             })
             .join("\n");
-          target.textContent = list;
         }
-      } catch (e) {
-        if (target) {
-          target.classList.add("text-red-600");
-          target.textContent = `Failed to fetch S3 objects: ${(e && e.message) || e}`;
-        }
-      }
+      );
     });
   }
 
