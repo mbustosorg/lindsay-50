@@ -671,17 +671,13 @@ def test_dashboard_template_renders_mqtt_status_header():
     alone doesn't expand it, so we check the include line + the
     partial contents in one go.
     """
-    dashboard_src = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html"
-    ).read_text()
+    dashboard_src = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert '{% include "_mqtt_header.html" %}' in dashboard_src, (
         "dashboard.html must include the _mqtt_header.html partial — "
         "the dashboard owns the simulator runtime so it must surface "
         "the MQTT status pill."
     )
-    partial = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
-    ).read_text()
+    partial = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html").read_text()
     assert 'id="mqtt-status"' in partial
     assert 'id="mqtt-ws-target"' in partial
     assert 'id="mqtt-sub-topic"' in partial
@@ -694,9 +690,7 @@ def test_mqtt_header_partial_is_a_real_template():
     to "never render the MQTT pill" — pages that need it now opt in
     by including the partial.
     """
-    partial_path = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
-    )
+    partial_path = _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
     assert partial_path.exists(), (
         "_mqtt_header.html partial must exist so dashboard.html, "
         "testing.html, and any future simulator-hosting page can "

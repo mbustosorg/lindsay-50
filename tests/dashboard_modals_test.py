@@ -48,11 +48,10 @@ def test_inject_form_posts_to_test_messages_endpoint():
     # `/api/test-messages`. The two lines aren't always within the
     # same window — match each independently and assert both
     # patterns occur in the file.
-    fetch_pattern = re.compile(r'fetch\(\s*[\"\']\/api\/test-messages[\"\']')
-    search_pattern = re.compile(r'new\s+URLSearchParams')
+    fetch_pattern = re.compile(r"fetch\(\s*[\"\']\/api\/test-messages[\"\']")
+    search_pattern = re.compile(r"new\s+URLSearchParams")
     assert fetch_pattern.search(_SRC), (
-        "dashboard_modals.js must POST to /api/test-messages "
-        "(matches the Testing-page wire shape)."
+        "dashboard_modals.js must POST to /api/test-messages " "(matches the Testing-page wire shape)."
     )
     assert search_pattern.search(_SRC), (
         "dashboard_modals.js must build a URLSearchParams body for "
@@ -64,7 +63,7 @@ def test_inject_form_sends_x_api_key_header():
     """The form's POST must carry the X-API-Key header from
     `window.APP_CONFIG.apiKey` so the auth gate accepts it."""
     pattern = re.compile(
-        r'X-API-Key[\s\S]{0,80}window\.APP_CONFIG',
+        r"X-API-Key[\s\S]{0,80}window\.APP_CONFIG",
         re.MULTILINE,
     )
     assert pattern.search(_SRC), (
@@ -117,10 +116,7 @@ def test_inject_form_clears_body_on_success():
         r"injectBody\.value\s*=\s*[\"\'][\"\']",
         re.MULTILINE,
     )
-    assert pattern.search(_SRC), (
-        "dashboard_modals.js must clear the body input after a "
-        "successful injection."
-    )
+    assert pattern.search(_SRC), "dashboard_modals.js must clear the body input after a " "successful injection."
 
 
 # --- Diagnostic modals (§6.5, §6.6, §6.7) ---------------------------------
@@ -148,7 +144,7 @@ def test_modal_fetches_its_endpoint(modal_id, endpoint):
 def test_modal_escape_key_handler_present():
     """§6.5: Escape closes the topmost open modal."""
     pattern = re.compile(
-        r'keydown[\s\S]{0,300}Escape[\s\S]{0,300}closeModal',
+        r"keydown[\s\S]{0,300}Escape[\s\S]{0,300}closeModal",
         re.MULTILINE,
     )
     assert pattern.search(_SRC), (
@@ -176,9 +172,9 @@ def test_modal_close_button_uses_data_attribute():
     """Each modal's close button declares `data-modal-close="ID"` so
     the shim can wire them generically without per-modal handler
     boilerplate."""
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "_dashboard_modals.html"
-    ).read_text(encoding="utf-8")
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "_dashboard_modals.html").read_text(
+        encoding="utf-8"
+    )
     for modal_id in ("json-modal", "cfg-modal", "filters-modal", "s3-modal"):
         pattern = re.compile(rf'data-modal-close="{modal_id}"')
         assert pattern.search(template), (
@@ -232,8 +228,7 @@ def test_shim_is_noop_without_dashboard_marker():
     absent, so /settings /testing /messages can load the same file
     safely."""
     pattern = re.compile(
-        r'querySelector\(\s*[\"\']\[data-dashboard-controls\][\"\']\s*\)'
-        r'[\s\S]{0,200}return\s*;',
+        r"querySelector\(\s*[\"\']\[data-dashboard-controls\][\"\']\s*\)" r"[\s\S]{0,200}return\s*;",
         re.MULTILINE,
     )
     assert pattern.search(_SRC), (
@@ -260,9 +255,9 @@ def test_modal_body_ids_match_template():
     Fix: pass `"cfg-modal"` and `"filters-modal"`. This test pins
     that contract.
     """
-    template = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "_dashboard_modals.html"
-    ).read_text(encoding="utf-8")
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "_dashboard_modals.html").read_text(
+        encoding="utf-8"
+    )
     expected_body_ids = {
         "cfg-modal": "cfg-modal-body",
         "filters-modal": "filters-modal-body",
@@ -279,7 +274,9 @@ def test_modal_body_ids_match_template():
         # pass the second arg as `bodyId` (e.g. `"cfg-modal"`); the
         # shim must NOT pass `"cfg"` (which would look for
         # `#cfg-body`).
-        pattern = re.compile(rf'fetchAndShow\(\s*[\"\']{re.escape(modal_id)}[\"\']\s*,\s*[\"\']{re.escape(body_id)}[\"\']')
+        pattern = re.compile(
+            rf"fetchAndShow\(\s*[\"\']{re.escape(modal_id)}[\"\']\s*,\s*[\"\']{re.escape(body_id)}[\"\']"
+        )
         assert pattern.search(_SRC), (
             f"dashboard_modals.js must call fetchAndShow("
             f"{modal_id!r}, {body_id!r}, ...) — a bodyId that doesn't "

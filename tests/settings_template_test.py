@@ -477,38 +477,29 @@ def test_settings_does_not_render_mqtt_status_header():
     fixture avoids pulling in `sqlite.get_distinct_senders`, which
     the minimal-test-stack fixture doesn't mock.)
     """
-    settings_src = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "settings.html"
-    ).read_text()
+    settings_src = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "settings.html").read_text()
     assert 'id="mqtt-status"' not in settings_src, (
         "/settings must not render the MQTT status header — the "
         "dashboard hosts the simulator now; Settings / Filters / "
         "Messages archive pages don't route MQTT traffic."
     )
-    assert "{% include \"_mqtt_header.html\" %}" not in settings_src, (
-        "settings.html must NOT include the _mqtt_header.html "
-        "partial — it doesn't route MQTT traffic."
+    assert '{% include "_mqtt_header.html" %}' not in settings_src, (
+        "settings.html must NOT include the _mqtt_header.html " "partial — it doesn't route MQTT traffic."
     )
 
 
 def test_messages_does_not_render_mqtt_status_header():
     """`/messages` archive page does NOT render the MQTT status header."""
-    messages_src = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "messages.html"
-    ).read_text()
-    assert 'id="mqtt-status"' not in messages_src, (
-        "/messages archive page must not render the MQTT status header."
-    )
-    assert "{% include \"_mqtt_header.html\" %}" not in messages_src
+    messages_src = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "messages.html").read_text()
+    assert 'id="mqtt-status"' not in messages_src, "/messages archive page must not render the MQTT status header."
+    assert '{% include "_mqtt_header.html" %}' not in messages_src
 
 
 def test_filters_does_not_render_mqtt_status_header():
     """`/filters` page does NOT render the MQTT status header."""
-    filters_path = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "filters.html"
-    )
+    filters_path = _PROJECT_ROOT / "heart-message-manager" / "templates" / "filters.html"
     if not filters_path.exists():
         pytest.skip("/filters template not in this deploy")
     filters_src = filters_path.read_text()
     assert 'id="mqtt-status"' not in filters_src
-    assert "{% include \"_mqtt_header.html\" %}" not in filters_src
+    assert '{% include "_mqtt_header.html" %}' not in filters_src

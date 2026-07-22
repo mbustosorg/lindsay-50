@@ -76,8 +76,7 @@ def test_settings_template_renders_sign_health_section():
 def test_settings_template_renders_effects_list_form():
     """The Settings page still renders the effects-list form."""
     assert "effects-list" in _SETTINGS_SRC or "effects_list" in _SETTINGS_SRC, (
-        "/settings template must retain the effects-list form — "
-        "§9.1 requires Settings to work standalone."
+        "/settings template must retain the effects-list form — " "§9.1 requires Settings to work standalone."
     )
 
 
@@ -85,8 +84,7 @@ def test_settings_template_renders_sign_upgrade_controls():
     """The Settings page still renders the sign-upgrade controls."""
     pattern = re.compile(r"data-upgrade-settings-field")
     assert pattern.search(_SETTINGS_SRC), (
-        "/settings template must retain data-upgrade-settings-field "
-        "— §9.1 requires Settings to work standalone."
+        "/settings template must retain data-upgrade-settings-field " "— §9.1 requires Settings to work standalone."
     )
 
 
@@ -105,8 +103,7 @@ def test_testing_template_renders_info_cards():
     Filters / S3 Bucket diagnostic cards."""
     for marker in ("cfg-section", "filters-section", "s3-section"):
         assert marker in _TESTING_SRC, (
-            f"/testing template must retain #{marker} — §9.1 "
-            "requires the diagnostic cards to work standalone."
+            f"/testing template must retain #{marker} — §9.1 " "requires the diagnostic cards to work standalone."
         )
 
 
@@ -114,8 +111,7 @@ def test_testing_template_renders_messages_feed():
     """The Testing page still renders the Messages Feed."""
     pattern = re.compile(r"msg-count|refreshFeed|messages-feed")
     assert pattern.search(_TESTING_SRC), (
-        "/testing template must retain the Messages Feed — §9.1 "
-        "requires the live feed to work standalone."
+        "/testing template must retain the Messages Feed — §9.1 " "requires the live feed to work standalone."
     )
 
 
@@ -133,8 +129,7 @@ def test_base_does_not_load_pyscript_for_secondary_pages():
         "/settings /testing /messages."
     )
     assert "pyscript.net" not in _BASE_SRC, (
-        "base.html must not reference pyscript.net — the simulator "
-        "runtime is dashboard-scoped (§4.10)."
+        "base.html must not reference pyscript.net — the simulator " "runtime is dashboard-scoped (§4.10)."
     )
 
 
@@ -142,16 +137,14 @@ def test_testing_template_does_not_load_pyscript():
     """/testing does not load the dashboard's PyScript runtime —
     it stays an SSR page with selective JS shims."""
     assert "<py-script" not in _TESTING_SRC, (
-        "testing.html must not include <py-script> — the simulator "
-        "is dashboard-scoped (§9.2)."
+        "testing.html must not include <py-script> — the simulator " "is dashboard-scoped (§9.2)."
     )
     assert "pyscript.net" not in _TESTING_SRC
 
 
 def test_settings_template_does_not_load_pyscript():
     assert "<py-script" not in _SETTINGS_SRC, (
-        "settings.html must not include <py-script> — the simulator "
-        "is dashboard-scoped (§9.2)."
+        "settings.html must not include <py-script> — the simulator " "is dashboard-scoped (§9.2)."
     )
     assert "pyscript.net" not in _SETTINGS_SRC
 
@@ -167,15 +160,13 @@ def test_testing_template_does_not_load_dashboard_controls():
     # to load them on /testing at all. The strict assertion is
     # that /testing does NOT carry the marker.
     assert "data-dashboard-controls" not in _TESTING_SRC, (
-        "/testing must not declare [data-dashboard-controls] — "
-        "the simulator lifecycle is dashboard-only (§9.2)."
+        "/testing must not declare [data-dashboard-controls] — " "the simulator lifecycle is dashboard-only (§9.2)."
     )
 
 
 def test_messages_template_does_not_load_pyscript():
     assert "<py-script" not in _MESSAGES_SRC, (
-        "messages.html must not include <py-script> — the simulator "
-        "is dashboard-scoped (§9.2)."
+        "messages.html must not include <py-script> — the simulator " "is dashboard-scoped (§9.2)."
     )
 
 
@@ -207,8 +198,7 @@ def test_dashboard_does_not_use_shared_worker_for_state():
             if candidate.exists():
                 src = candidate.read_text(encoding="utf-8")
                 assert "SharedWorker" not in src, (
-                    f"{candidate.name} must not use SharedWorker — "
-                    f"cross-tab coordination is forbidden (§9.3)."
+                    f"{candidate.name} must not use SharedWorker — " f"cross-tab coordination is forbidden (§9.3)."
                 )
                 assert "BroadcastChannel" not in src, (
                     f"{candidate.name} must not use BroadcastChannel "
@@ -242,12 +232,10 @@ def test_dashboard_does_not_use_localstorage_for_runtime_state():
             if candidate.exists():
                 src = candidate.read_text(encoding="utf-8")
                 assert "localStorage" not in src, (
-                    f"{candidate.name} must not use localStorage — "
-                    f"the dashboard runtime is per-tab (§9.3)."
+                    f"{candidate.name} must not use localStorage — " f"the dashboard runtime is per-tab (§9.3)."
                 )
                 assert "sessionStorage" not in src, (
-                    f"{candidate.name} must not use sessionStorage — "
-                    f"the dashboard runtime is per-tab (§9.3)."
+                    f"{candidate.name} must not use sessionStorage — " f"the dashboard runtime is per-tab (§9.3)."
                 )
 
 
@@ -270,16 +258,12 @@ def test_testing_template_documents_transitional_status():
 def test_testing_route_is_retained():
     """The /testing route is intentionally retained in this change.
     No follow-up issue has removed it."""
-    main_src = (_PROJECT_ROOT / "heart-message-manager" / "main.py").read_text(
-        encoding="utf-8"
-    )
+    main_src = (_PROJECT_ROOT / "heart-message-manager" / "main.py").read_text(encoding="utf-8")
     assert '"/testing"' in main_src or "'/testing'" in main_src, (
-        "/testing route must be retained — §9.4 forbids removing "
-        "the route in this change."
+        "/testing route must be retained — §9.4 forbids removing " "the route in this change."
     )
     assert "testing.html" in main_src, (
-        "/testing template must be referenced by main.py — §9.4 "
-        "forbids removing it in this change."
+        "/testing template must be referenced by main.py — §9.4 " "forbids removing it in this change."
     )
 
 
@@ -323,9 +307,7 @@ def test_status_topic_is_separate_from_message_topic():
     — distinct from `topic` (the message envelope flow). The
     Flask routes wire both subscribe paths so a simulator Stop
     does NOT cut the status subscription."""
-    paho_src = (
-        _PROJECT_ROOT / "lib_shared" / "paho_mqtt_client.py"
-    ).read_text(encoding="utf-8")
+    paho_src = (_PROJECT_ROOT / "lib_shared" / "paho_mqtt_client.py").read_text(encoding="utf-8")
     assert "status_topic" in paho_src, (
         "paho_mqtt_client.py must accept a separate status_topic "
         "subscribe path — the status flow is independent of the "
@@ -357,18 +339,15 @@ def test_settings_health_section_uses_sign_status_field():
 def test_testing_route_requires_auth():
     """/testing must remain behind the login_required gate. The
     §9 changes don't loosen auth."""
-    main_src = (_PROJECT_ROOT / "heart-message-manager" / "main.py").read_text(
-        encoding="utf-8"
-    )
+    main_src = (_PROJECT_ROOT / "heart-message-manager" / "main.py").read_text(encoding="utf-8")
     # Find the testing route + its decorators. The pattern is
     # `@app.route("/testing")` followed by `@login_required`.
     pattern = re.compile(
-        r'@app\.route\([\"\']/testing[\"\']\)[\s\S]{0,200}@login_required',
+        r"@app\.route\([\"\']/testing[\"\']\)[\s\S]{0,200}@login_required",
         re.MULTILINE,
     )
     assert pattern.search(main_src), (
-        "/testing route must be @login_required — §9 forbids "
-        "removing auth from the secondary pages."
+        "/testing route must be @login_required — §9 forbids " "removing auth from the secondary pages."
     )
 
 
@@ -391,9 +370,7 @@ def test_testing_includes_mqtt_header_partial():
     # user who deletes the partial source drops a useful error
     # pointing at the actual contract instead of a vague "include
     # didn't expand" failure.
-    partial_path = (
-        _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
-    )
+    partial_path = _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
     assert partial_path.exists(), (
         "_mqtt_header.html partial must exist so testing.html (and "
         "any future simulator-hosting page) can include the MQTT "
