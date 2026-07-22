@@ -4,7 +4,20 @@
    Testing / Messages links open in new tabs so the runtime stays
    alive across navigation. The base shell stays lightweight — only
    the physical-sign status pill (independent of simulator lifecycle,
-   §9.5) is loaded on every authenticated page via base.html. #}
+   §9.5) is loaded on every authenticated page via base.html.
+
+   Layout (post-2026-07-22):
+     ┌─ Page header ─────────────────────────────────────────┐
+     │ "Hey there!"   [Settings] [Testing] [Messages]        │
+     │                 [Current config] [S3 bucket] [Pill]   │
+     └───────────────────────────────────────────────────────┘
+     ┌─ Left column (50%) ────────┬─ Right column (50%) ───┐
+     │ Simulator runtime controls │ Preview canvas (512×) │
+     │ Test injection             │ (right half screen)   │
+     └────────────────────────────┴───────────────────────┘
+     ┌─ Recent 100 messages (FULL WIDTH, BELOW) ─────────────┐
+     │ Active filters  |  table (full width, scrollable)    │
+     └───────────────────────────────────────────────────────┘ #}
 {% block title %}Dashboard — Lindsay's Heart Admin{% endblock %}
 {% block content %}
 <div data-dashboard-controls class="space-y-6">
@@ -13,7 +26,13 @@
    nav links that open in a new tab so the runtime survives
    navigation. The Settings / Testing / Messages links are NOT
    in-place router links (issue #48, §4.3): a tab close on any
-   of those pages must not stop the original dashboard runtime. #}
+   of those pages must not stop the original dashboard runtime.
+
+   Diagnostic modal triggers (Current config, S3 bucket) also live
+   in the header — they were moved off the Test Injection card so
+   the operator can reach them without scrolling past the preview.
+   Active filters stays in the Recent 100 section since it's the
+   filter stack that applies to the rows below. #}
 <div class="flex items-center justify-between mb-6 flex-wrap gap-4">
   <div>
     <h2 class="text-4xl font-bold font-heading text-dark">Hey there!</h2>
@@ -35,6 +54,14 @@
        class="px-4 py-2 rounded-xl bg-white shadow text-sm font-semibold text-slate-700 hover:bg-indigo-50 hover:text-primary">
       Messages
     </a>
+    <button id="btn-modal-config" type="button"
+            class="px-4 py-2 rounded-xl bg-white shadow text-sm font-semibold text-slate-700 hover:bg-indigo-50 hover:text-primary">
+      Current config
+    </button>
+    <button id="btn-modal-s3" type="button"
+            class="px-4 py-2 rounded-xl bg-white shadow text-sm font-semibold text-slate-700 hover:bg-indigo-50 hover:text-primary">
+      S3 bucket
+    </button>
     {# Sign-status pill — independent of the simulator runtime
        (physical-sign status, not the in-browser preview). Mirrored
        from the prior dashboard.html layout. #}
@@ -52,134 +79,133 @@
   </div>
 </div>
 
-{# ── Lifecycle controls ──────────────────────────────────────────────
-   §5.2: Start / Stop bound to the dashboard runtime controller.
-   The buttons are disabled during transitions and the error
-   state. The status badge reads the live generation state from
-   `window.Dashboard.status()` once the PyScript entrypoint has
-   exposed it. #}
-<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
-  <div class="flex items-center justify-between flex-wrap gap-4">
-    <div class="flex items-center gap-4">
-      <h3 class="font-semibold font-heading text-dark text-lg">Simulator runtime</h3>
-      <span id="sim-status-badge"
-            data-state="stopped"
-            class="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">
-        Stopped
-      </span>
-    </div>
-    <div class="flex items-center gap-3">
-      <button id="sim-start-btn"
-              type="button"
-              class="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 disabled:opacity-50 disabled:cursor-not-allowed">
-        Start
-      </button>
-      <button id="sim-stop-btn"
-              type="button"
-              class="px-5 py-2 rounded-xl bg-slate-200 text-slate-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled>
-        Stop
-      </button>
-      <button id="sim-restart-btn"
-              type="button"
-              class="px-5 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 font-semibold hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled>
-        Restart
-      </button>
-    </div>
-  </div>
-  {# Inline error-state row — populated by `app.js` when the runtime
-     enters `error`. Cleared on next Start. §1.8. #}
-  <div id="sim-error-row"
-       class="hidden mt-4 p-3 rounded-xl bg-red-50 border border-red-100 text-sm text-red-700">
-    <span class="font-semibold">Simulator error:</span>
-    <span id="sim-error-message" class="ml-2 font-mono"></span>
-    <button id="sim-error-retry"
-            type="button"
-            class="ml-4 px-3 py-1 rounded-lg bg-red-600 text-white text-xs font-semibold">
-      Retry
-    </button>
-  </div>
-</div>
+{# ── Top-row grid: Simulator controls (left) + Preview (right) ───
+   Simulator runtime controls + Test injection sit in the left
+   column; the preview canvas sits in the right column on lg+
+   screens (50% width). Active filters lives in the header and
+   Recent 100 messages drops BELOW both columns at full width so
+   the operator can scroll through sign history without it being
+   squeezed next to the canvas. #}
+<div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
-{# ── Simulator canvas (moved from preview.html) ────────────────────── #}
-<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
-  <div class="flex flex-col items-center gap-4">
-    <div class="text-slate-500 text-sm">
-      <span class="font-semibold">Effect:</span> <span id="preview-effect">—</span>
-      <span class="mx-3 text-slate-300">|</span>
-      <span class="font-semibold">Now displaying:</span>
-      <a id="preview-message-link" href="#" role="button" class="text-slate-500">
-        <span id="preview-message">Idle</span>
-      </a>
+  {# ── Left column ─────────────────────────────────────────────── #}
+  <div class="space-y-6">
+
+    {# Simulator runtime controls. #}
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
+      <div class="flex items-center justify-between flex-wrap gap-4">
+        <div class="flex items-center gap-4">
+          <h3 class="font-semibold font-heading text-dark text-lg">Simulator runtime</h3>
+          <span id="sim-status-badge"
+                data-state="stopped"
+                class="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">
+            Stopped
+          </span>
+        </div>
+        <div class="flex items-center gap-3">
+          <button id="sim-start-btn"
+                  type="button"
+                  class="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 disabled:opacity-50 disabled:cursor-not-allowed">
+            Start
+          </button>
+          <button id="sim-stop-btn"
+                  type="button"
+                  class="px-5 py-2 rounded-xl bg-slate-200 text-slate-700 font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled>
+            Stop
+          </button>
+          <button id="sim-restart-btn"
+                  type="button"
+                  class="px-5 py-2 rounded-xl bg-white border border-slate-200 text-slate-700 font-semibold hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled>
+            Restart
+          </button>
+        </div>
+      </div>
+      {# Inline error-state row — populated by `app.js` when the runtime
+         enters `error`. Cleared on next Start. §1.8. #}
+      <div id="sim-error-row"
+           class="hidden mt-4 p-3 rounded-xl bg-red-50 border border-red-100 text-sm text-red-700">
+        <span class="font-semibold">Simulator error:</span>
+        <span id="sim-error-message" class="ml-2 font-mono"></span>
+        <button id="sim-error-retry"
+                type="button"
+                class="ml-4 px-3 py-1 rounded-lg bg-red-600 text-white text-xs font-semibold">
+          Retry
+        </button>
+      </div>
     </div>
-    <div class="relative w-full max-w-full bg-slate-900 rounded-xl p-4">
-      <div class="relative w-full max-w-[min(800px,100%)] h-auto aspect-square mx-auto">
-        <img id="browser-media-image" alt="" hidden
-             class="absolute inset-0 w-full h-full object-contain pointer-events-none"
-             style="z-index: 0; opacity: 0;">
-        <video id="browser-media-video" muted loop autoplay playsinline hidden
-               class="absolute inset-0 w-full h-full object-contain pointer-events-none"
-               style="z-index: 0; opacity: 0;"></video>
-        <canvas id="sign-canvas" width="768" height="768"
-                class="block w-full h-full"
-                style="position: relative; image-rendering: auto; z-index: 1;"></canvas>
-        <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
-          Simulator stopped — press Start to begin.
+
+    {# Test injection (Active filters button moved into the header
+       of the recent-100 section below). #}
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
+      <h3 class="font-semibold font-heading text-dark text-lg mb-4">Test injection</h3>
+      <form id="inject-form" class="flex flex-col gap-3">
+        <div class="flex flex-wrap gap-3">
+          <input id="inject-body"
+                 type="text"
+                 required
+                 placeholder="Type a message body to inject"
+                 class="flex-1 min-w-[200px] px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/40">
+          <input id="inject-sender"
+                 type="text"
+                 placeholder="+15551234567"
+                 class="w-44 px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/40">
+          <button type="submit"
+                  class="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30">
+            Inject
+          </button>
+        </div>
+        <div id="inject-result"
+             class="text-xs text-slate-500 font-mono min-h-[1.25rem]"></div>
+      </form>
+    </div>
+
+  </div>{# end left column #}
+
+  {# ── Right column: simulator canvas ──────────────────────────── #}
+  <div class="lg:sticky lg:top-4 lg:self-start">
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
+      <div class="flex flex-col items-center gap-4">
+        <div class="text-slate-500 text-sm">
+          <span class="font-semibold">Effect:</span> <span id="preview-effect">—</span>
+          <span class="mx-3 text-slate-300">|</span>
+          <span class="font-semibold">Now displaying:</span>
+          <a id="preview-message-link" href="#" role="button" class="text-slate-500">
+            <span id="preview-message">Idle</span>
+          </a>
+        </div>
+        <div class="relative w-full bg-slate-900 rounded-xl p-4">
+          {# Right-column canvas. Container is half-width on lg+
+             screens; the inner aspect-square keeps the simulator
+             square even as the column narrows. #}
+          <div class="relative w-full max-w-full mx-auto aspect-square">
+            <img id="browser-media-image" alt="" hidden
+                 class="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                 style="z-index: 0; opacity: 0;">
+            <video id="browser-media-video" muted loop autoplay playsinline hidden
+                   class="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                   style="z-index: 0; opacity: 0;"></video>
+            <canvas id="sign-canvas" width="768" height="768"
+                    class="block w-full h-full"
+                    style="position: relative; image-rendering: auto; z-index: 1;"></canvas>
+            <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
+              Simulator stopped — press Start to begin.
+            </div>
+          </div>
         </div>
       </div>
     </div>
-  </div>
-</div>
+  </div>{# end right column #}
 
-{# ── Test injection + diagnostics modals ─────────────────────────────
-   §6: reuse the existing /api/test-messages POST. The diagnostics
-   modal trio (Current Config / Active Filters / S3) opens from
-   buttons in this row; the underlying authenticated GET endpoints
-   already exist on the Flask side. #}
-<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
-  <h3 class="font-semibold font-heading text-dark text-lg mb-4">Test injection</h3>
-  <form id="inject-form" class="flex flex-col gap-3">
-    <div class="flex flex-wrap gap-3">
-      <input id="inject-body"
-             type="text"
-             required
-             placeholder="Type a message body to inject"
-             class="flex-1 min-w-[200px] px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/40">
-      <input id="inject-sender"
-             type="text"
-             placeholder="+15551234567"
-             class="w-44 px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/40">
-      <button type="submit"
-              class="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30">
-        Inject
-      </button>
-    </div>
-    <div id="inject-result"
-         class="text-xs text-slate-500 font-mono min-h-[1.25rem]"></div>
-  </form>
-  <div class="flex flex-wrap gap-2 mt-4 pt-4 border-t border-slate-100">
-    <button id="btn-modal-config" type="button"
-            class="px-3 py-2 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-indigo-50">
-      Current config
-    </button>
-    <button id="btn-modal-filters" type="button"
-            class="px-3 py-2 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-indigo-50">
-      Active filters
-    </button>
-    <button id="btn-modal-s3" type="button"
-            class="px-3 py-2 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-slate-700 hover:bg-indigo-50">
-      S3 bucket
-    </button>
-  </div>
-</div>
+</div>{# end top-row grid #}
 
-{# ── Recent-100 message region (client-paginated over 100-record ring) ──
-   §7: 20-row client pagination, source badges, suppress actions.
-   The table is populated by `app.js` reading from
-   `window.App.getMessages(100, include_suppressed=True)` and is
-   refreshed on every MessageManager change-notification. #}
-<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 overflow-hidden mb-6">
+{# ── Recent-100 message region (FULL WIDTH, BELOW the preview) ─────
+   Drops under both columns at full width — the operator can scroll
+   through sign history without it being squeezed next to the canvas.
+   Active filters button lives inline above the table (moved here
+   from the old Test-injection row). #}
+<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 overflow-hidden mt-6">
   <div class="flex items-center justify-between p-6 border-b border-indigo-100">
     <h3 class="font-semibold font-heading text-dark text-lg flex items-center gap-2">
       <span class="text-xl">📬</span> Recent 100 messages
@@ -190,6 +216,21 @@
       Full archive →
     </a>
   </div>
+
+  {# Active filters card — moved here from the old Test-injection
+     row. The button keeps its `#btn-modal-filters` id so the
+     `dashboard_modals.js` shim picks it up unchanged. #}
+  <div class="px-6 pt-4">
+    <button id="btn-modal-filters" type="button"
+            class="w-full px-4 py-3 rounded-xl bg-white border border-slate-200 text-sm font-semibold text-slate-700 hover:bg-indigo-50 flex items-center justify-between">
+      <span class="flex items-center gap-2">
+        <span class="text-base">🪄</span>
+        <span>Active filters</span>
+      </span>
+      <span class="text-xs text-slate-500 font-mono">Click to view →</span>
+    </button>
+  </div>
+
   <div class="overflow-x-auto">
     <table id="recent-table" class="w-full text-sm">
       <thead class="bg-indigo-50/50 text-slate-600 text-xs uppercase tracking-wider">
@@ -230,9 +271,9 @@
 <script type="module"
         src="https://pyscript.net/releases/2024.9.1/core.js"></script>
 <py-config
-    src="{{ url_for('static', filename='preview/py-config.toml') }}?v=12"></py-config>
+    src="{{ url_for('static', filename='preview/py-config.toml') }}?v=13"></py-config>
 <py-script
-    src="{{ url_for('static', filename='preview/heart-message-manager/app_main.py') }}?v=24"></py-script>
+    src="{{ url_for('static', filename='preview/heart-message-manager/app_main.py') }}?v=25"></py-script>
 <py-script
     src="{{ url_for('static', filename='preview/heart-message-manager/preview_main.py') }}?v=13"></py-script>
 <script src="{{ url_for('static', filename='preview/preview.js') }}?v=14"></script>

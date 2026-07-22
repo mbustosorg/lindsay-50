@@ -162,14 +162,17 @@ _logging.getLogger().setLevel(_logging.INFO)
 from dashboard_controller import DashboardController
 from dashboard_bootstrap import install_bootstrap
 
+print("[app-py] constructing DashboardController")
 _controller = DashboardController()
+print("[app-py] calling install_bootstrap")
 install_bootstrap(_controller)
+print("[app-py] install_bootstrap RETURNED; render loop hooks installed")
 
 # Expose the controller on `window` so the dashboard page's Start /
 # Stop buttons can drive it. `window.Dashboard.start()` / `.stop()`
 # are the production button-click bindings.
 js.window.Dashboard = _controller
-print("[app-py] Dashboard controller installed; auto-starting generation 1")
+print(f"[app-py] window.Dashboard exposed (state={_controller.state()})")
 
 
 # ---------------------------------------------------------------------------

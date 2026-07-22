@@ -122,16 +122,25 @@ def test_preview_template_layers_media_behind_canvas():
 def test_preview_template_canvas_is_responsive():
     """The canvas is CSS-responsive so it scales with the viewport on resize.
 
-    Regression: the previous version had a fixed inline `width: 512px;
-    height: 512px;` on the canvas, so the dark div (bg-slate-900) sized
-    to the canvas and didn't shrink when the viewport narrowed — the
-    user saw a fixed-size preview frame regardless of window width.
+    Regression history:
 
-    Fix: the dark div is `w-full max-w-full` (constrained to the card's
-    content area) and the canvas uses `max-w-[min(800px,100%)]
-    h-auto aspect-square` so it fills the dark div, caps at 800px, and
-    stays square via aspect-ratio. The inline pixel width/height were
-    removed.
+    1. The original layout had a fixed inline `width: 512px; height:
+       512px;` on the canvas, so the dark div (bg-slate-900) sized to
+       the canvas and didn't shrink when the viewport narrowed — the
+       user saw a fixed-size preview frame regardless of window width.
+
+    2. The first responsive fix (`max-w-[min(800px,100%)] h-auto
+       aspect-square`) capped the canvas at 800px while it owned the
+       full page width.
+
+    3. The 2026-07-22 layout split the dashboard into a two-column grid
+       (left: controls + test injection + recent-100; right: canvas).
+       The canvas now lives in a 50%-wide column on lg+ screens and
+       fills it 100% — the 800px cap was a full-page artifact and no
+       longer makes sense. The new invariant is: canvas fills the
+       right column (via `w-full max-w-full`) and stays square via
+       `aspect-square` so the canvas footprint matches the media
+       overlay footprint by construction.
     """
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     # The dark div (the preview frame) must be width-constrained so it
@@ -140,18 +149,11 @@ def test_preview_template_canvas_is_responsive():
     assert "w-full max-w-full" in template, (
         "The dark div (preview frame) must be w-full max-w-full so it " "shrinks with the card on viewport resize"
     )
-    # The canvas must declare max-w-[min(800px,100%)] so the inline JS-set
-    # width is clamped to both 800px and 100% of the dark div.
-    assert "max-w-[min(800px,100%)]" in template, (
-        "The canvas must cap at min(800px, 100% of dark div) via "
-        "max-w-[min(800px,100%)] so it can't overflow the dark div"
-    )
-    # The canvas must declare aspect-square so the height tracks the
-    # (possibly constrained) width — without this the canvas would be
-    # a non-square rectangle if the JS-set width is clamped by max-w.
+    # The canvas must declare aspect-square so its height tracks the
+    # width — without this the canvas would be a non-square rectangle
+    # if the JS-set width is constrained by the column.
     assert "aspect-square" in template, (
-        "The canvas must declare aspect-square so its height tracks the "
-        "width and it stays square even when the width is constrained"
+        "The canvas must declare aspect-square so its height tracks the " "width and it stays square inside its column"
     )
     # The inline pixel width/height must NOT be present anymore.
     assert "width: 512px" not in template, (
@@ -160,6 +162,14 @@ def test_preview_template_canvas_is_responsive():
         "fixed-size behavior is back"
     )
     assert "height: 512px" not in template
+    # The 800px cap was a full-page-width artifact from before the
+    # two-column layout — with the canvas in a 50% column the cap
+    # never triggers and was removed.
+    assert "max-w-[min(800px,100%)]" not in template, (
+        "The 800px cap was removed when the canvas moved into a "
+        "50%-wide right column; its presence means the layout "
+        "regressed to the pre-split full-width canvas"
+    )
 
 
 def test_preview_template_media_overlay_matches_canvas_footprint():
@@ -229,15 +239,23 @@ def test_preview_template_media_overlay_matches_canvas_footprint():
     assert "object-contain" in video_block
     assert "object-cover" not in video_block
 
-    # The sizing wrapper must declare the cap + aspect-square so the
-    # canvas and overlays end up at the same square footprint.
-    assert "max-w-[min(800px,100%)]" in template, (
-        "The sizing wrapper (or canvas) must cap at min(800px, 100%) — "
-        "this is the rule that keeps the overlay and canvas at the same "
-        "size"
-    )
+    # The sizing wrapper must declare aspect-square so the canvas and
+    # overlays end up at the same square footprint.
+    #
+    # Note: the legacy `max-w-[min(800px,100%)]` cap was removed when
+    # the canvas moved into a 50%-wide right column on lg+ screens
+    # (`grid-cols-1 lg:grid-cols-2`) — see §5 layout change. The cap
+    # never triggers inside a half-width column and was a full-page
+    # artifact from before the split. The wrapper is now
+    # `w-full max-w-full aspect-square` so it fills the column and
+    # stays square.
     assert "aspect-square" in template, (
         "The sizing wrapper (or canvas) must declare aspect-square so " "the overlay and canvas share a 1:1 footprint"
+    )
+    assert "max-w-[min(800px,100%)]" not in template, (
+        "The 800px cap was removed when the canvas moved into a 50%-wide "
+        "right column; its presence means the layout regressed to the "
+        "pre-split full-width canvas"
     )
 
 
@@ -429,9 +447,7 @@ def test_preview_route_redirects_to_dashboard():
         location = response.headers.get("Location", "")
         # Flask's test client preserves the full path; just check it
         # points at the dashboard endpoint, not the legacy simulator.
-        assert location.endswith("/"), (
-            f"/preview must redirect to `/` (got Location={location!r})"
-        )
+        assert location.endswith("/"), f"/preview must redirect to `/` (got Location={location!r})"
 
 
 def test_preview_csp_allows_s3_endpoint_when_explicit():
@@ -586,18 +602,8 @@ def test_pyscript_files_declares_every_app_main_import():
     import ast
     import tomllib
 
-    app_main_path = (
-        _PROJECT_ROOT
-        / "heart-message-manager"
-        / "app_main.py"
-    )
-    py_config_path = (
-        _PROJECT_ROOT
-        / "heart-message-manager"
-        / "static"
-        / "preview"
-        / "py-config.toml"
-    )
+    app_main_path = _PROJECT_ROOT / "heart-message-manager" / "app_main.py"
+    py_config_path = _PROJECT_ROOT / "heart-message-manager" / "static" / "preview" / "py-config.toml"
 
     tree = ast.parse(app_main_path.read_text(encoding="utf-8"))
     declared = tomllib.loads(py_config_path.read_text()).get("files", {})
@@ -608,11 +614,7 @@ def test_pyscript_files_declares_every_app_main_import():
     # `/{name}.py` — that matches the file naming convention the
     # project uses (each module is a single file with a matching
     # name).
-    declared_modules = {
-        key.split("/")[-1].removesuffix(".py")
-        for key in declared
-        if key.endswith(".py")
-    }
+    declared_modules = {key.split("/")[-1].removesuffix(".py") for key in declared if key.endswith(".py")}
 
     # Modules PyScript / Pyodide provides at runtime, plus the
     # CPython stdlib (Pyodide ships with the whole stdlib by default).

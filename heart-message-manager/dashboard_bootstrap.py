@@ -275,11 +275,7 @@ class DashboardRuntime:
         `static/sign_status.js`.
         """
         try:
-            d = (
-                dict(detail.to_py() if hasattr(detail, "to_py") else detail)
-                if detail is not None
-                else {}
-            )
+            d = dict(detail.to_py() if hasattr(detail, "to_py") else detail) if detail is not None else {}
         except Exception:
             d = {}
         label_map = {
@@ -318,15 +314,19 @@ def install_bootstrap(controller) -> None:
     DashboardRuntime._config = _app_config()
 
     def on_start(runtime) -> None:
+        print(f"[bootstrap-py] on_start ENTER generation={runtime.generation_id}")
         gen_id = runtime.generation_id
         cfg = DashboardRuntime._config
         dash = DashboardRuntime(gen_id, cfg, runtime)
 
         # Per-generation in-memory EventLog (issue #48, §2.6).
+        print("[bootstrap-py] constructing EventLog")
         runtime.event_log = EventLog(max_entries=100)
+        print(f"[bootstrap-py] EventLog OK id={id(runtime.event_log)}")
 
         # Per-generation MessageManager — wired with on_change that
         # consults the generation discriminator.
+        print("[bootstrap-py] constructing MessageManager")
         runtime.message_manager = MessageManager(
             messages_api_url=str(cfg.get("messagesApiUrl") or ""),
             config_api_url=str(cfg.get("configApiUrl") or ""),
@@ -334,9 +334,11 @@ def install_bootstrap(controller) -> None:
             is_browser=True,
             on_change=create_proxy(dash._make_on_change_js()),
         )
+        print(f"[bootstrap-py] MessageManager OK id={id(runtime.message_manager)}")
 
         # Per-generation EffectsCoordinator — wired with the
         # selector + the new event log.
+        print("[bootstrap-py] constructing EffectsCoordinator")
         runtime.coordinator = EffectsCoordinator(
             message_manager=runtime.message_manager,
             media_api_base_url=str(js.window.location.origin),
@@ -345,9 +347,11 @@ def install_bootstrap(controller) -> None:
             selector=WeightedSelector(),
             event_log=runtime.event_log,
         )
+        print(f"[bootstrap-py] EffectsCoordinator OK id={id(runtime.coordinator)}")
 
         # Per-generation MQTT-WS client.
         mqtt_url = str(cfg.get("mqttWsUrl") or "")
+        print(f"[bootstrap-py] mqtt_url={mqtt_url!r}")
         if mqtt_url:
             client_opts = {
                 "url": mqtt_url,
@@ -361,13 +365,18 @@ def install_bootstrap(controller) -> None:
             client_opts_js = to_js(client_opts, dict_converter=js.Object.fromEntries)
             from js import createMqttWsClient  # type: ignore[import-not-found]
 
+            print("[bootstrap-py] creating MQTT-WS client")
             runtime.mqtt_ws_client = createMqttWsClient(client_opts_js)
+            print(f"[bootstrap-py] MQTT-WS client created id={id(runtime.mqtt_ws_client)}; starting")
             runtime.mqtt_ws_client.start()
+            print("[bootstrap-py] MQTT-WS client.start() returned")
 
         # Bind the JS-callable proxies (seed / getMessages / getConfig)
         # and expose `window._coordinator` etc.
+        print("[bootstrap-py] installing JS callbacks + exposing window globals")
         _install_js_callbacks(runtime)
         _expose_window_globals(runtime)
+        print("[bootstrap-py] window._coordinator / _message_manager / _seed EXPOSED")
 
         # Bridge App.getMessages / App.getConfig so existing per-page
         # JS can read from the in-memory ring without owning IndexedDB.
@@ -382,11 +391,10 @@ def install_bootstrap(controller) -> None:
                     pass
 
         log.info("dashboard runtime generation=%d constructed", gen_id)
+        print(f"[bootstrap-py] on_start COMPLETE generation={gen_id}")
 
     def on_stop(runtime) -> None:  # noqa: ARG001
         _clear_window_globals()
-        log.info(
-            "dashboard runtime generation=%d torn down", runtime.generation_id
-        )
+        log.info("dashboard runtime generation=%d torn down", runtime.generation_id)
 
     controller.set_render_loop_hooks(on_start=on_start, on_stop=on_stop)
