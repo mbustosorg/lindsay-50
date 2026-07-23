@@ -112,7 +112,32 @@
     //
     // We listen for `py:done` (primary) and `py:ready` (fallback for
     // older runtimes that don't fire `py:done`).
+    //
+    // `dashboard.html` ships TWO `<py-script>` tags (`app_main.py`
+    // and `preview_main.py`), so `py:done` fires PER element —
+    // twice — before `py:all-done` fires once. The legacy
+    // `pyodideReady` event adds another fire. Without a guard,
+    // each event invokes `startRenderLoop`, which schedules its
+    // own `requestAnimationFrame(frame)` chain — four independent
+    // rAF loops all calling `window.tick()` into Python at the
+    // display refresh rate. That saturates the JS main thread and
+    // the browser becomes unresponsive within a few seconds of
+    // `__PREVIEW_TICK_ENABLED__` flipping to `true`.
+    //
+    // The one-shot guard (paired with the discriminator "the
+    // render-loop-start side effect") makes the first event win
+    // and silently drops the rest. Per
+    // `feedback_one_shot_guards_need_discriminator.md`, the bool
+    // is named for WHAT it's preventing, not the event that
+    // flipped it.
+    let renderLoopStarted = false;
     const onReady = () => {
+      if (renderLoopStarted) {
+        // Already running — the first event won. Logging here
+        // would be noise (3 lines per cold load); stay quiet.
+        return;
+      }
+      renderLoopStarted = true;
       hideLoading();
       console.log("[preview-js] onReady fired; starting render loop");
       startRenderLoop(canvas);
