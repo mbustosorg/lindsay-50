@@ -101,30 +101,6 @@
   {# ── Left column ─────────────────────────────────────────────── #}
   <div class="space-y-6">
 
-    {# Test injection. #}
-    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
-      <h3 class="font-semibold font-heading text-dark text-lg mb-4">Test injection</h3>
-      <form id="inject-form" class="flex flex-col gap-3">
-        <div class="flex flex-wrap gap-3">
-          <input id="inject-body"
-                 type="text"
-                 required
-                 placeholder="Type a message body to inject"
-                 class="flex-1 min-w-[200px] px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/40">
-          <input id="inject-sender"
-                 type="text"
-                 placeholder="+15551234567"
-                 class="w-44 px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/40">
-          <button type="submit"
-                  class="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30">
-            Inject
-          </button>
-        </div>
-        <div id="inject-result"
-             class="text-xs text-slate-500 font-mono min-h-[1.25rem]"></div>
-      </form>
-    </div>
-
     {# Sign Health — moved here from /settings (post-2026-07-22
        follow-up). sign_status.js populates `data-sign-status-field`
        cells automatically because the same shim is loaded on every
@@ -188,6 +164,30 @@
       </div>
     </div>
 
+    {# Test injection. #}
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
+      <h3 class="font-semibold font-heading text-dark text-lg mb-4">Test injection</h3>
+      <form id="inject-form" class="flex flex-col gap-3">
+        <div class="flex flex-wrap gap-3">
+          <input id="inject-body"
+                 type="text"
+                 required
+                 placeholder="Type a message body to inject"
+                 class="flex-1 min-w-[200px] px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/40">
+          <input id="inject-sender"
+                 type="text"
+                 placeholder="+15551234567"
+                 class="w-44 px-4 py-2 rounded-xl border border-slate-200 focus:outline-none focus:ring-2 focus:ring-primary/40">
+          <button type="submit"
+                  class="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30">
+            Inject
+          </button>
+        </div>
+        <div id="inject-result"
+             class="text-xs text-slate-500 font-mono min-h-[1.25rem]"></div>
+      </form>
+    </div>
+
   </div>{# end left column #}
 
   {# ── Right column: preview canvas with Start/Stop button ──────── #}
@@ -217,8 +217,15 @@
             Start
           </button>
         </div>
-        <div class="relative w-full bg-slate-900 rounded-xl p-4">
-          <div class="relative w-full max-w-full mx-auto aspect-square">
+        {# Preview canvas wrapper — ~2/3 of the column width, centered
+           (post-2026-07-22 follow-up). The right column is 50% of the
+           viewport on lg+; the canvas wrapper claims 2/3 of that,
+           so the preview matches the visual height of the left
+           column (Sign Health table + Test injection form) instead
+           of dwarfing it. The aspect-square + w-full inside scales
+           the 768×768 logical canvas proportionally. #}
+        <div class="relative w-2/3 mx-auto bg-slate-900 rounded-xl p-4">
+          <div class="relative w-full mx-auto aspect-square">
             <img id="browser-media-image" alt="" hidden
                  class="absolute inset-0 w-full h-full object-contain pointer-events-none"
                  style="z-index: 0; opacity: 0;">

@@ -4,20 +4,11 @@
 // Reads `window.APP_CONFIG` (inlined server-side from `settings.toml`)
 // and primes the in-browser state:
 //
-//   - On every page load, try to hydrate the in-memory
-//     MessageManager from `sessionStorage` via
-//     `window._hydrate_from_cache()`. If that returns true, the
-//     page renders the cached state on the first frame and no
-//     network call happens. The WS connection (started by
-//     `app_main.py` and fed by `MessageManager.dispatch`) keeps
-//     the cache current from there.
-//
-//   - On a cache miss (first page load this tab, after logout,
-//     or after a `seed()` Refresh that wiped the cache), call
-//     `window._seed()`. That fetches `/api/messages` and
-//     `/api/config` from Flask, populates the in-memory
-//     MessageManager, and writes a fresh cache via the
-//     MessageManager's universal `on_change` event.
+//   - The in-memory MessageManager is per-tab and per-generation
+//     (issue #48, §2.4). No sessionStorage / IndexedDB hydration
+//     is performed here — each fresh page load starts a fresh
+//     `DashboardController.start()` that builds its own
+//     MessageManager and seeds it from `/api/messages`.
 //
 //   - `window.App.registerOnChange(cb)` lets per-page scripts
 //     (e.g. /preview, /testing) subscribe to the universal
@@ -26,9 +17,8 @@
 //     MessageManager (`app_main.py` wires MqttWsClient →
 //     MessageManager.dispatch → on_change → window.App._dispatchChange).
 //     One event covers all mutations: WS message envelope, WS
-//     config envelope, seed completion, cache hydrate. The
-//     page re-renders whatever on its DOM could be affected
-//     by any state change.
+//     config envelope, seed completion. The page re-renders
+//     whatever on its DOM could be affected by any state change.
 //
 //   - `window.App.getMessages(limit, suppress)` and
 //     `window.App.getConfig()` are read APIs that delegate to
@@ -133,29 +123,6 @@
     }
   }
 
-  function clearMessageCache() {
-    // sessionStorage cache is gone (issue #48, §2.4). Kept as a
-    // no-op so legacy callers (`login.html` postMessage) don't
-    // throw. Any leftover keys with the `lindsay50:` prefix are
-    // wiped defensively — they shouldn't exist, but if an older
-    // build wrote them they're not load-bearing any more.
-    let wiped = 0;
-    try {
-      for (let i = sessionStorage.length - 1; i >= 0; i--) {
-        const k = sessionStorage.key(i);
-        if (k && k.indexOf("lindsay50:") === 0) {
-          sessionStorage.removeItem(k);
-          wiped += 1;
-        }
-      }
-      if (wiped > 0) {
-        console.info("[app] cleared leftover message cache (keys wiped:", wiped, ")");
-      }
-    } catch (e) {
-      console.warn("[app] clearMessageCache failed:", e);
-    }
-  }
-
   async function waitForDashboard(timeoutMs) {
     // Poll for the dashboard controller installed by `app_main.py`.
     // The previous version of this shim waited for
@@ -210,7 +177,6 @@
     registerOnChange,
     getMessages,
     getConfig: getConfigNow,
-    clearMessageCache,
     // PyScript-side fan-out entry point. The MessageManager's
     // on_change callback calls this; per-page listeners
     // (e.g. testing.html's `reRender`) are reached via

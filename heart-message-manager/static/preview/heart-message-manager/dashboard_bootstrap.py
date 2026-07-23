@@ -84,18 +84,27 @@ def _app_config() -> dict:
         return {}
 
 
-def _install_js_callbacks(runtime) -> None:
+def _install_js_callbacks(dash, runtime) -> None:
     """Bind the per-generation JS-callable callbacks onto runtime.proxies.
 
-    The proxies are held on the runtime record so Stop can release them
-    (the underlying PyScript proxies can't be unregistered, but the
-    callbacks read from `runtime.message_manager` which is swapped to
-    the null stand-in at Stop time, so the post-Stop envelope handler
-    is harmless).
+    Two objects are involved here, and the names matter:
+      - `dash` is the per-generation `DashboardRuntime` — it owns
+        the `seed_coroutine` / `get_messages_js` / `get_config_js`
+        methods that bridge into PyScript's asyncio runtime.
+      - `runtime` is the controller's `Runtime` dataclass — it owns
+        the `proxies` dict (held so `Stop` can release the proxies
+        in one place) and the canonical `message_manager` /
+        `coordinator` fields that `_expose_window_globals` mirrors
+        onto `window.*`.
+
+    The proxies live on `runtime.proxies` (not `dash`) because the
+    controller's Stop path releases the proxies off the controller's
+    Runtime record — keeping the proxy dict on the same object the
+    controller already walks at teardown is the simpler invariant.
     """
-    runtime.proxies["seed"] = create_proxy(runtime.seed_coroutine)
-    runtime.proxies["get_messages"] = create_proxy(runtime.get_messages_js)
-    runtime.proxies["get_config"] = create_proxy(runtime.get_config_js)
+    runtime.proxies["seed"] = create_proxy(dash.seed_coroutine)
+    runtime.proxies["get_messages"] = create_proxy(dash.get_messages_js)
+    runtime.proxies["get_config"] = create_proxy(dash.get_config_js)
 
 
 def _expose_window_globals(runtime) -> None:
@@ -374,7 +383,7 @@ def install_bootstrap(controller) -> None:
         # Bind the JS-callable proxies (seed / getMessages / getConfig)
         # and expose `window._coordinator` etc.
         print("[bootstrap-py] installing JS callbacks + exposing window globals")
-        _install_js_callbacks(runtime)
+        _install_js_callbacks(dash, runtime)
         _expose_window_globals(runtime)
         print("[bootstrap-py] window._coordinator / _message_manager / _seed EXPOSED")
 

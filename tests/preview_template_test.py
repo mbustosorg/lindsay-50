@@ -134,20 +134,24 @@ def test_preview_template_canvas_is_responsive():
        full page width.
 
     3. The 2026-07-22 layout split the dashboard into a two-column grid
-       (left: controls + test injection + recent-100; right: canvas).
-       The canvas now lives in a 50%-wide column on lg+ screens and
-       fills it 100% — the 800px cap was a full-page artifact and no
-       longer makes sense. The new invariant is: canvas fills the
-       right column (via `w-full max-w-full`) and stays square via
-       `aspect-square` so the canvas footprint matches the media
-       overlay footprint by construction.
+       (left: Sign Health + Test injection; right: canvas). The canvas
+       lives in a 50%-wide column on lg+ screens and is centered at
+       2/3 of that column (`w-2/3 mx-auto`) — the 800px cap was a
+       full-page artifact and no longer makes sense, and the preview
+       was reduced to ~2/3 size so the left column (Sign Health table
+       + Test injection form) matches the preview height instead of
+       being dwarfed by it. The new invariant: canvas claims 2/3 of
+       its column and stays square via `aspect-square` so the canvas
+       footprint matches the media overlay footprint by construction.
     """
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     # The dark div (the preview frame) must be width-constrained so it
-    # shrinks with the card. `w-full max-w-full` is the Tailwind for
-    # `width: 100%; max-width: 100%`.
-    assert "w-full max-w-full" in template, (
-        "The dark div (preview frame) must be w-full max-w-full so it " "shrinks with the card on viewport resize"
+    # shrinks with the card. After the 2/3 resize, the frame is
+    # `w-2/3 mx-auto` — 2/3 of the parent column, centered.
+    assert "w-2/3 mx-auto" in template, (
+        "The dark div (preview frame) must be w-2/3 mx-auto — the "
+        "post-2026-07-22 resize drops the preview to 2/3 of the "
+        "right column so the left column matches the preview height."
     )
     # The canvas must declare aspect-square so its height tracks the
     # width — without this the canvas would be a non-square rectangle
