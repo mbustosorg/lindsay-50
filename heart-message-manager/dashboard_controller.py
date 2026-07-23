@@ -222,6 +222,15 @@ class DashboardController:
         # canvas).
         self._render_loop_start: Optional[Callable[[Runtime], None]] = None
         self._render_loop_stop: Optional[Callable[[Runtime], None]] = None
+        # Lifecycle subscribers — the JS-side `dashboard_controls.js`
+        # shim calls `on_change(callback)` to keep the Start/Stop
+        # button label, the loading overlay, the error row, and the
+        # rAF tick gate (`__PREVIEW_TICK_ENABLED__`) in sync with the
+        # state machine. Each subscriber receives `{state, error}` on
+        # every transition (including the no-op `stopped → stopped`
+        # idempotent stop); exceptions in a subscriber are logged
+        # but do not abort the notification chain.
+        self._subscribers: list[Callable[[dict], None]] = []
 
     # --- Public lifecycle surface -----------------------------------------
 
@@ -245,6 +254,85 @@ class DashboardController:
         """
         with self._lock:
             return self._runtime
+
+    def status(self) -> dict:
+        """Return `{state, error}` snapshot for the active generation.
+
+        Mirrors the JSON shape the JS-side shim expects:
+        `dashboard_controls.js` calls this for the initial button-
+        label / error-row render, then subscribes via `on_change` for
+        live updates. `state` is the lifecycle string (`stopped` /
+        `starting` / `running` / `stopping` / `error`); `error` is
+        the last actionable error message captured during a failed
+        bootstrap, or None.
+        """
+        return self._snapshot()
+
+    def on_change(self, callback: Callable[[dict], None]) -> Callable[[], None]:
+        """Subscribe to lifecycle state transitions.
+
+        `callback` is invoked synchronously on every transition
+        (stopped → starting → running, etc.) with a `{state, error}`
+        dict. The subscription is fire-on-edge, NOT fire-on-subscribe:
+        the initial state is reachable via the separate `status()`
+        call. Returns an unsubscribe function that removes the
+        callback from the subscriber list (idempotent — calling it
+        twice is a no-op).
+
+        A subscriber that raises is logged and dropped from the
+        notification chain for THAT call only; subsequent transitions
+        still reach it. The list is iterated over a snapshot so an
+        unsubscribe mid-fire doesn't disturb the in-flight dispatch.
+        """
+        # No runtime callable check: the type annotation already
+        # enforces the contract. A JS-side caller via PyProxy could
+        # in theory pass a non-callable, but the dashboard_controls.js
+        # shim always wraps the callback in `function (snap) { ... }`,
+        # so the contract holds at every known call site.
+        with self._lock:
+            self._subscribers.append(callback)
+
+        def unsubscribe() -> None:
+            with self._lock:
+                try:
+                    self._subscribers.remove(callback)
+                except ValueError:
+                    pass
+
+        return unsubscribe
+
+    def _snapshot(self) -> dict:
+        """Build a `{state, error}` snapshot under the lock.
+
+        Returns a fresh dict on every call so a subscriber that
+        mutates its argument doesn't leak back into the controller's
+        state. `error` is None when the runtime is absent (the
+        controller is `stopped`) or when the active runtime hasn't
+        captured a failure yet.
+        """
+        with self._lock:
+            if self._runtime is None:
+                return {"state": "stopped", "error": None}
+            return {"state": self._runtime.state, "error": self._runtime.error}
+
+    def _notify_state(self, state: str, error: Optional[str] = None) -> None:
+        """Fan a `{state, error}` snapshot out to every subscriber.
+
+        Called OUTSIDE the lock so a subscriber that calls back into
+        the controller (e.g. `dashboard.start()`) doesn't deadlock.
+        The subscriber list is copied first so an unsubscribe
+        triggered by the callback doesn't disturb the in-flight
+        dispatch. Exceptions raised by a subscriber are logged and
+        swallowed — they must not abort the notification chain.
+        """
+        snap = {"state": state, "error": error}
+        with self._lock:
+            recipients = list(self._subscribers)
+        for cb in recipients:
+            try:
+                cb(snap)
+            except Exception as e:  # noqa: BLE001 — subscriber isolation
+                log.warning("DashboardController.on_change: subscriber raised: %r", e)
 
     def set_render_loop_hooks(
         self,
@@ -292,6 +380,12 @@ class DashboardController:
                 state="starting",
             )
 
+        # Notify subscribers that a new generation entered `starting`.
+        # Outside the lock so a subscriber that calls back into the
+        # controller (e.g. dashboard_controls.js's callback calling
+        # `dashboard.status()`) doesn't deadlock against the held lock.
+        self._notify_state("starting")
+
         # Bootstrap outside the lock so the lock isn't held during
         # the REST seed / MQTT connect / coordinator bind. The state
         # flips to `running` only after every step succeeds.
@@ -331,6 +425,10 @@ class DashboardController:
             # zeroing of `_active_generation_id`.
             self._active_generation_id = 0
             runtime.state = "stopping"
+        # Notify subscribers that the runtime is mid-teardown.
+        # Outside the lock for the same reason as `start`'s
+        # `starting` notification above.
+        self._notify_state("stopping")
         # Render-loop stop runs outside the lock — it may touch
         # `requestAnimationFrame` cancel which is a JS-side API.
         try:
@@ -351,6 +449,11 @@ class DashboardController:
             # Keep the torn-down record in the history ring for
             # diagnostics.
             self._record_history(runtime)
+        # Final notification: the runtime slot is cleared and the
+        # recorded state is `stopped`. Subscribers (e.g. the
+        # dashboard's Start/Stop button shim) flip the label back to
+        # `Start` and gate the rAF tick off.
+        self._notify_state("stopped")
 
     def restart(self) -> None:
         """Atomic Stop-then-Start. Returns once the new generation
@@ -440,6 +543,12 @@ class DashboardController:
             self._record_history(runtime)
             self._runtime = None
             self._active_generation_id = 0
+        # Notify subscribers that the bootstrap failed and the slot
+        # was released. Outside the lock for the same reason as the
+        # other transition notifications. The dashboard's error row
+        # reads `error.message` and the button label flips back to
+        # `Start` so the operator can retry.
+        self._notify_state("error", error)
 
     def _teardown_generation(self, runtime: Runtime) -> None:
         """Release the runtime's resources in dependency order.
@@ -509,5 +618,11 @@ class DashboardController:
         # to running. If they weren't installed, the runtime stays
         # in `starting` (the host test suite expects this — there's
         # no render layer to bind).
+        prev_state = runtime.state
         if runtime.message_manager is not None and not isinstance(runtime.message_manager, _NullMessageManager):
             runtime.state = "running"
+        # Notify subscribers iff the bootstrap actually transitioned
+        # the state — a hook that didn't promote stays in `starting`
+        # and we don't fan out a no-op notification.
+        if runtime.state != prev_state:
+            self._notify_state(runtime.state, runtime.error)

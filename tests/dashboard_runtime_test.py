@@ -447,3 +447,183 @@ def test_stop_invalidates_active_generation_before_render_loop_stop(controller):
     assert captured["is_active_at_on_stop"] is False
     assert captured["runtime_state_at_on_stop"] == "stopping"
 
+
+# --- on_change / status subscriber surface ---------------------------------
+#
+# The JS-side `dashboard_controls.js` shim calls
+# `Dashboard.status()` for the initial button-label / error-row
+# render, then subscribes via `Dashboard.on_change(callback)` for
+# live updates. Without this surface the shim's bind() falls
+# through to "neither on_change nor subscribe" and the Start button
+# never updates — that's the bug the subscriber wiring fixes.
+
+
+def test_status_initial_is_stopped(controller):
+    """A fresh controller reports `state="stopped"` and `error=None`."""
+    snap = controller.status()
+    assert snap == {"state": "stopped", "error": None}
+
+
+def test_status_during_starting(controller):
+    """`status()` reflects the optimistic `starting` state right
+    after `start()` and before any render-loop hook runs."""
+    controller.start()
+    snap = controller.status()
+    assert snap == {"state": "starting", "error": None}
+
+
+def test_status_after_successful_bootstrap(controller, fake_runtime_hook):
+    """After a successful bootstrap, `status()` reports `running`."""
+    fake_runtime_hook(controller)
+    controller.start()
+    assert controller.status() == {"state": "running", "error": None}
+
+
+def test_status_after_error(controller):
+    """A failed bootstrap reports `state="error"` with the error
+    message carried in `error`."""
+    def on_start_fail(runtime: Runtime) -> None:  # noqa: ARG001
+        raise RuntimeError("seed failed: HTTP 503")
+
+    controller.set_render_loop_hooks(on_start=on_start_fail)
+    controller.start()
+    snap = controller.status()
+    assert snap["state"] == "stopped"
+    assert snap["error"] is None
+    # But the history snapshot preserves the error so a fresh
+    # subscriber can read it back if it joins after the error.
+    hist = controller.history_snapshot()
+    assert hist[-1]["state"] == "error"
+    assert "seed failed: HTTP 503" in hist[-1]["error"]
+
+
+def test_on_change_fires_starting_and_running(controller, fake_runtime_hook):
+    """A subscriber receives both `starting` and `running` snapshots
+    during a successful Start."""
+    fake_runtime_hook(controller)
+    received: list[dict] = []
+    controller.on_change(lambda snap: received.append(dict(snap)))
+
+    controller.start()
+
+    # Two notifications during a single start(): "starting" (optimistic)
+    # and "running" (after the hook promoted the runtime).
+    states = [s["state"] for s in received]
+    assert "starting" in states
+    assert "running" in states
+    # `starting` fires before `running` (lifecycle order).
+    assert states.index("starting") < states.index("running")
+
+
+def test_on_change_fires_stopping_and_stopped(controller, fake_runtime_hook):
+    """A subscriber receives `stopping` then `stopped` during teardown."""
+    fake_runtime_hook(controller)
+    controller.start()
+    received: list[dict] = []
+    controller.on_change(lambda snap: received.append(dict(snap)))
+
+    controller.stop()
+
+    states = [s["state"] for s in received]
+    assert "stopping" in states
+    assert "stopped" in states
+    assert states.index("stopping") < states.index("stopped")
+
+
+def test_on_change_fires_error(controller):
+    """A failed bootstrap fans out an `error` snapshot with the
+    captured message."""
+    def on_start_fail(runtime: Runtime) -> None:  # noqa: ARG001
+        raise RuntimeError("transient network error")
+
+    controller.set_render_loop_hooks(on_start=on_start_fail)
+    received: list[dict] = []
+    controller.on_change(lambda snap: received.append(dict(snap)))
+
+    controller.start()
+
+    error_snaps = [s for s in received if s["state"] == "error"]
+    assert len(error_snaps) == 1
+    assert "transient network error" in error_snaps[0]["error"]
+
+
+def test_on_change_returns_working_unsubscribe(controller, fake_runtime_hook):
+    """The unsubscribe function returned from `on_change` removes
+    the callback from the subscriber list — subsequent transitions
+    no longer reach it."""
+    fake_runtime_hook(controller)
+    received: list[dict] = []
+    unsubscribe = controller.on_change(lambda snap: received.append(dict(snap)))
+
+    controller.start()
+    pre_stop_count = len(received)
+    assert pre_stop_count >= 2  # starting + running
+
+    unsubscribe()
+    controller.stop()
+
+    # No new notifications after unsubscribe.
+    assert len(received) == pre_stop_count
+
+
+def test_on_change_unsubscribe_is_idempotent(controller):
+    """Calling the unsubscribe function twice is a no-op (the
+    callback is no longer in the list the second time around)."""
+    received: list[dict] = []
+    unsubscribe = controller.on_change(lambda snap: received.append(dict(snap)))
+
+    unsubscribe()
+    unsubscribe()  # must not raise
+
+    controller.start()
+    # The callback was unsubscribed before start() ran, so it
+    # received no notifications.
+    assert received == []
+
+
+def test_on_change_subscriber_exception_does_not_break_chain(controller, fake_runtime_hook):
+    """A subscriber that raises is logged and skipped; subsequent
+    subscribers (and subsequent transitions) still receive their
+    snapshots."""
+    fake_runtime_hook(controller)
+    received: list[dict] = []
+
+    def raising_cb(snap):
+        raise RuntimeError("subscriber exploded")
+
+    controller.on_change(raising_cb)
+    controller.on_change(lambda snap: received.append(dict(snap)))
+
+    controller.start()
+
+    # The healthy subscriber still received the starting + running
+    # notifications despite the broken one raising on every call.
+    states = [s["state"] for s in received]
+    assert "starting" in states
+    assert "running" in states
+
+
+def test_on_change_does_not_fire_on_subscribe(controller):
+    """`on_change` is fire-on-edge: subscribing does NOT immediately
+    invoke the callback with the current state. The JS-side shim
+    uses `status()` for the initial pull and `on_change` for live
+    updates — a fire-on-subscribe would double-deliver."""
+    received: list[dict] = []
+    controller.on_change(lambda snap: received.append(dict(snap)))
+
+    assert received == []
+
+    controller.start()
+
+    # After the first transition, the callback has been invoked.
+    assert len(received) >= 1
+
+
+def test_status_after_stop_returns_stopped(controller, fake_runtime_hook):
+    """`status()` returns `stopped` (with no error) after teardown
+    even though the history ring holds the torn-down runtime."""
+    fake_runtime_hook(controller)
+    controller.start()
+    controller.stop()
+    assert controller.status() == {"state": "stopped", "error": None}
+
