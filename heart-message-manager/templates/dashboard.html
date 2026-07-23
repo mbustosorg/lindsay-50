@@ -191,9 +191,9 @@
   </div>{# end left column #}
 
   {# ── Right column: preview canvas with Start/Stop button ──────── #}
-  <div class="lg:sticky lg:top-4 lg:self-start">
-    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
-      <div class="flex flex-col gap-4">
+  <div class="lg:sticky lg:top-4">
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 h-full">
+      <div class="flex flex-col gap-4 h-full">
         {# Top row: Now-displaying text on the left, Start/Stop on
            the right (post-2026-07-22 follow-up). The button label
            flips Start⇄Stop in dashboard_controls.js based on the
@@ -217,26 +217,31 @@
             Start
           </button>
         </div>
-        {# Preview canvas wrapper — ~2/3 of the column width, centered
-           (post-2026-07-22 follow-up). The right column is 50% of the
-           viewport on lg+; the canvas wrapper claims 2/3 of that,
-           so the preview matches the visual height of the left
-           column (Sign Health table + Test injection form) instead
-           of dwarfing it. The aspect-square + w-full inside scales
-           the 768×768 logical canvas proportionally. #}
-        <div class="relative w-2/3 mx-auto bg-slate-900 rounded-xl p-4">
-          <div class="relative w-full mx-auto aspect-square">
-            <img id="browser-media-image" alt="" hidden
-                 class="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                 style="z-index: 0; opacity: 0;">
-            <video id="browser-media-video" muted loop autoplay playsinline hidden
+        {# Preview canvas wrapper — `flex-1` so it fills the
+           remaining vertical space inside the preview card (the
+           top row + error row are fixed-height siblings). The
+           dark frame inside is square (aspect-square) and centered
+           in this flex area, so the white padding around the
+           black square is even on all four sides regardless of
+           viewport. `max-h-full` + `max-w-full` together with
+           `aspect-square` mean the square always fits the smaller
+           of the two available dimensions — narrow viewport → wide
+           square; wide viewport → tall square. #}
+        <div class="flex-1 flex items-center justify-center min-h-0">
+          <div class="bg-slate-900 rounded-xl p-4 aspect-square w-full max-h-full max-w-full">
+            <div class="relative w-full h-full">
+              <img id="browser-media-image" alt="" hidden
                    class="absolute inset-0 w-full h-full object-contain pointer-events-none"
-                   style="z-index: 0; opacity: 0;"></video>
-            <canvas id="sign-canvas" width="768" height="768"
-                    class="block w-full h-full"
-                    style="position: relative; image-rendering: auto; z-index: 1;"></canvas>
-            <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
-              Simulator stopped — press Start to begin.
+                   style="z-index: 0; opacity: 0;">
+              <video id="browser-media-video" muted loop autoplay playsinline hidden
+                     class="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                     style="z-index: 0; opacity: 0;"></video>
+              <canvas id="sign-canvas" width="768" height="768"
+                      class="block w-full h-full"
+                      style="position: relative; image-rendering: auto; z-index: 1;"></canvas>
+              <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
+                Simulator stopped — press Start to begin.
+              </div>
             </div>
           </div>
         </div>

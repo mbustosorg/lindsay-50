@@ -135,23 +135,35 @@ def test_preview_template_canvas_is_responsive():
 
     3. The 2026-07-22 layout split the dashboard into a two-column grid
        (left: Sign Health + Test injection; right: canvas). The canvas
-       lives in a 50%-wide column on lg+ screens and is centered at
-       2/3 of that column (`w-2/3 mx-auto`) — the 800px cap was a
-       full-page artifact and no longer makes sense, and the preview
-       was reduced to ~2/3 size so the left column (Sign Health table
-       + Test injection form) matches the preview height instead of
-       being dwarfed by it. The new invariant: canvas claims 2/3 of
-       its column and stays square via `aspect-square` so the canvas
-       footprint matches the media overlay footprint by construction.
+       lives in a 50%-wide column on lg+ screens. The first round
+       (`w-2/3 mx-auto`) shrank the dark frame to 2/3 of the column
+       width so the preview height roughly matched the left column.
+       Round 2 (`flex-1 flex items-center justify-center` wrapper +
+       `aspect-square w-full max-h-full max-w-full` dark frame)
+       replaced the fixed 2/3 with a true flex layout: the preview
+       card stretches to the column height, the dark-frame area
+       fills the remaining vertical space, and the square centers
+       itself with even padding on all four sides. The new
+       invariant: the square fits the smaller of the available
+       width / height, and the white padding around it is equal
+       regardless of viewport shape.
     """
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
-    # The dark div (the preview frame) must be width-constrained so it
-    # shrinks with the card. After the 2/3 resize, the frame is
-    # `w-2/3 mx-auto` — 2/3 of the parent column, centered.
-    assert "w-2/3 mx-auto" in template, (
-        "The dark div (preview frame) must be w-2/3 mx-auto — the "
-        "post-2026-07-22 resize drops the preview to 2/3 of the "
-        "right column so the left column matches the preview height."
+    # The preview area is wrapped in a flex-1 + items-center +
+    # justify-center container so the square centers itself with
+    # even padding on all four sides. The dark frame itself is
+    # `aspect-square` with `max-h-full max-w-full`, so the square
+    # fits the smaller available dimension.
+    assert "flex-1 flex items-center justify-center" in template, (
+        "The preview area must wrap the dark frame in a flex-1 "
+        "items-center justify-center container so the square centers "
+        "with even padding on all four sides."
+    )
+    assert "aspect-square w-full max-h-full max-w-full" in template, (
+        "The dark frame must declare aspect-square w-full max-h-full "
+        "max-w-full so the square fits the smaller of the available "
+        "width / height, eliminating the wasted vertical space below "
+        "the preview."
     )
     # The canvas must declare aspect-square so its height tracks the
     # width — without this the canvas would be a non-square rectangle
