@@ -155,6 +155,11 @@ def _load_app_module(mock_cfg, paho_client_ctor):
     sqlite_mod.put_message = MagicMock()
     sqlite_mod.get_message = MagicMock(return_value=None)
     sqlite_mod.put_config = MagicMock()
+    # get_distinct_senders is called by /settings route at main.py:1824
+    # to surface senders that exist in SQLite but aren't in cfg.senders.
+    # Default to [] so the unlisted-senders block is empty for tests
+    # that don't care about it.
+    sqlite_mod.get_distinct_senders = MagicMock(return_value=[])
     sys.modules["sqlite"] = sqlite_mod
 
     s3_mod = types.ModuleType("s3")

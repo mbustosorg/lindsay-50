@@ -40,70 +40,13 @@
     </div>
   </div>
 
-  <!-- Sign Health — live snapshot from the device (decision 5.1 in
-       openspec/changes/archive/2026-07-09-add-sign-status-reports/design.md). Populated
-       by sign_status.js. Read-only fields; no form controls. When
-       state=offline or no snapshot has arrived, sign_status.js hides
-       the field slots and reveals the "No status received yet"
-       placeholder. When health=degraded, a warning banner surfaces
-       at the top of the table naming the failing check. -->
-  <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6">
-    <h3 class="font-heading font-semibold text-dark text-lg mb-2 flex items-center gap-2">
-      <span>📡</span> Sign Health
-    </h3>
-    <p class="text-sm text-slate-500 mb-4">
-      Live snapshot from the device. The Pi publishes this to
-      <code class="font-mono">MQTT_STATUS_TOPIC</code> every 5 seconds;
-      this page reads the latest one via MQTT and Flask's in-memory
-      subscriber. Read-only — there are no controls here.
-    </p>
-
-    <div data-sign-status-degraded-banner
-         style="display: none;"
-         class="mb-4 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
-      <span class="font-semibold">⚠ Degraded:</span>
-      <span data-degraded-reason>MQTT disconnected</span>
-    </div>
-
-    <div data-sign-status-placeholder class="px-4 py-6 text-center text-slate-500 bg-slate-50 rounded-xl">
-      No status received yet.
-    </div>
-
-    <div data-sign-status-fields style="display: none;">
-      <table class="w-full">
-        <tbody class="divide-y divide-indigo-50">
-          <tr>
-            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500 w-48">Running SHA</th>
-            <td class="px-4 py-2 font-mono text-sm" data-sign-status-field="active_sha">—</td>
-          </tr>
-          <tr>
-            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Short SHA</th>
-            <td class="px-4 py-2 font-mono text-sm" data-sign-status-field="short_sha">—</td>
-          </tr>
-          <tr>
-            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Started at</th>
-            <td class="px-4 py-2 text-sm font-mono" data-sign-status-field="started_at">—</td>
-          </tr>
-          <tr>
-            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Uptime</th>
-            <td class="px-4 py-2 text-sm" data-sign-status-field="uptime_seconds">—</td>
-          </tr>
-          <tr>
-            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">MQTT connected</th>
-            <td class="px-4 py-2 text-sm" data-sign-status-field="mqtt_connected">—</td>
-          </tr>
-          <tr>
-            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Last error</th>
-            <td class="px-4 py-2 text-sm font-mono" data-sign-status-field="last_error">—</td>
-          </tr>
-          <tr>
-            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Received at (browser)</th>
-            <td class="px-4 py-2 text-sm" data-sign-status-field="received_at_browser">—</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  </div>
+  {# The physical-sign status card used to live on this page. It moved
+     to the Dashboard (post-2026-07-22 follow-up): the in-browser
+     simulator is the one-stop ops surface, and the operator no
+     longer has to keep a Settings tab open to read the Pi's status.
+     The sign_status.js shim is still loaded on this page from
+     base.html and stays a no-op here because the status fields
+     now live on `/`. #}
 
   {# --- Pi Upgrade Control (issue #51 §6) --- #}
   {# The Flask self-version (running short SHA) is what the loader uses by

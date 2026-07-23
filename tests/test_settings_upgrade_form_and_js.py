@@ -99,6 +99,12 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
     models_mod.SignConfig = MagicMock()
     models_mod.FilterRule = MagicMock()
     models_mod.Message = MagicMock()
+    # `_default_effects_list` is referenced by `lib_shared.effects_loader`
+    # during the import chain. The loader is mocked too, but Python
+    # evaluates models.py partially during the import dance, so expose
+    # `_default_effects_list` on the mock or the loader's at-import call
+    # blows up with "cannot import name '_default_effects_list'".
+    models_mod._default_effects_list = MagicMock(return_value=[])
     effects_settings_mock = MagicMock()
     effects_settings_mock.MIN_LOOKBACK_DAYS = 1
     effects_settings_mock.MAX_LOOKBACK_DAYS = 365

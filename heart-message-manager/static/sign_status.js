@@ -95,19 +95,19 @@ function combinedState(snapshot, now) {
   if (state === "live" && health === "healthy") {
     renderKey = "live-healthy";
     text = "Live";
-    classes = "px-4 py-2 rounded-full bg-green-100 text-green-700 text-sm font-semibold flex items-center gap-2";
+    classes = "px-3 py-1.5 rounded-full bg-green-100 text-green-700 text-xs font-semibold flex items-center gap-2";
   } else if (state === "live" && health === "degraded") {
     renderKey = "live-degraded";
     text = "Degraded";
-    classes = "px-4 py-2 rounded-full bg-amber-100 text-amber-800 text-sm font-semibold flex items-center gap-2";
+    classes = "px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold flex items-center gap-2";
   } else if (state === "unknown") {
     renderKey = health === "degraded" ? "unknown-degraded" : "unknown-healthy";
     text = health === "degraded" ? "Unknown — Degraded" : "Unknown";
-    classes = "px-4 py-2 rounded-full bg-amber-100 text-amber-800 text-sm font-semibold flex items-center gap-2";
+    classes = "px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold flex items-center gap-2";
   } else {
     renderKey = "offline";
     text = "Offline";
-    classes = "px-4 py-2 rounded-full bg-slate-100 text-slate-600 text-sm font-semibold flex items-center gap-2";
+    classes = "px-3 py-1.5 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold flex items-center gap-2";
   }
   // The inner dot matches the pill color and animates only when Live.
   const dotColor = renderKey === "live-healthy"
@@ -340,11 +340,13 @@ function openStatusWs() {
       maybeAcceptSnapshot(parsed);
     },
     onStatus: (state, detail) => {
-      const el = document.querySelector("#sign-status-ws-state [data-state]");
-      const wrap = document.getElementById("sign-status-ws-state");
-      if (!wrap) return;
-      wrap.classList.remove("hidden");
-      if (el) el.textContent = state;
+      // The WS connection state for the status topic is surfaced
+      // via the preview's MQTT pill (see dashboard.html). The
+      // page no longer renders a separate `#sign-status-ws-state`
+      // indicator — the operator reads WS state from the same pill
+      // that summarizes the envelope-feed connection, with the
+      // WS URL + subscribe topic in the pill's tooltip.
+      void detail;
     },
   });
   _statusWsClient.start();

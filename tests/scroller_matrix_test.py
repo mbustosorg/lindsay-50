@@ -221,5 +221,8 @@ def test_matrix_scroller_raises_when_vendored_also_unavailable(monkeypatch):
     mod = _load_scroller_module()
     with pytest.raises(Exception, match="Couldn't load font"):
         mod.MatrixScroller(_StubDisplay())
-    # Only one LoadFont call: the failing vendored fallback is not retried.
-    assert font.LoadFont.call_count == 1
+    # Two LoadFont calls: the operator-configured path ("fonts/9x15.bdf"
+    # — the default when cfg.if_exists returns None) raises, then the
+    # vendored fallback ("fonts/8x13.bdf") also raises. The scroller
+    # only re-raises after the fallback attempt — no silent swallow.
+    assert font.LoadFont.call_count == 2

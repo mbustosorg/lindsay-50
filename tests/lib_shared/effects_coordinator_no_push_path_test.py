@@ -178,8 +178,11 @@ def test_preview_main_drops_request_message_and_apply_config():
         r"^def\s+apply_config\s*\(", src, re.MULTILINE
     ), "preview_main.py must not define `apply_config`"
     # The bootstrap / install-js surface must NOT install them on window.
-    # (The new `_install_js_api` only assigns `tick`, `get_frame_rgba`,
-    # `get_current_text`, `get_current_effect_name`.)
+    # (The 2026-07-23 round-5 `_install_js_api` only assigns `tick`,
+    # `get_frame_rgba`, `get_current_media`, `get_diagnostics` — the
+    # round-5 redesign removed `get_current_text` /
+    # `get_current_effect_name` from the JS surface along with the
+    # Now displaying / Effect status rows.)
     install_block = re.search(
         r"def\s+_install_js_api\s*\([^)]*\).*?(?=def\s+_coord\s*\(|def\s+tick\s*\()",
         src,

@@ -1162,723 +1162,149 @@ class TestOnChange:
 # ---------------------------------------------------------------------------
 
 
-class TestSessionCache:
-    """sessionStorage cache (browser-only).
+class TestNoCrossNavigationPersistence:
+    """Issue #48: MessageManager has no cross-navigation persistence layer.
 
-    The browser's sessionStorage persists the in-memory
-    state across full-page navigations within a tab so
-    /testing and /preview can re-render from cache instead
-    of waiting for a network re-seed on every nav. The
-    Pi doesn't have sessionStorage; all cache methods are
-    no-ops on the server path.
+    The dashboard's reset model is "throw away this generation and
+    build a new one" — not "wipe a persistent cache and re-hydrate
+    the existing generation". The Flask store (SQLite + S3) is the
+    canonical source of truth for everything the new generation
+    re-seeds; sessionStorage is no longer involved.
+
+    These tests pin the absence of the helpers the legacy
+    sessionStorage cache exposed:
+
+        - `hydrate_from_cache` — the per-page bootstrap that used
+          to read the cache. The dashboard's bootstrap calls the
+          REST seed instead.
+        - `_write_cache` — the trailing side effect of every
+          `_emit_change`. Gone, because there's nothing to write.
+        - `_clear_cache` — the leading side effect of `seed()`.
+          Gone for the same reason.
+
+    The Pi was never affected by this code path (every cache method
+    short-circuits on `is_browser=False`), so the contract is
+    "browser-side MessageManager no longer carries persistence
+    helpers, and the Pi's behavior is unchanged".
     """
 
-    @staticmethod
-    def _make_session_storage_shim():
-        """Return a (storage_dict, shim_callable) pair.
-
-        storage_dict is a plain Python dict. The shim mimics
-        `js.sessionStorage` with `getItem`/`setItem`/`removeItem`
-        that read/write that dict, plus a `key` for iteration
-        (used by the login-page wipe logic, not by
-        MessageManager itself).
-        """
-        store: dict = {}
-
-        def getItem(k):
-            return store.get(k)
-
-        def setItem(k, v):
-            store[k] = v
-
-        def removeItem(k):
-            store.pop(k, None)
-
-        def key(i):
-            return list(store.keys())[i] if 0 <= i < len(store) else None
-
-        shim = MagicMock()
-        shim.getItem = getItem
-        shim.setItem = setItem
-        shim.removeItem = removeItem
-        shim.key = key
-        shim._store = store
-        shim.length = lambda: len(store)
-        return store, shim
-
-    @staticmethod
-    def _make_json_shim():
-        """Return a shim that mimics `js.JSON` (stringify + parse)."""
-        shim = MagicMock()
-        shim.stringify = json.dumps
-        shim.parse = json.loads
-        return shim
-
-    @staticmethod
-    def _make_to_js_shim():
-        """Identity shim for `pyodide.ffi.to_js`.
-
-        The real `to_js` converts Python dicts to JsProxies that
-        `JSON.stringify` can walk. Under the test shim the payload
-        is already a plain Python dict, so an identity conversion
-        is faithful: the stringifier still walks it correctly and
-        the bytes-on-the-wire match a real Pyodide round-trip.
-        """
-        return lambda obj, dict_converter=None: obj
-
-    @staticmethod
-    def _make_from_entries_shim():
-        """Identity shim for `js.Object.fromEntries`.
-
-        Same rationale as `_make_to_js_shim`: the Python dict is
-        already structured correctly, so we just hand it back.
-        """
-        return lambda entries: dict(entries) if hasattr(entries, "__iter__") else entries
-
-    def test_hydrate_from_cache_empty_returns_false(self, messages_api_url, config_api_url, api_key):
-        """No cache entry → returns False; on_change not fired."""
-        cb = MagicMock()
-        _, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
+    def test_message_manager_has_no_hydrate_from_cache(self, messages_api_url, config_api_url, api_key):
+        """The per-page hydrate helper is gone — every browser load
+        must perform a fresh REST seed."""
         mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-                on_change=cb,
-            )
-            hit = asyncio.run(mgr.hydrate_from_cache())
-            assert hit is False
-            cb.assert_not_called()
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-
-    def test_hydrate_from_cache_invalidates_on_version_mismatch(self, messages_api_url, config_api_url, api_key):
-        """Cache with wrong `v` → returns False; on_change not fired."""
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        # Pre-populate with a v=0 entry
-        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(
-            {
-                "v": 0,
-                "sign_name": "Lindsay's Heart",
-                "messages": [],
-                "config": {},
-            }
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            is_browser=True,
         )
-        cb = MagicMock()
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-                on_change=cb,
-            )
-            hit = asyncio.run(mgr.hydrate_from_cache())
-            assert hit is False
-            cb.assert_not_called()
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-
-    def test_hydrate_from_cache_invalidates_on_sign_mismatch(self, messages_api_url, config_api_url, api_key):
-        """Cache for a different sign → returns False; on_change not fired."""
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(
-            {
-                "v": 1,
-                "sign_name": "Different Sign",
-                "messages": [],
-                "config": {},
-            }
+        assert not hasattr(mgr, "hydrate_from_cache"), (
+            "MessageManager should not expose `hydrate_from_cache`; "
+            "the dashboard bootstraps every generation from the REST "
+            "seed path, not from a sessionStorage cache."
         )
-        cb = MagicMock()
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-                on_change=cb,
-            )
-            hit = asyncio.run(mgr.hydrate_from_cache())
-            assert hit is False
-            cb.assert_not_called()
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
 
-    def test_hydrate_from_cache_invalidates_on_corrupt_json(self, messages_api_url, config_api_url, api_key):
-        """Invalid JSON in cache → returns False; no exception propagates."""
-        _, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        # json_shim.parse is json.loads; force it to raise for our marker
-        json_shim.parse = MagicMock(side_effect=ValueError("bad json"))
-        cb = MagicMock()
+    def test_message_manager_has_no_write_cache(self, messages_api_url, config_api_url, api_key):
+        """No trailing side effect on `_emit_change`."""
         mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-                on_change=cb,
-            )
-            hit = asyncio.run(mgr.hydrate_from_cache())
-            assert hit is False
-            cb.assert_not_called()
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            is_browser=True,
+        )
+        assert not hasattr(mgr, "_write_cache"), (
+            "MessageManager should not expose `_write_cache`; "
+            "sessionStorage writes are no longer part of `_emit_change`."
+        )
 
-    def test_hydrate_from_cache_populates_messages_and_config(
-        self, messages_api_url, config_api_url, api_key, seed_messages, seed_config
+    def test_message_manager_has_no_clear_cache(self, messages_api_url, config_api_url, api_key):
+        """No leading side effect on `seed()`."""
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            is_browser=True,
+        )
+        assert not hasattr(mgr, "_clear_cache"), (
+            "MessageManager should not expose `_clear_cache`; "
+            "sessionStorage removal is no longer part of `seed()`."
+        )
+
+    def test_message_manager_has_no_cache_class_constants(self, messages_api_url, config_api_url, api_key):
+        """The class-level cache version + prefix are gone — there
+        is no cache to version."""
+        mm = _mm()
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+        )
+        assert not hasattr(mgr, "_CACHE_VERSION"), (
+            "MessageManager should not expose `_CACHE_VERSION`; "
+            "the sessionStorage cache contract is gone."
+        )
+        assert not hasattr(mgr, "_CACHE_KEY_PREFIX"), (
+            "MessageManager should not expose `_CACHE_KEY_PREFIX`; "
+            "the sessionStorage cache contract is gone."
+        )
+
+    def test_emit_change_does_not_touch_session_storage(
+        self, messages_api_url, config_api_url, api_key
     ):
-        """Round-trip: write cache, fresh manager, hydrate → messages + config match."""
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        # First manager: populate, write cache
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr1 = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-            )
-            for item in seed_messages:
-                mgr1._handle_message(item)
-            mgr1._handle_config(seed_config)
-            mgr1._write_cache()
-            # The cache key includes the sign name, which changes
-            # during the test (default → "Test Sign"), so the store
-            # ends up with two entries: one keyed by the default and
-            # one by "Test Sign". The latest write is the one we
-            # want to assert against — pick the entry whose key
-            # matches the current cache key.
-            key = mgr1._cache_key()
-            assert key in store, f"expected {key!r} in store, found: {list(store.keys())}"
-            written = store[key]
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-        # Confirm shape
-        payload = json.loads(written)
-        assert payload["v"] == 1
-        assert payload["sign_name"] == seed_config["sign_settings"]["sign_name"]
-        assert len(payload["messages"]) == 2
-        assert payload["config"]["sign_settings"]["sign_name"] == "Test Sign"
-        # Second manager: hydrate from the same store. The
-        # sign_name check requires mgr2's sign.name to match
-        # the cache entry's sign_name, so seed it with the
-        # same name. In production, the sign name comes from
-        # the cached config — the gate is there so a tab for
-        # sign A can never hydrate from a tab for sign B.
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr2 = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-            )
-            mgr2._config.sign_settings = SignSettings(sign_name=seed_config["sign_settings"]["sign_name"])
-            hit = asyncio.run(mgr2.hydrate_from_cache())
-            assert hit is True
-            msgs = mgr2.get_messages(limit=10, suppress=False)
-            assert len(msgs) == 2
-            assert {m.message.id for m in msgs} == {"m1", "m2"}
-            assert mgr2.config.sign_settings.sign_name == "Test Sign"
-            assert mgr2.config.sign_settings.timezone == "US/Pacific"
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
+        """Pinning the contract: `_emit_change` only fires the
+        on_change callback. There's no separate cache-write step.
 
-    def test_hydrate_from_cache_preserves_media(self, messages_api_url, config_api_url, api_key):
-        """Round-trip: cache with `media` → hydrate → media survives.
-
-        Regression for the "after Flask restart, media is gone" symptom.
-        `_write_cache` already serializes `media` via `MessageView.to_dict()`,
-        but `_hydrate_from_cache` was constructing `Message(...)` with only
-        4 fields — silently dropping the list on the read side.
+        We instrument the `on_change` callback to also record
+        whether any `sessionStorage` interaction happened during
+        the call (it must not). The test asserts the callback was
+        fired and no storage write was attempted.
         """
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        to_js_shim = self._make_to_js_shim()
-        from_entries_shim = self._make_from_entries_shim()
-        # Pre-populate the cache directly with a payload containing media.
-        cache_payload = {
-            "v": 1,
-            "sign_name": "Lindsay's Heart",
-            "messages": [
-                {
-                    "id": "mms-h1",
-                    "sender": "+15551111111",
-                    "body": "with attachment",
-                    "received_at": "2026-07-01T10:00:00Z",
-                    "media": [
-                        {"type": "image/png", "url": "media/images/2026-07/h.png"},
-                    ],
-                    "source": "mqtt",
-                },
-            ],
-            "config": {
-                "sign": {"name": "Lindsay's Heart"},
-                "filters": [],
-                "effects_settings": {},
-                "text_settings": {},
-                "timezone": "US/Pacific",
-            },
-        }
-        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(cache_payload)
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = to_js_shim
-        mm._js_object_from_entries = from_entries_shim
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-            )
-            mgr._config.sign_settings = SignSettings(sign_name="Lindsay's Heart")
-            hit = asyncio.run(mgr.hydrate_from_cache())
-            assert hit is True
-            msgs = mgr.get_messages(limit=10, suppress=False)
-            assert len(msgs) == 1
-            assert msgs[0].message.id == "mms-h1"
-            assert msgs[0].message.media == [
-                {"type": "image/png", "url": "media/images/2026-07/h.png"},
-            ]
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
+        from unittest.mock import MagicMock
 
-    def test_hydrate_from_cache_fires_on_change(self, messages_api_url, config_api_url, api_key):
-        """Cache hit fires on_change exactly once."""
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(
-            {
-                "v": 1,
-                "sign_name": "Lindsay's Heart",
-                "messages": [
-                    {
-                        "id": "m1",
-                        "sender": "+15551111111",
-                        "body": "cached",
-                        "received_at": "2026-06-01T10:00:00Z",
-                        "source": "rest",
-                    }
-                ],
-                "config": {
-                    "filters": [],
-                    "senders": [],
-                    "effects_settings": {
-                        "effects": [{"name": "Hyperspace", "enabled": True}],
-                        "fade_seconds": 2.0,
-                        "hold_seconds": 15.0,
-                        "intro_seconds": 5.0,
-                        "idle_seconds": 300.0,
-                        "lookback_days": 14,
-                        "selector_algorithm": "weighted",
-                    },
-                    "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
-                    "sign_settings": {"sign_name": "Lindsay's Heart", "timezone": "US/Pacific"},
-                    "version": 3,
-                },
-            }
-        )
+        mm = _mm()
         cb = MagicMock()
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-                on_change=cb,
-            )
-            hit = asyncio.run(mgr.hydrate_from_cache())
-            assert hit is True
-            cb.assert_called_once_with()
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-
-    def test_handle_message_writes_cache(self, messages_api_url, config_api_url, api_key):
-        """_handle_message on a browser mgr writes the cache via _emit_change.
-
-        Also asserts that `media` survives into the sessionStorage payload —
-        the bug fix at 1fc1fff (MQTT envelope path) added `media=...` to
-        the Message constructor and that has to make it through the
-        MessageView.to_dict → JSON round-trip that _write_cache performs.
-        """
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-            )
-            mgr._handle_message(
-                {
-                    "id": "m1",
-                    "sender": "+15551234567",
-                    "body": "hi",
-                    "received_at": "2026-06-01T12:00:00Z",
-                    "media": [
-                        {"type": "image/png", "url": "media/images/2026-06/m1.png"},
-                    ],
-                }
-            )
-            assert len(store) == 1
-            payload = json.loads(list(store.values())[0])
-            assert any(m["id"] == "m1" for m in payload["messages"])
-            cached_m1 = next(m for m in payload["messages"] if m["id"] == "m1")
-            assert cached_m1["media"] == [
-                {"type": "image/png", "url": "media/images/2026-06/m1.png"},
-            ], f"media lost in cache write! got {cached_m1.get('media')!r}"
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-
-    def test_seed_writes_media_to_cache(self, messages_api_url, config_api_url, api_key):
-        """REST /api/messages → seed() → MessageView.to_dict() → sessionStorage.
-
-        The REST path round-trips through the same Message constructor
-        as MQTT (1fc1fff + f2238a8). This test asserts that when the
-        REST response carries `media`, the cached sessionStorage blob
-        carries the same list — i.e. the user's reported symptom
-        ("seed writes messages but no media shows in sessionStorage")
-        can't recur unnoticed.
-        """
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        seed_with_media = [
-            {
-                "id": "rest-1",
-                "sender": "+15551111111",
-                "body": "with pic",
-                "received_at": "2026-07-01T10:00:00Z",
-                "media": [
-                    {"type": "image/png", "url": "media/images/2026-07/rest-1.png"},
-                    {"type": "video/mp4", "url": "media/videos/2026-07/rest-1.mp4"},
-                ],
-            },
-        ]
-        cfg_payload = {
-            "filters": [],
-            "senders": [],
-            "effects_settings": {
-                "effects": [{"name": "Hyperspace", "enabled": True}],
-                "fade_seconds": 2.0,
-                "hold_seconds": 15.0,
-                "intro_seconds": 5.0,
-                "idle_seconds": 300.0,
-                "lookback_days": 14,
-                "selector_algorithm": "weighted",
-            },
-            "text_settings": {"speed": 3, "color": 16711680, "text_effect": "scroll"},
-            "sign_settings": {"sign_name": "Test Sign", "timezone": "US/Pacific"},
-            "version": 3,
-        }
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-            )
-
-            async def mock_fetch(url):
-                return seed_with_media if url == messages_api_url else cfg_payload
-
-            mgr._fetch = mock_fetch  # type: ignore[assignment]
-            asyncio.run(mgr.seed())
-            assert len(store) == 1
-            payload = json.loads(list(store.values())[0])
-            assert len(payload["messages"]) == 1
-            cached = payload["messages"][0]
-            assert cached["id"] == "rest-1"
-            assert cached["media"] == [
-                {"type": "image/png", "url": "media/images/2026-07/rest-1.png"},
-                {"type": "video/mp4", "url": "media/videos/2026-07/rest-1.mp4"},
-            ], f"REST-seed media lost in cache write! got {cached.get('media')!r}"
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-
-    def test_handle_config_writes_cache(self, messages_api_url, config_api_url, api_key):
-        """_handle_config on a browser mgr writes the cache via _emit_change."""
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-            )
-            mgr._handle_config(
-                {
-                    "filters": [],
-                    "senders": [],
-                    "effects_settings": {
-                        "effects": [{"name": "Hyperspace", "enabled": True}],
-                        "fade_seconds": 2.0,
-                        "hold_seconds": 15.0,
-                        "intro_seconds": 5.0,
-                        "idle_seconds": 300.0,
-                        "lookback_days": 14,
-                        "selector_algorithm": "weighted",
-                    },
-                    "text_settings": {
-                        "speed": 3,
-                        "color": 16711680,
-                        "text_effect": "scroll",
-                    },
-                    "sign_settings": {"sign_name": "Lindsay's Heart", "timezone": "US/Pacific"},
-                    "version": 3,
-                }
-            )
-            assert len(store) == 1
-            payload = json.loads(list(store.values())[0])
-            assert payload["config"]["sign_settings"]["timezone"] == "US/Pacific"
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-
-    def test_seed_writes_cache(self, messages_api_url, config_api_url, api_key, seed_messages, seed_config):
-        """seed() writes the cache on completion via the trailing _emit_change."""
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-            )
-
-            async def mock_fetch(url):
-                return seed_messages if url == messages_api_url else seed_config
-
-            mgr._fetch = mock_fetch  # type: ignore[assignment]
-            asyncio.run(mgr.seed())
-            assert len(store) == 1
-            payload = json.loads(list(store.values())[0])
-            assert len(payload["messages"]) == 2
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-
-    def test_cache_write_is_noop_on_server_path(self, messages_api_url, config_api_url, api_key):
-        """Pi mgr (is_browser=False) does not touch sessionStorage."""
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=False,
-            )
-            mgr._handle_message(
-                {
-                    "id": "m1",
-                    "sender": "+15551234567",
-                    "body": "hi",
-                    "received_at": "2026-06-01T12:00:00Z",
-                }
-            )
-            # Server path never touches sessionStorage
-            assert len(store) == 0
-            assert mgr._cache_key() == ""
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-
-    def test_cache_write_exception_is_swallowed(self, messages_api_url, config_api_url, api_key):
-        """sessionStorage raising doesn't break the buffer write."""
-        ss_shim = MagicMock()
-        ss_shim.setItem.side_effect = RuntimeError("quota exceeded")
-        json_shim = self._make_json_shim()
-        mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-            )
-            # Should not raise
-            mgr._handle_message(
-                {
-                    "id": "m1",
-                    "sender": "+15551234567",
-                    "body": "hi",
-                    "received_at": "2026-06-01T12:00:00Z",
-                }
-            )
-            # Buffer mutation succeeded despite the cache failure
-            msgs = mgr.get_messages(limit=10, suppress=False)
-            assert len(msgs) == 1
-            assert msgs[0].message.id == "m1"
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
-
-    def test_seed_clears_cache_before_fetch(
-        self, messages_api_url, config_api_url, api_key, seed_messages, seed_config
-    ):
-        """seed() wipes the cache before fetching and rewrites it after."""
-        store, ss_shim = self._make_session_storage_shim()
-        json_shim = self._make_json_shim()
-        # Pre-populate the cache with an entry that would otherwise
-        # hydrate. The seed must wipe it before the fetch.
-        store["lindsay50:seed:v1:Lindsay's Heart"] = json.dumps(
-            {
-                "v": 1,
-                "sign_name": "Lindsay's Heart",
-                "messages": [
-                    {
-                        "id": "stale",
-                        "sender": "+15550000000",
-                        "body": "should be wiped",
-                        "received_at": "2026-06-01T09:00:00Z",
-                        "source": "rest",
-                    }
-                ],
-                "config": {"sign": {"name": "Lindsay's Heart"}, "version": 2},
-            }
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            is_browser=True,
+            on_change=cb,
         )
+        # Should not raise even though no js.sessionStorage is
+        # bound (the legacy code path lazily imported it; the new
+        # path doesn't touch it at all).
+        mgr._emit_change()
+        cb.assert_called_once()
+
+    def test_seed_does_not_touch_session_storage(
+        self, messages_api_url, config_api_url, api_key
+    ):
+        """Pinning the contract: `seed()` does not call any cache
+        helper before fetching. We monkeypatch `_fetch` so the
+        test never hits the network — the only thing we're
+        checking is that no `sessionStorage.removeItem` /
+        `_write_cache` / `_clear_cache` is reached.
+        """
         mm = _mm()
-        mm._js_session_storage = ss_shim
-        mm._js_json = json_shim
-        mm._to_js = self._make_to_js_shim()
-        mm._js_object_from_entries = self._make_from_entries_shim()
-        try:
-            mgr = mm.MessageManager(
-                messages_api_url=messages_api_url,
-                config_api_url=config_api_url,
-                api_key=api_key,
-                is_browser=True,
-            )
+        mgr = mm.MessageManager(
+            messages_api_url=messages_api_url,
+            config_api_url=config_api_url,
+            api_key=api_key,
+            is_browser=True,
+        )
 
-            async def mock_fetch(url):
-                # The cache should be empty at this point — the seed
-                # cleared it before calling _fetch.
-                assert len(store) == 0, f"cache not cleared before fetch: {list(store.keys())}"
-                return seed_messages if url == messages_api_url else seed_config
+        async def mock_fetch(url):
+            return [] if url == messages_api_url else {}
 
-            mgr._fetch = mock_fetch  # type: ignore[assignment]
-            asyncio.run(mgr.seed())
-            # After seed, the cache is rewritten with the fetched data
-            assert len(store) == 1
-            payload = json.loads(list(store.values())[0])
-            assert all(m["id"] != "stale" for m in payload["messages"])
-        finally:
-            mm._js_session_storage = None
-            mm._js_json = None
-            mm._to_js = None
-            mm._js_object_from_entries = None
+        mgr._fetch = mock_fetch  # type: ignore[assignment]
+        # Should not raise. The legacy code path called
+        # `self._clear_cache()` BEFORE `_fetch`; the absence of
+        # any sessionStorage binding would have raised
+        # `RuntimeError: sessionStorage is not defined` here.
+        asyncio.run(mgr.seed())
+
 
 
 class TestRingBufferEviction:

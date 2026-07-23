@@ -90,7 +90,10 @@ elif _secret_key_path.exists():
 else:
     app.secret_key = uuid.uuid4().hex
     try:
-        _secret_key_path.write_text(app.secret_key)
+        # `app.secret_key` is typed by Flask as `str | bytes | None`,
+        # but the assignments above always produce `str`; cast so
+        # Pylance (and `write_text`'s signature) are happy.
+        _secret_key_path.write_text(str(app.secret_key))
     except OSError:
         # Read-only filesystem — keep the key in memory for this process.
         # On a multi-process deploy set FLASK_SECRET_KEY to make it shared.
@@ -856,7 +859,11 @@ def api_sign_settings():
     return jsonify(
         {
             "target_version": target,
-            "timezone": cfg.sign_settings.timezone if cfg.sign_settings else "US/Pacific",
+            # Default to "US/Pacific" when sign_settings is missing or its
+            # timezone field is empty (the persisted SignConfig may carry
+            # an empty string after a legacy reload). The wire form is
+            # always concrete so the Pi never sees `timezone=""`.
+            "timezone": (cfg.sign_settings.timezone if cfg.sign_settings else "") or "US/Pacific",
         }
     )
 
@@ -1148,7 +1155,10 @@ def _build_sign_config_from_request(data: dict) -> tuple:
     and returns per-field error messages.
 
     Args:
-        data: dict — the parsed JSON request body.
+        data: dict — the parsed JSON request body. Callers are
+            responsible for rejecting non-dict payloads (e.g.
+            ``api_put_config`` checks ``isinstance(data, dict)``
+            before calling this helper).
 
     Returns:
         A `(SignConfig | None, Response | None)` tuple. On success, the
@@ -1156,9 +1166,6 @@ def _build_sign_config_from_request(data: dict) -> tuple:
         On failure, the first element is None and the second is a Flask
         JSON response with HTTP 400 and `{"error": "<message>"}`.
     """
-    if not isinstance(data, dict):
-        return None, (jsonify({"error": "expected JSON object"}), 400)
-
     # Normalize to current version before validation so v1 payloads are
     # accepted through the same code path as v2.
     data = migrate(data, current_version=SignConfig.CURRENT_VERSION)
@@ -1317,7 +1324,20 @@ def _resolve_sender_names(messages, cfg) -> dict:
 @app.route("/")
 @login_required
 def dashboard():
-    """Dashboard: recent messages and counts."""
+    """Standalone preview dashboard (issue #48).
+
+    `/` is now the only route that hosts the simulated-Pi runtime.
+    The canvas + Start/Stop controls + recent-message region all live
+    on this page. The PyScript bootstrap (`app_main.py` +
+    `preview_main.py`) loads here, not on `/preview`.
+
+    The pre-#48 dashboard (recent-messages-only cards) is preserved
+    by the same template — `dashboard.html` now composes the canvas
+    region above the message region. The Flask view still passes the
+    same context variables the template needs (recent messages,
+    total count, suppression counts, sender names, sign name,
+    timezone, format helper).
+    """
     msgs = sqlite.get_all_messages()[:20]
     cfg = sqlite.get_config()
     total = sqlite.message_count()
@@ -1342,7 +1362,12 @@ def dashboard():
 @login_required
 def message_list():
     """Paginated message list with suppress/unsuppress buttons."""
-    page = max(1, int(request.args.get("page", 1)))
+    raw_page = request.args.get("page", "1")
+    try:
+        page = int(raw_page)
+    except (TypeError, ValueError):
+        page = 1
+    page = max(1, page)
     per_page = 50
 
     all_msgs = sqlite.get_all_messages()
@@ -1827,32 +1852,29 @@ def settings():
 @app.route("/preview")
 @login_required
 def preview():
-    """Preview: show what display_list() returns, with toggle for include_filtered."""
-    include_filtered = request.args.get("include_filtered", "false") == "true"
-    cfg = sqlite.get_config()
-    all_msgs = sqlite.get_all_messages()
+    """Compatibility redirect — `/preview` → `/` (issue #48).
 
-    return render_template(
-        "preview.html",
-        result=all_msgs,
-        include_filtered=include_filtered,
-        sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
-        timezone=cfg.sign_settings.timezone,
-        format_from_iso=format_from_iso,
-    )
+    Pre-#48, `/preview` rendered a separate `preview.html` document
+    hosting the simulated-Pi canvas + rAF loop. The
+    standalone-preview-dashboard change moves that runtime onto `/`
+    (the dashboard) so the simulator is the dashboard, not a
+    separate page. `/preview` is retained as a 302 to `/` for any
+    bookmark / deep-link that still points at the old route.
+
+    No `include_filtered` toggle survives — the dashboard preview
+    always reflects the live in-memory view, not a server-rendered
+    snapshot of the SQLite store.
+    """
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/testing")
-@login_required
 def testing():
-    """Testing: inject messages and inspect system state."""
-    cfg = sqlite.get_config()
-    twilio_token = _cfg.if_exists("TWILIO_AUTH_TOKEN")
-    return render_template(
-        "testing.html",
-        sign_name=cfg.sign_settings.sign_name,
-        twilio_token=twilio_token or "",
-    )
+    """Removed 2026-07-23 — the legacy Testing page is no longer
+    reachable. The diagnostic surface (test injection, filters,
+    config inspector) was folded into the dashboard per issue #48;
+    /testing now redirects to /."""
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/health")
@@ -1861,7 +1883,7 @@ def health():
     return "ok"
 
 
-# CSP for the preview page: PyScript loads WebAssembly (needs
+# CSP for the dashboard (issue #48). PyScript loads WebAssembly (needs
 # wasm-unsafe-eval) and pulls its runtime + dependencies from
 # pyscript.net and cdn.jsdelivr.net. The same-origin allowance covers
 # the static files Flask ships under /static/ (the python source for the
@@ -1881,11 +1903,11 @@ def health():
 # Mosquitto, `wss://io.adafruit.com` for Adafruit IO). Without this,
 # the browser console fills with "Connecting to 'ws://<host>:<port>/mqtt'
 # violates the following Content Security Policy directive" errors and
-# the preview page never receives live envelopes.
-_PREVIEW_CSP_BASE = (
+# the dashboard never receives live envelopes.
+_DASHBOARD_CSP_BASE = (
     "default-src 'self'; "
     # 'unsafe-inline' + cdn.tailwindcss.com: base.html loads the Tailwind
-    # play CDN and an inline `tailwind.config = {...}` block. The /preview
+    # play CDN and an inline `tailwind.config = {...}` block. The /
     # route is login-protected, so allowing these is safe.
     "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' "
     "https://pyscript.net https://cdn.jsdelivr.net "
@@ -1898,7 +1920,7 @@ _PREVIEW_CSP_BASE = (
     # would otherwise be the fallback for `<video src=…>` loads
     # (the browser doesn't allow the S3 origin without an
     # explicit media-src, even though img-src is allowed). The
-    # S3 origin is spliced in by `_set_preview_csp` from the
+    # S3 origin is spliced in by `_set_dashboard_csp` from the
     # same config the S3 client reads.
     "media-src 'self'; "
     "connect-src 'self' "
@@ -1907,14 +1929,22 @@ _PREVIEW_CSP_BASE = (
 
 
 @app.after_request
-def _set_preview_csp(response):
-    """Set a permissive CSP on /preview so PyScript + WASM + MQTT-WS can run.
+def _set_dashboard_csp(response):
+    """Set the dashboard CSP on `/` so PyScript + WASM + MQTT-WS can run.
 
-    All other pages keep the browser's default CSP (none, since we don't
-    set one). Only the preview needs the wasm-unsafe-eval + PyScript CDN
-    + MQTT-WS exceptions; everywhere else is unaffected.
+    All other pages keep the browser's default CSP (none, since we
+    don't set one). Only `/` needs the wasm-unsafe-eval + PyScript
+    CDN + MQTT-WS exceptions; `/messages`, `/settings`, `/testing`,
+    `/auth/login`, `/health`, etc. are unaffected. The Settings,
+    Testing, and Messages pages do not load the simulated-Pi
+    runtime — they only carry the physical-sign status client
+    (`sign_status.js`), which uses the browser's fetch API against
+    `/api/sign-status` (same-origin, no CSP exception needed).
+
+    Renamed from `_set_preview_csp` in #48 (the dashboard now owns
+    the simulator; `/preview` is a redirect to `/`).
     """
-    if request.path == "/preview" or request.path.startswith("/preview/"):
+    if request.path == "/" or request.path == "/preview" or request.path.startswith("/preview/"):
         from urllib.parse import urlparse
 
         mqtt_ws_url = _derive_mqtt_ws_url()
@@ -1934,7 +1964,7 @@ def _set_preview_csp(response):
         # (`s3._s3_client`), so the CSP never disagrees with the
         # actual signed-URL origin.
         s3_origin = _derive_s3_origin()
-        csp = _PREVIEW_CSP_BASE
+        csp = _DASHBOARD_CSP_BASE
         if ws_origin:
             csp = csp.replace(
                 "connect-src 'self'",
@@ -1955,6 +1985,57 @@ def _set_preview_csp(response):
                 f"media-src 'self' {s3_origin}",
             )
         response.headers["Content-Security-Policy"] = csp
+    return response
+
+
+# Cache-control for the PyScript mirror copies.
+#
+# Issue #48: PyScript fetches `dashboard_controller.py`,
+# `dashboard_bootstrap.py`, and the rest of the [files] list from
+# `/static/preview/heart-message-manager/...` at page-load time.
+# These URLs are identical across releases — only the file CONTENTS
+# change — and Flask's static handler serves them with
+# `Cache-Control: public, max-age=43200` (12 hours) by default.
+# Without a bust, the browser will serve stale Python source for
+# up to 12 hours after a deploy, and the controller's `on_change`
+# subscriber surface can land in the running browser without the
+# matching Python methods — manifesting as
+# `ModuleNotFoundError` or missing-attribute errors that look like
+# a deploy bug but are actually a stale-cache artifact.
+#
+# Query-string cache-busters on the [files] URLs themselves don't
+# work: PyScript 2024.9.x uses the URL verbatim as the MEMFS
+# path, so `/.../dashboard_controller.py?v=27` lands in MEMFS as
+# `dashboard_controller.py?v=27`, and Python's import system
+# can't find a module at that name. We can't bust from the URL
+# side; we have to bust from the response-headers side.
+#
+# The narrow fix: zero out the cache headers on `/static/preview/`
+# responses. The browser always revalidates, picking up new file
+# contents the same page load. Other static assets (JS, CSS,
+# images under `/static/`) keep their long max-age — they're
+# already cache-busted via `?v=N` query strings on the script
+# tags in `templates/base.html` and `templates/dashboard.html`.
+_PREVIEW_STATIC_PREFIX = "/static/preview/"
+
+
+@app.after_request
+def _disable_preview_static_cache(response):
+    """Disable HTTP caching on the PyScript mirror files.
+
+    Flask's static handler adds `Cache-Control: public, max-age=43200`
+    by default. We strip that on `/static/preview/` responses and
+    replace with `no-cache, must-revalidate` so the browser always
+    revalidates with the server (200 with new content, or 304 if
+    the file is unchanged). The `Pragma` and `Expires` headers are
+    the HTTP/1.0 belt-and-suspenders for very old browsers; the
+    `must-revalidate` directive forces strict behavior under
+    HTTP/1.1 even when the server is unreachable.
+    """
+    if request.path.startswith(_PREVIEW_STATIC_PREFIX):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
     return response
 
 

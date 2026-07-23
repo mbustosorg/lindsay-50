@@ -59,6 +59,21 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 "heart-message-manager/preview_display.py" = "/static/preview/heart-message-manager/preview_display.py"
 "heart-message-manager/preview_scroller.py" = "/static/preview/heart-message-manager/preview_scroller.py"
 "heart-message-manager/preview_main.py" = "/static/preview/heart-message-manager/preview_main.py"
+# Dashboard runtime (issue #48, simplified 2026-07-23).
+# `app_main.py` imports `dashboard_runtime.install_runtime` at module
+# load time so it must be declared here — PyScript's MEMFS only
+# resolves modules that are listed in [files]. The canonical copy
+# lives at `heart-message-manager/dashboard_runtime.py`; the mirror
+# copy under static/preview/ is what PyScript fetches at page-load
+# time (Flask serves it under the /static/preview/ URL).
+#
+# History: this entry replaced the previous
+# `dashboard_controller.py` + `dashboard_bootstrap.py` mapping. The
+# two-file controller/bootstrap split was about per-generation
+# teardown — replaced by a single `install_runtime()` call since
+# the operator no longer has a Start/Stop toggle (refresh restarts
+# the page-side runtime).
+"heart-message-manager/dashboard_runtime.py" = "/static/preview/heart-message-manager/dashboard_runtime.py"
 # Browser-side event log (issue #26). PyScript wrapper around
 # `js.indexedDB`, mirroring the Pi-side `heart-matrix-controller/event_log.py`
 # schema so the same `MessageSelector` class works in the preview runtime.

@@ -273,25 +273,32 @@ class TestMessageManagerDispatch:
         assert second_called == ["second"]
 
     def test_message_envelope_still_routes_to_message_handler(self):
+        # Disable the senders allowlist so the +1 sender (not in the
+        # default empty allowlist) isn't filtered out before we can
+        # assert the buffer was populated.
         manager = self._build_manager()
         from lib_shared.models import MessageEnvelope, Message
 
         msg = Message(id="m1", sender="+1", body="hi", received_at="2026-05-22T00:00:00Z")
         manager.dispatch(MessageEnvelope(type="message", payload=msg.to_dict()).to_json())
-        # Message lands in the buffer (1+ entries).
-        assert manager.get_messages(limit=10) != []
+        # Message lands in the buffer (1+ entries). `suppress=False`
+        # is needed because the default config has
+        # `enforce_allowed_senders=True` and the test sender isn't in
+        # the empty allowlist — that's the *filter* path, not the
+        # *dispatch* path this test is asserting.
+        assert manager.get_messages(limit=10, suppress=False) != []
 
     def test_config_envelope_with_target_version_caches_field(self):
-        """type=config envelope carries sign.target_version through
-        to the in-memory config (issue #51 § Config envelope is the
-        carrier for `sign.target_version`)."""
+        """type=config envelope carries sign_settings.target_version
+        through to the in-memory config (issue #51 § Config envelope
+        is the carrier for `sign_settings.target_version`)."""
         manager = self._build_manager()
         from lib_shared.models import MessageEnvelope
 
         cfg_dict = {
             "filters": [],
             "senders": [],
-            "sign": {"name": "Test", "target_version": "abc1234"},
+            "sign_settings": {"sign_name": "Test", "target_version": "abc1234"},
             "timezone": "US/Pacific",
             "version": 2,
             "effects_settings": {"effects": [], "fade_seconds": 0.5, "hold_seconds": 7.0},
@@ -299,5 +306,5 @@ class TestMessageManagerDispatch:
         }
         manager.dispatch(MessageEnvelope(type="config", payload=cfg_dict).to_json())
 
-        cached = manager._config.sign.to_dict()
+        cached = manager._config.sign_settings.to_dict()
         assert cached["target_version"] == "abc1234"

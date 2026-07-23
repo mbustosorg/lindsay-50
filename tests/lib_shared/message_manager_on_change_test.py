@@ -104,7 +104,7 @@ def test_on_change_does_not_fire_when_no_change():
 
 
 def test_app_main_on_change_fans_out_to_js():
-    """In the browser, the app-scoped MessageManager's on_change callback
+    """In the browser, the per-generation MessageManager's on_change callback
     fans the change out to JS subscribers via `App._dispatchChange()`.
 
     The coordinator reads config live at tick time, so the on_change
@@ -112,46 +112,71 @@ def test_app_main_on_change_fans_out_to_js():
     on the coordinator's next `tick()`. The JS fan-out is the only
     responsibility of the on_change path on the browser.
 
+    History: pre-#48 the on_change lived in `app_main.py:_on_change_js`.
+    The 2026-07-23 round-5 simplification moved it to
+    `dashboard_runtime._on_change_js` (no per-generation discriminator
+    — the runtime is built ONCE per page load; refresh to restart).
+    The contract is unchanged: fan out to JS, never call apply_settings.
+
     We can't run PyScript in tests, so we read the source and assert
     the fan-out is present and that `apply_settings` is NOT in the
     on_change body.
     """
-    p = Path(__file__).parent.parent.parent / "heart-message-manager" / "app_main.py"
+    p = (
+        Path(__file__).parent.parent.parent
+        / "heart-message-manager"
+        / "dashboard_runtime.py"
+    )
     src = p.read_text(encoding="utf-8")
-    assert "def _on_change_js" in src, "app_main.py must define _on_change_js"
-    # Find the closure body — between `def _on_change_js():` (or with
-    # the `-> None` annotation) and the next `def `.
-    m = re.search(r"def _on_change_js\([^)]*\)[^:]*:\s*\n(.*?)(?=\ndef |\Z)", src, re.DOTALL)
+    assert "def _on_change_js" in src, (
+        "dashboard_runtime.py must define _on_change_js"
+    )
+    # Find the closure body — between `def _on_change_js():` (or
+    # `def _on_change_js() -> None:`) and the next sibling `def `
+    # at the same OR parent indent. `_on_change_js` is defined as
+    # a nested closure inside `install_runtime()`.
+    m = re.search(
+        r"def _on_change_js\(\)[^:]*:\s*\n((?:[ \t]+.*\n|\s*\n)*?)(?=^[ \t]*def |^def |\Z)",
+        src,
+        re.MULTILINE,
+    )
     assert m is not None, "could not extract _on_change_js body"
     body = m.group(1)
-    # Drop the docstring (it may reference the old design as
-    # historical context).
+    # Drop the docstring.
     body = re.sub(r'"""[\s\S]*?"""', "", body, count=1)
-    assert "app._dispatchChange" in body, "browser _on_change_js must call app._dispatchChange to fan out to JS"
+    assert "_dispatchChange" in body, (
+        "browser on_change callback must call app._dispatchChange to fan out to JS"
+    )
     assert "apply_settings" not in body, (
-        "browser _on_change_js must not call _coordinator.apply_settings — "
+        "browser on_change callback must not call _coordinator.apply_settings — "
         "the coordinator reads config live from message_manager.config"
     )
 
 
-def test_create_proxy_is_invoked_with_on_change_js():
-    """Smoke check: a closure that calls create_proxy(_on_change_js)()
-    actually invokes the proxy.
-
-    We can't import preview_main under CPython (top-level await on
-    `loadPackage`), so we exercise the same pattern in isolation: a
-    closure that calls a tracking proxy and assert the proxy fired.
-    """
-    create_proxy = MagicMock(return_value=MagicMock())
-    _on_change_js = MagicMock()
-
-    def _on_change():
-        create_proxy(_on_change_js)()
-
-    _on_change()
-    # The proxy was created around the JS callback and then invoked.
-    create_proxy.assert_called_once_with(_on_change_js)
-    create_proxy.return_value.assert_called_once_with()
+def test_create_proxy_is_invoked_with_callbacks():
+    """Smoke check: the runtime wraps the per-callback closures in
+    `create_proxy()` so PyScript can hand them to the JS side as
+    JsProxies. Replaces the per-generation `_make_on_change_js`
+    / `_on_envelope_js` / `_on_status_js` checks from before
+    the 2026-07-23 round-5 simplification."""
+    p = (
+        Path(__file__).parent.parent.parent
+        / "heart-message-manager"
+        / "dashboard_runtime.py"
+    )
+    src = p.read_text(encoding="utf-8")
+    assert "create_proxy(_on_change_js)" in src, (
+        "dashboard_runtime.py must wrap the on_change closure in create_proxy() "
+        "before handing it to MessageManager"
+    )
+    assert "create_proxy(_on_envelope_py)" in src, (
+        "dashboard_runtime.py must wrap the envelope callback in create_proxy() "
+        "before handing it to the MQTT-WS shim"
+    )
+    assert "create_proxy(_on_status_py)" in src, (
+        "dashboard_runtime.py must wrap the status callback in create_proxy() "
+        "before handing it to the MQTT-WS shim"
+    )
 
 
 # --- Scenario 3: MessageManager(coordinator=...) raises TypeError ------------

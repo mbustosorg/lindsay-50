@@ -283,8 +283,8 @@ class MessageSelector(ABC):
             event_log: Optional event log for selectors that need
                 display-recency (e.g. `WeightedSelector`). Selectors
                 that don't use it (e.g. `RandomSelector`) ignore the
-                argument. Matches both `EventLog` (Pi) and
-                `IndexedDBEventLog` (browser) — both expose
+                argument. Matches both `EventLog` (Pi, JSONL-backed)
+                and `EventLog` (browser, deque-backed) — both expose
                 `last_for(message_id, event_type)` and
                 `query(event_type, message_id, since)`.
             favorites: Optional iterable of message IDs that are

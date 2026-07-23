@@ -73,7 +73,7 @@ def _load_test_auth():
 
 def test_preview_template_has_sign_canvas_element():
     """The preview template renders a <canvas id='sign-canvas'> element."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert 'id="sign-canvas"' in template
     assert "<canvas" in template
 
@@ -87,7 +87,7 @@ def test_preview_template_uses_responsive_image_rendering():
     `image-rendering: pixelated`. The canvas is the sign-canvas element
     and declares an image-rendering style (the current value is `auto`).
     """
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert 'id="sign-canvas"' in template
     assert "image-rendering:" in template
 
@@ -107,7 +107,7 @@ def test_preview_template_layers_media_behind_canvas():
     gets re-hidden by the image as soon as the overlay's opacity
     reaches 1.0 during the fade-in hold.
     """
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert 'style="z-index: 0; opacity: 0;"' in template, (
         "Image and video must be at z-index 0 (behind canvas) so the "
         "transparent canvas can composite the scroller text on top of "
@@ -119,47 +119,78 @@ def test_preview_template_layers_media_behind_canvas():
     )
 
 
-def test_preview_template_canvas_is_responsive():
-    """The canvas is CSS-responsive so it scales with the viewport on resize.
+def test_preview_template_canvas_is_fixed_size():
+    """The preview block is a fixed-size square — the left column absorbs
+    the rest of the viewport and the preview does NOT resize with the
+    viewport on resize.
 
-    Regression: the previous version had a fixed inline `width: 512px;
-    height: 512px;` on the canvas, so the dark div (bg-slate-900) sized
-    to the canvas and didn't shrink when the viewport narrowed — the
-    user saw a fixed-size preview frame regardless of window width.
+    Regression history:
 
-    Fix: the dark div is `w-full max-w-full` (constrained to the card's
-    content area) and the canvas uses `max-w-[min(800px,100%)]
-    h-auto aspect-square` so it fills the dark div, caps at 800px, and
-    stays square via aspect-ratio. The inline pixel width/height were
-    removed.
+    1. The original layout had a fixed inline `width: 512px; height:
+       512px;` on the canvas. The dark div (bg-slate-900) sized to the
+       canvas, but the surrounding column didn't grow/shrink to match.
+
+    2. Round 2 (`flex-1 flex items-center justify-center` wrapper +
+       `aspect-square w-full max-h-full max-w-full` dark frame)
+       replaced the fixed-pixel canvas with a true flex layout: the
+       square fits the smaller of available width / height and the
+       white padding around it stays even. Reported as looking wrong —
+       the preview shrank and grew with the viewport.
+
+    3. 2026-07-23 fix: the operator asked for a fixed-size preview
+       with the left column resizing to match. The right column is
+       a fixed 464px-wide flex container with `flex-shrink-0`. The
+       dark frame is `aspect-square` with explicit `w-full max-h-[400px]
+       max-w-[400px] min-h-[200px]` clamps. Left column gets
+       `flex-1 min-w-0`. New invariant: preview stays a 400×400
+       square regardless of viewport, no whitespace gaps beside the
+       dark frame.
     """
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
-    # The dark div (the preview frame) must be width-constrained so it
-    # shrinks with the card. `w-full max-w-full` is the Tailwind for
-    # `width: 100%; max-width: 100%`.
-    assert "w-full max-w-full" in template, (
-        "The dark div (preview frame) must be w-full max-w-full so it " "shrinks with the card on viewport resize"
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
+
+    # The right-column wrapper is fixed-width and shrink-proof — it
+    # owns its own 464px and the left column resizes around it.
+    assert 'style="width: 464px;"' in template, (
+        "The right column must be a fixed 464px-wide flex container "
+        "(400px dark frame + 24px padding × 2) with an inline "
+        "`style=\"width: 464px;\"`. Anything else breaks the "
+        "fixed-preview invariant."
     )
-    # The canvas must declare max-w-[min(800px,100%)] so the inline JS-set
-    # width is clamped to both 800px and 100% of the dark div.
-    assert "max-w-[min(800px,100%)]" in template, (
-        "The canvas must cap at min(800px, 100% of dark div) via "
-        "max-w-[min(800px,100%)] so it can't overflow the dark div"
+    assert "flex-shrink-0" in template, (
+        "The right column must declare `flex-shrink-0` so the flex "
+        "parent can't squash it below 464px on narrow viewports."
     )
-    # The canvas must declare aspect-square so the height tracks the
-    # (possibly constrained) width — without this the canvas would be
-    # a non-square rectangle if the JS-set width is clamped by max-w.
-    assert "aspect-square" in template, (
+
+    # The dark frame is bounded to 400×400 via min/max clamps.
+    assert "max-h-[400px]" in template and "max-w-[400px]" in template, (
+        "The dark frame must cap at 400×400 via `max-h-[400px] max-w-[400px]` "
+        "so the preview stays a fixed-size square even on tall/wide viewports."
+    )
+    assert "min-h-[200px]" in template, (
+        "The dark frame must declare `min-h-[200px]` so it never collapses "
+        "below a usable preview on narrow viewports."
+    )
+
+    # The canvas declares aspect-square so its height tracks the width.
+    assert 'aspect-square"' in template or "aspect-square " in template or template.count("aspect-square") >= 2, (
         "The canvas must declare aspect-square so its height tracks the "
-        "width and it stays square even when the width is constrained"
+        "width and it stays square inside the dark frame."
     )
-    # The inline pixel width/height must NOT be present anymore.
-    assert "width: 512px" not in template, (
-        "The inline `width: 512px;` on the canvas was removed in favor "
-        "of CSS-driven responsive sizing; its presence means the old "
-        "fixed-size behavior is back"
+
+    # The legacy "responsive" markers must be gone.
+    assert "aspect-square w-full max-h-full max-w-full" not in template, (
+        "The round-2 responsive dark-frame class string must NOT be "
+        "present — its presence means the layout regressed to "
+        "viewport-responsive preview sizing."
     )
-    assert "height: 512px" not in template
+    assert "max-w-[min(800px,100%)]" not in template, (
+        "The 800px cap from the pre-split full-width canvas must NOT "
+        "be present — its presence means the layout regressed."
+    )
+    assert "w-2/3 mx-auto" not in template, (
+        "The round-1 `w-2/3 mx-auto` dark-frame size must NOT be "
+        "present — its presence means the layout regressed."
+    )
 
 
 def test_preview_template_media_overlay_matches_canvas_footprint():
@@ -190,7 +221,7 @@ def test_preview_template_media_overlay_matches_canvas_footprint():
     Lit LEDs still paint on top (canvas z-index 1 > media z-index 0);
     what changed is only the media's footprint.
     """
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
 
     # The image overlay must fill its parent wrapper (which owns the
     # 800px cap + aspect-square). `absolute inset-0 w-full h-full` is
@@ -229,15 +260,23 @@ def test_preview_template_media_overlay_matches_canvas_footprint():
     assert "object-contain" in video_block
     assert "object-cover" not in video_block
 
-    # The sizing wrapper must declare the cap + aspect-square so the
-    # canvas and overlays end up at the same square footprint.
-    assert "max-w-[min(800px,100%)]" in template, (
-        "The sizing wrapper (or canvas) must cap at min(800px, 100%) — "
-        "this is the rule that keeps the overlay and canvas at the same "
-        "size"
-    )
+    # The sizing wrapper must declare aspect-square so the canvas and
+    # overlays end up at the same square footprint.
+    #
+    # Note: the legacy `max-w-[min(800px,100%)]` cap was removed when
+    # the canvas moved into a 50%-wide right column on lg+ screens
+    # (`grid-cols-1 lg:grid-cols-2`) — see §5 layout change. The cap
+    # never triggers inside a half-width column and was a full-page
+    # artifact from before the split. The wrapper is now
+    # `w-full max-w-full aspect-square` so it fills the column and
+    # stays square.
     assert "aspect-square" in template, (
         "The sizing wrapper (or canvas) must declare aspect-square so " "the overlay and canvas share a 1:1 footprint"
+    )
+    assert "max-w-[min(800px,100%)]" not in template, (
+        "The 800px cap was removed when the canvas moved into a 50%-wide "
+        "right column; its presence means the layout regressed to the "
+        "pre-split full-width canvas"
     )
 
 
@@ -262,23 +301,51 @@ def _extract_tag(template: str, element_id: str) -> str:
     return template[open_lt : close_gt + 1]
 
 
-def test_preview_template_has_status_block():
-    """The template shows the current effect name and message body."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
-    assert 'id="preview-effect"' in template
-    assert 'id="preview-message"' in template
+def test_preview_template_has_preview_title():
+    """The Preview card leads with a 📺 title (2026-07-23 round-5).
+
+    Under the round-5 redesign, the Preview card is its own card
+    with a 📺 title and an MQTT pill summarizing the WS connection
+    state. The previous "Now displaying" / "Effect" / loading
+    overlay rows are gone (issue #48 round-5, 2026-07-23).
+    """
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
+    assert "Preview" in template
+    assert 'id="preview-mqtt-pill"' in template
 
 
-def test_preview_template_has_loading_indicator():
-    """A 'Loading preview…' indicator that hides once PyScript is ready."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
-    assert "Loading preview" in template
-    assert 'id="preview-loading"' in template
+def test_preview_template_no_legacy_status_block():
+    """The "Now displaying" / "Effect" rows are removed (2026-07-23).
+
+    The previous Preview card showed the active message body and
+    effect class via `#preview-message` / `#preview-effect`; the
+    round-5 redesign removed both. The operator reads what the
+    preview is showing directly from the canvas — the rows were
+    redundant. Asserting the absent selectors prevents accidental
+    re-introduction.
+    """
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
+    assert 'id="preview-effect"' not in template
+    assert 'id="preview-message"' not in template
+    assert 'id="preview-loading"' not in template
+    assert 'id="preview-message-link"' not in template
+
+
+def test_preview_template_no_start_stop_toggle():
+    """There is no Start/Stop toggle on the Preview card.
+
+    Under the round-5 redesign, page load = Pi startup and refresh
+    restarts. Asserting the absent `#sim-toggle-btn` selector
+    prevents accidental re-introduction of the legacy Start/Stop
+    lifecycle controls.
+    """
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
+    assert 'id="sim-toggle-btn"' not in template
 
 
 def test_preview_template_includes_pyscript_runtime():
     """The PyScript runtime script + py-config link are present."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert "py-config" in template
     assert "py-script" in template
     assert "pyscript" in template.lower()
@@ -286,20 +353,23 @@ def test_preview_template_includes_pyscript_runtime():
 
 def test_preview_template_loads_preview_main():
     """The <py-script> tag points at the preview_main entry point."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert "preview_main.py" in template
 
 
 def test_preview_template_no_websocket():
     """v1 has no WebSocket — assert neither the JS nor template references one."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "preview.html").read_text()
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
     assert "new WebSocket" not in template
     assert "WebSocket(" not in template
     assert "Flask-Sock" not in template
 
 
 def test_preview_template_loaded_by_app():
-    """GET /preview returns a 200 with the rendered canvas element."""
+    """GET /preview follows a 302 to `/` which renders the dashboard with
+    the canvas element (issue #48). `/preview` itself no longer renders
+    the simulator document — the route is a back-compat redirect.
+    """
     # Build the app via the same loader test_auth uses, so all heavy deps
     # are mocked but the template still renders through Jinja. The
     # _AppLoader wrapper snapshots and restores sys.modules so the
@@ -309,7 +379,7 @@ def test_preview_template_loaded_by_app():
         client = app.test_client()
         # Need to log in first
         client.post("/login", data={"username": "admin", "password": "secret123"})
-        response = client.get("/preview")
+        response = client.get("/", follow_redirects=True)
         assert response.status_code == 200
         body = response.data.decode()
         assert 'id="sign-canvas"' in body
@@ -317,7 +387,16 @@ def test_preview_template_loaded_by_app():
         # 9f5efb3 moved the LED look to a JS-side dot mask) — but the canvas
         # still declares an image-rendering style.
         assert "image-rendering:" in body
-        assert "Loading preview" in body
+        # The Preview card now has a 📺 title + MQTT pill
+        # (2026-07-23 round-5). Asserting the present selector so
+        # the new layout is part of the contract.
+        assert 'id="preview-mqtt-pill"' in body
+        # The legacy "Simulator stopped — press Start" overlay
+        # (#preview-loading) is gone in the round-5 redesign.
+        # Refresh to restart; there's no "stopped" intermediate
+        # state. Asserting the absent selector prevents accidental
+        # re-introduction.
+        assert 'id="preview-loading"' not in body
         # No WebSocket references in the rendered HTML
         assert "new WebSocket" not in body
         assert "Flask-Sock" not in body
@@ -331,7 +410,7 @@ def test_preview_template_csp_header_on_preview_route():
         client = app.test_client()
         client.post("/login", data={"username": "admin", "password": "secret123"})
 
-        response = client.get("/preview")
+        response = client.get("/")
         csp = response.headers.get("Content-Security-Policy", "")
         assert "wasm-unsafe-eval" in csp
         # PyScript CDN allowed in script-src
@@ -351,7 +430,7 @@ def test_preview_template_csp_allows_tailwind_cdn():
         client = app.test_client()
         client.post("/login", data={"username": "admin", "password": "secret123"})
 
-        response = client.get("/preview")
+        response = client.get("/")
         csp = response.headers.get("Content-Security-Policy", "")
         # The script-src directive must include the Tailwind CDN
         script_src = _extract_directive(csp, "script-src")
@@ -379,12 +458,43 @@ def _extract_directive(csp: str, name: str) -> str:
 
 
 def test_other_routes_have_no_csp_header():
-    """Non-/preview routes are unaffected — no CSP is set."""
+    """Non-dashboard routes are unaffected — no CSP is set.
+
+    The dashboard CSP hook (`_set_dashboard_csp`) only fires on `/`
+    and the legacy `/preview` (back-compat redirect). Routes outside
+    the simulator must not carry the wasm-unsafe-eval / PyScript-CDN
+    relaxations — they're irrelevant on /messages, /settings, etc.,
+    and broadening them widens the attack surface for no reason.
+    """
     auth = _load_test_auth()
     with _AppLoader(auth) as app:
         client = app.test_client()
         response = client.get("/health")
         assert response.headers.get("Content-Security-Policy", "") == ""
+
+
+def test_preview_route_redirects_to_dashboard():
+    """`/preview` is a 302 redirect to the dashboard `/` (issue #48 §4.5).
+
+    The legacy `/preview` URL must not render a second simulator
+    document — both runtime and operator confusion follow. The
+    redirect's target (`url_for("dashboard")`) is the SSOT: a future
+    route rename only needs to update one place.
+    """
+    auth = _load_test_auth()
+    with _AppLoader(auth) as app:
+        client = app.test_client()
+        client.post("/login", data={"username": "admin", "password": "secret123"})
+        # Don't follow the redirect — we want to assert it's a 302.
+        response = client.get("/preview")
+        assert response.status_code in (301, 302), (
+            f"/preview must redirect (got {response.status_code}); "
+            "issue #48 §4.6 requires a compatibility redirect to `/`."
+        )
+        location = response.headers.get("Location", "")
+        # Flask's test client preserves the full path; just check it
+        # points at the dashboard endpoint, not the legacy simulator.
+        assert location.endswith("/"), f"/preview must redirect to `/` (got Location={location!r})"
 
 
 def test_preview_csp_allows_s3_endpoint_when_explicit():
@@ -430,7 +540,7 @@ def test_preview_csp_allows_s3_endpoint_when_explicit():
         app.config["TESTING"] = True
         client = app.test_client()
         client.post("/login", data={"username": "admin", "password": "secret123"})
-        response = client.get("/preview")
+        response = client.get("/")
         csp = response.headers.get("Content-Security-Policy", "")
         img_src = _extract_directive(csp, "img-src")
         assert "http://localhost:9000" in img_src, f"img-src must allow the MinIO origin; got: {img_src!r}"
@@ -461,7 +571,7 @@ def test_preview_csp_allows_s3_endpoint_when_explicit():
         app.config["TESTING"] = True
         client = app.test_client()
         client.post("/login", data={"username": "admin", "password": "secret123"})
-        response = client.get("/preview")
+        response = client.get("/")
         csp = response.headers.get("Content-Security-Policy", "")
         img_src = _extract_directive(csp, "img-src")
         assert (
@@ -520,3 +630,135 @@ def test_pyscript_declared_files_all_serve_200():
             f"{len(failures)} py-config.toml [files] entries do not serve 200; "
             f"PyScript bootstrap will silently fail. First few: {failures[:3]}"
         )
+
+
+def test_pyscript_files_declares_every_app_main_import():
+    """Regression (issue #48): every Python module imported by
+    `app_main.py` must be declared in `py-config.toml` `[files]`.
+    PyScript's MEMFS only resolves modules that are listed in
+    `[files]` — any undeclared import crashes the bootstrap with
+    `ModuleNotFoundError` (browser console). The original
+    dashboard_controller / dashboard_bootstrap modules shipped
+    undeclared; the round-5 simplification (2026-07-23) replaced
+    them with a single `dashboard_runtime` module which IS
+    declared.
+
+    Walks `app_main.py`'s top-level `from X import Y` / `import X`
+    statements, normalizes each name to a py-config `[files]` key,
+    and asserts the key is present. Skips `pyodide_js` (PyScript-
+    provided), stdlib modules, and `js` / `window` (Pyodide proxies).
+    """
+    import ast
+    import tomllib
+
+    app_main_path = _PROJECT_ROOT / "heart-message-manager" / "app_main.py"
+    py_config_path = _PROJECT_ROOT / "heart-message-manager" / "static" / "preview" / "py-config.toml"
+
+    tree = ast.parse(app_main_path.read_text(encoding="utf-8"))
+    declared = tomllib.loads(py_config_path.read_text()).get("files", {})
+
+    # The `[files]` keys are full py-config paths like
+    # `"heart-message-manager/dashboard_controller.py"`. We accept a
+    # bare import name as "declared" if any declared key ends with
+    # `/{name}.py` — that matches the file naming convention the
+    # project uses (each module is a single file with a matching
+    # name).
+    declared_modules = {key.split("/")[-1].removesuffix(".py") for key in declared if key.endswith(".py")}
+
+    # Modules PyScript / Pyodide provides at runtime, plus the
+    # CPython stdlib (Pyodide ships with the whole stdlib by default).
+    # Any of these can be `import`ed without a [files] entry.
+    STDLIB_MODULES = frozenset(sys.stdlib_module_names) if hasattr(sys, "stdlib_module_names") else frozenset()
+    RUNTIME_PROVIDED = {
+        "pyodide_js",
+        "pyodide",
+        "js",
+        "pyscript",
+    } | STDLIB_MODULES
+
+    missing: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.split(".")[0]
+                if top in RUNTIME_PROVIDED:
+                    continue
+                if top not in declared_modules:
+                    missing.append(top)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module is None or node.level > 0:
+                continue  # relative import — already in same dir as app_main.py
+            top = node.module.split(".")[0]
+            if top in RUNTIME_PROVIDED:
+                continue
+            if top not in declared_modules:
+                missing.append(top)
+
+    assert not missing, (
+        f"app_main.py imports {len(missing)} module(s) not declared in "
+        f"py-config.toml [files]: {missing!r}. PyScript's MEMFS will "
+        f"fail to resolve them at page-load and the dashboard will "
+        f"throw ModuleNotFoundError on bootstrap. Add each as a "
+        f"[files] entry mapping the source path to its "
+        f"/static/preview/ URL."
+    )
+
+
+def test_dashboard_template_renders_mqtt_status_header():
+    """The dashboard MUST render the MQTT status header.
+
+    Companion to `test_settings_does_not_render_mqtt_status_header`:
+    the dashboard owns the simulator runtime and the MQTT-WS
+    envelope fan-out, so the operator expects the connection-state
+    pill somewhere on the page.
+
+    History: pre-round-5 the pill was a header strip
+    (`_mqtt_header.html`) with `#mqtt-status` / `#mqtt-ws-target` /
+    `#mqtt-sub-topic`. The 2026-07-23 round-5 redesign moved the
+    MQTT state indicator into the Preview card itself
+    (`#preview-mqtt-pill`) and dropped the header partial. The
+    operator reads the WS URL + subscribe topic from the pill's
+    `title=` tooltip instead of from a banner at the top of the
+    page. Asserting the new shape here.
+    """
+    dashboard_src = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
+    # The new pill lives in the Preview card. The template should
+    # NOT include the old `_mqtt_header.html` partial — that whole
+    # row was removed.
+    assert 'id="preview-mqtt-pill"' in dashboard_src, (
+        "dashboard.html must surface the MQTT status pill on the "
+        "Preview card (`#preview-mqtt-pill`) so the operator can "
+        "see WS state without scanning the page header."
+    )
+    assert '{% include "_mqtt_header.html" %}' not in dashboard_src, (
+        "dashboard.html must NOT include the legacy "
+        "`_mqtt_header.html` partial — the round-5 redesign moved "
+        "the pill into the Preview card."
+    )
+
+
+def test_mqtt_header_partial_is_a_real_template():
+    """The `_mqtt_header.html` partial exists and is rendered only when
+    included — it does NOT live in the base shell anymore (issue #48,
+    §4.10). The base template went from "always render the MQTT pill"
+    to "never render the MQTT pill" — pages that need it now opt in
+    by including the partial.
+    """
+    partial_path = _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
+    assert partial_path.exists(), (
+        "_mqtt_header.html partial must exist so dashboard.html and "
+        "any future simulator-hosting page can include the MQTT "
+        "status pill explicitly. (testing.html was removed 2026-07-23.)"
+    )
+    base = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "base.html").read_text()
+    # The base shell no longer contains the MQTT block. Pages opt in
+    # by including `_mqtt_header.html`. Regression: the previous
+    # base.html rendered the pill on every authenticated page (a
+    # recurring "but I thought it was running" complaint on the
+    # archive / settings pages).
+    assert 'id="mqtt-status"' not in base, (
+        "base.html must NOT render the MQTT status header — issue "
+        "#48, §4.10 moved the pill to `_mqtt_header.html` so each "
+        "page opts in explicitly. The dashboard + testing pages "
+        "include the partial; settings + messages archive do not."
+    )

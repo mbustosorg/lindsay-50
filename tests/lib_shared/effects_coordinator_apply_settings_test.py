@@ -496,20 +496,42 @@ def test_pi_on_change_does_not_call_apply_settings():
 
 
 def test_app_main_on_change_does_not_call_apply_settings():
-    """The browser's app-scoped `_on_change_js` callback is a
-    fan-out to `App._dispatchChange` only — no `apply_settings`
-    call, since the coordinator reads config live."""
-    p = Path(__file__).parent.parent.parent / "heart-message-manager" / "app_main.py"
+    """The browser's `_on_change_js` callback is a fan-out to
+    `App._dispatchChange` only — no `apply_settings` call, since
+    the coordinator reads config live.
+
+    History: pre-#48 this looked at `app_main.py:_on_change_js`.
+    The 2026-07-23 round-5 simplification moved the on_change
+    callback to `dashboard_runtime._on_change_js` (no per-
+    generation discriminator — the runtime is built ONCE per
+    page load; refresh to restart). The contract is unchanged.
+    """
+    p = (
+        Path(__file__).parent.parent.parent
+        / "heart-message-manager"
+        / "dashboard_runtime.py"
+    )
     src = p.read_text(encoding="utf-8")
-    m = re.search(r"def _on_change_js\([^)]*\)[^:]*:\s*\n(.*?)(?=\ndef |\Z)", src, re.DOTALL)
+    # Look for the closure body inside `_on_change_js`. The 2026-07-23
+    # round-5 simplification moved the callback into a nested closure
+    # inside `install_runtime()`; the regex matches the function
+    # declaration (with or without a return-type annotation) and any
+    # subsequent `def ` at the same or parent indent.
+    m = re.search(
+        r"def _on_change_js\(\)[^:]*:\s*\n((?:[ \t]+.*\n|\s*\n)*?)(?=^[ \t]*def |^def |\Z)",
+        src,
+        re.MULTILINE,
+    )
     assert m is not None, "could not extract _on_change_js body"
     body = m.group(1)
     body = re.sub(r'"""[\s\S]*?"""', "", body, count=1)
     assert "apply_settings" not in body, (
-        "browser _on_change_js must not call apply_settings — "
+        "browser on_change callback must not call apply_settings — "
         "the coordinator reads config live from message_manager.config"
     )
-    assert "app._dispatchChange" in body, "app_main.py _on_change_js must still fan out to App._dispatchChange"
+    assert "_dispatchChange" in body, (
+        "browser on_change must still fan out to App._dispatchChange"
+    )
 
 
 def test_preview_main_does_not_pass_settings_to_bind():

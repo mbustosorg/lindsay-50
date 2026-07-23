@@ -1,0 +1,92 @@
+{# Dashboard modals partial (issue #48, §6.5–§6.7).
+   Included only from `dashboard.html`. Three diagnostic modals
+   (Current config + Active filters + S3 bucket) share a common
+   shell + close contract, plus the JSON viewer used by the
+   preview-message link and the test-injection success path.
+   The S3 bucket modal was added back on 2026-07-23 round-5:
+   the operator asked to surface the bucket browser at the top
+   of the page (it used to live on the legacy Testing page).
+   The /api/admin/s3-objects endpoint returns a jstree-style
+   {nodes: [...]} response; the shim renders that JSON verbatim.
+   Opening, updating, and closing any modal leaves the runtime
+   generation, render loop, coordinator state, and MQTT
+   connection unchanged. #}
+
+{# ── JSON viewer (preview-message click + test injection result) ── #}
+<div id="json-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+  <div class="bg-white rounded-2xl shadow-2xl max-w-2xl w-full mx-4 max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between p-6 border-b border-indigo-100">
+      <h3 id="json-modal-title" class="font-semibold font-heading text-dark">Message</h3>
+      <button data-modal-close="json-modal"
+              class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center cursor-pointer">
+        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-auto p-6">
+      <pre id="json-modal-body" class="text-xs text-slate-600 bg-slate-50 rounded-xl p-4 overflow-auto whitespace-pre-wrap break-all"></pre>
+    </div>
+  </div>
+</div>
+
+{# ── Current config modal (§6.5) ─────────────────────────────────── #}
+<div id="cfg-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="cfg-modal-title">
+  <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between p-6 border-b border-indigo-100">
+      <h3 id="cfg-modal-title" class="font-semibold font-heading text-dark">Current config</h3>
+      <button data-modal-close="cfg-modal"
+              class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center cursor-pointer">
+        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-auto p-6">
+      <pre id="cfg-modal-body" class="text-xs text-slate-600 bg-slate-50 rounded-xl p-4 overflow-auto whitespace-pre-wrap break-all"></pre>
+    </div>
+  </div>
+</div>
+
+{# ── Active filters modal ────────────────────────────────────────── #}
+<div id="filters-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="filters-modal-title">
+  <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between p-6 border-b border-indigo-100">
+      <h3 id="filters-modal-title" class="font-semibold font-heading text-dark">Active filters</h3>
+      <button data-modal-close="filters-modal"
+              class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center cursor-pointer">
+        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-auto p-6">
+      <pre id="filters-modal-body" class="text-xs text-slate-600 bg-slate-50 rounded-xl p-4 overflow-auto whitespace-pre-wrap break-all"></pre>
+    </div>
+  </div>
+</div>
+
+{# ── S3 bucket modal (round-5, 2026-07-23) ──────────────────────────
+   Re-introduced from the legacy Testing page as a filesystem
+   navigator. `dashboard_modals.js` builds the tree of 📁 folders
+   and 📄 files into `#s3-modal-body` (a `<div>` because the tree
+   has nested `<ul>` elements); folder click → lazy-loads children
+   via `/api/admin/s3-objects?prefix=...`; file click → fetches
+   `/api/admin/s3-object?key=...` and shows the content in
+   `#json-modal`. Same UX as the deleted Testing page. #}
+<div id="s3-modal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="s3-modal-title">
+  <div class="bg-white rounded-2xl shadow-2xl max-w-3xl w-full mx-4 max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between p-6 border-b border-indigo-100">
+      <h3 id="s3-modal-title" class="font-semibold font-heading text-dark">S3 bucket</h3>
+      <button data-modal-close="s3-modal"
+              class="w-8 h-8 rounded-lg bg-slate-100 hover:bg-slate-200 flex items-center justify-center cursor-pointer">
+        <svg class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-auto p-6">
+      <div id="s3-modal-body" class="text-sm text-slate-700 max-h-[60vh] overflow-auto"></div>
+    </div>
+  </div>
+</div>
