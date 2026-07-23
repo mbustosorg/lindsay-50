@@ -30,8 +30,6 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
-
 _PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_PROJECT_ROOT))
 
@@ -184,22 +182,28 @@ def test_suppress_button_re_enabled_on_failure():
     )
 
 
-def test_suppress_endpoints_use_post_with_json_body():
-    """Both suppress and unsuppress endpoints accept a JSON body
-    with `{"id": ...}`."""
+def test_suppress_endpoints_use_post_with_msg_id_in_path():
+    """Both suppress and unsuppress endpoints POST to
+    /api/messages/<msg_id>/suppress (or /unsuppress), with the
+    msg_id embedded in the URL path — not in a JSON body. The
+    legacy /api/admin/{suppress,unsuppress}-message routes the
+    dashboard previously called returned 404; the operator
+    reported the failure on 2026-07-23 and we switched to the
+    per-message path (see main.py:693 + main.py:716)."""
     suppress_pattern = re.compile(
-        r"endpoint\s*=\s*[\s\S]{0,200}/api/admin/(?:suppress|unsuppress)-message",
+        r'"/api/messages/"\s*\+\s*encodeURIComponent\(id\)\s*\+\s*"/(?:suppress|unsuppress)"',
         re.MULTILINE,
     )
     assert suppress_pattern.search(_SRC), (
         "dashboard_recent.js must route suppress / unsuppress "
-        "actions to /api/admin/{suppress,unsuppress}-message."
+        "actions to /api/messages/<msg_id>/suppress|unsuppress "
+        "with the msg_id in the URL path."
     )
-    # JSON body
-    body_pattern = re.compile(r"JSON\.stringify")
-    assert body_pattern.search(_SRC), (
-        "dashboard_recent.js must JSON-encode the suppress action "
-        "body."
+    # POST method
+    method_pattern = re.compile(r'method:\s*"POST"')
+    assert method_pattern.search(_SRC), (
+        "dashboard_recent.js must use POST for suppress / "
+        "unsuppress actions."
     )
 
 
