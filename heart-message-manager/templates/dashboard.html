@@ -12,8 +12,8 @@
      │                 [Current config] [S3 bucket] [Pill]   │
      └───────────────────────────────────────────────────────┘
      ┌─ Left column (50%) ────────┬─ Right column (50%) ───┐
-     │ Simulator runtime controls │ Preview canvas (512×) │
-     │ Test injection             │ (right half screen)   │
+     │ Test injection             │ Preview canvas (512×) │
+     │ Sign Health                │ (right half screen)   │
      └────────────────────────────┴───────────────────────┘
      ┌─ Recent 100 messages (FULL WIDTH, BELOW) ─────────────┐
      │ Active filters  |  table (full width, scrollable)    │
@@ -80,21 +80,22 @@
   </div>
 </div>
 
-{# ── Top-row grid: Test injection (left) + Preview (right) ───
+{# ── Top-row grid: Left column (Test injection + Sign Health) + Right column (Preview) ───
    Layout (post-2026-07-22 follow-up):
      - The Simulator runtime card is GONE. Start/Stop is the only
        remaining lifecycle control; it lives at the top-right of the
        preview card, paired with the "Effect / Now displaying" line.
-     - Test injection stays in the left column.
+     - The LEFT column stacks Test injection + Sign Health
+       vertically. Sign Health was moved here from Settings so the
+       operator doesn't need a Settings tab open to read Pi status.
      - The preview canvas stays in the right column on lg+ screens.
      - Recent 100 messages still drops BELOW both columns at full
        width so the operator can scroll through sign history without
        it being squeezed next to the canvas.
-     - Sign Health was moved here from Settings — see the card below
-       the top-row grid. sign_status.js picks up its data fields
-       automatically because the same script is on every auth page
-       (loaded from base.html) and it is a no-op when no
-       `data-sign-status-field` cells exist. #}
+     - sign_status.js picks up Sign Health's data fields automatically
+       because the same script is loaded on every auth page from
+       base.html and is a no-op when no `data-sign-status-field`
+       cells exist. #}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
   {# ── Left column ─────────────────────────────────────────────── #}
@@ -122,6 +123,69 @@
         <div id="inject-result"
              class="text-xs text-slate-500 font-mono min-h-[1.25rem]"></div>
       </form>
+    </div>
+
+    {# Sign Health — moved here from /settings (post-2026-07-22
+       follow-up). sign_status.js populates `data-sign-status-field`
+       cells automatically because the same shim is loaded on every
+       auth page from base.html and is a no-op when no such cells
+       exist. The Settings page no longer hosts this card. #}
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
+      <h3 class="font-heading font-semibold text-dark text-lg mb-2 flex items-center gap-2">
+        <span>📡</span> Sign Health
+      </h3>
+      <p class="text-sm text-slate-500 mb-4">
+        Live snapshot from the device. The Pi publishes this to
+        <code class="font-mono">MQTT_STATUS_TOPIC</code> every 5 seconds;
+        this page reads the latest one via MQTT and Flask's in-memory
+        subscriber. Read-only — there are no controls here.
+      </p>
+
+      <div data-sign-status-degraded-banner
+           style="display: none;"
+           class="mb-4 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+        <span class="font-semibold">⚠ Degraded:</span>
+        <span data-degraded-reason>MQTT disconnected</span>
+      </div>
+
+      <div data-sign-status-placeholder class="px-4 py-6 text-center text-slate-500 bg-slate-50 rounded-xl">
+        No status received yet.
+      </div>
+
+      <div data-sign-status-fields style="display: none;">
+        <table class="w-full">
+          <tbody class="divide-y divide-indigo-50">
+            <tr>
+              <th class="text-left px-4 py-2 text-sm font-medium text-slate-500 w-48">Running SHA</th>
+              <td class="px-4 py-2 font-mono text-sm" data-sign-status-field="active_sha">—</td>
+            </tr>
+            <tr>
+              <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Short SHA</th>
+              <td class="px-4 py-2 font-mono text-sm" data-sign-status-field="short_sha">—</td>
+            </tr>
+            <tr>
+              <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Started at</th>
+              <td class="px-4 py-2 text-sm font-mono" data-sign-status-field="started_at">—</td>
+            </tr>
+            <tr>
+              <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Uptime</th>
+              <td class="px-4 py-2 text-sm" data-sign-status-field="uptime_seconds">—</td>
+            </tr>
+            <tr>
+              <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">MQTT connected</th>
+              <td class="px-4 py-2 text-sm" data-sign-status-field="mqtt_connected">—</td>
+            </tr>
+            <tr>
+              <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Last error</th>
+              <td class="px-4 py-2 text-sm font-mono" data-sign-status-field="last_error">—</td>
+            </tr>
+            <tr>
+              <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Received at (browser)</th>
+              <td class="px-4 py-2 text-sm" data-sign-status-field="received_at_browser">—</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </div>
 
   </div>{# end left column #}
@@ -186,70 +250,6 @@
   </div>{# end right column #}
 
 </div>{# end top-row grid #}
-
-{# ── Sign Health ───────────────────────────────────────────────────
-   Moved from /settings (post-2026-07-22 follow-up). sign_status.js
-   populates `data-sign-status-field` cells automatically because the
-   same shim is loaded on every auth page from base.html and is a
-   no-op when no such cells exist. The Settings page no longer hosts
-   this card. #}
-<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mt-6">
-  <h3 class="font-heading font-semibold text-dark text-lg mb-2 flex items-center gap-2">
-    <span>📡</span> Sign Health
-  </h3>
-  <p class="text-sm text-slate-500 mb-4">
-    Live snapshot from the device. The Pi publishes this to
-    <code class="font-mono">MQTT_STATUS_TOPIC</code> every 5 seconds;
-    this page reads the latest one via MQTT and Flask's in-memory
-    subscriber. Read-only — there are no controls here.
-  </p>
-
-  <div data-sign-status-degraded-banner
-       style="display: none;"
-       class="mb-4 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
-    <span class="font-semibold">⚠ Degraded:</span>
-    <span data-degraded-reason>MQTT disconnected</span>
-  </div>
-
-  <div data-sign-status-placeholder class="px-4 py-6 text-center text-slate-500 bg-slate-50 rounded-xl">
-    No status received yet.
-  </div>
-
-  <div data-sign-status-fields style="display: none;">
-    <table class="w-full">
-      <tbody class="divide-y divide-indigo-50">
-        <tr>
-          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500 w-48">Running SHA</th>
-          <td class="px-4 py-2 font-mono text-sm" data-sign-status-field="active_sha">—</td>
-        </tr>
-        <tr>
-          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Short SHA</th>
-          <td class="px-4 py-2 font-mono text-sm" data-sign-status-field="short_sha">—</td>
-        </tr>
-        <tr>
-          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Started at</th>
-          <td class="px-4 py-2 text-sm font-mono" data-sign-status-field="started_at">—</td>
-        </tr>
-        <tr>
-          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Uptime</th>
-          <td class="px-4 py-2 text-sm" data-sign-status-field="uptime_seconds">—</td>
-        </tr>
-        <tr>
-          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">MQTT connected</th>
-          <td class="px-4 py-2 text-sm" data-sign-status-field="mqtt_connected">—</td>
-        </tr>
-        <tr>
-          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Last error</th>
-          <td class="px-4 py-2 text-sm font-mono" data-sign-status-field="last_error">—</td>
-        </tr>
-        <tr>
-          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Received at (browser)</th>
-          <td class="px-4 py-2 text-sm" data-sign-status-field="received_at_browser">—</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-</div>
 
 {# ── Recent-100 message region (FULL WIDTH, BELOW the preview) ─────
    Drops under both columns at full width — the operator can scroll
