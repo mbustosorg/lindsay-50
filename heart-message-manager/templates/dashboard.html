@@ -99,16 +99,37 @@
      - Canvas sizing is now CSS-driven (the previous JS-side
        `sizeCanvasToViewport` override caused a 528x576 non-square
        canvas inside a 608x608 dark frame, leaving black space on
-       the right — see `static/preview/preview.js` for the removal). #}
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+       the right — see `static/preview/preview.js` for the removal).
+
+   Layout (2026-07-23 evening follow-up):
+     - The top-row split is no longer 50/50. The right column
+       (preview) is now a FIXED-WIDTH column sized to fit the
+       400x400 dark frame + card padding (≈ 464px including
+       p-6). The left column (Sign Health + Test injection)
+       flexes (`flex-1`) to absorb ALL remaining horizontal
+       space. The preview dark frame stays a constant size
+       regardless of viewport; the left-column cards widen
+       and narrow to fill the rest.
+     - Implemented as `flex` (not `grid-cols-2`) so the
+       preview column can be `flex-shrink-0` with an explicit
+       width and the left column is `flex-1 min-w-0` (the
+       min-w-0 lets the flex item actually shrink past its
+       content's intrinsic width). `items-stretch` keeps
+       both columns at the same height.
+     - The 464px right column means the white area around the
+       dark frame is just the card's p-6 padding on each side
+       (24px) — no large empty zone. #}
+<div class="flex flex-col lg:flex-row gap-6 items-stretch">
 
   {# ── Left column ───────────────────────────────────────────────
      `h-full` + `flex flex-col` makes the wrapper match the right
-     column's height (they're grid siblings — grid stretches them
-     by default). Sign Health's `flex-1` then absorbs the leftover
-     space, so the left column visually balances the (now smaller)
-     preview card. #}
-  <div class="space-y-6 lg:h-full lg:flex lg:flex-col">
+     column's height (they're flex siblings — items-stretch
+     keeps them equal). Sign Health's `flex-1` then absorbs the
+     leftover space, so the left column visually balances the
+     (now narrower, fixed-width) preview card. `flex-1 min-w-0`
+     on the wrapper lets the left column take ALL the leftover
+     horizontal width without forcing the preview to grow. #}
+  <div class="space-y-6 lg:h-full lg:flex lg:flex-col flex-1 min-w-0">
 
     {# Sign Health — moved here from /settings (post-2026-07-22
        follow-up). sign_status.js populates `data-sign-status-field`
@@ -201,8 +222,13 @@
 
   </div>{# end left column #}
 
-  {# ── Right column: preview canvas with Start/Stop button ──────── #}
-  <div class="lg:sticky lg:top-4">
+  {# ── Right column: preview canvas with Start/Stop button ────────
+     Fixed-width column (≈ 464px) sized to fit the 400x400 dark
+     frame + card padding (p-6 = 24px each side). `flex-shrink-0`
+     stops the preview from being squished by the flex-1 left
+     column at narrow viewports — the preview stays at its
+     designed size, the left column absorbs any width surplus. #}
+  <div class="lg:sticky lg:top-4 flex-shrink-0" style="width: 464px;">
     <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 h-full">
       <div class="flex flex-col gap-4 h-full">
         {# Top row: Now-displaying text on the left, Start/Stop on
@@ -320,9 +346,14 @@
     <table id="recent-table" class="w-full text-sm">
       <thead class="bg-indigo-50/50 text-slate-600 text-xs uppercase tracking-wider">
         <tr>
+          {# Column order (2026-07-23): Source | Sender | Body | Status |
+             Received | Actions. Source moved to the far left per
+             operator request; Status is a new dedicated column
+             showing the suppression verdict + rule chips. #}
+          <th class="px-4 py-3 text-left">Source</th>
           <th class="px-4 py-3 text-left">Sender</th>
           <th class="px-4 py-3 text-left">Body</th>
-          <th class="px-4 py-3 text-left">Source</th>
+          <th class="px-4 py-3 text-left">Status</th>
           <th class="px-4 py-3 text-left">Received</th>
           <th class="px-4 py-3 text-right">Actions</th>
         </tr>
@@ -371,5 +402,5 @@
    in the future). #}
 <script src="{{ url_for('static', filename='dashboard_controls.js') }}?v=4"></script>
 <script src="{{ url_for('static', filename='dashboard_modals.js') }}?v=7"></script>
-<script src="{{ url_for('static', filename='dashboard_recent.js') }}?v=2"></script>
+<script src="{{ url_for('static', filename='dashboard_recent.js') }}?v=4"></script>
 {% endblock %}

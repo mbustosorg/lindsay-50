@@ -119,72 +119,77 @@ def test_preview_template_layers_media_behind_canvas():
     )
 
 
-def test_preview_template_canvas_is_responsive():
-    """The canvas is CSS-responsive so it scales with the viewport on resize.
+def test_preview_template_canvas_is_fixed_size():
+    """The preview block is a fixed-size square — the left column absorbs
+    the rest of the viewport and the preview does NOT resize with the
+    viewport on resize.
 
     Regression history:
 
     1. The original layout had a fixed inline `width: 512px; height:
-       512px;` on the canvas, so the dark div (bg-slate-900) sized to
-       the canvas and didn't shrink when the viewport narrowed — the
-       user saw a fixed-size preview frame regardless of window width.
+       512px;` on the canvas. The dark div (bg-slate-900) sized to the
+       canvas, but the surrounding column didn't grow/shrink to match.
 
-    2. The first responsive fix (`max-w-[min(800px,100%)] h-auto
-       aspect-square`) capped the canvas at 800px while it owned the
-       full page width.
-
-    3. The 2026-07-22 layout split the dashboard into a two-column grid
-       (left: Sign Health + Test injection; right: canvas). The canvas
-       lives in a 50%-wide column on lg+ screens. The first round
-       (`w-2/3 mx-auto`) shrank the dark frame to 2/3 of the column
-       width so the preview height roughly matched the left column.
-       Round 2 (`flex-1 flex items-center justify-center` wrapper +
+    2. Round 2 (`flex-1 flex items-center justify-center` wrapper +
        `aspect-square w-full max-h-full max-w-full` dark frame)
-       replaced the fixed 2/3 with a true flex layout: the preview
-       card stretches to the column height, the dark-frame area
-       fills the remaining vertical space, and the square centers
-       itself with even padding on all four sides. The new
-       invariant: the square fits the smaller of the available
-       width / height, and the white padding around it is equal
-       regardless of viewport shape.
+       replaced the fixed-pixel canvas with a true flex layout: the
+       square fits the smaller of available width / height and the
+       white padding around it stays even. Reported as looking wrong —
+       the preview shrank and grew with the viewport.
+
+    3. 2026-07-23 fix: the operator asked for a fixed-size preview
+       with the left column resizing to match. The right column is
+       a fixed 464px-wide flex container with `flex-shrink-0`. The
+       dark frame is `aspect-square` with explicit `w-full max-h-[400px]
+       max-w-[400px] min-h-[200px]` clamps. Left column gets
+       `flex-1 min-w-0`. New invariant: preview stays a 400×400
+       square regardless of viewport, no whitespace gaps beside the
+       dark frame.
     """
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
-    # The preview area is wrapped in a flex-1 + items-center +
-    # justify-center container so the square centers itself with
-    # even padding on all four sides. The dark frame itself is
-    # `aspect-square` with `max-h-full max-w-full`, so the square
-    # fits the smaller available dimension.
-    assert "flex-1 flex items-center justify-center" in template, (
-        "The preview area must wrap the dark frame in a flex-1 "
-        "items-center justify-center container so the square centers "
-        "with even padding on all four sides."
+
+    # The right-column wrapper is fixed-width and shrink-proof — it
+    # owns its own 464px and the left column resizes around it.
+    assert 'style="width: 464px;"' in template, (
+        "The right column must be a fixed 464px-wide flex container "
+        "(400px dark frame + 24px padding × 2) with an inline "
+        "`style=\"width: 464px;\"`. Anything else breaks the "
+        "fixed-preview invariant."
     )
-    assert "aspect-square w-full max-h-full max-w-full" in template, (
-        "The dark frame must declare aspect-square w-full max-h-full "
-        "max-w-full so the square fits the smaller of the available "
-        "width / height, eliminating the wasted vertical space below "
-        "the preview."
+    assert "flex-shrink-0" in template, (
+        "The right column must declare `flex-shrink-0` so the flex "
+        "parent can't squash it below 464px on narrow viewports."
     )
-    # The canvas must declare aspect-square so its height tracks the
-    # width — without this the canvas would be a non-square rectangle
-    # if the JS-set width is constrained by the column.
-    assert "aspect-square" in template, (
-        "The canvas must declare aspect-square so its height tracks the " "width and it stays square inside its column"
+
+    # The dark frame is bounded to 400×400 via min/max clamps.
+    assert "max-h-[400px]" in template and "max-w-[400px]" in template, (
+        "The dark frame must cap at 400×400 via `max-h-[400px] max-w-[400px]` "
+        "so the preview stays a fixed-size square even on tall/wide viewports."
     )
-    # The inline pixel width/height must NOT be present anymore.
-    assert "width: 512px" not in template, (
-        "The inline `width: 512px;` on the canvas was removed in favor "
-        "of CSS-driven responsive sizing; its presence means the old "
-        "fixed-size behavior is back"
+    assert "min-h-[200px]" in template, (
+        "The dark frame must declare `min-h-[200px]` so it never collapses "
+        "below a usable preview on narrow viewports."
     )
-    assert "height: 512px" not in template
-    # The 800px cap was a full-page-width artifact from before the
-    # two-column layout — with the canvas in a 50% column the cap
-    # never triggers and was removed.
+
+    # The canvas declares aspect-square so its height tracks the width.
+    assert 'aspect-square"' in template or "aspect-square " in template or template.count("aspect-square") >= 2, (
+        "The canvas must declare aspect-square so its height tracks the "
+        "width and it stays square inside the dark frame."
+    )
+
+    # The legacy "responsive" markers must be gone.
+    assert "aspect-square w-full max-h-full max-w-full" not in template, (
+        "The round-2 responsive dark-frame class string must NOT be "
+        "present — its presence means the layout regressed to "
+        "viewport-responsive preview sizing."
+    )
     assert "max-w-[min(800px,100%)]" not in template, (
-        "The 800px cap was removed when the canvas moved into a "
-        "50%-wide right column; its presence means the layout "
-        "regressed to the pre-split full-width canvas"
+        "The 800px cap from the pre-split full-width canvas must NOT "
+        "be present — its presence means the layout regressed."
+    )
+    assert "w-2/3 mx-auto" not in template, (
+        "The round-1 `w-2/3 mx-auto` dark-frame size must NOT be "
+        "present — its presence means the layout regressed."
     )
 
 
