@@ -67,8 +67,8 @@ src = "https://cdn.jsdelivr.net/pyodide/v0.26.2/full/pyodide.js"
 # these mirror copies under static/preview/ are what PyScript
 # fetches at page-load time (Flask serves them under the
 # /static/preview/ URL).
-"heart-message-manager/dashboard_controller.py" = "/static/preview/heart-message-manager/dashboard_controller.py"
-"heart-message-manager/dashboard_bootstrap.py" = "/static/preview/heart-message-manager/dashboard_bootstrap.py"
+"heart-message-manager/dashboard_controller.py" = "/static/preview/heart-message-manager/dashboard_controller.py?v=26"
+"heart-message-manager/dashboard_bootstrap.py" = "/static/preview/heart-message-manager/dashboard_bootstrap.py?v=26"
 # Browser-side event log (issue #26). PyScript wrapper around
 # `js.indexedDB`, mirroring the Pi-side `heart-matrix-controller/event_log.py`
 # schema so the same `MessageSelector` class works in the preview runtime.

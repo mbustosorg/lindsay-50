@@ -4,9 +4,12 @@
 //   1. Wire the three diagnostic modal triggers (Current config,
 //      Active filters, S3 bucket) to fetch their data and open the
 //      modal shell. The data fetchers delegate to the existing
-//      authenticated `/api/admin/config`, `/api/admin/filters`,
-//      `/api/admin/s3-objects` endpoints (the same ones the Testing
-//      page uses).
+//      authenticated `/api/admin/config` and `/api/admin/s3-objects`
+//      endpoints (the same ones the Testing page uses). Active
+//      filters is read from the in-memory config
+//      (`window.App.getConfig()`) — there is no `/api/admin/filters`
+//      endpoint, and filters are just one field of the live SignConfig
+//      that the dashboard already mirrors from MQTT.
 //   2. Bind the test-injection form to POST `/api/test-messages`
 //      with the same shape the Testing page uses, then surface the
 //      result (HTTP status + parsed body) in the inline result row.
@@ -156,13 +159,57 @@
     });
   }
   if (btnFilters) {
-    btnFilters.addEventListener("click", function () {
-      fetchAndShow(
-        "filters-modal",
-        "filters-modal-body",
-        "/api/admin/filters",
-        "Failed to fetch active filters"
-      );
+    btnFilters.addEventListener("click", async function () {
+      // Active filters live inside the live SignConfig the
+      // dashboard already mirrors from MQTT — there's no
+      // dedicated `/api/admin/filters` endpoint and creating
+      // one would duplicate state. Read from the in-memory
+      // buffer via `App.getConfig()` (the same proxy the
+      // Testing page reads from). `App.getConfig` is async in
+      // the cold-load window before PyScript overwrites the
+      // stub with the per-generation proxy; await it directly.
+      setModalBody("filters-modal-body", "Loading…", false);
+      openModal("filters-modal");
+      try {
+        const App = window.App;
+        if (!App || typeof App.getConfig !== "function") {
+          setModalBody(
+            "filters-modal-body",
+            "Failed to fetch active filters: App not ready (PyScript bootstrap hasn't installed the config proxy yet).",
+            true,
+          );
+          return;
+        }
+        const cfg = await App.getConfig();
+        const filters =
+          (cfg && Array.isArray(cfg.filters)) ? cfg.filters : [];
+        if (filters.length === 0) {
+          setModalBody("filters-modal-body", "(no active filters)", false);
+          return;
+        }
+        // FilterRule.to_dict() produces {type, value, action, status, label}
+        // — render each row as a one-line summary so the modal
+        // matches the same compact view the Settings page uses.
+        const rows = filters
+          .map(function (f) {
+            const type = (f && f.type) || "?";
+            const value = (f && f.value) || "";
+            const action = (f && f.action) || "?";
+            const status = (f && f.status) || "?";
+            const label = (f && f.label) || "";
+            const labelStr = label ? ` — ${label}` : "";
+            return `[${status}] ${action} ${type} = ${value}${labelStr}`;
+          })
+          .join("\n");
+        setModalBody("filters-modal-body", rows, false);
+      } catch (e) {
+        setModalBody(
+          "filters-modal-body",
+          "Failed to fetch active filters: " +
+            ((e && e.message) || String(e)),
+          true,
+        );
+      }
     });
   }
   if (btnS3) {

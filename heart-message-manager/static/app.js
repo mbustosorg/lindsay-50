@@ -143,11 +143,15 @@
   async function init() {
     // Wait for the dashboard controller (installed by `app_main.py`)
     // and kick off the first generation. The controller's
-    // `start()` awaits its internal seed + WS connect; we don't
-    // need to do anything else here — `app_main.py` wires the
-    // MQTT-WS envelope fan-out into the per-generation manager,
-    // and the dashboard page's lifecycle controls own subsequent
-    // Stop / Restart transitions.
+    // `start()` constructs the per-generation MessageManager,
+    // EffectsCoordinator, and MQTT-WS client (via the
+    // `_render_loop_start` hook registered by `app_main.py`).
+    // The seed — which fetches `/api/messages` and `/api/config`
+    // into the in-memory buffer — is exposed as `window._seed`
+    // by the same hook but is NOT auto-fired by `start()`; the
+    // Testing page calls `_seed()` from its "Refresh feed"
+    // button, and the dashboard auto-fires it here so the
+    // operator lands on a populated table.
     //
     // On pages WITHOUT the dashboard simulator (Settings, Testing,
     // Messages, archive) `window.Dashboard` is still installed
@@ -165,6 +169,24 @@
       console.info("[app] dashboard runtime started");
     } catch (e) {
       console.warn("[app] dashboard start failed:", e);
+      return;
+    }
+    // Auto-seed the in-memory buffer. `_seed` is installed by the
+    // bootstrap hook (`dashboard_bootstrap.py:install_bootstrap`)
+    // at the end of `on_start`, so it's available the moment
+    // `Dashboard.start()` resolves. `seed()` is idempotent — it
+    // clears the buffer first, so calling it on every page load
+    // (and again on every Stop-then-Start) is safe. The resulting
+    // `on_change` fans out to `App._dispatchChange()` so any
+    // registered listener (dashboard_recent's table re-render,
+    // testing's reRender, etc.) updates without polling.
+    if (typeof window._seed === "function") {
+      try {
+        await window._seed();
+        console.info("[app] in-memory buffer seeded");
+      } catch (e) {
+        console.warn("[app] seed failed:", e);
+      }
     }
   }
 
