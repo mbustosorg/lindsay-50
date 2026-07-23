@@ -301,25 +301,46 @@ def _extract_tag(template: str, element_id: str) -> str:
     return template[open_lt : close_gt + 1]
 
 
-def test_preview_template_has_status_block():
-    """The template shows the current effect name and message body."""
-    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
-    assert 'id="preview-effect"' in template
-    assert 'id="preview-message"' in template
+def test_preview_template_has_preview_title():
+    """The Preview card leads with a 📺 title (2026-07-23 round-5).
 
-
-def test_preview_template_has_loading_indicator():
-    """A simulator-state indicator (#preview-loading) that hides once the
-    runtime is running and shows the lifecycle state otherwise.
-
-    Under #48 the canvas lives on `/` (dashboard), and the loading
-    overlay's text reflects the active lifecycle state (Starting /
-    Stopped / Error) rather than just "Loading preview…". The
-    `id="preview-loading"` selector is the contract that ties
-    `preview.js`'s `hideLoading()` to the DOM.
+    Under the round-5 redesign, the Preview card is its own card
+    with a 📺 title and an MQTT pill summarizing the WS connection
+    state. The previous "Now displaying" / "Effect" / loading
+    overlay rows are gone (issue #48 round-5, 2026-07-23).
     """
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
-    assert 'id="preview-loading"' in template
+    assert "Preview" in template
+    assert 'id="preview-mqtt-pill"' in template
+
+
+def test_preview_template_no_legacy_status_block():
+    """The "Now displaying" / "Effect" rows are removed (2026-07-23).
+
+    The previous Preview card showed the active message body and
+    effect class via `#preview-message` / `#preview-effect`; the
+    round-5 redesign removed both. The operator reads what the
+    preview is showing directly from the canvas — the rows were
+    redundant. Asserting the absent selectors prevents accidental
+    re-introduction.
+    """
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
+    assert 'id="preview-effect"' not in template
+    assert 'id="preview-message"' not in template
+    assert 'id="preview-loading"' not in template
+    assert 'id="preview-message-link"' not in template
+
+
+def test_preview_template_no_start_stop_toggle():
+    """There is no Start/Stop toggle on the Preview card.
+
+    Under the round-5 redesign, page load = Pi startup and refresh
+    restarts. Asserting the absent `#sim-toggle-btn` selector
+    prevents accidental re-introduction of the legacy Start/Stop
+    lifecycle controls.
+    """
+    template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
+    assert 'id="sim-toggle-btn"' not in template
 
 
 def test_preview_template_includes_pyscript_runtime():
@@ -366,11 +387,16 @@ def test_preview_template_loaded_by_app():
         # 9f5efb3 moved the LED look to a JS-side dot mask) — but the canvas
         # still declares an image-rendering style.
         assert "image-rendering:" in body
-        # The simulator-state overlay now lives on `/` with id
-        # `preview-loading`; the visible text reflects the lifecycle
-        # state (Starting / Stopped / Error) rather than "Loading
-        # preview…".
-        assert 'id="preview-loading"' in body
+        # The Preview card now has a 📺 title + MQTT pill
+        # (2026-07-23 round-5). Asserting the present selector so
+        # the new layout is part of the contract.
+        assert 'id="preview-mqtt-pill"' in body
+        # The legacy "Simulator stopped — press Start" overlay
+        # (#preview-loading) is gone in the round-5 redesign.
+        # Refresh to restart; there's no "stopped" intermediate
+        # state. Asserting the absent selector prevents accidental
+        # re-introduction.
+        assert 'id="preview-loading"' not in body
         # No WebSocket references in the rendered HTML
         assert "new WebSocket" not in body
         assert "Flask-Sock" not in body
@@ -612,8 +638,10 @@ def test_pyscript_files_declares_every_app_main_import():
     PyScript's MEMFS only resolves modules that are listed in
     `[files]` — any undeclared import crashes the bootstrap with
     `ModuleNotFoundError` (browser console). The original
-    dashboard-controller + dashboard-bootstrap modules shipped
-    undeclared and the user saw the crash on every page load.
+    dashboard_controller / dashboard_bootstrap modules shipped
+    undeclared; the round-5 simplification (2026-07-23) replaced
+    them with a single `dashboard_runtime` module which IS
+    declared.
 
     Walks `app_main.py`'s top-level `from X import Y` / `import X`
     statements, normalizes each name to a py-config `[files]` key,
@@ -681,27 +709,32 @@ def test_dashboard_template_renders_mqtt_status_header():
 
     Companion to `test_settings_does_not_render_mqtt_status_header`:
     the dashboard owns the simulator runtime and the MQTT-WS
-    envelope fan-out, so the operator expects the status pill at
-    the top of the page. Implemented as the `_mqtt_header.html`
-    partial — the dashboard includes it explicitly.
+    envelope fan-out, so the operator expects the connection-state
+    pill somewhere on the page.
 
-    Pin: dashboard.html contains `{% include "_mqtt_header.html" %}`
-    AND the partial contains the `#mqtt-status` /
-    `#mqtt-ws-target` / `#mqtt-sub-topic` elements. The include is
-    evaluated server-side by Jinja; reading dashboard.html source
-    alone doesn't expand it, so we check the include line + the
-    partial contents in one go.
+    History: pre-round-5 the pill was a header strip
+    (`_mqtt_header.html`) with `#mqtt-status` / `#mqtt-ws-target` /
+    `#mqtt-sub-topic`. The 2026-07-23 round-5 redesign moved the
+    MQTT state indicator into the Preview card itself
+    (`#preview-mqtt-pill`) and dropped the header partial. The
+    operator reads the WS URL + subscribe topic from the pill's
+    `title=` tooltip instead of from a banner at the top of the
+    page. Asserting the new shape here.
     """
     dashboard_src = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html").read_text()
-    assert '{% include "_mqtt_header.html" %}' in dashboard_src, (
-        "dashboard.html must include the _mqtt_header.html partial — "
-        "the dashboard owns the simulator runtime so it must surface "
-        "the MQTT status pill."
+    # The new pill lives in the Preview card. The template should
+    # NOT include the old `_mqtt_header.html` partial — that whole
+    # row was removed.
+    assert 'id="preview-mqtt-pill"' in dashboard_src, (
+        "dashboard.html must surface the MQTT status pill on the "
+        "Preview card (`#preview-mqtt-pill`) so the operator can "
+        "see WS state without scanning the page header."
     )
-    partial = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html").read_text()
-    assert 'id="mqtt-status"' in partial
-    assert 'id="mqtt-ws-target"' in partial
-    assert 'id="mqtt-sub-topic"' in partial
+    assert '{% include "_mqtt_header.html" %}' not in dashboard_src, (
+        "dashboard.html must NOT include the legacy "
+        "`_mqtt_header.html` partial — the round-5 redesign moved "
+        "the pill into the Preview card."
+    )
 
 
 def test_mqtt_header_partial_is_a_real_template():

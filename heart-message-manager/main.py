@@ -90,7 +90,10 @@ elif _secret_key_path.exists():
 else:
     app.secret_key = uuid.uuid4().hex
     try:
-        _secret_key_path.write_text(app.secret_key)
+        # `app.secret_key` is typed by Flask as `str | bytes | None`,
+        # but the assignments above always produce `str`; cast so
+        # Pylance (and `write_text`'s signature) are happy.
+        _secret_key_path.write_text(str(app.secret_key))
     except OSError:
         # Read-only filesystem — keep the key in memory for this process.
         # On a multi-process deploy set FLASK_SECRET_KEY to make it shared.
@@ -1148,7 +1151,10 @@ def _build_sign_config_from_request(data: dict) -> tuple:
     and returns per-field error messages.
 
     Args:
-        data: dict — the parsed JSON request body.
+        data: dict — the parsed JSON request body. Callers are
+            responsible for rejecting non-dict payloads (e.g.
+            ``api_put_config`` checks ``isinstance(data, dict)``
+            before calling this helper).
 
     Returns:
         A `(SignConfig | None, Response | None)` tuple. On success, the
@@ -1156,9 +1162,6 @@ def _build_sign_config_from_request(data: dict) -> tuple:
         On failure, the first element is None and the second is a Flask
         JSON response with HTTP 400 and `{"error": "<message>"}`.
     """
-    if not isinstance(data, dict):
-        return None, (jsonify({"error": "expected JSON object"}), 400)
-
     # Normalize to current version before validation so v1 payloads are
     # accepted through the same code path as v2.
     data = migrate(data, current_version=SignConfig.CURRENT_VERSION)

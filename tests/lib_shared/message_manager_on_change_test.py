@@ -112,11 +112,11 @@ def test_app_main_on_change_fans_out_to_js():
     on the coordinator's next `tick()`. The JS fan-out is the only
     responsibility of the on_change path on the browser.
 
-    Pre-#48 this looked at `app_main.py:_on_change_js`. After the
-    refactor, the per-generation on_change lives in
-    `dashboard_bootstrap.py:DashboardRuntime._make_on_change_js`
-    (a closure with a generation-discriminator guard). The contract
-    is unchanged: fan out to JS, never call apply_settings.
+    History: pre-#48 the on_change lived in `app_main.py:_on_change_js`.
+    The 2026-07-23 round-5 simplification moved it to
+    `dashboard_runtime._on_change_js` (no per-generation discriminator
+    — the runtime is built ONCE per page load; refresh to restart).
+    The contract is unchanged: fan out to JS, never call apply_settings.
 
     We can't run PyScript in tests, so we read the source and assert
     the fan-out is present and that `apply_settings` is NOT in the
@@ -125,20 +125,22 @@ def test_app_main_on_change_fans_out_to_js():
     p = (
         Path(__file__).parent.parent.parent
         / "heart-message-manager"
-        / "dashboard_bootstrap.py"
+        / "dashboard_runtime.py"
     )
     src = p.read_text(encoding="utf-8")
-    assert "def _make_on_change_js" in src, (
-        "dashboard_bootstrap.py must define _make_on_change_js"
+    assert "def _on_change_js" in src, (
+        "dashboard_runtime.py must define _on_change_js"
     )
-    # Find the closure body — between `def _make_on_change_js(self):`
-    # and the next `def `.
+    # Find the closure body — between `def _on_change_js():` (or
+    # `def _on_change_js() -> None:`) and the next sibling `def `
+    # at the same OR parent indent. `_on_change_js` is defined as
+    # a nested closure inside `install_runtime()`.
     m = re.search(
-        r"def _make_on_change_js\(self\):\s*\n(.*?)(?=\n    def |\Z)",
+        r"def _on_change_js\(\)[^:]*:\s*\n((?:[ \t]+.*\n|\s*\n)*?)(?=^[ \t]*def |^def |\Z)",
         src,
-        re.DOTALL,
+        re.MULTILINE,
     )
-    assert m is not None, "could not extract _make_on_change_js body"
+    assert m is not None, "could not extract _on_change_js body"
     body = m.group(1)
     # Drop the docstring.
     body = re.sub(r'"""[\s\S]*?"""', "", body, count=1)
@@ -151,29 +153,29 @@ def test_app_main_on_change_fans_out_to_js():
     )
 
 
-def test_create_proxy_is_invoked_with_on_change_js():
-    """Smoke check: the per-generation bootstrap wraps the
-    `_make_on_change_js` closure in `create_proxy()` so PyScript can
-    hand it to the JS side as a JsProxy. We assert the bootstrap
-    source calls `create_proxy(dash._make_on_change_js())` —
-    the proxy is created around the freshly-built closure."""
+def test_create_proxy_is_invoked_with_callbacks():
+    """Smoke check: the runtime wraps the per-callback closures in
+    `create_proxy()` so PyScript can hand them to the JS side as
+    JsProxies. Replaces the per-generation `_make_on_change_js`
+    / `_on_envelope_js` / `_on_status_js` checks from before
+    the 2026-07-23 round-5 simplification."""
     p = (
         Path(__file__).parent.parent.parent
         / "heart-message-manager"
-        / "dashboard_bootstrap.py"
+        / "dashboard_runtime.py"
     )
     src = p.read_text(encoding="utf-8")
-    assert "create_proxy(dash._make_on_change_js())" in src, (
-        "dashboard_bootstrap.py must wrap the per-generation on_change "
-        "closure in create_proxy() before handing it to MessageManager"
+    assert "create_proxy(_on_change_js)" in src, (
+        "dashboard_runtime.py must wrap the on_change closure in create_proxy() "
+        "before handing it to MessageManager"
     )
-    assert "create_proxy(dash._on_envelope_js)" in src, (
-        "dashboard_bootstrap.py must wrap the per-generation envelope "
-        "callback in create_proxy() before handing it to the MQTT-WS shim"
+    assert "create_proxy(_on_envelope_py)" in src, (
+        "dashboard_runtime.py must wrap the envelope callback in create_proxy() "
+        "before handing it to the MQTT-WS shim"
     )
-    assert "create_proxy(dash._on_status_js)" in src, (
-        "dashboard_bootstrap.py must wrap the per-generation status "
-        "callback in create_proxy() before handing it to the MQTT-WS shim"
+    assert "create_proxy(_on_status_py)" in src, (
+        "dashboard_runtime.py must wrap the status callback in create_proxy() "
+        "before handing it to the MQTT-WS shim"
     )
 
 

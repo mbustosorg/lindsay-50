@@ -29,12 +29,18 @@ Exposes the JS-callable surface that `static/preview/preview.js`
 expects:
   - `window.tick`                 — advance the coordinator one frame
   - `window.get_frame_rgba`       — read the current frame buffer
-  - `window.get_current_text`     — read the active message body
-  - `window.get_current_effect_name` — read the active effect class
-  - `window.get_current_message`  — read the active Message dict
-                                    (issue #38) — used to bind the
-                                    preview status text to the
-                                    Testing page's JSON modal.
+  - `window.get_current_media`    — read the active MMS attachment
+                                    (issue #38) for the browser-side
+                                    `<img>` / `<video>` overlay
+  - `window.get_diagnostics`      — read coordinator state-machine
+                                    values for the 1 Hz heartbeat
+                                    log
+
+History (2026-07-23): the previous surface exposed
+`get_current_text`, `get_current_effect_name`, and
+`get_current_message` for the preview status block. The
+issue-#48 round-5 redesign removed that block from the
+dashboard; the Python-side functions are gone with it.
 
 The actual main loop lives in `static/preview/preview.js`, which
 drives `tick()` via requestAnimationFrame (capped at 30 FPS). The
@@ -66,7 +72,7 @@ imports (Pillow + numpy are pulled in via the
 py-config.toml declared packages).
 """
 
-from pyodide.ffi import create_proxy, to_js  # type: ignore[import-not-found]  (used by `_install_js_api`, `get_current_message`, `get_current_media`; Pyodide FFI for JS interop)
+from pyodide.ffi import to_js  # type: ignore[import-not-found]  (used by `_install_js_api`, `get_current_media`; Pyodide FFI for JS interop)
 from pyodide_js import loadPackage  # type: ignore[reportGeneralTypeIssues]  # noqa: F401  (top-level await: PyScript 2024.9.x runs via `eval_code_async`)
 
 print("[preview-py] module evaluation START (line 69)")
@@ -280,7 +286,7 @@ asyncio.ensure_future(_bootstrap_with_logging())
 def _coord():
     """Return the bound coordinator, or None if bootstrap is still in flight.
 
-    JS-callable surface (tick, get_current_text, ...) calls
+    JS-callable surface (tick, get_frame_rgba, ...) calls
     this on every invocation. The `None` branch is rare — those
     callbacks only run after `_install_js_api()` lands, which
     `_bootstrap()` only does after the coord is in the slot — but
@@ -301,13 +307,10 @@ def _coord():
 def _install_js_api() -> None:
     js.window.tick = tick
     js.window.get_frame_rgba = get_frame_rgba
-    js.window.get_current_text = get_current_text
-    js.window.get_current_effect_name = get_current_effect_name
     js.window.get_current_media = get_current_media
-    js.window.get_current_message = get_current_message
     js.window.get_diagnostics = get_diagnostics
     print(
-        "[preview-py] _install_js_api: window.tick, get_frame_rgba, get_current_text, get_current_effect_name, get_current_media, get_current_message, get_diagnostics all installed"
+        "[preview-py] _install_js_api: window.tick, get_frame_rgba, get_current_media, get_diagnostics all installed"
     )
 
 
@@ -326,56 +329,6 @@ def tick():
 def get_frame_rgba():
     """Return the current frame buffer as raw RGBA bytes for the JS blit."""
     return _web_canvas.to_imagedata()
-
-
-def get_current_effect_name():
-    """Return the class name of the active effect (status block)."""
-    coord = _coord()
-    return coord.current_effect_name if coord is not None else ""
-
-
-def get_current_text():
-    """Return the body of the message currently being scrolled."""
-    coord = _coord()
-    return coord.current_text if coord is not None else ""
-
-
-def get_current_message():
-    """Return the full wire shape of the message currently being shown.
-
-    Used by `preview.js` to bind the `#preview-message` text to a
-    click handler that opens the same JSON modal the Testing page
-    uses. The dict shape matches `Message.to_dict()` exactly
-    (`id`, `sender`, `body`, `received_at`, `media`) so the
-    serialized JSON in the modal is byte-identical to what the
-    broker would publish — useful for confirming the coordinator
-    picked up the same `media` list the wire carried.
-
-    Returns `None` when the coordinator is idle (no picked entry —
-    boot splash, SMS-only background, or post-`on_deck` consume).
-    `preview.js` treats `None` as "no link target", so clicking
-    the text in idle state is a no-op.
-
-    Conversion note (issue #38 debug-2026-07-09): Pyodide's default
-    conversion of a returned Python dict is a JS `Map`, not a plain
-    `Object` — so `proxy.id` was always `undefined`, the link's
-    `data-msg` was always deleted, and the click handler always
-    fired the "no data-msg; idle state?" warning. We wrap the
-    return in `to_js(..., dict_converter=Object.fromEntries)` so
-    the JS side gets a real object whose property accessors work,
-    `JSON.stringify` walks every field, and `btoa(...)` produces a
-    matching base64 payload for the modal. The modal decode path
-    stays as-is since it already works from the plain `Object`
-    shape (`JSON.parse(decodeURIComponent(escape(atob(raw))))`).
-    """
-    coord = _coord()
-    if coord is None:
-        return None
-    current = coord.current_message
-    if current is None:
-        return None
-    raw = current.to_dict()
-    return to_js(raw, dict_converter=js.Object.fromEntries)
 
 
 def get_current_media():

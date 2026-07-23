@@ -79,7 +79,7 @@
     // on each `<py-script>` element) — fired after the main module has
     // finished evaluating, at which point the top-level functions
     // exposed by preview_main.py (tick, get_frame_rgba,
-    // get_current_text, get_current_effect_name) are callable.
+    // get_current_media, get_diagnostics) are callable.
     // `py:all-done` is the equivalent plain Event fired once all
     // py-script elements are done.
     //
@@ -111,7 +111,6 @@
         return;
       }
       renderLoopStarted = true;
-      hideLoading();
       console.log("[preview-js] onReady fired; starting render loop");
       startRenderLoop(canvas);
     };
@@ -173,11 +172,6 @@
     // Clear any previously-set inline height so CSS `h-auto aspect-square`
     // computes the height from the (possibly constrained) width.
     canvas.style.height = "";
-  }
-
-  function hideLoading() {
-    const loading = document.getElementById("preview-loading");
-    if (loading) loading.style.display = "none";
   }
 
   // ------------------------------------------------------------------
@@ -268,44 +262,6 @@
     const ctx = canvas.getContext("2d");
     const mediaImg = document.getElementById("browser-media-image");
     const mediaVideo = document.getElementById("browser-media-video");
-    const messageLink = document.getElementById("preview-message-link");
-    if (messageLink) {
-      // Wire the modal click directly via addEventListener. The
-      // previous inline `onclick="return showPreviewMessageModal(event)"`
-      // approach was fragile: it relied on `this` resolving to the
-      // anchor after the click bubbled from the inner <span>, and on
-      // the inline handler not being clobbered by anything that
-      // touches attributes. A direct listener on the anchor is the
-      // robust path — `this` is always the anchor, the listener
-      // can't be shadowed by template edits, and we can `preventDefault`
-      // to suppress the href="#" navigation.
-      messageLink.addEventListener("click", function (ev) {
-        ev.preventDefault();
-        const raw = messageLink.dataset.msg;
-        if (!raw) {
-          console.warn("[preview-js] message link clicked but no data-msg; idle state?");
-          return;
-        }
-        try {
-          const item = JSON.parse(decodeURIComponent(escape(atob(raw))));
-          document.getElementById("json-modal-title").textContent = "Message " + item.id;
-          document.getElementById("json-modal-body").textContent = JSON.stringify(item, null, 2);
-          const modal = document.getElementById("json-modal");
-          if (!modal) {
-            console.error("[preview-js] #json-modal element not found");
-            return;
-          }
-          modal.classList.remove("hidden");
-          modal.classList.add("flex");
-          console.log("[preview-js] modal opened for message id=%s", item.id);
-        } catch (e) {
-          console.error("[preview-js] modal decode failed:", e, "raw=", raw.slice(0, 80));
-        }
-      });
-      console.log("[preview-js] message-link click handler attached");
-    } else {
-      console.error("[preview-js] #preview-message-link element not found");
-    }
     let lastMediaKey = "";
     // Throttle variable for the "python returned" diagnostic log.
     // Distinct from `lastMediaKey` (which `applyMedia` owns and
@@ -313,13 +269,6 @@
     // the diagnostic path would race the swap check and silently
     // skip the first media of every cycle.
     let lastLoggedMediaKey = "";
-    let lastEffectNameForLog = "";
-    // Tracks the id of the message currently bound to the status
-    // link. The link's `data-msg` is rewritten only when this
-    // changes — the rAF loop at 30 FPS would otherwise base64-
-    // encode the full Message dict every frame even when the
-    // coordinator is sitting on the same message for 15+ seconds.
-    let lastLinkMessageId = "";
     // Tracks whether Python last returned empty media (no key/url).
     // The empty-state log fires only on the transition INTO empty
     // — once we're empty, stay quiet until Python produces a real
@@ -452,85 +401,6 @@
       mediaVideo.style.filter = "brightness(" + brightness.toFixed(3) + ")";
     }
 
-    function updateMessageLink() {
-      // Bind the preview status text to a clickable link that
-      // opens the Testing page's #json-modal showing the full
-      // Message dict (id, sender, body, received_at, media).
-      //
-      // Cheap path: the rAF loop is 30 FPS but a typical
-      // `hold_seconds` is 15s, so the picked message is
-      // stable for ~450 frames in a row. We only re-encode
-      // the base64 JSON when the id changes — and we cache
-      // the id in `lastLinkMessageId` so the hot path is a
-      // single integer compare.
-      if (!messageLink) return;
-      if (typeof window.get_current_message !== "function") return;
-      let msg = null;
-      try {
-        msg = window.get_current_message();
-      } catch (e) {
-        if (PREVIEW_DEBUG) console.warn("[preview-modal] get_current_message failed:", e);
-        return;
-      }
-      // `get_current_message` is wrapped in `to_js(dict_converter=Object.fromEntries)`
-      // on the Python side (preview_main.py), so what arrives here is a plain
-      // JS `Object` with property accessors — `msg.id`, `JSON.stringify(msg)`,
-      // etc. all work. Pyodide's default Python-dict-to-JS conversion produces
-      // a Map, which is why we wrap on the Python side instead.
-      const id = (msg && msg.id) || "";
-      if (id === lastLinkMessageId) {
-        // Hot path: same id as last frame, do nothing. This is the
-        // 99% case during a 15s hold.
-        return;
-      }
-      if (PREVIEW_DEBUG) {
-        // Log the picked message so we can see in the console what
-        // the wire shape looks like — specifically the `media` list,
-        // which is the field the image render path depends on. If
-        // `media` is empty, the image can never load (the coordinator
-        // won't construct a `BrowserMediaOverlay`); if `media` has
-        // entries but the image still doesn't render, the issue is
-        // downstream in `applyMedia` / the Flask `/api/media/<key>`
-        // proxy.
-        const media = (msg && Array.isArray(msg.media)) ? msg.media : [];
-        const mediaUrls = media.map((m) => m && m.url).filter(Boolean);
-        console.log(
-          "[preview-modal] picked message: id=%s body=%s media_count=%d media_urls=%s",
-          id || "(none)",
-          ((msg && msg.body) || "").slice(0, 40),
-          media.length,
-          JSON.stringify(mediaUrls),
-        );
-      }
-      lastLinkMessageId = id;
-      if (!msg || !id) {
-        // Idle / no picked entry — drop the data-msg so the
-        // click handler is a no-op and revert the link to plain-
-        // text styling so "Now displaying: Idle" doesn't read as
-        // a link to nowhere.
-        delete messageLink.dataset.msg;
-        messageLink.className = "text-slate-500";
-        return;
-      }
-      // Match the encode/decode in preview.html:
-      //   encode: btoa(unescape(encodeURIComponent(JSON.stringify(item))))
-      //   decode: JSON.parse(decodeURIComponent(escape(atob(raw))))
-      // — the unescape/escape dance round-trips UTF-8 safely.
-      try {
-        const json = JSON.stringify(msg);
-        const b64 = btoa(unescape(encodeURIComponent(json)));
-        messageLink.dataset.msg = b64;
-        // Switch the link to the indigo/underline treatment so
-        // the user can see it's clickable. Set as the full
-        // className so the previous `text-slate-500` is dropped.
-        messageLink.className = "text-indigo-600 hover:text-indigo-800 hover:underline cursor-pointer";
-      } catch (e) {
-        if (PREVIEW_DEBUG) console.warn("[preview-modal] encode failed:", e);
-        delete messageLink.dataset.msg;
-        messageLink.className = "text-slate-500";
-      }
-    }
-
     function frame(now) {
       if (now - lastTick >= FRAME_MS) {
         // Call Python: advance the coordinator, then pull the frame buffer.
@@ -542,31 +412,13 @@
         // therefore reach `window.tick`, `window.get_frame_rgba`, etc.
         // — installed by preview_main.py when the <py-script> body runs.
         try {
-          // §5.5: the lifecycle controls toggle this flag. When
-          // the controller is `stopped` / `error` / `stopping`,
-          // the canvas freezes on the last frame and the Python
-          // `tick()` is skipped entirely. The default (no flag
-          // present) is enabled so older builds that don't ship
-          // `dashboard_controls.js` keep working.
-          if (typeof window.__PREVIEW_TICK_ENABLED__ !== "undefined" &&
-              !window.__PREVIEW_TICK_ENABLED__) {
-            // Don't update lastTick — when the gate flips back on,
-            // we want the next eligible frame to fire immediately,
-            // not after a 1-frame-throttled recovery.
-            requestAnimationFrame(frame);
-            return;
-          }
+          // Page-load runtime (issue #48, simplified 2026-07-23).
+          // There is no Start/Stop toggle anymore — the
+          // dashboard_runtime is built ONCE per page load and runs
+          // for the lifetime of the page. Refresh to restart, like
+          // restarting the Pi. The rAF loop always fires
+          // `window.tick()`; there is no per-frame gate.
           if (typeof window.tick === "function") window.tick();
-          const effectName = typeof window.get_current_effect_name === "function"
-            ? window.get_current_effect_name() : "";
-          const text = typeof window.get_current_text === "function"
-            ? window.get_current_text() : "";
-          updateStatus(effectName, text);
-          updateMessageLink();
-          if (PREVIEW_DEBUG && effectName !== lastEffectNameForLog) {
-            console.log("[preview-effect] now=%s (was=%s)", effectName || "—", lastEffectNameForLog || "—");
-            lastEffectNameForLog = effectName;
-          }
 
           // Pull the active media attachment (issue #38). When the
           // picked message has MMS attachments, the coordinator's
@@ -696,13 +548,6 @@
       requestAnimationFrame(frame);
     }
     requestAnimationFrame(frame);
-  }
-
-  function updateStatus(effectName, text) {
-    const e = document.getElementById("preview-effect");
-    if (e && effectName !== undefined) e.textContent = effectName || "—";
-    const m = document.getElementById("preview-message");
-    if (m) m.textContent = (text && text.length) ? text : "Idle";
   }
 
   // ------------------------------------------------------------------

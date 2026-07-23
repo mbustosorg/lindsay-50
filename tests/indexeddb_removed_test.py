@@ -38,12 +38,16 @@ def test_no_indexeddb_eventlog_class_in_event_log_module():
     )
 
 
-def test_no_indexeddb_imports_in_dashboard_bootstrap():
-    """The dashboard runtime bootstrap must not import IndexedDB."""
-    src_path = _PROJECT_ROOT / "heart-message-manager" / "dashboard_bootstrap.py"
+def test_no_indexeddb_imports_in_dashboard_runtime():
+    """The dashboard runtime module must not import IndexedDB.
+
+    Replaces the previous `dashboard_bootstrap.py` /
+    `dashboard_controller.py` checks (2026-07-23 round-5
+    simplification merged the two into a single
+    `dashboard_runtime.install_runtime()`).
+    """
+    src_path = _PROJECT_ROOT / "heart-message-manager" / "dashboard_runtime.py"
     src = src_path.read_text(encoding="utf-8")
-    # Comment-only mentions of "IndexedDB" are OK (the docstring at
-    # the top references the prior design as historical context).
     # Look for actual `import`/`from` statements touching indexeddb.
     matches = re.findall(
         r"^\s*(?:from\s+[\w.]*indexeddb[\w.]*|import\s+[\w.]*indexeddb[\w.]*|"
@@ -52,25 +56,25 @@ def test_no_indexeddb_imports_in_dashboard_bootstrap():
         re.IGNORECASE | re.MULTILINE,
     )
     assert matches == [], (
-        f"dashboard_bootstrap.py imports IndexedDB: {matches}. "
+        f"dashboard_runtime.py imports IndexedDB: {matches}. "
         "The browser event log is deque-backed; no IndexedDB is "
         "involved in the dashboard runtime path."
     )
 
 
-def test_no_indexeddb_references_in_dashboard_controller():
-    """The controller is browser-agnostic but should not own any
-    IndexedDB-specific state."""
-    src_path = _PROJECT_ROOT / "heart-message-manager" / "dashboard_controller.py"
-    src = src_path.read_text(encoding="utf-8")
-    # The phrase "IndexedDB" must not appear at all (no historical
-    # context for the controller — the deque EventLog is the only
-    # contract it knows about).
-    assert "IndexedDB" not in src, (
-        "dashboard_controller.py must not reference IndexedDB; "
-        "the controller's contract is browser-agnostic and the "
-        "deque EventLog is the only EventLog surface."
-    )
+def test_dashboard_controller_and_bootstrap_modules_are_gone():
+    """The legacy per-generation controller / bootstrap split was
+    replaced by a single `dashboard_runtime.install_runtime()`
+    (2026-07-23 round-5). The two old modules are deleted; if
+    anyone re-introduces them, this test fails."""
+    for name in ("dashboard_controller.py", "dashboard_bootstrap.py"):
+        path = _PROJECT_ROOT / "heart-message-manager" / name
+        assert not path.exists(), (
+            f"{name} must be deleted — the round-5 simplification "
+            f"replaced it with `dashboard_runtime.install_runtime()`. "
+            f"Re-introducing it contradicts the page-load-equals-Pi-"
+            f"startup design."
+        )
 
 
 def test_no_indexeddb_in_app_main():
