@@ -195,16 +195,59 @@
       window.setTimeout(reload, 50);
       return;
     }
+    // §7.1: 100 records with suppressed records included.
+    //
+    // `App.getMessages` is async (returns a Promise) until PyScript
+    // overwrites it with the per-generation synchronous proxy during
+    // bootstrap. We need to handle both shapes so the table doesn't
+    // flash `currentRows.slice is not a function` on cold load —
+    // Promise objects have no `.slice`. Once PyScript is up the proxy
+    // returns a true JS Array; before that, treat the function as
+    // async and re-render after it settles.
+    let result;
     try {
-      // §7.1: 100 records with suppressed records included.
-      const rows = App.getMessages(100, true) || [];
-      currentRows = rows;
-      render();
+      result = App.getMessages(100, true);
     } catch (e) {
       console.warn("[dashboard-recent] getMessages failed:", e);
       currentRows = [];
       render();
+      return;
     }
+    if (result && typeof result.then === "function") {
+      result.then(
+        (rows) => {
+          currentRows = coerceRows(rows);
+          render();
+        },
+        (err) => {
+          console.warn("[dashboard-recent] getMessages rejected:", err);
+          currentRows = [];
+          render();
+        },
+      );
+      return;
+    }
+    currentRows = coerceRows(result);
+    render();
+  }
+
+  function coerceRows(rows) {
+    // Coerce the result of `App.getMessages(...)` into a real JS Array.
+    // PyScript's `to_js(list)` returns a PyProxy of a JS Array (has
+    // `.length` and indexed access, but no `.slice`); Python-side
+    // pre-bootstrap paths can also return `null` or a plain object.
+    // `Array.isArray` rejects all of these. `Array.from` works for
+    // array-like objects (those with `.length`); fall back to `[]`
+    // for anything else.
+    if (Array.isArray(rows)) return rows;
+    if (rows && typeof rows.length === "number") {
+      try {
+        return Array.from(rows);
+      } catch (_) {
+        return [];
+      }
+    }
+    return [];
   }
 
   if (prevBtn) {

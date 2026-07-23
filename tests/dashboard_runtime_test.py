@@ -407,3 +407,43 @@ def test_stop_swaps_message_manager_to_null(controller, fake_runtime_hook):
     # the fake before Stop dropped it.
     assert refs["message_manager"] is pre
 
+
+def test_stop_invalidates_active_generation_before_render_loop_stop(controller):
+    """Design §2 contract: Stop invalidates the active generation FIRST,
+    then runs teardown. The render-loop on_stop hook must observe a
+    zeroed `_active_generation_id` and a False `is_active_generation(stale_gen)`
+    BEFORE any teardown side-effect runs — otherwise a late
+    `_on_change_js` (which captures `gen_id` at wrap time and gates
+    on `is_active_generation(gen_id)` at call time) could fan out a
+    stale `App._dispatchChange()` during the brief teardown window.
+    See Finding (b) in the standalone-preview-dashboard spot-check.
+    """
+    captured: dict = {}
+    stale_gen_holder: dict = {}
+
+    def on_start(runtime: Runtime) -> None:
+        runtime.event_log = object()
+        runtime.message_manager = _FakeMessageManager()
+
+    def on_stop(runtime: Runtime) -> None:
+        # At this exact moment — early in `stop()` — the active
+        # generation id MUST already be zero and the stale-gen
+        # consultation MUST already return False.
+        captured["generation_id_at_on_stop"] = controller.generation_id()
+        stale_gen = stale_gen_holder["gen"]
+        captured["is_active_at_on_stop"] = controller.is_active_generation(stale_gen)
+        captured["runtime_state_at_on_stop"] = runtime.state
+
+    controller.set_render_loop_hooks(on_start=on_start, on_stop=on_stop)
+    controller.start()
+    stale_gen_holder["gen"] = controller.generation_id()
+    controller.stop()
+
+    assert captured["generation_id_at_on_stop"] == 0, (
+        "stop() must zero _active_generation_id BEFORE running the "
+        "render-loop on_stop hook so a late _on_change_js short-circuits. "
+        "See dashboard_controller.py:stop() — Finding (b)."
+    )
+    assert captured["is_active_at_on_stop"] is False
+    assert captured["runtime_state_at_on_stop"] == "stopping"
+

@@ -49,23 +49,22 @@ _LIFECYCLE_STATES = ("starting", "running", "stopping", "stopped", "error")
 def test_apply_state_handles_lifecycle_state(state):
     """The shim's `applyState` function recognizes every documented
     lifecycle state. If a new state is added to the controller, the
-    shim must extend its label/color map; this test fails until it
-    does."""
-    # `applyState` reads `state || "stopped"` and looks up the label
-    # + color from the in-function dicts. Both dicts must have an
-    # entry for every state. The keys are unquoted (JS object-literal
-    # shorthand) so the regex matches `state: "label"` and
-    # `state: "bg-..."`.
+    shim must extend its label map; this test fails until it does.
+
+    Note (post-2026-07-22 follow-up): the per-state COLOR map was
+    removed alongside the simulator-status badge (the badge lived
+    on the now-removed Simulator runtime card; the operator no
+    longer has a colored chip to color). The label map is the only
+    lifecycle encoding that survives — the Start⇄Stop toggle
+    button label is the entire lifecycle UI now. Color coverage
+    was dropped intentionally as part of the UI reorg; the badge
+    itself is the §5 contract that no longer exists."""
     label_pattern = re.compile(rf"\b{state}:\s*\"", re.MULTILINE)
-    color_pattern = re.compile(rf"\b{state}:\s*\"bg-", re.MULTILINE)
     assert label_pattern.search(_SRC), (
         f"dashboard_controls.js applyState() must label the {state!r} "
-        f"state — the spec requires distinct labels per lifecycle state."
-    )
-    assert color_pattern.search(_SRC), (
-        f"dashboard_controls.js applyState() must color the {state!r} "
-        f"state — the spec requires distinct color treatments per "
-        f"lifecycle state."
+        f"state — the Start⇄Stop toggle button label encodes the "
+        f"next operator action, and every lifecycle state must "
+        f"have a label entry (spec §5)."
     )
 
 

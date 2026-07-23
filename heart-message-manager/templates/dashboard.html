@@ -80,54 +80,27 @@
   </div>
 </div>
 
-{# ── Top-row grid: Simulator controls (left) + Preview (right) ───
-   Simulator runtime controls + Test injection sit in the left
-   column; the preview canvas sits in the right column on lg+
-   screens (50% width). Active filters lives in the header and
-   Recent 100 messages drops BELOW both columns at full width so
-   the operator can scroll through sign history without it being
-   squeezed next to the canvas. #}
+{# ── Top-row grid: Test injection (left) + Preview (right) ───
+   Layout (post-2026-07-22 follow-up):
+     - The Simulator runtime card is GONE. Start/Stop is the only
+       remaining lifecycle control; it lives at the top-right of the
+       preview card, paired with the "Effect / Now displaying" line.
+     - Test injection stays in the left column.
+     - The preview canvas stays in the right column on lg+ screens.
+     - Recent 100 messages still drops BELOW both columns at full
+       width so the operator can scroll through sign history without
+       it being squeezed next to the canvas.
+     - Sign Health was moved here from Settings — see the card below
+       the top-row grid. sign_status.js picks up its data fields
+       automatically because the same script is on every auth page
+       (loaded from base.html) and it is a no-op when no
+       `data-sign-status-field` cells exist. #}
 <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
   {# ── Left column ─────────────────────────────────────────────── #}
   <div class="space-y-6">
 
-    {# Simulator runtime controls. A single toggle button: reads
-       "Start" when stopped, "Stop" when running, and is disabled
-       during transitions. The button lives in this card AND as the
-       floating control on the preview canvas (§5.7) — both share
-       the same `id="sim-toggle-btn"` listener. #}
-    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
-      <div class="flex items-center justify-between flex-wrap gap-4">
-        <div class="flex items-center gap-4">
-          <h3 class="font-semibold font-heading text-dark text-lg">Simulator runtime</h3>
-          <span id="sim-status-badge"
-                data-state="stopped"
-                class="px-3 py-1 rounded-full bg-slate-100 text-slate-600 text-xs font-semibold">
-            Stopped
-          </span>
-        </div>
-        <button id="sim-toggle-btn"
-                type="button"
-                class="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 disabled:opacity-50 disabled:cursor-not-allowed">
-          Start
-        </button>
-      </div>
-      {# Inline error-state row — cleared on next Start. §1.8. #}
-      <div id="sim-error-row"
-           class="hidden mt-4 p-3 rounded-xl bg-red-50 border border-red-100 text-sm text-red-700">
-        <span class="font-semibold">Simulator error:</span>
-        <span id="sim-error-message" class="ml-2 font-mono"></span>
-        <button id="sim-error-retry"
-                type="button"
-                class="ml-4 px-3 py-1 rounded-lg bg-red-600 text-white text-xs font-semibold">
-          Retry
-        </button>
-      </div>
-    </div>
-
-    {# Test injection (Active filters button moved into the header
-       of the recent-100 section below). #}
+    {# Test injection. #}
     <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
       <h3 class="font-semibold font-heading text-dark text-lg mb-4">Test injection</h3>
       <form id="inject-form" class="flex flex-col gap-3">
@@ -153,26 +126,34 @@
 
   </div>{# end left column #}
 
-  {# ── Right column: simulator canvas ──────────────────────────── #}
+  {# ── Right column: preview canvas with Start/Stop button ──────── #}
   <div class="lg:sticky lg:top-4 lg:self-start">
     <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6">
-      <div class="flex flex-col items-center gap-4">
-        <div class="text-slate-500 text-sm flex flex-wrap items-center justify-center gap-x-2">
-          <span><span class="font-semibold">Effect:</span> <span id="preview-effect">—</span></span>
-          <span class="text-slate-300">|</span>
-          <span><span class="font-semibold">Now displaying:</span>
-            <a id="preview-message-link" href="#" role="button" class="text-slate-500">
-              <span id="preview-message">Idle</span>
-            </a>
-          </span>
+      <div class="flex flex-col gap-4">
+        {# Top row: Now-displaying text on the left, Start/Stop on
+           the right (post-2026-07-22 follow-up). The button label
+           flips Start⇄Stop in dashboard_controls.js based on the
+           controller's lifecycle state, and is disabled only during
+           transitions. The simulator status badge was removed
+           alongside the runtime card — the button label + error
+           row are the only lifecycle UI now. #}
+        <div class="flex items-start justify-between gap-4 flex-wrap">
+          <div class="text-slate-500 text-sm flex flex-wrap items-center gap-x-2">
+            <span><span class="font-semibold">Effect:</span> <span id="preview-effect">—</span></span>
+            <span class="text-slate-300">|</span>
+            <span><span class="font-semibold">Now displaying:</span>
+              <a id="preview-message-link" href="#" role="button" class="text-slate-500">
+                <span id="preview-message">Idle</span>
+              </a>
+            </span>
+          </div>
+          <button id="sim-toggle-btn"
+                  type="button"
+                  class="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 disabled:opacity-50 disabled:cursor-not-allowed">
+            Start
+          </button>
         </div>
         <div class="relative w-full bg-slate-900 rounded-xl p-4">
-          {# Right-column canvas. Container is half-width on lg+
-             screens; the inner aspect-square keeps the simulator
-             square even as the column narrows. The floating toggle
-             button at the bottom replaces the previous Start/Stop/
-             Restart triplet — one button, label flips Start⇄Stop
-             with the runtime state, disabled during transitions. #}
           <div class="relative w-full max-w-full mx-auto aspect-square">
             <img id="browser-media-image" alt="" hidden
                  class="absolute inset-0 w-full h-full object-contain pointer-events-none"
@@ -186,22 +167,89 @@
             <div id="preview-loading" class="absolute inset-0 flex items-center justify-center text-slate-200 text-sm">
               Simulator stopped — press Start to begin.
             </div>
-            {# Floating toggle button over the canvas bottom edge.
-               Same id as the toolbar `#sim-toggle-btn`; the JS shim
-               rebinds clicks for both buttons via the same handler. #}
-            <button id="sim-toggle-btn-canvas"
-                    type="button"
-                    class="absolute left-1/2 -translate-x-1/2 bottom-4 px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-secondary text-white font-semibold shadow-lg shadow-primary/30 disabled:opacity-50 disabled:cursor-not-allowed"
-                    style="z-index: 2;">
-              Start
-            </button>
           </div>
+        </div>
+        {# Inline error-state row, kept under the canvas (post-2026-07-22
+           follow-up). Cleared on next Start. §1.8. #}
+        <div id="sim-error-row"
+             class="hidden p-3 rounded-xl bg-red-50 border border-red-100 text-sm text-red-700">
+          <span class="font-semibold">Simulator error:</span>
+          <span id="sim-error-message" class="ml-2 font-mono"></span>
+          <button id="sim-error-retry"
+                  type="button"
+                  class="ml-4 px-3 py-1 rounded-lg bg-red-600 text-white text-xs font-semibold">
+            Retry
+          </button>
         </div>
       </div>
     </div>
   </div>{# end right column #}
 
 </div>{# end top-row grid #}
+
+{# ── Sign Health ───────────────────────────────────────────────────
+   Moved from /settings (post-2026-07-22 follow-up). sign_status.js
+   populates `data-sign-status-field` cells automatically because the
+   same shim is loaded on every auth page from base.html and is a
+   no-op when no such cells exist. The Settings page no longer hosts
+   this card. #}
+<div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mt-6">
+  <h3 class="font-heading font-semibold text-dark text-lg mb-2 flex items-center gap-2">
+    <span>📡</span> Sign Health
+  </h3>
+  <p class="text-sm text-slate-500 mb-4">
+    Live snapshot from the device. The Pi publishes this to
+    <code class="font-mono">MQTT_STATUS_TOPIC</code> every 5 seconds;
+    this page reads the latest one via MQTT and Flask's in-memory
+    subscriber. Read-only — there are no controls here.
+  </p>
+
+  <div data-sign-status-degraded-banner
+       style="display: none;"
+       class="mb-4 px-4 py-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-800 text-sm">
+    <span class="font-semibold">⚠ Degraded:</span>
+    <span data-degraded-reason>MQTT disconnected</span>
+  </div>
+
+  <div data-sign-status-placeholder class="px-4 py-6 text-center text-slate-500 bg-slate-50 rounded-xl">
+    No status received yet.
+  </div>
+
+  <div data-sign-status-fields style="display: none;">
+    <table class="w-full">
+      <tbody class="divide-y divide-indigo-50">
+        <tr>
+          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500 w-48">Running SHA</th>
+          <td class="px-4 py-2 font-mono text-sm" data-sign-status-field="active_sha">—</td>
+        </tr>
+        <tr>
+          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Short SHA</th>
+          <td class="px-4 py-2 font-mono text-sm" data-sign-status-field="short_sha">—</td>
+        </tr>
+        <tr>
+          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Started at</th>
+          <td class="px-4 py-2 text-sm font-mono" data-sign-status-field="started_at">—</td>
+        </tr>
+        <tr>
+          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Uptime</th>
+          <td class="px-4 py-2 text-sm" data-sign-status-field="uptime_seconds">—</td>
+        </tr>
+        <tr>
+          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">MQTT connected</th>
+          <td class="px-4 py-2 text-sm" data-sign-status-field="mqtt_connected">—</td>
+        </tr>
+        <tr>
+          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Last error</th>
+          <td class="px-4 py-2 text-sm font-mono" data-sign-status-field="last_error">—</td>
+        </tr>
+        <tr>
+          <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Received at (browser)</th>
+          <td class="px-4 py-2 text-sm" data-sign-status-field="received_at_browser">—</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
 
 {# ── Recent-100 message region (FULL WIDTH, BELOW the preview) ─────
    Drops under both columns at full width — the operator can scroll
@@ -287,7 +335,7 @@
    re-bind when the operator revisits `/`. No-op when `[data-dashboard-controls]`
    is absent (e.g. when the same scripts file is loaded by /settings
    in the future). #}
-<script src="{{ url_for('static', filename='dashboard_controls.js') }}?v=2"></script>
+<script src="{{ url_for('static', filename='dashboard_controls.js') }}?v=3"></script>
 <script src="{{ url_for('static', filename='dashboard_modals.js') }}?v=3"></script>
-<script src="{{ url_for('static', filename='dashboard_recent.js') }}?v=1"></script>
+<script src="{{ url_for('static', filename='dashboard_recent.js') }}?v=2"></script>
 {% endblock %}

@@ -307,11 +307,29 @@ class DashboardController:
         Idempotent: Stop on a stopped controller is a no-op. A Stop
         while a generation is mid-bootstrap stops the bootstrap
         cleanly (no callbacks will resolve past the discriminator).
+
+        Ordering — design §2 calls for "invalidate the generation
+        first, then tear down". We zero `_active_generation_id`
+        *before* running teardown so any wrapped async callback
+        (the `_on_change_js` closure that captures `gen_id` at
+        wrap time) sees `is_active_generation(gen_id) is False`
+        immediately and short-circuits without mutating JS-side
+        state. Unwrapped callbacks (e.g. `_on_envelope_js`) are
+        caught by the per-call `_NullMessageManager` swap inside
+        `_teardown_generation`.
         """
         with self._lock:
             runtime = self._runtime
             if runtime is None:
                 return
+            # Invalidate the generation FIRST so wrapped callbacks
+            # short-circuit before we touch any teardown state.
+            # Without this, a late `_on_change_js` (capturing the
+            # still-valid gen_id) could fan out via
+            # `App._dispatchChange()` during the brief window
+            # between `runtime.state = "stopping"` and the eventual
+            # zeroing of `_active_generation_id`.
+            self._active_generation_id = 0
             runtime.state = "stopping"
         # Render-loop stop runs outside the lock — it may touch
         # `requestAnimationFrame` cancel which is a JS-side API.
@@ -320,15 +338,15 @@ class DashboardController:
                 self._render_loop_stop(runtime)
         except Exception as e:
             log.warning("DashboardController.stop: render loop stop failed: %s", e)
-        # Tear down the runtime resources.
+        # Tear down the runtime resources (swap MM to NullMM,
+        # close MQTT, drop event log, release coord/scroller/canvas).
         self._teardown_generation(runtime)
-        # Clear the active slot + discriminator.
+        # Clear the active slot.
         with self._lock:
             # Idempotence: if Start was called during the teardown,
             # the new generation already owns the slot. Don't clobber.
             if self._runtime is runtime:
                 self._runtime = None
-                self._active_generation_id = 0
             runtime.state = "stopped"
             # Keep the torn-down record in the history ring for
             # diagnostics.

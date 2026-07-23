@@ -58,18 +58,51 @@ _MESSAGES_SRC = _MESSAGES.read_text(encoding="utf-8")
 # --- §9.1: /settings + /testing retain their full forms --------------------
 
 
-def test_settings_template_renders_sign_health_section():
-    """The Settings template still renders the sign-health pill /
-    Settings Health section when opened directly (no dashboard
-    context required)."""
+def test_dashboard_template_renders_sign_health_card():
+    """The Dashboard template renders the Sign Health card
+    (post-2026-07-22 follow-up — Sign Health moved off Settings).
+    The card exposes `data-sign-status-field` cells so the
+    sign_status.js shim fills them with the physical-sign status
+    snapshot whenever one arrives. Operators no longer need a
+    Settings tab to read Pi health."""
     pattern = re.compile(
-        r"data-sign-status-field|sign-health|Sign Health",
+        r"data-sign-status-field|Sign Health",
         re.IGNORECASE,
     )
-    assert pattern.search(_SETTINGS_SRC), (
-        "/settings template must retain the sign-health section / "
-        "data-sign-status-field contract — §9.1 requires Settings "
-        "to work standalone."
+    assert pattern.search(_DASHBOARD_SRC), (
+        "/ (Dashboard) template must expose the Sign Health card "
+        "with [data-sign-status-field] cells — Sign Health moved "
+        "here from Settings in the post-2026-07-22 follow-up so "
+        "operators don't have to keep a Settings tab open."
+    )
+
+
+def test_settings_template_no_longer_renders_sign_health_section():
+    """Companion to the above: the Sign Health CARD moved off
+    `/settings` to the Dashboard (post-2026-07-22 follow-up).
+
+    Note: the Pi Upgrade section on /settings legitimately keeps a
+    `data-sign-status-field="short_sha"` cell so operators can see
+    "is the Pi running what I targeted?" next to the apply button.
+    That cell is a separate concern from the moved Sign Health
+    card and is NOT covered by this assertion.
+
+    The moved card is uniquely identifiable by the
+    `active_sha` / `uptime_seconds` / `mqtt_connected` /
+    `last_error` / `received_at_browser` fields — none of those
+    appear on the Pi Upgrade section, so their absence on
+    `/settings` proves the card moved."""
+    unique_field_pattern = re.compile(
+        r"data-sign-status-field=\"(?:active_sha|uptime_seconds|"
+        r"mqtt_connected|last_error|received_at_browser|started_at)\"",
+    )
+    assert not unique_field_pattern.search(_SETTINGS_SRC), (
+        "/settings template must not still carry the moved Sign "
+        "Health card fields (active_sha / uptime_seconds / "
+        "mqtt_connected / last_error / received_at_browser / "
+        "started_at) — the card moved to the Dashboard in the "
+        "post-2026-07-22 follow-up. The Pi Upgrade section's "
+        "`short_sha` cell is a separate, retained cell."
     )
 
 
@@ -321,15 +354,20 @@ def test_status_topic_is_separate_from_message_topic():
     )
 
 
-def test_settings_health_section_uses_sign_status_field():
-    """The Settings page's health section is rendered via
+def test_dashboard_health_card_uses_sign_status_field():
+    """The Dashboard's Sign Health card (post-2026-07-22 follow-up —
+    moved here from /settings) is rendered via
     [data-sign-status-field] which the sign_status.js shim fills
-    in — independent of the dashboard simulator."""
+    in — independent of the dashboard simulator. This is the §9.5
+    contract: status pills must render even when the simulator is
+    stopped, and the same shim must drive the cell population."""
     pattern = re.compile(r"data-sign-status-field")
-    assert pattern.search(_SETTINGS_SRC), (
-        "/settings must expose [data-sign-status-field] so the "
-        "physical-sign status subscription fills the health section "
-        "even when the dashboard simulator is stopped (§9.5)."
+    assert pattern.search(_DASHBOARD_SRC), (
+        "/ (Dashboard) must expose [data-sign-status-field] so the "
+        "physical-sign status subscription fills the Sign Health "
+        "card even when the simulator is stopped (§9.5). Sign "
+        "Health moved to / from /settings in the post-2026-07-22 "
+        "follow-up; the field contract is unchanged."
     )
 
 

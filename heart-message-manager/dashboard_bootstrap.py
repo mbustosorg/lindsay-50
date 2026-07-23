@@ -87,15 +87,20 @@ def _app_config() -> dict:
 def _install_js_callbacks(runtime) -> None:
     """Bind the per-generation JS-callable callbacks onto runtime.proxies.
 
-    The proxies are held on the runtime record so Stop can release them
-    (the underlying PyScript proxies can't be unregistered, but the
-    callbacks read from `runtime.message_manager` which is swapped to
-    the null stand-in at Stop time, so the post-Stop envelope handler
-    is harmless).
+    The proxies are generation-gated via `_gated(...)` so a late call
+    from a torn-down generation short-circuits before it touches
+    `runtime.message_manager`. The proxy objects still live for the
+    lifetime of the underlying JS call site (PyScript can't unregister
+    them), but the gate ensures the wrapped callable no-ops if the
+    captured generation is no longer active. The runtime record's
+    `_NullMessageManager` swap at Stop is defense-in-depth, not the
+    primary correctness mechanism — design §2 prescribes the
+    wrap-once closure.
     """
-    runtime.proxies["seed"] = create_proxy(runtime.seed_coroutine)
-    runtime.proxies["get_messages"] = create_proxy(runtime.get_messages_js)
-    runtime.proxies["get_config"] = create_proxy(runtime.get_config_js)
+    gen_id = runtime.generation_id
+    runtime.proxies["seed"] = create_proxy(_gated(runtime.seed_coroutine, gen_id))
+    runtime.proxies["get_messages"] = create_proxy(_gated(runtime.get_messages_js, gen_id))
+    runtime.proxies["get_config"] = create_proxy(_gated(runtime.get_config_js, gen_id))
 
 
 def _expose_window_globals(runtime) -> None:
@@ -130,6 +135,33 @@ def _clear_window_globals() -> None:
                 delattr(js.window, name)
             except Exception:
                 pass
+
+
+def _gated(callback, gen_id: int):
+    """Wrap a callback with a wrap-once generation gate (design §2).
+
+    The returned closure captures `gen_id` at construction time and
+    consults the controller's active-generation registry at call
+    time. If the active generation id does not match the captured
+    one, the wrapper returns `None` without invoking the underlying
+    callback; otherwise it forwards `*args, **kwargs`.
+
+    Used at every PyScript proxy registration site so the captured
+    `gen_id` is fixed for the lifetime of the proxy and cannot drift
+    across Stop-then-Start boundaries. Per
+    `feedback_one_shot_guards_need_discriminator.md` — pair every
+    "is this the active generation?" check with the id of the
+    thing whose side-effect we want to gate.
+    """
+    captured_gen = gen_id
+
+    def _wrap(*args, **kwargs):
+        ctrl = DashboardRuntime._controller
+        if ctrl is None or not ctrl.is_active_generation(captured_gen):
+            return None
+        return callback(*args, **kwargs)
+
+    return _wrap
 
 
 # --- Per-generation runtime ------------------------------------------------
@@ -168,6 +200,15 @@ class DashboardRuntime:
         # dispatch, suppression toggle, config update), the proxy
         # fans out to `window.App._dispatchChange()` if present.
         self._on_change_js = self._make_on_change_js()
+        # Generation-gated wrappers — captured once at construction,
+        # used at every registration site (MQTT-WS onEnvelope/onStatus,
+        # JS proxy slot bindings). See `_gated(...)` for the gate
+        # semantics. The captured `gen_id` is a closure-local variable
+        # bound at wrap time and cannot drift across Stop-then-Start
+        # boundaries — per design §2 and
+        # `feedback_one_shot_guards_need_discriminator.md`.
+        self._on_envelope_gated = _gated(self._on_envelope_js, generation_id)
+        self._on_status_gated = _gated(self._on_status_js, generation_id)
 
     # --- Hooks called by DashboardController -----------------------------
 
@@ -359,8 +400,14 @@ def install_bootstrap(controller) -> None:
                 "password": str(cfg.get("mqttPassword") or ""),
                 "topic": str(cfg.get("mqttTopic") or ""),
                 "longDisconnectMs": int(cfg.get("mqttLongDisconnectMs") or 300000),
-                "onEnvelope": create_proxy(dash._on_envelope_js),
-                "onStatus": create_proxy(dash._on_status_js),
+                # Generation-gated via `_gated(...)`: a late envelope
+                # callback from a torn-down generation short-circuits
+                # before touching `runtime.message_manager`. The
+                # underlying PyScript proxies cannot be unregistered,
+                # but the gate makes the wrapped callable a no-op when
+                # the captured generation is no longer active.
+                "onEnvelope": create_proxy(dash._on_envelope_gated),
+                "onStatus": create_proxy(dash._on_status_gated),
             }
             client_opts_js = to_js(client_opts, dict_converter=js.Object.fromEntries)
             from js import createMqttWsClient  # type: ignore[import-not-found]

@@ -1,23 +1,21 @@
 // Dashboard lifecycle controls + simulator status binding (issue #48, §5).
 //
-// Two responsibilities:
-//   1. Wire a single toggle button (rendered TWICE in the page — once
-//      in the toolbar as `#sim-toggle-btn` and once floating over the
-//      preview canvas as `#sim-toggle-btn-canvas`) to
-//      `window.Dashboard.start()` / `.stop()`. Both buttons share the
-//      same `id` family and this shim attaches the click handler to
-//      every element that matches.
+// Responsibilities:
+//   1. Wire the single Start/Stop toggle button (`#sim-toggle-btn`,
+//      rendered inline at the top-right of the preview card, next to
+//      the "Now displaying" line) to `window.Dashboard.start()` /
+//      `.stop()`.
 //   2. Subscribe to the controller's state stream and keep the
-//      status badge (`#sim-status-badge`), the loading overlay
-//      (`#preview-loading`), the inline error row
-//      (`#sim-error-row`), and the toggle buttons themselves in sync
-//      with the active generation's lifecycle state
+//      loading overlay (`#preview-loading`), the inline error row
+//      (`#sim-error-row`), and the toggle button itself in sync with
+//      the active generation's lifecycle state
 //      (`starting`/`running`/`stopping`/`stopped`/`error`).
 //
-// The button label flips `Start` ⇄ `Stop` based on the runtime state
-// (mirror badge label = "Start" when `stopped`/`error`, "Stop" when
-// `running`/`starting`). It is disabled during `stopping` so the
-// operator can't enqueue a second transition.
+// The button label flips `Start` ⇄ `Stop` based on the runtime state.
+// It is disabled during `stopping` so the operator can't enqueue a
+// second transition. The simulator status badge was removed
+// alongside the Simulator runtime card (post-2026-07-22 follow-up)
+// — the button label + error row are the only lifecycle UI now.
 //
 // §5.5: the page-local rAF render loop in `preview.js` reads
 // `window.__PREVIEW_TICK_ENABLED__` before invoking `window.tick()`.
@@ -39,21 +37,21 @@
   }
 
   const toggleBtns = Array.from(
-    document.querySelectorAll("#sim-toggle-btn, #sim-toggle-btn-canvas"),
+    document.querySelectorAll("#sim-toggle-btn"),
   );
-  const badge = document.getElementById("sim-status-badge");
   const errorRow = document.getElementById("sim-error-row");
   const errorMsg = document.getElementById("sim-error-message");
   const errorRetryBtn = document.getElementById("sim-error-retry");
   const loadingEl = document.getElementById("preview-loading");
 
-  // Status → label / disabled / color of the TOGGLE BUTTON (Start vs Stop).
+  // Status → label / disabled of the TOGGLE BUTTON (Start vs Stop).
   //
-  // The previous Start / Stop / Restart triplet encoded "intent to
-  // transition" by separate buttons. A single toggle button encodes
-  // "the next action" — given the current state, what should the
-  // button's click do? Stopped / Error → click triggers a Start.
-  // Running / Starting → click triggers a Stop. Stopping → disabled.
+  // A single toggle button encodes "the next action" — given the
+  // current state, what should the button's click do? Stopped /
+  // Error → click triggers a Start. Running / Starting → click
+  // triggers a Stop. Stopping → disabled. The simulator status badge
+  // was removed alongside the runtime card, so the button label is
+  // the only "what state is the simulator in?" indicator.
   const TOGGLE_LABEL = {
     stopped: "Start",
     starting: "Stop",
@@ -62,37 +60,10 @@
     error: "Start",
   };
 
-  // ---- Status → button / badge / error row ----
+  // ---- Status → button / error row ----
 
   function applyState(state, error) {
     const normalized = state || "stopped";
-
-    if (badge) {
-      badge.dataset.state = normalized;
-      const labels = {
-        starting: "Starting…",
-        running: "Running",
-        stopping: "Stopping…",
-        stopped: "Stopped",
-        error: "Error",
-      };
-      badge.textContent = labels[normalized] || normalized || "Stopped";
-      const colorClasses = {
-        starting: "bg-amber-100 text-amber-700",
-        running: "bg-green-100 text-green-700",
-        stopping: "bg-amber-100 text-amber-700",
-        stopped: "bg-slate-100 text-slate-600",
-        error: "bg-red-100 text-red-700",
-      };
-      badge.classList.remove(
-        "bg-amber-100", "text-amber-700",
-        "bg-green-100", "text-green-700",
-        "bg-slate-100", "text-slate-600",
-        "bg-red-100", "text-red-700",
-      );
-      const cls = colorClasses[normalized] || colorClasses.stopped;
-      cls.split(" ").forEach((c) => badge.classList.add(c));
-    }
 
     // Toggle button label + disabled state — encoded directly from
     // the controller's lifecycle state.
