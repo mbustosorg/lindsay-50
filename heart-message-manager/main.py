@@ -1985,6 +1985,57 @@ def _set_dashboard_csp(response):
     return response
 
 
+# Cache-control for the PyScript mirror copies.
+#
+# Issue #48: PyScript fetches `dashboard_controller.py`,
+# `dashboard_bootstrap.py`, and the rest of the [files] list from
+# `/static/preview/heart-message-manager/...` at page-load time.
+# These URLs are identical across releases — only the file CONTENTS
+# change — and Flask's static handler serves them with
+# `Cache-Control: public, max-age=43200` (12 hours) by default.
+# Without a bust, the browser will serve stale Python source for
+# up to 12 hours after a deploy, and the controller's `on_change`
+# subscriber surface can land in the running browser without the
+# matching Python methods — manifesting as
+# `ModuleNotFoundError` or missing-attribute errors that look like
+# a deploy bug but are actually a stale-cache artifact.
+#
+# Query-string cache-busters on the [files] URLs themselves don't
+# work: PyScript 2024.9.x uses the URL verbatim as the MEMFS
+# path, so `/.../dashboard_controller.py?v=27` lands in MEMFS as
+# `dashboard_controller.py?v=27`, and Python's import system
+# can't find a module at that name. We can't bust from the URL
+# side; we have to bust from the response-headers side.
+#
+# The narrow fix: zero out the cache headers on `/static/preview/`
+# responses. The browser always revalidates, picking up new file
+# contents the same page load. Other static assets (JS, CSS,
+# images under `/static/`) keep their long max-age — they're
+# already cache-busted via `?v=N` query strings on the script
+# tags in `templates/base.html` and `templates/dashboard.html`.
+_PREVIEW_STATIC_PREFIX = "/static/preview/"
+
+
+@app.after_request
+def _disable_preview_static_cache(response):
+    """Disable HTTP caching on the PyScript mirror files.
+
+    Flask's static handler adds `Cache-Control: public, max-age=43200`
+    by default. We strip that on `/static/preview/` responses and
+    replace with `no-cache, must-revalidate` so the browser always
+    revalidates with the server (200 with new content, or 304 if
+    the file is unchanged). The `Pragma` and `Expires` headers are
+    the HTTP/1.0 belt-and-suspenders for very old browsers; the
+    `must-revalidate` directive forces strict behavior under
+    HTTP/1.1 even when the server is unreachable.
+    """
+    if request.path.startswith(_PREVIEW_STATIC_PREFIX):
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+    return response
+
+
 def _derive_s3_origin() -> str:
     """Return the origin (scheme + host + port) of the S3 endpoint the
     Flask /api/media/<key> proxy redirects to.

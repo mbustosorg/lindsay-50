@@ -34,13 +34,6 @@
     }
     h1, h2, h3, h4, h5, h6 { font-family: 'Fredoka', sans-serif; }
   </style>
-  {# The login page used to load clear_cache.js and call
-     App.clearMessageCache() before submit to wipe any prior
-     user's sessionStorage state. Issue #48 dropped sessionStorage
-     persistence (the MessageManager is per-tab in-memory only),
-     so there is no cache to wipe. The login form simply submits;
-     each fresh login lands the operator on a fresh per-generation
-     runtime via `DashboardController.start()`. #}
 </head>
 <body class="font-body">
 <div class="min-h-screen flex items-center justify-center">
