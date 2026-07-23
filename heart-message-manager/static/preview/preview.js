@@ -53,46 +53,19 @@
     const canvas = document.getElementById("sign-canvas");
     if (!canvas) { console.error("[preview-js] #sign-canvas not found; aborting"); return; }
     setupFuzzyRendering(canvas);
-    sizeCanvasToViewport(canvas);
-    // Re-size on viewport changes. We use a ResizeObserver on the card
-    // (the bg-white rounded-2xl wrapper) rather than the `window.resize`
-    // event because:
-    //   - `window.resize` doesn't fire when the URL bar collapses on
-    //     mobile (the layout viewport changes but the visual viewport
-    //     doesn't), or when the user opens devtools docked to the side
-    //     on some browsers.
-    //   - The actual available width for the canvas is the card's
-    //     content area, not `window.innerWidth`. The card has p-12
-    //     (48px on each side) and the dark div inside it has p-4
-    //     (16px on each side) — using the card's clientWidth avoids
-    //     hardcoding that padding chain and keeps the canvas from
-    //     overflowing the card on narrow viewports.
-    // rAF-throttled so a continuous drag fires sizeCanvasToViewport at
-    // most once per frame instead of dozens of times per second.
-    const card = canvas.closest(".bg-white.rounded-2xl");
-    if (card && typeof ResizeObserver !== "undefined") {
-      let resizeScheduled = false;
-      const ro = new ResizeObserver(() => {
-        if (resizeScheduled) return;
-        resizeScheduled = true;
-        requestAnimationFrame(() => {
-          resizeScheduled = false;
-          sizeCanvasToViewport(canvas);
-        });
-      });
-      ro.observe(card);
-    } else {
-      // Fallback for browsers without ResizeObserver — listen on window.
-      let resizeScheduled = false;
-      window.addEventListener("resize", () => {
-        if (resizeScheduled) return;
-        resizeScheduled = true;
-        requestAnimationFrame(() => {
-          resizeScheduled = false;
-          sizeCanvasToViewport(canvas);
-        });
-      });
-    }
+    // Canvas sizing is purely CSS-driven now: the dark frame has
+    //   `aspect-square w-full max-h-[400px] max-w-[400px]` and the
+    //   canvas itself is `w-full h-full`, so the backing 768x768 frame
+    //   is uniformly scaled into a square at up to 400x400.
+    // The previous JS-side `sizeCanvasToViewport` override set the
+    //   canvas's inline width to a value derived from the card's
+    //   content width (which ignored the parent's `aspect-square`
+    //   constraint), producing a non-square 528x576 canvas inside a
+    //   608x608 dark frame — 48px of black space on the right of the
+    //   LED render. See `dashboard.html` for the matching dark-frame
+    //   sizing. No JS-side resize hook is required because the
+    //   layout responds to viewport changes via the grid item's
+    //   `w-full max-h-full max-w-full` chain.
 
     // Wait for PyScript runtime to be ready.
     //

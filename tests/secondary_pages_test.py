@@ -1,28 +1,36 @@
 """Tests for the secondary pages preserved by issue #48, §9.
 
 The dashboard at `/` now owns the simulator + live MQTT + test
-injection. The /settings, /testing, and /messages pages are
-**transitionally** preserved — operators can reach them via
-bookmarks, the new-tab nav links in the dashboard header, or the
-sidebar-free `/messages` / `/settings` / `/testing` URL bar.
+injection. The /settings and /messages pages are **transitionally**
+preserved — operators can reach them via bookmarks, the new-tab
+nav links in the dashboard header, or the sidebar-free
+`/messages` / `/settings` URL bar.
 
-The spec §9 forbids removing them in this change. The page-level
-contracts are pinned here:
+The /testing page was removed on 2026-07-23 — its diagnostic
+surface (test injection, filters, config inspector, messages
+feed) was folded into the dashboard per the issue #48 design.
+The /testing route is RETAINED as a redirect to `/` so that any
+bookmarks, inbound links, or curl scripts that point at it
+don't 404 — they land on the dashboard instead. The redirect
+preserves the URL contract while the rest of the surface lives
+on `/`.
 
-  - §9.1: /settings and /testing still render their full forms
-    (sign-health, effects list, sign-upgrade controls, inject
-    form, info cards, messages feed) when opened directly.
-  - §9.2: /settings, /testing, /messages do NOT load the
-    dashboard's PyScript runtime, message-topic MQTT subscriber,
-    or preview canvas.
-  - §9.3: closing a /settings, /testing, or /messages tab must
-    not stop the dashboard. This is a cross-tab contract; the
-    test pins the absence of any `BroadcastChannel` /
-    `localStorage` / `SharedWorker` coordination that would let
-    one tab tear down the dashboard.
-  - §9.4: /testing surfaces a "transitional" banner that links to
-    the dashboard, and the page is intentionally retained (the
-    template + route are NOT removed in this change).
+The page-level contracts are pinned here:
+
+  - §9.1: /settings still renders its full forms (effects list,
+    sign-upgrade controls) when opened directly. The messages
+    page still renders its archive.
+  - §9.2: /settings and /messages do NOT load the dashboard's
+    PyScript runtime, message-topic MQTT subscriber, or preview
+    canvas.
+  - §9.3: closing a /settings or /messages tab must not stop the
+    dashboard. This is a cross-tab contract; the test pins the
+    absence of any `BroadcastChannel` / `localStorage` /
+    `SharedWorker` coordination that would let one tab tear down
+    the dashboard.
+  - §9.4 (legacy): /testing surfaced a "transitional" banner —
+    that page is now removed. The redirect-to-dashboard covers
+    the URL contract for any pre-removal bookmark.
   - §9.5: the physical-sign status pill / Settings health section
     still receive the physical MQTT_STATUS_TOPIC independently of
     simulator lifecycle. The base shell still loads
@@ -44,18 +52,16 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 
 _BASE = _PROJECT_ROOT / "heart-message-manager" / "templates" / "base.html"
 _DASHBOARD = _PROJECT_ROOT / "heart-message-manager" / "templates" / "dashboard.html"
-_TESTING = _PROJECT_ROOT / "heart-message-manager" / "templates" / "testing.html"
 _SETTINGS = _PROJECT_ROOT / "heart-message-manager" / "templates" / "settings.html"
 _MESSAGES = _PROJECT_ROOT / "heart-message-manager" / "templates" / "messages.html"
 
 _BASE_SRC = _BASE.read_text(encoding="utf-8")
 _DASHBOARD_SRC = _DASHBOARD.read_text(encoding="utf-8")
-_TESTING_SRC = _TESTING.read_text(encoding="utf-8")
 _SETTINGS_SRC = _SETTINGS.read_text(encoding="utf-8")
 _MESSAGES_SRC = _MESSAGES.read_text(encoding="utf-8")
 
 
-# --- §9.1: /settings + /testing retain their full forms --------------------
+# --- §9.1: /settings retains its full forms ------------------------------
 
 
 def test_dashboard_template_renders_sign_health_card():
@@ -121,30 +127,27 @@ def test_settings_template_renders_sign_upgrade_controls():
     )
 
 
-def test_testing_template_renders_inject_form():
-    """The Testing page still renders the test-injection form."""
-    assert 'id="inject-form"' in _TESTING_SRC, (
-        "/testing template must retain #inject-form — §9.1 "
-        "requires the injection form to work standalone (the "
-        "dashboard has a copy too, but /testing remains "
-        "authoritative for operators on the old nav)."
+def test_testing_route_redirects_to_dashboard():
+    """The /testing route is RETAINED as a redirect to / so that
+    any pre-removal bookmark, inbound link, or curl script lands
+    on the dashboard instead of 404'ing. The page itself was
+    removed on 2026-07-23 — the diagnostic surface lives on /
+    now."""
+    main_src = (_PROJECT_ROOT / "heart-message-manager" / "main.py").read_text(encoding="utf-8")
+    assert '"/testing"' in main_src or "'/testing'" in main_src, (
+        "/testing route must be retained as a redirect (post-removal "
+        "follow-up): the URL contract outlives the page."
     )
-
-
-def test_testing_template_renders_info_cards():
-    """The Testing page still renders the Current Config / Active
-    Filters / S3 Bucket diagnostic cards."""
-    for marker in ("cfg-section", "filters-section", "s3-section"):
-        assert marker in _TESTING_SRC, (
-            f"/testing template must retain #{marker} — §9.1 " "requires the diagnostic cards to work standalone."
-        )
-
-
-def test_testing_template_renders_messages_feed():
-    """The Testing page still renders the Messages Feed."""
-    pattern = re.compile(r"msg-count|refreshFeed|messages-feed")
-    assert pattern.search(_TESTING_SRC), (
-        "/testing template must retain the Messages Feed — §9.1 " "requires the live feed to work standalone."
+    # The retained route must NOT render testing.html — the
+    # template is gone. It must redirect to dashboard instead.
+    assert "testing.html" not in main_src, (
+        "/testing template was removed (2026-07-23) — main.py must "
+        "not still reference testing.html. The retained route is a "
+        "redirect."
+    )
+    assert "redirect(url_for(\"dashboard\"))" in main_src or "redirect(url_for('dashboard'))" in main_src, (
+        "/testing route must redirect to the dashboard — the page "
+        "is gone, the redirect preserves the URL contract."
     )
 
 
@@ -154,25 +157,17 @@ def test_testing_template_renders_messages_feed():
 def test_base_does_not_load_pyscript_for_secondary_pages():
     """`base.html` no longer inlines the PyScript runtime — it's
     scoped to the dashboard (issue #48 §4.10). The Settings /
-    Testing / Messages pages therefore avoid the cold-PyScript-load
-    cost when opened directly."""
+    Messages pages therefore avoid the cold-PyScript-load cost
+    when opened directly. /testing is a redirect so it's
+    automatically exempt."""
     assert "<py-config" not in _BASE_SRC, (
         "base.html must not inline <py-config> — the simulator "
         "is dashboard-scoped (§4.10) and base.html is shared by "
-        "/settings /testing /messages."
+        "/settings /messages (and the /testing redirect)."
     )
     assert "pyscript.net" not in _BASE_SRC, (
         "base.html must not reference pyscript.net — the simulator " "runtime is dashboard-scoped (§4.10)."
     )
-
-
-def test_testing_template_does_not_load_pyscript():
-    """/testing does not load the dashboard's PyScript runtime —
-    it stays an SSR page with selective JS shims."""
-    assert "<py-script" not in _TESTING_SRC, (
-        "testing.html must not include <py-script> — the simulator " "is dashboard-scoped (§9.2)."
-    )
-    assert "pyscript.net" not in _TESTING_SRC
 
 
 def test_settings_template_does_not_load_pyscript():
@@ -180,21 +175,6 @@ def test_settings_template_does_not_load_pyscript():
         "settings.html must not include <py-script> — the simulator " "is dashboard-scoped (§9.2)."
     )
     assert "pyscript.net" not in _SETTINGS_SRC
-
-
-def test_testing_template_does_not_load_dashboard_controls():
-    """/testing loads dashboard_modals.js / dashboard_recent.js /
-    dashboard_controls.js ONLY if the [data-dashboard-controls]
-    marker is present — which it is not on /testing. Each shim is
-    a no-op without the marker, so loading is safe."""
-    # The shims are loaded from base.html or a {% block scripts %}.
-    # If they're loaded on every page (including /testing), the
-    # no-op guard ensures correctness — but we don't actually need
-    # to load them on /testing at all. The strict assertion is
-    # that /testing does NOT carry the marker.
-    assert "data-dashboard-controls" not in _TESTING_SRC, (
-        "/testing must not declare [data-dashboard-controls] — " "the simulator lifecycle is dashboard-only (§9.2)."
-    )
 
 
 def test_messages_template_does_not_load_pyscript():
@@ -272,44 +252,7 @@ def test_dashboard_does_not_use_localstorage_for_runtime_state():
                 )
 
 
-# --- §9.4: Testing documents itself as transitional ----------------------
-
-
-def test_testing_template_documents_transitional_status():
-    """/testing surfaces a "transitional" banner so operators
-    arriving via bookmark see the new dashboard path."""
-    pattern = re.compile(
-        r"data-testing-transitional-banner|Transitional",
-        re.MULTILINE,
-    )
-    assert pattern.search(_TESTING_SRC), (
-        "/testing must surface a 'Transitional' banner linking to "
-        "the dashboard — §9.4 documents Testing as transitional."
-    )
-
-
-def test_testing_route_is_retained():
-    """The /testing route is intentionally retained in this change.
-    No follow-up issue has removed it."""
-    main_src = (_PROJECT_ROOT / "heart-message-manager" / "main.py").read_text(encoding="utf-8")
-    assert '"/testing"' in main_src or "'/testing'" in main_src, (
-        "/testing route must be retained — §9.4 forbids removing " "the route in this change."
-    )
-    assert "testing.html" in main_src, (
-        "/testing template must be referenced by main.py — §9.4 " "forbids removing it in this change."
-    )
-
-
-def test_testing_banner_links_to_dashboard():
-    """The transitional banner's anchor points at the dashboard."""
-    pattern = re.compile(
-        r"url_for\([\"\']dashboard[\"\']\)|/[\"\'].{0,40}dashboard",
-        re.MULTILINE,
-    )
-    assert pattern.search(_TESTING_SRC), (
-        "/testing transitional banner must link to url_for('dashboard') "
-        "— §9.4 directs operators to the new dashboard."
-    )
+# --- §9.4 (legacy): /testing page is gone — see test_testing_route_redirects_to_dashboard above ---
 
 
 # --- §9.5: physical-sign status independent of simulator lifecycle --------
@@ -371,50 +314,7 @@ def test_dashboard_health_card_uses_sign_status_field():
     )
 
 
-# --- Auth still required --------------------------------------------------
+# --- /testing page removal (post-2026-07-23 follow-up) ------------------
 
-
-def test_testing_route_requires_auth():
-    """/testing must remain behind the login_required gate. The
-    §9 changes don't loosen auth."""
-    main_src = (_PROJECT_ROOT / "heart-message-manager" / "main.py").read_text(encoding="utf-8")
-    # Find the testing route + its decorators. The pattern is
-    # `@app.route("/testing")` followed by `@login_required`.
-    pattern = re.compile(
-        r"@app\.route\([\"\']/testing[\"\']\)[\s\S]{0,200}@login_required",
-        re.MULTILINE,
-    )
-    assert pattern.search(main_src), (
-        "/testing route must be @login_required — §9 forbids " "removing auth from the secondary pages."
-    )
-
-
-def test_testing_includes_mqtt_header_partial():
-    """/testing includes the `_mqtt_header.html` partial.
-
-    Companion to `test_settings_does_not_render_mqtt_status_header`
-    (settings_template_test.py): the dashboard hosts the simulator,
-    the transitional Testing page still owns its own simulator, and
-    both surface the MQTT status pill at the top of the page. The
-    base shell went from "always render" to "never render"; pages
-    that need the pill now opt in by including the partial.
-    """
-    assert '{% include "_mqtt_header.html" %}' in _TESTING_SRC, (
-        "testing.html must include the _mqtt_header.html partial "
-        "explicitly (issue #48, §4.10) — the Testing page owns the "
-        "simulator runtime and surfaces the MQTT status pill."
-    )
-    # The partial itself must declare the elements — pin this so a
-    # user who deletes the partial source drops a useful error
-    # pointing at the actual contract instead of a vague "include
-    # didn't expand" failure.
-    partial_path = _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
-    assert partial_path.exists(), (
-        "_mqtt_header.html partial must exist so testing.html (and "
-        "any future simulator-hosting page) can include the MQTT "
-        "status pill explicitly."
-    )
-    partial_src = partial_path.read_text(encoding="utf-8")
-    assert 'id="mqtt-status"' in partial_src
-    assert 'id="mqtt-ws-target"' in partial_src
-    assert 'id="mqtt-sub-topic"' in partial_src
+# (The single test_testing_route_redirects_to_dashboard declaration
+# lives in the §9.1 section above.)

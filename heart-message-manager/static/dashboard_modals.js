@@ -1,17 +1,25 @@
 // Dashboard modals + test injection (issue #48, §6).
 //
 // Three responsibilities:
-//   1. Wire the three diagnostic modal triggers (Current config,
-//      Active filters, S3 bucket) to fetch their data and open the
-//      modal shell. The data fetchers delegate to the existing
-//      authenticated `/api/admin/config` and `/api/admin/s3-objects`
-//      endpoints (the same ones the Testing page uses). Active
-//      filters is read from the in-memory config
-//      (`window.App.getConfig()`) — there is no `/api/admin/filters`
-//      endpoint, and filters are just one field of the live SignConfig
-//      that the dashboard already mirrors from MQTT.
+//   1. Wire the two diagnostic modal triggers (Current config,
+//      Active filters) to fetch their data and open the modal shell.
+//      Both read from the in-memory live config
+//      (`window.App.getConfig()`) — the `/api/admin/config` endpoint
+//      returns the server-side admin view, which can drift from what
+//      the Pi simulator is actually running. The simulator's
+//      `MessageManager` is the source of truth for "what config is
+//      currently being applied to the EffectsCoordinator", and that's
+//      already mirrored into `App.getConfig()` by the per-generation
+//      bootstrap.
+//      The S3 bucket trigger was removed on 2026-07-23: its
+//      endpoint's response shape (jstree-style `nodes: [...]`) didn't
+//      match the modal's `objects: [...]` parser, so the modal
+//      displayed "Failed to fetch S3 objects" with no useful
+//      diagnostic. The legacy Testing page was removed in the same
+//      sweep — the diagnostic surface that lived there has been
+//      folded into the dashboard's test-injection form (§6.2).
 //   2. Bind the test-injection form to POST `/api/test-messages`
-//      with the same shape the Testing page uses, then surface the
+//      with the same shape the Testing page used, then surface the
 //      result (HTTP status + parsed body) in the inline result row.
 //      §6.1: the form reports Flask acceptance separately from the
 //      MQTT-receipt side (which lives in `preview.js` via the
@@ -102,60 +110,51 @@
   document.addEventListener("keydown", function (e) {
     if (e.key !== "Escape") return;
     const openModalEl = document.querySelector(
-      "#json-modal:not(.hidden), #cfg-modal:not(.hidden), #filters-modal:not(.hidden), #s3-modal:not(.hidden)"
+      "#json-modal:not(.hidden), #cfg-modal:not(.hidden), #filters-modal:not(.hidden)"
     );
     if (openModalEl) closeModal(openModalEl.id);
   });
 
   // ---- Diagnostic modal triggers -----------------------------------
 
-  async function fetchAndShow(modalId, bodyId, url, errorPrefix, transformFn) {
-    setModalBody(bodyId, "Loading…", false);
-    openModal(modalId);
-    try {
-      const res = await fetch(url, {
-        headers: { "X-API-Key": (window.APP_CONFIG || {}).apiKey || "" },
-      });
-      const text = await res.text();
-      if (!res.ok) {
-        setModalBody(bodyId, `${errorPrefix}: HTTP ${res.status}\n${text}`, true);
-        return;
-      }
-      // Custom transform wins (used by S3 to render its list view); the
-      // default pretty-prints JSON or falls back to the raw body.
-      if (typeof transformFn === "function") {
-        try {
-          const out = transformFn(text);
-          if (out == null) return;
-          setModalBody(bodyId, String(out), false);
-        } catch (parseErr) {
-          setModalBody(bodyId, `${errorPrefix}: invalid JSON — ${(parseErr && parseErr.message) || parseErr}`, true);
-        }
-        return;
-      }
-      try {
-        const parsed = JSON.parse(text);
-        setModalBody(bodyId, JSON.stringify(parsed, null, 2), false);
-      } catch (_) {
-        setModalBody(bodyId, text, false);
-      }
-    } catch (e) {
-      setModalBody(bodyId, `${errorPrefix}: ${(e && e.message) || e}`, true);
-    }
-  }
-
   const btnCfg = document.getElementById("btn-modal-config");
   const btnFilters = document.getElementById("btn-modal-filters");
-  const btnS3 = document.getElementById("btn-modal-s3");
 
   if (btnCfg) {
-    btnCfg.addEventListener("click", function () {
-      fetchAndShow(
-        "cfg-modal",
-        "cfg-modal-body",
-        "/api/admin/config",
-        "Failed to fetch current config"
-      );
+    btnCfg.addEventListener("click", async function () {
+      // Current config lives in the per-generation MessageManager's
+      // SignConfig — the same live state the EffectsCoordinator is
+      // applying. Read it via `App.getConfig()` (the proxy the
+      // dashboard_bootstrap installed) instead of hitting
+      // `/api/admin/config`, which returns the server-side admin
+      // view and can drift from what the Pi simulator is actually
+      // running. Same proxy the Active filters button reads from.
+      setModalBody("cfg-modal-body", "Loading…", false);
+      openModal("cfg-modal");
+      try {
+        const App = window.App;
+        if (!App || typeof App.getConfig !== "function") {
+          setModalBody(
+            "cfg-modal-body",
+            "Failed to fetch current config: App not ready (PyScript bootstrap hasn't installed the config proxy yet).",
+            true,
+          );
+          return;
+        }
+        const cfg = await App.getConfig();
+        if (!cfg || (typeof cfg === "object" && Object.keys(cfg).length === 0)) {
+          setModalBody("cfg-modal-body", "(no config loaded)", false);
+          return;
+        }
+        setModalBody("cfg-modal-body", JSON.stringify(cfg, null, 2), false);
+      } catch (e) {
+        setModalBody(
+          "cfg-modal-body",
+          "Failed to fetch current config: " +
+            ((e && e.message) || String(e)),
+          true,
+        );
+      }
     });
   }
   if (btnFilters) {
@@ -187,18 +186,17 @@
           setModalBody("filters-modal-body", "(no active filters)", false);
           return;
         }
-        // FilterRule.to_dict() produces {type, value, action, status, label}
-        // — render each row as a one-line summary so the modal
-        // matches the same compact view the Settings page uses.
+        // FilterRule.to_dict() produces {type, pattern, action, status}
+        // (lib_shared/models.py:280). Render each row as a one-line
+        // summary so the modal matches the same compact view the
+        // Settings page uses.
         const rows = filters
           .map(function (f) {
             const type = (f && f.type) || "?";
-            const value = (f && f.value) || "";
+            const pattern = (f && f.pattern) || "";
             const action = (f && f.action) || "?";
             const status = (f && f.status) || "?";
-            const label = (f && f.label) || "";
-            const labelStr = label ? ` — ${label}` : "";
-            return `[${status}] ${action} ${type} = ${value}${labelStr}`;
+            return `[${status}] ${action} ${type} = ${pattern}`;
           })
           .join("\n");
         setModalBody("filters-modal-body", rows, false);
@@ -210,31 +208,6 @@
           true,
         );
       }
-    });
-  }
-  if (btnS3) {
-    btnS3.addEventListener("click", function () {
-      fetchAndShow(
-        "s3-modal",
-        "s3-modal-body",
-        "/api/admin/s3-objects",
-        "Failed to fetch S3 objects",
-        // Flat-list transform: render each object as `key    (size bytes)`.
-        // Returning null leaves the modal in its current state — used here
-        // for the empty-list case to short-circuit `setModalBody`.
-        function (rawText) {
-          const parsed = JSON.parse(rawText);
-          const items = (parsed && parsed.objects) || parsed || [];
-          if (!Array.isArray(items) || items.length === 0) return "(no objects)";
-          return items
-            .map(function (o) {
-              const key = (o && o.Key) || (o && o.key) || String(o);
-              const size = (o && o.Size) || (o && o.size) || "";
-              return size ? `${key}    (${size} bytes)` : `${key}`;
-            })
-            .join("\n");
-        }
-      );
     });
   }
 

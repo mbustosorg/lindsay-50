@@ -1862,16 +1862,12 @@ def preview():
 
 
 @app.route("/testing")
-@login_required
 def testing():
-    """Testing: inject messages and inspect system state."""
-    cfg = sqlite.get_config()
-    twilio_token = _cfg.if_exists("TWILIO_AUTH_TOKEN")
-    return render_template(
-        "testing.html",
-        sign_name=cfg.sign_settings.sign_name,
-        twilio_token=twilio_token or "",
-    )
+    """Removed 2026-07-23 — the legacy Testing page is no longer
+    reachable. The diagnostic surface (test injection, filters,
+    config inspector) was folded into the dashboard per issue #48;
+    /testing now redirects to /."""
+    return redirect(url_for("dashboard"))
 
 
 @app.route("/health")

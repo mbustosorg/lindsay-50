@@ -708,9 +708,9 @@ def test_mqtt_header_partial_is_a_real_template():
     """
     partial_path = _PROJECT_ROOT / "heart-message-manager" / "templates" / "_mqtt_header.html"
     assert partial_path.exists(), (
-        "_mqtt_header.html partial must exist so dashboard.html, "
-        "testing.html, and any future simulator-hosting page can "
-        "include the MQTT status pill explicitly."
+        "_mqtt_header.html partial must exist so dashboard.html and "
+        "any future simulator-hosting page can include the MQTT "
+        "status pill explicitly. (testing.html was removed 2026-07-23.)"
     )
     base = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "base.html").read_text()
     # The base shell no longer contains the MQTT block. Pages opt in

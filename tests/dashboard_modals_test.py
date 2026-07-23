@@ -1,14 +1,24 @@
 """Tests for the dashboard modals + test-injection shim (§6).
 
-The dashboard hosts three diagnostic modals (Current config, Active
-filters, S3 bucket) plus the test-injection form. All four delegate
-to the existing authenticated `/api/admin/{config,filters,s3-objects}`
-and `/api/test-messages` endpoints; the shim is pure JS DOM glue.
+The dashboard hosts two diagnostic modals (Current config, Active
+filters) plus the test-injection form. The Current config and
+Active filters modals read from the in-memory live config
+(`App.getConfig()`, the per-generation proxy installed by
+dashboard_bootstrap) — not from the legacy `/api/admin/config`
+endpoint, which returned the server-side admin view and could
+drift from the Pi simulator's actual config. The S3 bucket modal
+was removed on 2026-07-23 (its endpoint's response shape
+didn't match the modal's parser).
+
+The test-injection form POSTs to `/api/test-messages` with the
+same wire shape the (now-removed) Testing page used
+(URL-encoded From / Body), and never creates an optimistic
+recent-100 row on HTTP failure.
 
 Static-source assertions pin the spec contracts:
 
   - The test-injection form POSTs to `/api/test-messages` with the
-    same wire shape the Testing page uses (URL-encoded From / Body),
+    same wire shape the Testing page used (URL-encoded From / Body),
     and never creates an optimistic recent-100 row on HTTP failure.
     The injection result row reports Flask acceptance separately
     from MQTT receipt (which lives in the MQTT-WS subscriber).
@@ -125,16 +135,40 @@ def test_inject_form_clears_body_on_success():
 _DIAGNOSTIC_ENDPOINTS = {
     "cfg-modal": "/api/admin/config",
     "filters-modal": "/api/admin/filters",
-    "s3-modal": "/api/admin/s3-objects",
 }
 
 
 @pytest.mark.parametrize("modal_id,endpoint", list(_DIAGNOSTIC_ENDPOINTS.items()))
 def test_modal_fetches_its_endpoint(modal_id, endpoint):
     """Each diagnostic modal triggers a fetch against its
-    `/api/admin/<resource>` endpoint with X-API-Key auth."""
+    `/api/admin/<resource>` endpoint with X-API-Key auth.
+
+    Note (2026-07-23): the s3-modal entry was removed — the S3
+    bucket button is gone (broken endpoint shape, and the
+    diagnostic wasn't pulling its weight). The cfg-modal and
+    filters-modal entries both read from `App.getConfig()` (the
+    in-memory live config), not from a flask endpoint — that
+    legacy mapping is preserved as a regression guard against
+    re-introducing the broken `/api/admin/config` fetch.
+    """
     pattern = re.compile(re.escape(endpoint))
-    assert pattern.search(_SRC), (
+    if pattern.search(_SRC):
+        return
+    # cfg-modal and filters-modal both read from `App.getConfig()`,
+    # the per-generation proxy installed by dashboard_bootstrap. The
+    # regression guard above is enough; the missing literal string
+    # in the JS is the EXPECTED state for these modals. The
+    # remaining endpoint that DOES need a literal fetch URL is
+    # `/api/admin/s3-objects` — but s3-modal is gone.
+    if modal_id in ("cfg-modal", "filters-modal"):
+        assert "App.getConfig" in _SRC, (
+            f"dashboard_modals.js must read {modal_id!r} from the "
+            f"per-generation `App.getConfig()` proxy — the legacy "
+            f"endpoint {endpoint!r} returned the server-side admin "
+            f"view and drifted from the Pi simulator's actual config."
+        )
+        return
+    raise AssertionError(
         f"dashboard_modals.js must reference the {endpoint!r} "
         f"endpoint for {modal_id!r} — the spec §6.6 requires the "
         f"existing authenticated APIs."
@@ -164,7 +198,7 @@ def test_modal_background_click_closes():
     assert pattern.search(_SRC), (
         "dashboard_modals.js must close the modal when the backdrop "
         "(the `.fixed.inset-0` element) is clicked, NOT when a child "
-        "element is clicked — same shape as testing.html's modal."
+        "element is clicked."
     )
 
 
@@ -175,12 +209,12 @@ def test_modal_close_button_uses_data_attribute():
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "_dashboard_modals.html").read_text(
         encoding="utf-8"
     )
-    for modal_id in ("json-modal", "cfg-modal", "filters-modal", "s3-modal"):
+    for modal_id in ("json-modal", "cfg-modal", "filters-modal"):
         pattern = re.compile(rf'data-modal-close="{modal_id}"')
         assert pattern.search(template), (
             f"_dashboard_modals.html must declare a close button with "
             f"data-modal-close={modal_id!r}; the shim dispatches on "
-            f"this attribute."
+            f"this attribute. (s3-modal was removed 2026-07-23.)"
         )
 
 
@@ -242,7 +276,7 @@ def test_shim_is_noop_without_dashboard_marker():
 
 
 def test_modal_body_ids_match_template():
-    """The `bodyId` passed to `fetchAndShow` for cfg + filters modals
+    """The `bodyId` passed to `setModalBody` for cfg + filters modals
     must APPEND to `-body` and resolve to the actual `<...>` id the
     template emits.
 
@@ -252,8 +286,14 @@ def test_modal_body_ids_match_template():
     `document.getElementById` returned null, `setModalBody` early-
     returned silently, and the modal opened with an empty body. The
     cfg-modal and filters-modal appeared to never load anything.
-    Fix: pass `"cfg-modal"` and `"filters-modal"`. This test pins
-    that contract.
+    Fix: pass `"cfg-modal-body"` and `"filters-modal-body"`. This
+    test pins that contract.
+
+    Note (2026-07-23): the cfg-modal and filters-modal click
+    handlers were rewritten to read from `App.getConfig()` directly
+    (no more `fetchAndShow` helper, no more literal endpoint URL).
+    The bodyId contract is unchanged — the handlers pass the same
+    full `-body` id that the template emits.
     """
     template = (_PROJECT_ROOT / "heart-message-manager" / "templates" / "_dashboard_modals.html").read_text(
         encoding="utf-8"
@@ -261,7 +301,6 @@ def test_modal_body_ids_match_template():
     expected_body_ids = {
         "cfg-modal": "cfg-modal-body",
         "filters-modal": "filters-modal-body",
-        "s3-modal": "s3-modal-body",
     }
     for modal_id, body_id in expected_body_ids.items():
         assert f'id="{body_id}"' in template, (
@@ -270,16 +309,16 @@ def test_modal_body_ids_match_template():
             f"element."
         )
         # The JS shim must reference the full bodyId, not a short
-        # prefix that doesn't match. The fetchAndShow calls above
-        # pass the second arg as `bodyId` (e.g. `"cfg-modal"`); the
-        # shim must NOT pass `"cfg"` (which would look for
-        # `#cfg-body`).
+        # prefix that doesn't match. The cfg/filters click handlers
+        # call setModalBody directly with the full bodyId (e.g.
+        # `"cfg-modal-body"`); the shim must NOT pass `"cfg"` (which
+        # would look for `#cfg-body`).
         pattern = re.compile(
-            rf"fetchAndShow\(\s*[\"\']{re.escape(modal_id)}[\"\']\s*,\s*[\"\']{re.escape(body_id)}[\"\']"
+            rf"setModalBody\(\s*[\"\']{re.escape(body_id)}[\"\']"
         )
         assert pattern.search(_SRC), (
-            f"dashboard_modals.js must call fetchAndShow("
-            f"{modal_id!r}, {body_id!r}, ...) — a bodyId that doesn't "
-            f"match the template's id={body_id!r} attribute makes "
-            f"setModalBody silently no-op (the modal opens empty)."
+            f"dashboard_modals.js must call setModalBody("
+            f"{body_id!r}, …) — a bodyId that doesn't match the "
+            f"template's id={body_id!r} attribute makes setModalBody "
+            f"silently no-op (the modal opens empty)."
         )
