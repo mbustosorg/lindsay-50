@@ -204,11 +204,6 @@
           "nor subscribe; badge will lag by one click.",
       );
     }
-    // Initial gate: default to disabled until the controller reports
-    // a real state. Without this, the canvas rAF loop would happily
-    // call `window.tick()` while PyScript is still loading and crash
-    // on `_coord() == None`.
-    window.__PREVIEW_TICK_ENABLED__ = false;
     console.log("[dashboard-controls] bound to window.Dashboard");
   }
 

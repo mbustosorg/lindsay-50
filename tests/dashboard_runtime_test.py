@@ -27,6 +27,7 @@ from dashboard_controller import (
     DashboardController,
     Runtime,
     _NullMessageManager,
+    _to_js_obj,
 )
 
 
@@ -626,4 +627,94 @@ def test_status_after_stop_returns_stopped(controller, fake_runtime_hook):
     controller.start()
     controller.stop()
     assert controller.status() == {"state": "stopped", "error": None}
+
+
+# --- PyScript dict → JS object boundary (issue #48 regression) -------------
+#
+# The standalone dashboard's Start/Stop button reads the controller's
+# state via `Dashboard.status()` on bind, then keeps in sync via the
+# `on_change` callback. Pyodide 0.26 hands Python dicts back to JS as
+# `PyProxy` wrappers — `Object.keys(snap)` returns `[]`,
+# `JSON.stringify(snap)` returns `"{}"`, and `snap.state` is
+# `undefined`. Without an explicit `to_js(..., dict_converter=
+# Object.fromEntries)` conversion, the button shows "Start" / overlay
+# shows "Simulator stopped — press Start to begin" even though the
+# controller is actually `running`. The `stop` action then fires when
+# the operator clicks the (mis-labeled) "Start" button.
+#
+# The `_to_js_obj` helper centralizes the conversion with a host-CPython
+# fallback (the unit-test environment has no Pyodide), so the conversion
+# is exercised in production (PyScript) and the structural shape is
+# preserved in tests.
+
+
+def test_to_js_obj_returns_plain_dict_on_host_python():
+    """Host CPython has no Pyodide; the helper falls back to the input dict."""
+    out = _to_js_obj({"state": "running", "error": None})
+    assert out == {"state": "running", "error": None}
+    assert out["state"] == "running"
+
+
+def test_to_js_obj_preserves_none_values():
+    """`error=None` must survive the conversion. Pyodide's default
+    `Object.fromEntries` keeps the key with a `null` value; the helper
+    must do the same on host CPython so tests can compare with `==`."""
+    out = _to_js_obj({"state": "running", "error": None})
+    assert "error" in out
+    assert out["error"] is None
+
+
+def test_status_returns_runnings_error_none_shape(controller, fake_runtime_hook):
+    """`status()` returns the `{state, error}` shape with `state=running`
+    and `error=None` after a successful bootstrap. Regression for the
+    bug where the value arrived in JS as an empty PyProxy dict, making
+    `applyState` see `state === undefined` and fall back to `stopped`."""
+    fake_runtime_hook(controller)
+    controller.start()
+    snap = controller.status()
+    assert snap["state"] == "running"
+    assert snap["error"] is None
+    # The dict shape must include both keys — the JS shim reads
+    # `snap.state` directly and treats an absent key as "stopped".
+    assert "state" in snap
+    assert "error" in snap
+
+
+def test_on_change_payload_has_state_and_error_keys(controller, fake_runtime_hook):
+    """Subscribers receive a `{state, error}` payload with both keys
+    populated. Regression for the bug where the dict arrived as a
+    PyProxy and the JS shim's `snap.state` was `undefined`."""
+    fake_runtime_hook(controller)
+    received: list[dict] = []
+    controller.on_change(lambda snap: received.append(dict(snap)))
+    controller.start()
+    assert received, "subscribers should have been notified"
+    running = [s for s in received if s.get("state") == "running"]
+    assert running, f"expected a 'running' notification, got {received}"
+    snap = running[-1]
+    assert "state" in snap
+    assert "error" in snap
+    assert snap["error"] is None
+
+
+def test_on_change_payload_keys_remain_accessible_across_transitions(controller, fake_runtime_hook):
+    """Every transition payload has both `state` and `error` keys.
+    Regression: the original PyProxy bug surfaced as a transient
+    notification with `snap.state === undefined`, which the JS shim
+    normalized to `stopped` and overrode the operator's view."""
+    fake_runtime_hook(controller)
+    received: list[dict] = []
+    controller.on_change(lambda snap: received.append(dict(snap)))
+    controller.start()
+    controller.stop()
+    states = [s["state"] for s in received]
+    assert "starting" in states
+    assert "running" in states
+    assert "stopping" in states
+    assert "stopped" in states
+    # Every payload carried both keys — the JS shim's
+    # `applyState(state, error)` destructures both.
+    for snap in received:
+        assert "state" in snap, f"snap without 'state' key: {snap}"
+        assert "error" in snap, f"snap without 'error' key: {snap}"
 

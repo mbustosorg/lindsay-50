@@ -82,6 +82,38 @@ DEFAULT_EVENT_LOG_MAX_ENTRIES = 100
 GENERATION_HISTORY_MAX = 8
 
 
+# --- Pyodide dict → JS object conversion -----------------------------------
+
+
+def _to_js_obj(d: dict) -> Any:
+    """Convert a Python dict to a JS-side Object, or pass through on host CPython.
+
+    `Dashboard.status()` and the `on_change` callback payload return
+    `{state, error}` dicts that the JS-side `dashboard_controls.js`
+    shim reads via direct property access (`snap.state`, `snap.error`).
+    Pyodide 0.26's default boundary conversion hands a Python dict
+    back to JS as a `PyProxy` wrapper — `Object.keys(snap)` is `[]`,
+    `JSON.stringify(snap)` is `"{}"`, and `snap.state` is `undefined`.
+    Without an explicit `to_js(..., dict_converter=Object.fromEntries)`
+    conversion, the dashboard button shows "Start" / overlay shows
+    "Simulator stopped" even though the controller is actually
+    `running` — which makes the manual Start click dispatch the
+    `stop` action (since `state === "running"`), tearing down the
+    runtime the operator just bootstrapped.
+
+    In host CPython (unit-test environment without Pyodide), the
+    import fails; we fall back to the plain dict so the existing
+    tests can keep using `==` comparisons and `[key]` access.
+    """
+    try:
+        import js  # type: ignore[import-not-found]
+        from pyodide.ffi import to_js  # type: ignore[import-not-found]
+
+        return to_js(d, dict_converter=js.Object.fromEntries)
+    except (ImportError, ModuleNotFoundError):
+        return d
+
+
 # --- Runtime record ---------------------------------------------------------
 
 
@@ -265,8 +297,19 @@ class DashboardController:
         `starting` / `running` / `stopping` / `error`); `error` is
         the last actionable error message captured during a failed
         bootstrap, or None.
+
+        The dict is wrapped in `to_js(..., dict_converter=Object.fromEntries)`
+        because Pyodide 0.26 returns Python dicts to JS as `PyProxy`
+        wrappers — `Object.keys()`, `JSON.stringify`, and direct
+        property access on the returned object all return empty
+        / undefined without an explicit conversion. The bug surfaced
+        as the dashboard's button showing "Start" and the loading
+        overlay showing "Simulator stopped — press Start to begin"
+        even when the controller's state was actually `running`
+        (because `dashboard_controls.js` saw `status()` returning
+        `{}` and treated it as `state === "stopped"`).
         """
-        return self._snapshot()
+        return _to_js_obj(self._snapshot())
 
     def on_change(self, callback: Callable[[dict], None]) -> Callable[[], None]:
         """Subscribe to lifecycle state transitions.
@@ -324,13 +367,23 @@ class DashboardController:
         triggered by the callback doesn't disturb the in-flight
         dispatch. Exceptions raised by a subscriber are logged and
         swallowed — they must not abort the notification chain.
+
+        The snapshot dict is converted via `to_js(..., dict_converter=
+        Object.fromEntries)` before being handed to each callback for
+        the same reason `status()` does it: Pyodide 0.26 passes
+        Python dicts to JS callbacks as `PyProxy` wrappers, and the
+        subscriber (`dashboard_controls.js:bind`) reads
+        `snap.state` / `snap.error` directly — without the wrap,
+        both fields are `undefined` and the UI looks stuck on
+        `stopped`.
         """
-        snap = {"state": state, "error": error}
+        snap_py = {"state": state, "error": error}
+        snap_js = _to_js_obj(snap_py)
         with self._lock:
             recipients = list(self._subscribers)
         for cb in recipients:
             try:
-                cb(snap)
+                cb(snap_js)
             except Exception as e:  # noqa: BLE001 — subscriber isolation
                 log.warning("DashboardController.on_change: subscriber raised: %r", e)
 
