@@ -124,6 +124,11 @@ def _load_app_module(mock_cfg, real_cfg):
     sqlite_mod.put_message = MagicMock()
     sqlite_mod.get_message = MagicMock(return_value=None)
     sqlite_mod.put_config = MagicMock()
+    # get_distinct_senders is called by /settings route to surface senders
+    # that exist in the SQLite store but aren't in cfg.senders yet
+    # (main.py:1824, issue #6 follow-up). Returning [] keeps the
+    # unlisted-senders block empty.
+    sqlite_mod.get_distinct_senders = MagicMock(return_value=[])
     sys.modules["sqlite"] = sqlite_mod
 
     s3_mod = types.ModuleType("s3")

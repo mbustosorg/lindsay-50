@@ -179,6 +179,15 @@ def test_preview_coord_mms_message_constructs_browser_overlay(caplog):
             fade_seconds=0.01,
             hold_seconds=0.1,
             idle_seconds=0.05,
+            # The test's hardcoded `received_at=2026-07-09` is ~14.5
+            # days behind `time.time()` at test-run. The default
+            # `lookback_days=14` would filter the message out at
+            # the eligibility gate and the coordinator would land
+            # in `background` (no message to pick, no overlay to
+            # build). Widen to MAX_LOOKBACK_DAYS so the hardcoded
+            # timestamp stays eligible — same pattern as
+            # `_StubMessageManager.__init__` for the test stub.
+            lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
         ),
     )
     clock = _Clock()

@@ -60,17 +60,18 @@ def _make_mock_cfg():
 
 @dataclass
 class _FakeSignSettings:
-    """A stand-in for `SignSettings` with the two fields the endpoint reads."""
+    """A stand-in for `SignSettings` with the fields the endpoint reads."""
 
     target_version: str = ""
-    name: str = "Lindsay's Heart"
+    sign_name: str = "Lindsay's Heart"
+    timezone: str = "US/Pacific"
 
 
 @dataclass
 class _FakeSignConfig:
-    """Stand-in for `SignConfig` exposing only `sign` and `timezone`."""
+    """Stand-in for `SignConfig` exposing only `sign_settings` and `timezone`."""
 
-    sign: _FakeSignSettings
+    sign_settings: _FakeSignSettings
     timezone: str = "US/Pacific"
 
 
@@ -104,6 +105,13 @@ def _load_app_module(
     models_mod.SignConfig = MagicMock()
     models_mod.FilterRule = MagicMock()
     models_mod.Message = MagicMock()
+    # main.py:62-64 imports EffectsSettings, TextSettings, MessageEnvelope
+    # from lib_shared.models at module load. The mock has to expose each
+    # name or the import fails with "cannot import name 'TextSettings'
+    # from 'lib_shared.models' (unknown location)".
+    models_mod.MessageEnvelope = MagicMock()
+    models_mod.MessageView = MagicMock()
+    models_mod.TextSettings = MagicMock()
     effects_settings_mock = MagicMock()
     effects_settings_mock.MIN_LOOKBACK_DAYS = 1
     effects_settings_mock.MAX_LOOKBACK_DAYS = 365
@@ -165,7 +173,10 @@ def _load_app_module(
     # A MagicMock would fall through to the Flask-short-SHA branch; use
     # an explicit fake so we can drive both states from the test.
     fake_cfg = _FakeSignConfig(
-        sign=_FakeSignSettings(target_version=persisted_target_version),
+        sign_settings=_FakeSignSettings(
+            target_version=persisted_target_version,
+            timezone=persisted_timezone,
+        ),
         timezone=persisted_timezone,
     )
     sqlite_mod.get_config = MagicMock(return_value=fake_cfg)

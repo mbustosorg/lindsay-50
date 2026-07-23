@@ -1,7 +1,7 @@
 """Tests for SignSettings.target_version default resolution.
 
 Issue #51 wire contract:
-  - target_version lives on SignSettings (alongside `name`).
+  - target_version lives on SignSettings (alongside `sign_name`).
   - Default at construction time resolves to Flask's running short SHA
     (via `from_heroku_or_git()` + `short_sha()`).
   - The wire form is ALWAYS concrete — Flask never persists an empty value.
@@ -109,7 +109,7 @@ class TestDefaultTargetVersion:
     def test_explicit_target_version_overrides_default(self, fresh_models_module):
         """A caller-supplied target_version wins over the default."""
         SignSettings = fresh_models_module.SignSettings
-        s = SignSettings(name="X", target_version="feedface")
+        s = SignSettings(sign_name="X", target_version="feedface")
         assert s.target_version == "feedface"
 
     def test_empty_string_target_version_is_preserved(self, fresh_models_module):
@@ -138,12 +138,12 @@ class TestFromDict:
             return_value="abc1234",
             create=True,
         ):
-            s = SignSettings.from_dict({"name": "X"})
+            s = SignSettings.from_dict({"sign_name": "X"})
             assert s.target_version == "abc1234"
 
     def test_explicit_target_version_is_preserved(self, fresh_models_module):
         SignSettings = fresh_models_module.SignSettings
-        s = SignSettings.from_dict({"name": "X", "target_version": "feedface"})
+        s = SignSettings.from_dict({"sign_name": "X", "target_version": "feedface"})
         assert s.target_version == "feedface"
 
     def test_from_dict_none_uses_default(self, fresh_models_module):
@@ -155,7 +155,7 @@ class TestFromDict:
             create=True,
         ):
             s = SignSettings.from_dict(None)
-            assert s.name == SignSettings.DEFAULT_NAME
+            assert s.sign_name == SignSettings.DEFAULT_SIGN_NAME
             assert s.target_version == "abc1234"
 
     def test_from_dict_empty_dict_uses_default(self, fresh_models_module):
@@ -167,7 +167,7 @@ class TestFromDict:
             create=True,
         ):
             s = SignSettings.from_dict({})
-            assert s.name == SignSettings.DEFAULT_NAME
+            assert s.sign_name == SignSettings.DEFAULT_SIGN_NAME
             assert s.target_version == "abc1234"
 
 
@@ -183,7 +183,7 @@ class TestToDict:
 
     def test_round_trip_through_from_to_dict(self, fresh_models_module):
         SignSettings = fresh_models_module.SignSettings
-        original = SignSettings(name="Test", target_version="deadbee")
+        original = SignSettings(sign_name="Test", target_version="deadbee")
         round_tripped = SignSettings.from_dict(original.to_dict())
         assert round_tripped.to_dict() == original.to_dict()
 
@@ -208,11 +208,16 @@ class TestSqliteRoundTrip:
 
         with mock.patch.object(sqlite_mod, "_db_path", return_value=db_path):
             sqlite_mod.init_db()
-            cfg = SignConfig(sign=SignSettings(name="X", target_version="abc1234"))
+            cfg = SignConfig(sign_settings=SignSettings(sign_name="X", target_version="abc1234"))
             sqlite_mod.put_config(cfg)
             loaded = sqlite_mod.get_config()
 
-        assert loaded.sign.to_dict() == {"name": "X", "target_version": "abc1234"}
+        assert loaded.sign_settings.to_dict() == {
+            "sign_name": "X",
+            "target_version": "abc1234",
+            "enforce_allowed_senders": True,
+            "timezone": "US/Pacific",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -233,8 +238,8 @@ class TestS3RebuildPath:
         # constructs SignSettings.from_dict({...}).
         # The S3 row may NOT carry target_version (pre-change data);
         # the construction must default.
-        cfg = fresh_models_module.SignConfig.from_dict({"sign": {"name": "FromS3"}, "timezone": "US/Pacific"})
-        assert "target_version" in cfg.sign.to_dict()
+        cfg = fresh_models_module.SignConfig.from_dict({"sign_settings": {"sign_name": "FromS3"}, "timezone": "US/Pacific"})
+        assert "target_version" in cfg.sign_settings.to_dict()
         # The field is concrete (never None, never empty when the resolver
         # succeeds — which it does in the test environment).
-        assert isinstance(cfg.sign.target_version, str)
+        assert isinstance(cfg.sign_settings.target_version, str)

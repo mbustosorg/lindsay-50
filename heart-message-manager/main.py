@@ -859,7 +859,11 @@ def api_sign_settings():
     return jsonify(
         {
             "target_version": target,
-            "timezone": cfg.sign_settings.timezone if cfg.sign_settings else "US/Pacific",
+            # Default to "US/Pacific" when sign_settings is missing or its
+            # timezone field is empty (the persisted SignConfig may carry
+            # an empty string after a legacy reload). The wire form is
+            # always concrete so the Pi never sees `timezone=""`.
+            "timezone": (cfg.sign_settings.timezone if cfg.sign_settings else "") or "US/Pacific",
         }
     )
 

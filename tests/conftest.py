@@ -56,24 +56,42 @@ from lib_shared.models import (
 def _ensure_real_lib_shared():
     """Re-import the real lib_shared package if it was replaced by a Mock.
 
-    `test_auth.py`'s `app` fixture swaps `lib_shared` (and its submodules)
-    for `types.ModuleType` mocks so it can stub out heavy deps while
-    loading main.py. After that fixture tears down, the real submodules
-    are restored — but if a sibling test's autouse fixture runs an
-    unconditional wipe-and-reimport (the previous approach), it drops
-    the real submodules and forces a fresh import, breaking tests that
-    captured references at module load time.
+    `test_auth.py`'s `app` fixture (and similar mocks in
+    `test_admin_settings_route.py`, `settings_template_test.py`, etc.)
+    swap `lib_shared` (and its submodules) for `types.ModuleType` mocks
+    so they can stub out heavy deps while loading main.py. These mocks
+    set `__path__` to the real directory so Python's import system can
+    resolve any submodules they DON'T mock — which means a simple
+    `hasattr(cached, '__path__')` check is no longer enough to tell a
+    Mock from the real package.
 
-    This helper only wipes when the cached `lib_shared` is a Mock (i.e.
-    the package itself has no `__path__`, which a real package always
-    has). On a clean process the real package is already in sys.modules
-    and the function is a no-op.
+    The reliable signal is `__file__`: a `types.ModuleType` instance
+    has no `__file__` attribute unless explicitly set, but the real
+    package always has one (it points at `lib_shared/__init__.py`).
+    Same for any submodules: `lib_shared.models` Mock objects in
+    `test_auth.py` / `test_sign_settings_endpoint.py` don't set
+    `__file__`; the real module does.
+
+    The wipe runs only when at least one cached lib_shared* entry is a
+    Mock — on a clean process every entry has `__file__` and the
+    helper is a no-op.
     """
-    cached = sys.modules.get("lib_shared")
-    if cached is None or not hasattr(cached, "__path__"):
-        for name in [k for k in list(sys.modules) if k == "lib_shared" or k.startswith("lib_shared.")]:
-            del sys.modules[name]
-        importlib.import_module("lib_shared")
+    cached_names = [k for k in list(sys.modules) if k == "lib_shared" or k.startswith("lib_shared.")]
+    if not cached_names:
+        return
+    has_mock = False
+    for name in cached_names:
+        mod = sys.modules.get(name)
+        if mod is None:
+            continue
+        if not hasattr(mod, "__file__"):
+            has_mock = True
+            break
+    if not has_mock:
+        return
+    for name in cached_names:
+        sys.modules.pop(name, None)
+    importlib.import_module("lib_shared")
 
 
 @pytest.fixture(autouse=True)
@@ -128,6 +146,16 @@ def _reset_effects_settings_cache():
     of its own body; the reset only reaches across test boundaries.
     """
     yield
+    # The `from lib_shared.models import _default_effects_list` below
+    # requires the real models module to be in sys.modules — but tests
+    # like `test_auth.py`, `test_flask_command_endpoints.py`, and
+    # `messages_archive_test.py` swap it for a Mock-without-`_default_
+    # effects_list` while loading main.py. If a sibling test's teardown
+    # ran ahead of this autouse fixture's undo (or monkeypatch's undo
+    # left a stale entry), the import errors with "cannot import name
+    # '_default_effects_list'". Wipe stale Mocks first so the import
+    # resolves against the genuine module.
+    _ensure_real_lib_shared()
     import lib_shared.effects_loader as _loader
     from lib_shared.models import _default_effects_list
 

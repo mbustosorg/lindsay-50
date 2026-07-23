@@ -495,12 +495,18 @@ def test_make_selector_dispatches_by_algorithm_field():
     a silent regression: the coordinator would always pick the
     fallback. Pin the dispatch.
     """
-    from lib_shared.selector import make_selector
+    # Re-resolve `make_selector` / `WeightedSelector` / `RandomSelector`
+    # inside the test body so a Mock installed earlier in the suite
+    # (e.g. by test_auth.py / test_sign_settings_endpoint.py) can't
+    # silently bind these names to a stub.
+    from lib_shared.selector import make_selector as _make_selector
+    from lib_shared.selector import WeightedSelector as _WeightedSelector
+    from lib_shared.selector import RandomSelector as _RandomSelector
 
-    assert isinstance(make_selector("weighted"), WeightedSelector)
-    assert isinstance(make_selector("random"), RandomSelector)
+    assert isinstance(_make_selector("weighted"), _WeightedSelector)
+    assert isinstance(_make_selector("random"), _RandomSelector)
     with pytest.raises(ValueError):
-        make_selector("not-a-real-algorithm")
+        _make_selector("not-a-real-algorithm")
 
 
 def test_messages_within_offset_are_eligible():

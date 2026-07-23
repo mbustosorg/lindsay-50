@@ -75,6 +75,13 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
     models_mod.SignConfig = MagicMock()
     models_mod.FilterRule = MagicMock()
     models_mod.Message = MagicMock()
+    # main.py:63 imports `from lib_shared.models import EffectsSettings,
+    # TextSettings` at module-load. The mock has to expose TextSettings or
+    # the import fails. `_default_effects_list` is referenced by
+    # `lib_shared.effects_loader`; the loader is mocked too, but the
+    # import order means models.py is partially evaluated, so expose it.
+    models_mod.TextSettings = MagicMock()
+    models_mod._default_effects_list = MagicMock(return_value=[])
     effects_settings_mock = MagicMock()
     effects_settings_mock.MIN_LOOKBACK_DAYS = 1
     effects_settings_mock.MAX_LOOKBACK_DAYS = 365

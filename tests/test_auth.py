@@ -234,10 +234,13 @@ def esp32_headers():
 
 class TestLoginSuccess:
     def test_login_valid_credentials_redirects_to_dashboard(self, client):
-        """POST /login with correct ADMIN_USERNAME/ADMIN_PASSWORD redirects to /?wipe=1.
+        """POST /login with correct ADMIN_USERNAME/ADMIN_PASSWORD redirects to /.
 
-        The login route appends `?wipe=1` so the client-side app wipes
-        IndexedDB and re-seeds from REST on this load (see auth.py).
+        Issue #48 dropped IndexedDB persistence — the message buffer is
+        now per-tab in-memory only, owned by the per-generation
+        MessageManager — so the legacy `?wipe=1` query string is dead.
+        The login route lands the operator on a fresh dashboard
+        generation regardless of any persistence state.
         """
         response = client.post(
             "/login",
@@ -245,7 +248,7 @@ class TestLoginSuccess:
             follow_redirects=False,
         )
         assert response.status_code == 302
-        assert response.location == "/?wipe=1"
+        assert response.location == "/"
 
 
 # ---------------------------------------------------------------------------
