@@ -28,6 +28,11 @@ class PreviewScroller(ScrollerBase):
     Pillow's bundled default font, which is always available.
     """
 
+    # Pillow's Image text() draws with y as the glyph TOP (see
+    # compute_layout), not a baseline — so scrim_bands() must not subtract
+    # the ascent when locating the glyph box.
+    _TEXT_Y_IS_BASELINE = False
+
     def __init__(
         self, display, *, speed: int = ScrollerBase.DEFAULT_SPEED, color: int = 0xFF6400, font_path: str | None = None
     ):

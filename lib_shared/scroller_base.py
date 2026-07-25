@@ -49,6 +49,13 @@ class ScrollerBase:
     )
     DEFAULT_SPEED = 3
 
+    # Whether `top_y` / `bottom_y` are glyph BASELINES or the glyph TOP.
+    # The rgbmatrix MatrixScroller uses a baseline (graphics.DrawText takes
+    # a baseline); the Pillow PreviewScroller uses the glyph top (Image
+    # text() draws y as the top). `scrim_bands()` reads this to normalize
+    # either datum to the glyph box. Subclasses override as needed.
+    _TEXT_Y_IS_BASELINE = True
+
     @classmethod
     def resolve_pacing(cls, speed: int) -> tuple[float, float]:
         """Translate a 1..5 speed knob to (frame_delay, offset_seconds).
@@ -117,9 +124,10 @@ class ScrollerBase:
         """Return the vertical row spans [(y0, y1), ...] to darken behind
         the text, or an empty list when the scrim is off / there's no text.
 
-        Each span brackets one text line's glyph box (baseline − ascent to
-        baseline + descent) plus a 2px pad. Uses the subclass-populated
-        `font_height` / `font_baseline`; returns [] if those aren't set.
+        Each span brackets one text line's glyph box plus a 2px pad. Uses
+        the subclass-populated `font_height` / `font_baseline` and the
+        `_TEXT_Y_IS_BASELINE` datum flag to locate the glyph top from
+        `top_y` / `bottom_y`; returns [] if the font metrics aren't set.
         The display clamps the spans to the panel height.
         """
         if self._scrim <= 0.0 or not self.text:
@@ -130,8 +138,11 @@ class ScrollerBase:
             return []
         pad = 2
 
-        def span(baseline_y: int) -> tuple[int, int]:
-            return (baseline_y - fb - pad, baseline_y - fb + fh + pad)
+        def span(line_y: int) -> tuple[int, int]:
+            # Normalize either text-y datum to the glyph top: a baseline
+            # sits `ascent` (font_baseline) below the glyph top.
+            glyph_top = (line_y - fb) if self._TEXT_Y_IS_BASELINE else line_y
+            return (glyph_top - pad, glyph_top + fh + pad)
 
         bands = [span(self.top_y)]
         if not self.single_line:
