@@ -117,8 +117,17 @@ class ScrollerBase:
 
     @property
     def scrim(self) -> float:
-        """Current scrim darkness level (0.0 off .. 1.0)."""
-        return self._scrim
+        """Effective scrim darkness right now: the configured level scaled
+        by the current text brightness.
+
+        Scaling by `_brightness` makes the scrim fade in and out in
+        lock-step with the text — during the coordinator's `in` / `text_out`
+        crossfades the band darkens/lightens with the glyphs, so no dark box
+        lingers after the text has faded (the "scrim too long at the end of
+        the scroll" symptom). Returns 0.0 when the scrim is off or the text
+        is fully faded.
+        """
+        return self._scrim * self._brightness
 
     def scrim_rects(self) -> list[tuple[int, int, int, int]]:
         """Return the rectangles [(x0, y0, x1, y1), ...] to darken behind the
@@ -133,8 +142,12 @@ class ScrollerBase:
         the glyph top; returns [] if the font metrics aren't set. The
         display clamps each rect to the panel bounds. Rects may extend
         off-screen (the text scrolls in/out) — clamping handles that.
+
+        Gated on the EFFECTIVE `scrim` (brightness-scaled), so once the
+        text has fully faded (brightness 0) no rects are produced and the
+        display takes the cheap no-scrim path.
         """
-        if self._scrim <= 0.0 or not self.text:
+        if self.scrim <= 0.0 or not self.text:
             return []
         fh = int(getattr(self, "font_height", 0) or 0)
         fb = int(getattr(self, "font_baseline", 0) or 0)

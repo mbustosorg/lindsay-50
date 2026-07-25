@@ -235,6 +235,26 @@ def test_set_scrim_clamps():
     assert s.scrim == 0.0
 
 
+def test_scrim_scales_with_brightness():
+    """The effective scrim is the configured level times text brightness,
+    so it fades in/out with the text (no lingering dark box)."""
+    s = _StubScroller(speed=3)
+    s.set_scrim(0.6)
+    assert s.scrim == 0.6  # default brightness 1.0
+    s.set_brightness(0.5)
+    assert s.scrim == 0.3  # 0.6 * 0.5
+    s.set_brightness(0.0)
+    assert s.scrim == 0.0  # fully faded → no scrim
+
+
+def test_scrim_rects_empty_when_faded_out():
+    """With the text fully faded (brightness 0), no rects are produced even
+    though the configured scrim level is non-zero."""
+    s = _scrim_scroller(scrim=0.6)
+    s.set_brightness(0.0)
+    assert s.scrim_rects() == []
+
+
 def test_scrim_rects_off_returns_empty():
     assert _scrim_scroller(scrim=0.0).scrim_rects() == []
 
