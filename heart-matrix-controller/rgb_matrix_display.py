@@ -135,22 +135,32 @@ class MatrixDisplay(DisplayBase):
     def _render_with_scrim(self, canvas, effect, scroller, bands):
         """Render `effect` into an offscreen buffer, dim the text bands, blit.
 
+        Buffer geometry comes from the CANVAS (`canvas.width` /
+        `canvas.height`) — the logical size the pixel mapper exposes and
+        the size every effect/scroller renders against — NOT `self.width`
+        / `self.height`, which are mis-derived for non-U-mapper configs
+        (e.g. the V-mapper 64x64 stack reports self=128x32). Sizing the
+        buffer to self.* dropped the effect's lower half and blacked out
+        everything below the text.
+
         numpy + Pillow are imported lazily here (both ship on the Pi via
         requirements-pi; neither is needed on the host, and this path only
         runs when the scrim is enabled)."""
         import numpy as np
         from PIL import Image
 
+        w = int(canvas.width)
+        h = int(canvas.height)
         buf = self._scrim_buf
-        if buf is None or buf.shape[0] != self.height or buf.shape[1] != self.width:
-            buf = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        if buf is None or buf.shape[0] != h or buf.shape[1] != w:
+            buf = np.zeros((h, w, 3), dtype=np.uint8)
             self._scrim_buf = buf
         buf.fill(0)
         effect.render(_BufferCanvas(buf))
         factor = 1.0 - float(getattr(scroller, "scrim", 0.0))
         for y0, y1 in bands:
             y0 = max(0, int(y0))
-            y1 = min(self.height, int(y1))
+            y1 = min(h, int(y1))
             if y1 > y0:
                 buf[y0:y1] = (buf[y0:y1].astype(np.float32) * factor).astype(np.uint8)
         canvas.SetImage(Image.fromarray(buf))
