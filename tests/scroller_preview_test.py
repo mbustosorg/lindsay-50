@@ -170,7 +170,7 @@ def test_preview_scroller_single_line_layout_for_short_canvas():
 def test_preview_scroller_uses_glyph_top_datum_for_scrim():
     """PreviewScroller marks its text-y datum as glyph-top (not baseline).
 
-    Pillow's Image text() draws y as the glyph top, so scrim_bands() must
+    Pillow's Image text() draws y as the glyph top, so scrim_rects() must
     NOT subtract the ascent for the preview (unlike the Pi's baseline
     MatrixScroller). This locks that contract so the scrim band stays
     aligned with the rendered text in the browser preview.

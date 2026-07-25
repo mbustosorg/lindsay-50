@@ -124,31 +124,34 @@ class WebCanvas:
         """
         self.image = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 0))
 
-    def apply_scrim(self, bands, level):
-        """Darken the pattern in the given row spans by `level` (0.0..1.0).
+    def apply_scrim(self, rects, level):
+        """Darken the pattern in the given rectangles by `level` (0.0..1.0).
 
         The browser mirror of the Pi's text scrim (MatrixDisplay). Because
         this canvas is a real RGBA Pillow image, we alpha-composite black
-        at `alpha = level` over each band: a lit pixel C becomes
+        at `alpha = level` over each rect: a lit pixel C becomes
         C*(1 - level) (identical to the Pi's per-pixel multiply), while a
         transparent gap picks up a semi-opaque dark tint — improving text
         contrast over both the pattern and any media layered behind the
-        canvas in the DOM. No-op when the scrim is off or the band is empty.
+        canvas in the DOM. Each rect hugs the text (not the full display
+        width). No-op when the scrim is off or a rect is empty.
         """
-        if not bands or level <= 0:
+        if not rects or level <= 0:
             return
         a = max(0, min(255, int(round(255 * float(level)))))
         if a == 0:
             return
-        for y0, y1 in bands:
+        for x0, y0, x1, y1 in rects:
+            x0 = max(0, int(x0))
             y0 = max(0, int(y0))
+            x1 = min(self.width, int(x1))
             y1 = min(self.height, int(y1))
-            if y1 <= y0:
+            if x1 <= x0 or y1 <= y0:
                 continue
-            region = self.image.crop((0, y0, self.width, y1))
-            overlay = Image.new("RGBA", (self.width, y1 - y0), (0, 0, 0, a))
+            region = self.image.crop((x0, y0, x1, y1))
+            overlay = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, a))
             # alpha_composite(dst, src) → src over dst.
-            self.image.paste(Image.alpha_composite(region, overlay), (0, y0))
+            self.image.paste(Image.alpha_composite(region, overlay), (x0, y0))
 
 
 class WebDisplay(DisplayBase):
@@ -179,10 +182,10 @@ class WebDisplay(DisplayBase):
     def render(self, effect, scroller):
         self.canvas.clear()
         effect.render(self.canvas)
-        # Text scrim (readability aid): dim the pattern in the band behind
+        # Text scrim (readability aid): dim the pattern in the rects behind
         # the text before drawing it. No-op when text_scrim is 0 / the
-        # scroller reports no bands. Mirrors MatrixDisplay on the Pi.
-        bands = scroller.scrim_bands() if hasattr(scroller, "scrim_bands") else []
-        if bands:
-            self.canvas.apply_scrim(bands, getattr(scroller, "scrim", 0.0))
+        # scroller reports no rects. Mirrors MatrixDisplay on the Pi.
+        rects = scroller.scrim_rects() if hasattr(scroller, "scrim_rects") else []
+        if rects:
+            self.canvas.apply_scrim(rects, getattr(scroller, "scrim", 0.0))
         scroller.render(self.canvas)

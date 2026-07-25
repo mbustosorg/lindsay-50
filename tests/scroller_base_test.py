@@ -204,16 +204,19 @@ def test_set_text_emits_debug_log(caplog):
     )
 
 
-# --- text-scrim band geometry (readability aid) ----------------------------
+# --- text-scrim rectangle geometry (readability aid) -----------------------
 
 
 def _scrim_scroller(*, scrim, text="hi", single_line=True):
-    """A stub scroller with font metrics + top_y set, ready for scrim_bands()."""
+    """A stub scroller with font metrics + text x/width set for scrim_rects()."""
     s = _StubScroller(speed=3)
     s.font_height = 15
     s.font_baseline = 12
     s.top_y = 38
     s.bottom_y = 10
+    s.top_x = 10
+    s.bottom_x = 40
+    s.text_width = 20
     s.single_line = single_line
     s.text = text
     s.set_scrim(scrim)
@@ -232,37 +235,46 @@ def test_set_scrim_clamps():
     assert s.scrim == 0.0
 
 
-def test_scrim_bands_off_returns_empty():
-    assert _scrim_scroller(scrim=0.0).scrim_bands() == []
+def test_scrim_rects_off_returns_empty():
+    assert _scrim_scroller(scrim=0.0).scrim_rects() == []
 
 
-def test_scrim_bands_no_text_returns_empty():
-    assert _scrim_scroller(scrim=0.6, text="").scrim_bands() == []
+def test_scrim_rects_no_text_returns_empty():
+    assert _scrim_scroller(scrim=0.6, text="").scrim_rects() == []
 
 
-def test_scrim_bands_single_line_geometry():
-    """One span bracketing the glyph box (baseline-ascent-pad .. +descent+pad)."""
-    bands = _scrim_scroller(scrim=0.6).scrim_bands()
-    # top_y=38, baseline(ascent)=12, height=15, pad=2
-    #   y0 = 38 - 12 - 2 = 24 ; y1 = 38 - 12 + 15 + 2 = 43
-    assert bands == [(24, 43)]
+def test_scrim_rects_single_line_geometry():
+    """One rect hugging the text: x over [top_x, top_x+text_width], y glyph box."""
+    rects = _scrim_scroller(scrim=0.6).scrim_rects()
+    # top_x=10, text_width=20, pad=2 -> x0=8, x1=10+20+2=32
+    # top_y=38 baseline, ascent=12, height=15, pad=2 -> y0=24, y1=43
+    assert rects == [(8, 24, 32, 43)]
 
 
-def test_scrim_bands_two_lines():
-    """Two-line mode yields a span per line."""
-    bands = _scrim_scroller(scrim=0.6, single_line=False).scrim_bands()
-    assert len(bands) == 2
-    assert (24, 43) in bands  # top line (top_y=38)
-    # bottom line: bottom_y=10 -> (10-12-2, 10-12+15+2) = (-4, 15)
-    assert (-4, 15) in bands
+def test_scrim_rects_not_full_width():
+    """The rect must NOT span the whole display width — only the text."""
+    (x0, _y0, x1, _y1) = _scrim_scroller(scrim=0.6).scrim_rects()[0]
+    # text_width(20) + 2*pad(2) = 24, far short of any full-panel width.
+    assert x1 - x0 == 24
 
 
-def test_scrim_bands_missing_font_metrics_returns_empty():
-    """Without font_height set, no band is produced (defensive)."""
+def test_scrim_rects_two_lines():
+    """Two-line mode yields a rect per line, each at its own x."""
+    rects = _scrim_scroller(scrim=0.6, single_line=False).scrim_rects()
+    assert len(rects) == 2
+    assert (8, 24, 32, 43) in rects  # top line (top_x=10, top_y=38)
+    # bottom line: bottom_x=40 -> x0=38, x1=62 ; bottom_y=10 -> y0=-4, y1=15
+    assert (38, -4, 62, 15) in rects
+
+
+def test_scrim_rects_missing_font_metrics_returns_empty():
+    """Without font_height set, no rect is produced (defensive)."""
     s = _StubScroller(speed=3)
     s.top_y = 38
+    s.top_x = 10
+    s.text_width = 20
     s.single_line = True
     s.text = "hi"
     s.set_scrim(0.6)
     # no font_height / font_baseline attributes set
-    assert s.scrim_bands() == []
+    assert s.scrim_rects() == []

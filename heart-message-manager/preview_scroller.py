@@ -29,7 +29,7 @@ class PreviewScroller(ScrollerBase):
     """
 
     # Pillow's Image text() draws with y as the glyph TOP (see
-    # compute_layout), not a baseline — so scrim_bands() must not subtract
+    # compute_layout), not a baseline — so scrim_rects() must not subtract
     # the ascent when locating the glyph box.
     _TEXT_Y_IS_BASELINE = False
 

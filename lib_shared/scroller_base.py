@@ -52,7 +52,7 @@ class ScrollerBase:
     # Whether `top_y` / `bottom_y` are glyph BASELINES or the glyph TOP.
     # The rgbmatrix MatrixScroller uses a baseline (graphics.DrawText takes
     # a baseline); the Pillow PreviewScroller uses the glyph top (Image
-    # text() draws y as the top). `scrim_bands()` reads this to normalize
+    # text() draws y as the top). `scrim_rects()` reads this to normalize
     # either datum to the glyph box. Subclasses override as needed.
     _TEXT_Y_IS_BASELINE = True
 
@@ -88,7 +88,7 @@ class ScrollerBase:
         self._brightness = 1.0
         # Text-scrim darkness level, 0.0 (off) .. 1.0 (band fully black).
         # Live-updated from TextSettings.text_scrim via set_scrim(); the
-        # display reads it + scrim_bands() to dim the pattern behind the
+        # display reads it + scrim_rects() to dim the pattern behind the
         # text. Default off.
         self._scrim = 0.0
         # Subclass must populate after font load:
@@ -120,15 +120,19 @@ class ScrollerBase:
         """Current scrim darkness level (0.0 off .. 1.0)."""
         return self._scrim
 
-    def scrim_bands(self) -> list[tuple[int, int]]:
-        """Return the vertical row spans [(y0, y1), ...] to darken behind
-        the text, or an empty list when the scrim is off / there's no text.
+    def scrim_rects(self) -> list[tuple[int, int, int, int]]:
+        """Return the rectangles [(x0, y0, x1, y1), ...] to darken behind the
+        text, or an empty list when the scrim is off / there's no text.
 
-        Each span brackets one text line's glyph box plus a 2px pad. Uses
-        the subclass-populated `font_height` / `font_baseline` and the
-        `_TEXT_Y_IS_BASELINE` datum flag to locate the glyph top from
-        `top_y` / `bottom_y`; returns [] if the font metrics aren't set.
-        The display clamps the spans to the panel height.
+        Each rect tightly brackets one text line: horizontally from the
+        line's current scroll position (`top_x` / `bottom_x`) across the
+        measured `text_width`, and vertically over the glyph box — both
+        with a 2px pad, so the scrim hugs the text rather than spanning the
+        whole display. Uses the subclass-populated `font_height` /
+        `font_baseline` + the `_TEXT_Y_IS_BASELINE` datum flag to locate
+        the glyph top; returns [] if the font metrics aren't set. The
+        display clamps each rect to the panel bounds. Rects may extend
+        off-screen (the text scrolls in/out) — clamping handles that.
         """
         if self._scrim <= 0.0 or not self.text:
             return []
@@ -137,17 +141,18 @@ class ScrollerBase:
         if fh <= 0:
             return []
         pad = 2
+        tw = int(self.text_width)
 
-        def span(line_y: int) -> tuple[int, int]:
+        def rect(line_x: int, line_y: int) -> tuple[int, int, int, int]:
             # Normalize either text-y datum to the glyph top: a baseline
             # sits `ascent` (font_baseline) below the glyph top.
             glyph_top = (line_y - fb) if self._TEXT_Y_IS_BASELINE else line_y
-            return (glyph_top - pad, glyph_top + fh + pad)
+            return (line_x - pad, glyph_top - pad, line_x + tw + pad, glyph_top + fh + pad)
 
-        bands = [span(self.top_y)]
+        rects = [rect(self.top_x, self.top_y)]
         if not self.single_line:
-            bands.append(span(self.bottom_y))
-        return bands
+            rects.append(rect(self.bottom_x, self.bottom_y))
+        return rects
 
     def color_tuple(self):
         c, b = self._color, self._brightness

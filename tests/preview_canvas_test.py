@@ -170,25 +170,28 @@ def test_apply_scrim_dims_lit_pixel_and_tints_gap():
 
     Matches the Pi's per-pixel multiply for lit pixels; transparent gaps
     pick up a semi-opaque black so text reads over media behind the DOM.
+    Rect (x0=4, y0=24, x1=40, y1=41) hugs the text — pixels outside it
+    (in x OR y) are untouched.
     """
     mod = _load_canvas_module()
     c = mod.WebCanvas(64, 64)
-    c.SetPixel(5, 30, 200, 210, 220)  # lit, opaque
-    c.apply_scrim([(24, 41)], 0.6)  # factor 0.4, alpha round(255*0.6)=153
+    c.SetPixel(5, 30, 200, 210, 220)  # lit, opaque, inside the rect
+    c.apply_scrim([(4, 24, 40, 41)], 0.6)  # factor 0.4, alpha round(255*0.6)=153
     assert c.image.getpixel((5, 30)) == (80, 84, 88, 255)  # 200*.4, 210*.4, 220*.4
-    assert c.image.getpixel((0, 30)) == (0, 0, 0, 153)  # gap → semi-dark
-    assert c.image.getpixel((5, 10)) == (0, 0, 0, 0)  # outside band untouched
+    assert c.image.getpixel((10, 30)) == (0, 0, 0, 153)  # gap inside rect → semi-dark
+    assert c.image.getpixel((5, 10)) == (0, 0, 0, 0)  # outside rect (y) untouched
+    assert c.image.getpixel((50, 30)) == (0, 0, 0, 0)  # outside rect (x) untouched
 
 
 def test_apply_scrim_level_zero_is_noop():
     mod = _load_canvas_module()
     c = mod.WebCanvas(8, 8)
     c.SetPixel(0, 0, 100, 100, 100)
-    c.apply_scrim([(0, 8)], 0.0)
+    c.apply_scrim([(0, 0, 8, 8)], 0.0)
     assert c.image.getpixel((0, 0)) == (100, 100, 100, 255)
 
 
-def test_apply_scrim_empty_bands_is_noop():
+def test_apply_scrim_empty_rects_is_noop():
     mod = _load_canvas_module()
     c = mod.WebCanvas(8, 8)
     c.SetPixel(0, 0, 100, 100, 100)
@@ -197,7 +200,7 @@ def test_apply_scrim_empty_bands_is_noop():
 
 
 def test_webdisplay_render_applies_scrim_between_effect_and_text():
-    """WebDisplay.render dims the effect band before the text is drawn."""
+    """WebDisplay.render dims the effect rect before the text is drawn."""
     mod = _load_canvas_module()
     canvas = mod.WebCanvas(64, 64)
     display = mod.WebDisplay(canvas)
@@ -205,19 +208,21 @@ def test_webdisplay_render_applies_scrim_between_effect_and_text():
     class _Effect:
         def render(self, cv):
             for y in range(cv.height):
-                cv.SetPixel(0, y, 100, 100, 100)
+                for x in range(cv.width):
+                    cv.SetPixel(x, y, 100, 100, 100)
 
     class _Scroller:
         scrim = 0.5
         text = "hi"
 
-        def scrim_bands(self):
-            return [(20, 30)]
+        def scrim_rects(self):
+            return [(10, 20, 30, 30)]
 
         def render(self, cv):
             pass  # text draw is a no-op for this test
 
     display.render(_Effect(), _Scroller())
-    # Inside the band: dimmed to 100*(1-0.5)=50. Outside: untouched 100.
-    assert canvas.image.getpixel((0, 25)) == (50, 50, 50, 255)
-    assert canvas.image.getpixel((0, 5)) == (100, 100, 100, 255)
+    # Inside the rect: dimmed to 100*(1-0.5)=50. Outside (x or y): 100.
+    assert canvas.image.getpixel((15, 25)) == (50, 50, 50, 255)
+    assert canvas.image.getpixel((15, 5)) == (100, 100, 100, 255)  # outside y
+    assert canvas.image.getpixel((50, 25)) == (100, 100, 100, 255)  # outside x

@@ -51,8 +51,9 @@ class _FullFrameEffect:
 class _Scroller:
     scrim = 0.6
 
-    def scrim_bands(self):
-        return [(24, 43)]
+    def scrim_rects(self):
+        # Hugs the text: x in [5, 40), y in [24, 43).
+        return [(5, 24, 40, 43)]
 
 
 def _display_with_wrong_self_dims():
@@ -66,7 +67,7 @@ def _display_with_wrong_self_dims():
 def test_scrim_buffer_follows_canvas_not_self_dims():
     d = _display_with_wrong_self_dims()
     c = _Canvas64()
-    d._render_with_scrim(c, _FullFrameEffect(), _Scroller(), [(24, 43)])
+    d._render_with_scrim(c, _FullFrameEffect(), _Scroller(), [(5, 24, 40, 43)])
     assert c.captured.shape == (64, 64, 3)
     assert d._scrim_buf.shape == (64, 64, 3)
 
@@ -74,16 +75,19 @@ def test_scrim_buffer_follows_canvas_not_self_dims():
 def test_scrim_does_not_black_out_below_text():
     d = _display_with_wrong_self_dims()
     c = _Canvas64()
-    d._render_with_scrim(c, _FullFrameEffect(), _Scroller(), [(24, 43)])
+    d._render_with_scrim(c, _FullFrameEffect(), _Scroller(), [(5, 24, 40, 43)])
     img = c.captured
     # Rows above and below the text band retain the effect, not black.
     assert tuple(img[0, 10]) == (150, 160, 170)
     assert tuple(img[60, 10]) == (150, 160, 170)
 
 
-def test_scrim_dims_the_text_band():
+def test_scrim_dims_only_the_text_rect():
     d = _display_with_wrong_self_dims()
     c = _Canvas64()
-    d._render_with_scrim(c, _FullFrameEffect(), _Scroller(), [(24, 43)])
-    # Band rows dimmed by (1 - 0.6): 150*.4=60, 160*.4=64, 170*.4=68.
-    assert tuple(c.captured[30, 10]) == (60, 64, 68)
+    d._render_with_scrim(c, _FullFrameEffect(), _Scroller(), [(5, 24, 40, 43)])
+    img = c.captured  # numpy indexing is [y, x]
+    # Inside the rect (y=30, x=10): dimmed by (1 - 0.6) → 150*.4, 160*.4, 170*.4.
+    assert tuple(img[30, 10]) == (60, 64, 68)
+    # Same row but outside the rect's x-extent (x=50): NOT dimmed.
+    assert tuple(img[30, 50]) == (150, 160, 170)

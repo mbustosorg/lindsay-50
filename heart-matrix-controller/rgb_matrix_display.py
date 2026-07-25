@@ -115,25 +115,26 @@ class MatrixDisplay(DisplayBase):
         SwapOnVSync blocks until the panel's next vertical refresh, which paces
         the main loop — no manual sleep needed.
 
-        When the scroller reports a non-empty scrim band (TextSettings.
+        When the scroller reports non-empty scrim rects (TextSettings.
         text_scrim > 0), the effect is drawn into an offscreen buffer, the
-        rows behind the text are dimmed by `(1 - scrim)`, and the result is
-        blitted — so the pattern shows through, just darker where the text
-        sits. With the scrim off (the default) this is the original direct
-        path: no buffer, no numpy/PIL import, no extra blit.
+        rectangles behind the text are dimmed by `(1 - scrim)`, and the
+        result is blitted — so the pattern shows through, just darker where
+        the text sits (the rects hug the text, not the whole width). With
+        the scrim off (the default) this is the original direct path: no
+        buffer, no numpy/PIL import, no extra blit.
         """
         canvas = self.canvas
         canvas.Clear()
-        bands = scroller.scrim_bands() if hasattr(scroller, "scrim_bands") else []
-        if bands:
-            self._render_with_scrim(canvas, effect, scroller, bands)
+        rects = scroller.scrim_rects() if hasattr(scroller, "scrim_rects") else []
+        if rects:
+            self._render_with_scrim(canvas, effect, scroller, rects)
         else:
             effect.render(canvas)
         scroller.render(canvas)
         self.canvas = self._matrix.SwapOnVSync(canvas)
 
-    def _render_with_scrim(self, canvas, effect, scroller, bands):
-        """Render `effect` into an offscreen buffer, dim the text bands, blit.
+    def _render_with_scrim(self, canvas, effect, scroller, rects):
+        """Render `effect` into an offscreen buffer, dim the text rects, blit.
 
         Buffer geometry comes from the CANVAS (`canvas.width` /
         `canvas.height`) — the logical size the pixel mapper exposes and
@@ -158,11 +159,13 @@ class MatrixDisplay(DisplayBase):
         buf.fill(0)
         effect.render(_BufferCanvas(buf))
         factor = 1.0 - float(getattr(scroller, "scrim", 0.0))
-        for y0, y1 in bands:
+        for x0, y0, x1, y1 in rects:
+            x0 = max(0, int(x0))
             y0 = max(0, int(y0))
+            x1 = min(w, int(x1))
             y1 = min(h, int(y1))
-            if y1 > y0:
-                buf[y0:y1] = (buf[y0:y1].astype(np.float32) * factor).astype(np.uint8)
+            if x1 > x0 and y1 > y0:
+                buf[y0:y1, x0:x1] = (buf[y0:y1, x0:x1].astype(np.float32) * factor).astype(np.uint8)
         canvas.SetImage(Image.fromarray(buf))
 
 
