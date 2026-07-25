@@ -572,12 +572,17 @@ class EffectsCoordinator:
 
         text_settings = self.text_settings
         log.info(
-            "Coordinator scroller settings refresh: color=%s speed=%s",
+            "Coordinator scroller settings refresh: color=%s speed=%s scrim=%s",
             text_settings.color,
             text_settings.speed,
+            getattr(text_settings, "text_scrim", 0.0),
         )
         scroller.set_color(text_settings.color)
         scroller.set_speed(text_settings.speed)
+        # Text-scrim readability aid (0.0 off). set_scrim exists on
+        # ScrollerBase; getattr guards against an older scroller stub.
+        if hasattr(scroller, "set_scrim"):
+            scroller.set_scrim(getattr(text_settings, "text_scrim", 0.0))
 
     def _maybe_build_media_cycler(self) -> Effect | None:
         """Construct a `MediaCycler` (Pi) or `BrowserMediaOverlay`

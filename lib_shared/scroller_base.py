@@ -79,6 +79,11 @@ class ScrollerBase:
         self.bottom_y = 0
         self._color = color
         self._brightness = 1.0
+        # Text-scrim darkness level, 0.0 (off) .. 1.0 (band fully black).
+        # Live-updated from TextSettings.text_scrim via set_scrim(); the
+        # display reads it + scrim_bands() to dim the pattern behind the
+        # text. Default off.
+        self._scrim = 0.0
         # Subclass must populate after font load:
         #   self.font, self.font_height, self.font_baseline
 
@@ -95,6 +100,43 @@ class ScrollerBase:
         fd, off = self.resolve_pacing(speed)
         self.frame_delay = fd
         self.offset_seconds = off
+
+    def set_scrim(self, level: float) -> None:
+        """Live-update the text-scrim darkness (0.0 off .. 1.0 black band)."""
+        try:
+            self._scrim = max(0.0, min(1.0, float(level)))
+        except (TypeError, ValueError):
+            self._scrim = 0.0
+
+    @property
+    def scrim(self) -> float:
+        """Current scrim darkness level (0.0 off .. 1.0)."""
+        return self._scrim
+
+    def scrim_bands(self) -> list[tuple[int, int]]:
+        """Return the vertical row spans [(y0, y1), ...] to darken behind
+        the text, or an empty list when the scrim is off / there's no text.
+
+        Each span brackets one text line's glyph box (baseline − ascent to
+        baseline + descent) plus a 2px pad. Uses the subclass-populated
+        `font_height` / `font_baseline`; returns [] if those aren't set.
+        The display clamps the spans to the panel height.
+        """
+        if self._scrim <= 0.0 or not self.text:
+            return []
+        fh = int(getattr(self, "font_height", 0) or 0)
+        fb = int(getattr(self, "font_baseline", 0) or 0)
+        if fh <= 0:
+            return []
+        pad = 2
+
+        def span(baseline_y: int) -> tuple[int, int]:
+            return (baseline_y - fb - pad, baseline_y - fb + fh + pad)
+
+        bands = [span(self.top_y)]
+        if not self.single_line:
+            bands.append(span(self.bottom_y))
+        return bands
 
     def color_tuple(self):
         c, b = self._color, self._brightness

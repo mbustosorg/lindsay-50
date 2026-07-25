@@ -1263,6 +1263,12 @@ def _build_sign_config_from_request(data: dict) -> tuple:
                 jsonify({"error": (f"text_settings.text_effect: must be one of ('scroll',), got {te!r}")}),
                 400,
             )
+        scrim = ts.get("text_scrim")
+        if scrim is not None and (isinstance(scrim, bool) or not isinstance(scrim, (int, float)) or not (0.0 <= scrim <= 1.0)):
+            return None, (
+                jsonify({"error": "text_settings.text_scrim: must be a number in 0.0..1.0"}),
+                400,
+            )
 
     # All checks passed; construct the SignConfig (from_dict runs migrate()
     # again as defense-in-depth, which is a no-op for an already-migrated dict).
@@ -1545,6 +1551,15 @@ def settings():
         te = request.form.get("text_settings_text_effect")
         if te:
             ts_form.text_effect = te
+        # Text scrim slider (0..100 percent → 0.0..1.0). Absent/blank
+        # leaves the current value; out-of-range is clamped by
+        # TextSettings._clamp_scrim on assignment.
+        scrim_raw = request.form.get("text_settings_scrim")
+        if scrim_raw is not None and scrim_raw != "":
+            try:
+                ts_form.text_scrim = TextSettings._clamp_scrim(int(scrim_raw) / 100.0)
+            except ValueError:
+                logger.warning("[settings] text_settings_scrim: dropped non-numeric value %r", scrim_raw)
         # `name_display_format` (issue #6): one of the four valid
         # display formats. Unknown / missing values fall back to the
         # default (`first_initial_if_duplicates`) so a partial form

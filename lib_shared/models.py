@@ -658,6 +658,22 @@ class TextSettings:
     MAX_SPEED = 5
     DEFAULT_SPEED = 3
 
+    # Text-scrim level (readability aid): darken the pattern in the band
+    # behind the scrolling text so the text stands out. 0.0 = off (no
+    # dimming), 1.0 = the band is fully black. The Pi applies it as a
+    # per-pixel brightness multiply of `(1 - text_scrim)` over the text
+    # rows only (see MatrixDisplay.render). Default off — a slider on the
+    # /settings page sets it.
+    DEFAULT_TEXT_SCRIM = 0.0
+
+    @staticmethod
+    def _clamp_scrim(value) -> float:
+        """Coerce an arbitrary scrim input to a float in [0.0, 1.0]."""
+        try:
+            return max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return TextSettings.DEFAULT_TEXT_SCRIM
+
     # Name display format (issue #6 / implement-senders-filtering).
     # Governs how `MessageView.sender_name` is computed from the stored
     # `name` field. Lives here (next to `color` / `text_effect`) because
@@ -678,6 +694,7 @@ class TextSettings:
         color: int = 0xFF0000,
         text_effect: str = "scroll",
         name_display_format: Optional[str] = None,
+        text_scrim: float = DEFAULT_TEXT_SCRIM,
     ):
         """Initialize TextSettings.
 
@@ -687,6 +704,8 @@ class TextSettings:
             text_effect: One of TEXT_EFFECTS (currently "scroll").
             name_display_format: One of VALID_NAME_DISPLAY_FORMATS.
                 Default `None` falls through to DEFAULT_NAME_DISPLAY_FORMAT.
+            text_scrim: 0.0..1.0 darkness of the band behind the scrolling
+                text (0.0 = off). Clamped into range.
         """
         self.speed = speed
         self.color = color
@@ -694,6 +713,7 @@ class TextSettings:
         self.name_display_format = (
             name_display_format if name_display_format is not None else self.DEFAULT_NAME_DISPLAY_FORMAT
         )
+        self.text_scrim = self._clamp_scrim(text_scrim)
 
     @classmethod
     def from_dict(cls, d):
@@ -731,6 +751,8 @@ class TextSettings:
             color=int(d.get("color", 0xFF0000)),
             text_effect=text_effect,
             name_display_format=name_display_format,
+            # Optional / additive: pre-scrim configs omit it → default off.
+            text_scrim=cls._clamp_scrim(d.get("text_scrim", cls.DEFAULT_TEXT_SCRIM)),
         )
 
     def to_dict(self):
@@ -740,6 +762,7 @@ class TextSettings:
             "color": self.color,
             "text_effect": self.text_effect,
             "name_display_format": self.name_display_format,
+            "text_scrim": self.text_scrim,
         }
 
     def validate(self):
@@ -764,6 +787,8 @@ class TextSettings:
                 f"name_display_format must be one of {self.VALID_NAME_DISPLAY_FORMATS}, "
                 f"got {self.name_display_format!r}"
             )
+        if not (0.0 <= self.text_scrim <= 1.0):
+            raise ValueError("text_scrim must be in range 0.0..1.0")
 
 
 class SignConfig:

@@ -202,3 +202,67 @@ def test_set_text_emits_debug_log(caplog):
         "scroller.set_text must NOT emit an INFO log (round 4 demoted it); "
         f"got: {[r.getMessage() for r in info_records]}"
     )
+
+
+# --- text-scrim band geometry (readability aid) ----------------------------
+
+
+def _scrim_scroller(*, scrim, text="hi", single_line=True):
+    """A stub scroller with font metrics + top_y set, ready for scrim_bands()."""
+    s = _StubScroller(speed=3)
+    s.font_height = 15
+    s.font_baseline = 12
+    s.top_y = 38
+    s.bottom_y = 10
+    s.single_line = single_line
+    s.text = text
+    s.set_scrim(scrim)
+    return s
+
+
+def test_set_scrim_clamps():
+    s = _StubScroller(speed=3)
+    s.set_scrim(0.4)
+    assert s.scrim == 0.4
+    s.set_scrim(9)
+    assert s.scrim == 1.0
+    s.set_scrim(-3)
+    assert s.scrim == 0.0
+    s.set_scrim("bad")
+    assert s.scrim == 0.0
+
+
+def test_scrim_bands_off_returns_empty():
+    assert _scrim_scroller(scrim=0.0).scrim_bands() == []
+
+
+def test_scrim_bands_no_text_returns_empty():
+    assert _scrim_scroller(scrim=0.6, text="").scrim_bands() == []
+
+
+def test_scrim_bands_single_line_geometry():
+    """One span bracketing the glyph box (baseline-ascent-pad .. +descent+pad)."""
+    bands = _scrim_scroller(scrim=0.6).scrim_bands()
+    # top_y=38, baseline(ascent)=12, height=15, pad=2
+    #   y0 = 38 - 12 - 2 = 24 ; y1 = 38 - 12 + 15 + 2 = 43
+    assert bands == [(24, 43)]
+
+
+def test_scrim_bands_two_lines():
+    """Two-line mode yields a span per line."""
+    bands = _scrim_scroller(scrim=0.6, single_line=False).scrim_bands()
+    assert len(bands) == 2
+    assert (24, 43) in bands  # top line (top_y=38)
+    # bottom line: bottom_y=10 -> (10-12-2, 10-12+15+2) = (-4, 15)
+    assert (-4, 15) in bands
+
+
+def test_scrim_bands_missing_font_metrics_returns_empty():
+    """Without font_height set, no band is produced (defensive)."""
+    s = _StubScroller(speed=3)
+    s.top_y = 38
+    s.single_line = True
+    s.text = "hi"
+    s.set_scrim(0.6)
+    # no font_height / font_baseline attributes set
+    assert s.scrim_bands() == []

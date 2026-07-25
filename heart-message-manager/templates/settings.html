@@ -258,6 +258,20 @@
           <option value="scroll"{% if cfg.text_settings.text_effect == 'scroll' %} selected{% endif %}>scroll</option>
         </select>
       </div>
+      <div class="col-span-2">
+        <label class="block text-sm font-medium text-slate-600 mb-2">
+          Text background darkness
+          <span class="font-normal text-slate-400">— dims the pattern behind the scrolling text for readability (0% = off)</span>
+        </label>
+        <div class="flex items-center gap-4">
+          <input type="range" name="text_settings_scrim" id="text-scrim-slider"
+                 min="0" max="100" step="5"
+                 value="{{ (cfg.text_settings.text_scrim * 100) | round | int }}"
+                 class="flex-1 accent-primary cursor-pointer"
+                 oninput="document.getElementById('text-scrim-value').textContent = this.value + '%'">
+          <output id="text-scrim-value" class="w-12 text-right font-mono text-slate-700">{{ (cfg.text_settings.text_scrim * 100) | round | int }}%</output>
+        </div>
+      </div>
     </div>
   </div>
 

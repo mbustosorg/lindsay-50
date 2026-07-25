@@ -24,9 +24,36 @@ def test_text_effects_whitelist():
 
 
 def test_to_dict_contains_wire_fields():
-    """to_dict emits the wire fields including v3's name_display_format."""
+    """to_dict emits the wire fields including name_display_format + text_scrim."""
     d = TextSettings().to_dict()
-    assert set(d.keys()) == {"speed", "color", "text_effect", "name_display_format"}
+    assert set(d.keys()) == {"speed", "color", "text_effect", "name_display_format", "text_scrim"}
+
+
+def test_text_scrim_default_off():
+    """text_scrim defaults to 0.0 (scrim disabled)."""
+    assert TextSettings().text_scrim == 0.0
+    assert TextSettings().to_dict()["text_scrim"] == 0.0
+
+
+def test_text_scrim_round_trip_and_clamp():
+    """text_scrim round-trips and is clamped into [0.0, 1.0]."""
+    assert TextSettings.from_dict(TextSettings(text_scrim=0.65).to_dict()).text_scrim == 0.65
+    assert TextSettings(text_scrim=5).text_scrim == 1.0  # clamp high
+    assert TextSettings(text_scrim=-2).text_scrim == 0.0  # clamp low
+    assert TextSettings.from_dict({"text_scrim": "nope"}).text_scrim == 0.0  # bad → default
+
+
+def test_text_scrim_absent_is_off():
+    """A pre-scrim wire payload (no text_scrim key) loads as off."""
+    assert TextSettings.from_dict({"speed": 3, "color": 0xFF0000}).text_scrim == 0.0
+
+
+def test_validate_rejects_out_of_range_scrim():
+    """validate() rejects a text_scrim outside 0.0..1.0."""
+    s = TextSettings()
+    s.text_scrim = 1.5  # bypass the constructor clamp
+    with pytest.raises(ValueError):
+        s.validate()
 
 
 def test_round_trip_default():
