@@ -91,6 +91,12 @@ class ScrollerBase:
         # display reads it + scrim_rects() to dim the pattern behind the
         # text. Default off.
         self._scrim = 0.0
+        # Count of completed scroll passes: incremented each time the
+        # (top) line scrolls fully off the left edge and wraps back to the
+        # right. Reset on set_text. The coordinator watches for an
+        # increment to let a message finish scrolling before it fades
+        # (rather than cutting off mid-scroll at hold_seconds).
+        self._wrap_count = 0
         # Subclass must populate after font load:
         #   self.font, self.font_height, self.font_baseline
 
@@ -171,6 +177,14 @@ class ScrollerBase:
             rects.append(rect(self.bottom_x, self.bottom_y))
         return rects
 
+    @property
+    def wrap_count(self) -> int:
+        """Completed scroll passes since the current text was set — the
+        (top) line has scrolled off the left and wrapped this many times.
+        The coordinator treats an increment as 'the text finished a pass'.
+        """
+        return self._wrap_count
+
     def color_tuple(self):
         c, b = self._color, self._brightness
         return (
@@ -186,6 +200,7 @@ class ScrollerBase:
         self.text_width = self.measure_text(self.text)
         self.top_x = canvas_width
         self.bottom_x = canvas_width
+        self._wrap_count = 0
         now = time.monotonic()
         self.start_time = now
         self.last_frame = now
@@ -222,6 +237,10 @@ class ScrollerBase:
         new_top = self.top_x - pixels
         if new_top < end_x:
             new_top = canvas_width
+            # The (top) line just scrolled fully off the left and wrapped —
+            # one completed scroll pass. The coordinator watches this to let
+            # a message finish before fading (option b).
+            self._wrap_count += 1
         self.top_x = new_top
         if not self.single_line and now - self.start_time >= self.offset_seconds:
             new_bot = self.bottom_x - pixels

@@ -1530,3 +1530,47 @@ def test_pick_runs_once_per_out_to_in_transition(monkeypatch):
 
 
 # --- round 3 (debug-visibility): pick-first at every transition site ------
+
+
+# --- option b: wait for the text to scroll off before fading -----------------
+
+
+def test_ready_to_fade_waits_for_scroll_off():
+    """After hold_seconds, defer text_out until the text wraps (scrolls off)."""
+    coord, *_ = _build()
+    disp = SimpleNamespace(width=64)
+    scr = SimpleNamespace(text="a long message", wrap_count=3, frame_delay=0.04, text_width=200)
+    # First call past hold latches the wait and does NOT fade yet.
+    assert coord._ready_to_fade_after_hold(scr, disp, now=1000.0) is False
+    assert coord._hold_wait_armed is True
+    # Still waiting while the text keeps scrolling (wrap_count unchanged).
+    assert coord._ready_to_fade_after_hold(scr, disp, now=1001.0) is False
+    # Once it wraps (scrolled off the left), ready to fade.
+    scr.wrap_count = 4
+    assert coord._ready_to_fade_after_hold(scr, disp, now=1002.0) is True
+
+
+def test_ready_to_fade_immediate_when_no_text():
+    coord, *_ = _build()
+    disp = SimpleNamespace(width=64)
+    scr = SimpleNamespace(text="", wrap_count=0, frame_delay=0.04, text_width=0)
+    assert coord._ready_to_fade_after_hold(scr, disp, now=1000.0) is True
+
+
+def test_ready_to_fade_backstop_deadline():
+    """A stalled scroller (no wrap) still fades once the backstop elapses."""
+    coord, *_ = _build()
+    disp = SimpleNamespace(width=64)
+    scr = SimpleNamespace(text="hi", wrap_count=0, frame_delay=0.04, text_width=100)
+    # deadline = 1000 + (100+64)*0.04 + 2 = 1008.56
+    assert coord._ready_to_fade_after_hold(scr, disp, now=1000.0) is False
+    assert coord._ready_to_fade_after_hold(scr, disp, now=1005.0) is False
+    assert coord._ready_to_fade_after_hold(scr, disp, now=1009.0) is True
+
+
+def test_ready_to_fade_legacy_scroller_without_wrap_count():
+    """A scroller that doesn't report wrap_count keeps the cut-at-hold behavior."""
+    coord, *_ = _build()
+    disp = SimpleNamespace(width=64)
+    scr = SimpleNamespace(text="hi", frame_delay=0.04, text_width=100)  # no wrap_count
+    assert coord._ready_to_fade_after_hold(scr, disp, now=1000.0) is True

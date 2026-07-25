@@ -298,3 +298,28 @@ def test_scrim_rects_missing_font_metrics_returns_empty():
     s.set_scrim(0.6)
     # no font_height / font_baseline attributes set
     assert s.scrim_rects() == []
+
+
+# --- wrap_count (scroll-pass completion signal for option b) ----------------
+
+
+def test_wrap_count_increments_on_scroll_off(monkeypatch):
+    """wrap_count bumps when the text scrolls fully off the left and wraps."""
+    clock = _make_time(monkeypatch, start=1000.0)
+    s = _StubScroller(speed=5, char_width=2)  # frame_delay 0.02
+    s.set_text("hello", 10)  # text_width=10, canvas_width=10
+    assert s.wrap_count == 0
+    clock.advance(100 * 0.02)  # 100 px of travel — well past (10+10) → wraps
+    s.tick(10)
+    assert s.wrap_count == 1
+
+
+def test_wrap_count_resets_on_set_text(monkeypatch):
+    clock = _make_time(monkeypatch, start=1000.0)
+    s = _StubScroller(speed=5, char_width=2)
+    s.set_text("hello", 10)
+    clock.advance(100 * 0.02)
+    s.tick(10)
+    assert s.wrap_count == 1
+    s.set_text("world", 10)
+    assert s.wrap_count == 0

@@ -327,6 +327,18 @@ class EffectsCoordinator:
         self._suppress_media_override: bool = False
         self._suppress_for_message_id: str | None = None
 
+        # Hold → text_out "let the text finish scrolling" state (option b).
+        # When hold_seconds elapses mid-scroll, we defer the fade until the
+        # text scrolls off the left (one wrap) rather than cutting it off.
+        # `_hold_wait_armed` marks that we've latched the wait for the
+        # current hold; `_hold_wait_baseline_wraps` is the scroller's
+        # wrap_count when we latched; `_hold_wait_deadline` is a monotonic
+        # backstop (one full scroll pass + slack) so a stalled scroller
+        # can't hang the hold forever. All reset at each new in→hold.
+        self._hold_wait_armed: bool = False
+        self._hold_wait_baseline_wraps: int = 0
+        self._hold_wait_deadline: float = 0.0
+
     def is_bound(self) -> bool:
         """True when the coordinator has a render layer (display + scroller + effects + heart).
 
@@ -969,6 +981,43 @@ class EffectsCoordinator:
             return False
         return True
 
+    def _ready_to_fade_after_hold(self, scroller, display, now) -> bool:
+        """Once `hold_seconds` has elapsed, decide whether to start the
+        text_out fade now or wait for the text to finish scrolling (option b).
+
+        Returns True immediately when there's nothing to wait on — no
+        scrolling text, or a scroller that doesn't report `wrap_count`
+        (older/stub scrollers keep the legacy cut-at-hold behavior). When
+        there IS scrolling text, latches the current `wrap_count` on the
+        first call and then returns True only once the text has scrolled
+        fully off the left (wrap_count incremented) — or a computed backstop
+        (one full scroll pass + slack) elapses, so a stalled scroller can't
+        hang the hold indefinitely.
+        """
+        text = getattr(scroller, "text", "") or ""
+        wrap_count = getattr(scroller, "wrap_count", None)
+        if not text or wrap_count is None:
+            return True
+
+        if not self._hold_wait_armed:
+            # First tick past hold_seconds — latch and start waiting.
+            self._hold_wait_armed = True
+            self._hold_wait_baseline_wraps = int(wrap_count)
+            frame_delay = getattr(scroller, "frame_delay", 0.04) or 0.04
+            text_width = int(getattr(scroller, "text_width", 0) or 0)
+            width = display.width if display is not None else 64
+            # A full pass scrolls (text_width + width) pixels at frame_delay
+            # per pixel; +2s slack. The wrap normally fires well before this.
+            self._hold_wait_deadline = now + (text_width + width) * float(frame_delay) + 2.0
+            return False
+
+        if int(wrap_count) > self._hold_wait_baseline_wraps:
+            return True  # text finished a pass (scrolled off the left)
+        if now >= self._hold_wait_deadline:
+            log.info("Coordinator hold: scroll-off wait hit backstop deadline; fading now")
+            return True
+        return False
+
     def get_display_message(self) -> str | None:
         """Return the body of the message currently being rendered, or
         the on-deck body when nothing has been staged yet.
@@ -1395,6 +1444,9 @@ class EffectsCoordinator:
                 # body. Background otherwise (SMS-only message
                 # with empty body; rotation effect stays put).
                 next_mode = "hold" if self.showing_text else "background"
+                # Fresh hold → clear any latched "wait for scroll-off" state
+                # from the previous message (option b).
+                self._hold_wait_armed = False
                 log.info(
                     "Coordinator in→%s: effect=%s text=%r",
                     next_mode,
@@ -1430,7 +1482,11 @@ class EffectsCoordinator:
             # hold_seconds cutoff from clobbering that transition back to
             # `text_out` — which would otherwise defer the rotation
             # swap by an extra text_out/background cycle.
-            if self.mode == "hold" and now - self.phase_start >= effects_settings.hold_seconds:
+            if (
+                self.mode == "hold"
+                and now - self.phase_start >= effects_settings.hold_seconds
+                and self._ready_to_fade_after_hold(scroller, display, now)
+            ):
                 log.info(
                     "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
                     self.current_effect_name,
@@ -1438,6 +1494,7 @@ class EffectsCoordinator:
                     now - self.phase_start,
                     effects_settings.hold_seconds,
                 )
+                self._hold_wait_armed = False
                 self.mode = "text_out"
                 self.fade_start = now
                 self.last_step = 0.0
