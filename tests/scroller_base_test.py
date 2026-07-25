@@ -246,9 +246,9 @@ def test_scrim_rects_no_text_returns_empty():
 def test_scrim_rects_single_line_geometry():
     """One rect hugging the text: x over [top_x, top_x+text_width], y glyph box."""
     rects = _scrim_scroller(scrim=0.6).scrim_rects()
-    # top_x=10, text_width=20, pad=2 -> x0=8, x1=10+20+2=32
-    # top_y=38 baseline, ascent=12, height=15, pad=2 -> y0=24, y1=43
-    assert rects == [(8, 24, 32, 43)]
+    # top_x=10, text_width=20, x_pad=2 -> x0=8, x1=10+20+2=32
+    # top_y=38 baseline, ascent=12, height=15, y_pad=1 -> y0=25, y1=38-12+15+1=42
+    assert rects == [(8, 25, 32, 42)]
 
 
 def test_scrim_rects_not_full_width():
@@ -262,9 +262,9 @@ def test_scrim_rects_two_lines():
     """Two-line mode yields a rect per line, each at its own x."""
     rects = _scrim_scroller(scrim=0.6, single_line=False).scrim_rects()
     assert len(rects) == 2
-    assert (8, 24, 32, 43) in rects  # top line (top_x=10, top_y=38)
-    # bottom line: bottom_x=40 -> x0=38, x1=62 ; bottom_y=10 -> y0=-4, y1=15
-    assert (38, -4, 62, 15) in rects
+    assert (8, 25, 32, 42) in rects  # top line (top_x=10, top_y=38)
+    # bottom line: bottom_x=40 -> x0=38, x1=62 ; bottom_y=10 -> y0=-3, y1=14
+    assert (38, -3, 62, 14) in rects
 
 
 def test_scrim_rects_missing_font_metrics_returns_empty():

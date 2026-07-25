@@ -140,14 +140,18 @@ class ScrollerBase:
         fb = int(getattr(self, "font_baseline", 0) or 0)
         if fh <= 0:
             return []
-        pad = 2
+        # Horizontal pad keeps a small margin around the text width; the
+        # vertical pad is tighter (1px) so the scrim is 2px shorter than the
+        # padded glyph box — one row trimmed off the top, one off the bottom.
+        x_pad = 2
+        y_pad = 1
         tw = int(self.text_width)
 
         def rect(line_x: int, line_y: int) -> tuple[int, int, int, int]:
             # Normalize either text-y datum to the glyph top: a baseline
             # sits `ascent` (font_baseline) below the glyph top.
             glyph_top = (line_y - fb) if self._TEXT_Y_IS_BASELINE else line_y
-            return (line_x - pad, glyph_top - pad, line_x + tw + pad, glyph_top + fh + pad)
+            return (line_x - x_pad, glyph_top - y_pad, line_x + tw + x_pad, glyph_top + fh + y_pad)
 
         rects = [rect(self.top_x, self.top_y)]
         if not self.single_line:
