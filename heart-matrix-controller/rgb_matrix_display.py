@@ -165,7 +165,18 @@ class MatrixDisplay(DisplayBase):
             x1 = min(w, int(x1))
             y1 = min(h, int(y1))
             if x1 > x0 and y1 > y0:
-                buf[y0:y1, x0:x1] = (buf[y0:y1, x0:x1].astype(np.float32) * factor).astype(np.uint8)
+                region = buf[y0:y1, x0:x1]
+                dimmed = (region.astype(np.float32) * factor).astype(np.uint8)
+                # Round the corners: leave the four corner pixels undimmed so
+                # the scrim reads as slightly rounded, not a hard box. Only
+                # when the rect is big enough that dropping a corner reads as
+                # a bevel rather than eating a sliver.
+                rh = y1 - y0
+                rw = x1 - x0
+                if rw >= 3 and rh >= 3:
+                    for cy, cx in ((0, 0), (0, rw - 1), (rh - 1, 0), (rh - 1, rw - 1)):
+                        dimmed[cy, cx] = region[cy, cx]
+                buf[y0:y1, x0:x1] = dimmed
         canvas.SetImage(Image.fromarray(buf))
 
 

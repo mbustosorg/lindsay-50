@@ -149,7 +149,15 @@ class WebCanvas:
             if x1 <= x0 or y1 <= y0:
                 continue
             region = self.image.crop((x0, y0, x1, y1))
-            overlay = Image.new("RGBA", (x1 - x0, y1 - y0), (0, 0, 0, a))
+            rw = x1 - x0
+            rh = y1 - y0
+            overlay = Image.new("RGBA", (rw, rh), (0, 0, 0, a))
+            # Round the corners: zero the overlay's alpha at the four corners
+            # so those pixels stay undimmed — the scrim reads as slightly
+            # rounded rather than a hard box (matches the Pi).
+            if rw >= 3 and rh >= 3:
+                for cx, cy in ((0, 0), (rw - 1, 0), (0, rh - 1), (rw - 1, rh - 1)):
+                    overlay.putpixel((cx, cy), (0, 0, 0, 0))
             # alpha_composite(dst, src) → src over dst.
             self.image.paste(Image.alpha_composite(region, overlay), (x0, y0))
 

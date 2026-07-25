@@ -91,3 +91,15 @@ def test_scrim_dims_only_the_text_rect():
     assert tuple(img[30, 10]) == (60, 64, 68)
     # Same row but outside the rect's x-extent (x=50): NOT dimmed.
     assert tuple(img[30, 50]) == (150, 160, 170)
+
+def test_scrim_rounds_corners():
+    """The four corner pixels of the rect stay undimmed (rounded look);
+    edge and interior pixels are dimmed."""
+    d = _display_with_wrong_self_dims()
+    c = _Canvas64()
+    d._render_with_scrim(c, _FullFrameEffect(), _Scroller(), [(5, 24, 40, 43)])
+    img = c.captured  # rect x[5,40) y[24,43): corners (y,x) 24/5, 24/39, 42/5, 42/39
+    assert tuple(img[24, 5]) == (150, 160, 170)   # top-left corner undimmed
+    assert tuple(img[42, 39]) == (150, 160, 170)  # bottom-right corner undimmed
+    assert tuple(img[24, 20]) == (60, 64, 68)     # top edge (non-corner) dimmed
+    assert tuple(img[30, 10]) == (60, 64, 68)     # interior dimmed

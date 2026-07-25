@@ -226,3 +226,16 @@ def test_webdisplay_render_applies_scrim_between_effect_and_text():
     assert canvas.image.getpixel((15, 25)) == (50, 50, 50, 255)
     assert canvas.image.getpixel((15, 5)) == (100, 100, 100, 255)  # outside y
     assert canvas.image.getpixel((50, 25)) == (100, 100, 100, 255)  # outside x
+
+
+def test_apply_scrim_rounds_corners():
+    """The overlay leaves the four corner pixels undimmed (rounded look)."""
+    mod = _load_canvas_module()
+    c = mod.WebCanvas(64, 64)
+    c.SetPixel(4, 24, 200, 200, 200)   # top-left corner of rect (4,24,40,41)
+    c.SetPixel(39, 40, 200, 200, 200)  # bottom-right corner (x1-1, y1-1)
+    c.SetPixel(10, 30, 200, 200, 200)  # interior
+    c.apply_scrim([(4, 24, 40, 41)], 0.6)
+    assert c.image.getpixel((4, 24)) == (200, 200, 200, 255)   # corner undimmed
+    assert c.image.getpixel((39, 40)) == (200, 200, 200, 255)  # corner undimmed
+    assert c.image.getpixel((10, 30)) == (80, 80, 80, 255)     # interior dimmed
