@@ -376,6 +376,7 @@ def test_current_message_advances_after_fresh_id_lifecycle(monkeypatch):
         intro_seconds=0.0,
         fade_seconds=0.05,
         hold_seconds=0.05,
+        idle_seconds=0.05,
         message_manager=mgr,
     )
     coord.start()
@@ -393,11 +394,10 @@ def test_current_message_advances_after_fresh_id_lifecycle(monkeypatch):
     mgr.add_message(msg2)
     # After m2 lands in the buffer, m2 becomes on_deck on the next
     # hold tick (fresh-id replacement). Then hold ends → text_out →
-    # background → idle (IDLE_SECONDS_AFTER_HOLD) → out → in (m2
+    # background → idle (idle_seconds) → out → in (m2
     # becomes current_message from on_deck).
-    monkeypatch.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
     # Drive JUST past one background→out→out→in cycle, but NOT far
-    # enough to reach in→hold. With IDLE=0.05 and fade_seconds=0.05,
+    # enough to reach in→hold. With idle_seconds=0.05 and fade_seconds=0.05,
     # the out→in transition completes at 0.10s into the drive, and
     # the in→hold transition fires at 0.15s. Driving 0.10s lands us
     # in `in` mode (just past the out→in).
@@ -550,11 +550,11 @@ def test_out_to_in_does_not_pick_same_message_back_to_back():
     )
     mgr = _StubMessageManager(messages=[msg1, msg2])
     # Tight pacing — drive two complete out→in transitions in ~0.5s.
-    monkey.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
     coord, display, scroller, fx_a, fx_b, heart = _build(
         intro_seconds=0.0,
         fade_seconds=0.05,
         hold_seconds=0.05,
+        idle_seconds=0.05,
         message_manager=mgr,
         # Pin to `RandomSelector` so the test exercises the
         # coordinator's anti-repeat hint (the operator
@@ -659,7 +659,7 @@ def test_weighted_selector_avoids_back_to_back_via_display_recency(monkeypatch):
 
     Uses the `monkeypatch` fixture (auto-cleanup) instead of
     `pytest.MonkeyPatch()` so a failure mid-test doesn't leak
-    `IDLE_SECONDS_AFTER_HOLD=0.05` into subsequent tests via
+    monkeypatched `time.monotonic` into subsequent tests via
     module-level state.
     """
     clock = _Clock()
@@ -677,7 +677,6 @@ def test_weighted_selector_avoids_back_to_back_via_display_recency(monkeypatch):
         suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1, msg2])
-    monkeypatch.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
 
     # Note: NOT passing `selector=` — the coordinator dispatches
     # per the live `effects_settings.selector_algorithm` field on
@@ -689,6 +688,7 @@ def test_weighted_selector_avoids_back_to_back_via_display_recency(monkeypatch):
         intro_seconds=0.0,
         fade_seconds=0.05,
         hold_seconds=0.05,
+        idle_seconds=0.05,
         message_manager=mgr,
     )
     coord.start()
@@ -870,7 +870,6 @@ def test_rotation_advances_through_enabled_effects_across_cycles():
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
-    monkey.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.02)
     # Four stub effects so we can see the rotation advance
     # through multiple slots.
     fx0 = _make_effect("E0")()
@@ -908,7 +907,7 @@ def test_rotation_advances_through_enabled_effects_across_cycles():
         fade_seconds=0.02,
         intro_seconds=0.0,
         hold_seconds=0.02,
-        idle_seconds=999.0,
+        idle_seconds=0.02,
         lookback_days=14,
         selector_algorithm="weighted",
     )
@@ -1189,20 +1188,19 @@ def test_hold_does_not_interrupt_on_random_picks_from_shown_set(caplog):
 
 
 def test_background_re_rolls_on_idle_timeout(caplog, monkeypatch):
-    """`IDLE_SECONDS_AFTER_HOLD` is honored as the post-hold gap before
-    the next out→in. With the new design this is a module-level
-    constant (3.0 default) — PATCHED HERE to 0.05 for a fast test run.
-    Without this constant being honored, the sign would cycle as fast
+    """`idle_seconds` is honored as the post-hold gap before
+    the next out→in. This is the `idle_seconds` config field
+    (300.0 default) — SET HERE to 0.05 for a fast test run.
+    Without this value being honored, the sign would cycle as fast
     as the fade lets it (no idle window at all) or sit indefinitely
     (the old broken behavior).
 
     Drive the coordinator through hold → text_out → background and
-    advance the clock past `IDLE_SECONDS_AFTER_HOLD`. The next tick
+    advance the clock past `idle_seconds`. The next tick
     fires `_begin_out` and the log includes `idle_seconds=<value>`.
     """
     clock = _Clock()
     monkeypatch.setattr(time, "monotonic", clock)
-    monkeypatch.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
     from lib_shared.models import MessageView, Message
 
     msg = MessageView(
@@ -1215,6 +1213,7 @@ def test_background_re_rolls_on_idle_timeout(caplog, monkeypatch):
         intro_seconds=0.0,
         fade_seconds=0.05,
         hold_seconds=0.05,
+        idle_seconds=0.05,
         message_manager=mgr,
     )
     coord.start()
@@ -1224,7 +1223,7 @@ def test_background_re_rolls_on_idle_timeout(caplog, monkeypatch):
     _drive(clock, coord, 0.3)
     assert coord.mode == "background", f"Setup expected to land in background mode; got {coord.mode!r}"
 
-    # Sit in background past IDLE_SECONDS_AFTER_HOLD (patched to 0.05).
+    # Sit in background past idle_seconds (set to 0.05).
     # Each tick advances by ~0.01s; advance 0.5 s to comfortably exceed.
     _drive(clock, coord, 0.5)
 
@@ -1233,21 +1232,21 @@ def test_background_re_rolls_on_idle_timeout(caplog, monkeypatch):
     assert matches, (
         "Expected at least one 'Coordinator background→out' INFO log with "
         "the (idle) trigger when the coordinator sat in background past "
-        "IDLE_SECONDS_AFTER_HOLD. If missing, the post-hold gap isn't wired up."
+        "idle_seconds. If missing, the post-hold gap isn't wired up."
     )
     msg_log = matches[0].getMessage()
-    assert "0.1" in msg_log, f"Expected IDLE_SECONDS_AFTER_HOLD=0.05 in the log; got: {msg_log!r}"
+    assert "0.1" in msg_log, f"Expected idle_seconds=0.05 in the log; got: {msg_log!r}"
 
 
 def test_background_replaces_on_deck_on_fresh_id(caplog):
     """A genuinely-new SMS arriving in background replaces `on_deck`;
-    the actual fade kicks off when `IDLE_SECONDS_AFTER_HOLD` elapses
+    the actual fade kicks off when `idle_seconds` elapses
     OR when a fresh-id lands in `hold` mode after the next fade-in.
 
     With the new on-deck model, the background branch does NOT
     immediately fire `_begin_out` on a fresh id. Instead it
     silently swaps `on_deck` — the next out→in transition (after
-    IDLE_SECONDS_AFTER_HOLD) consumes whatever `on_deck` is at
+    idle_seconds) consumes whatever `on_deck` is at
     that moment, possibly the fresh SMS that landed mid-background.
 
     This test pins the new contract: fresh-id in background replaces
@@ -1269,12 +1268,12 @@ def test_background_replaces_on_deck_on_fresh_id(caplog):
         suppressed=False,
     )
     mgr = _StubMessageManager(messages=[msg1])
-    # Long IDLE_SECONDS_AFTER_HOLD so idle doesn't fire during the test.
-    monkey.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 999.0)
+    # Long idle_seconds so idle doesn't fire during the test.
     coord, *_ = _build(
         intro_seconds=0.0,
         fade_seconds=0.05,
         hold_seconds=0.05,
+        idle_seconds=999.0,
         message_manager=mgr,
     )
     coord.start()
@@ -1457,14 +1456,13 @@ def test_pick_runs_once_per_out_to_in_transition(monkeypatch):
     (background→out) AND at the out→in consumer side, so the per-cycle
     pull count was 2. The new contract is 1.
 
-    With phases at 0.05s and IDLE_SECONDS_AFTER_HOLD=0.05, each cycle
+    With phases at 0.05s and idle_seconds=0.05, each cycle
     is 0.05 (out) + 0.05 (in) + 0.05 (hold) + 0.05 (text_out) + 0.05
     (background) = 0.25s. A 0.5s drive = 2 full cycles = 2 picks.
     """
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
-    monkey.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
     from lib_shared.models import MessageView, Message
 
     msg1 = MessageView(
@@ -1482,6 +1480,7 @@ def test_pick_runs_once_per_out_to_in_transition(monkeypatch):
         intro_seconds=0.0,
         fade_seconds=0.05,
         hold_seconds=0.05,
+        idle_seconds=0.05,
         message_manager=mgr,
     )
     coord.start()

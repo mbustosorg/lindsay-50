@@ -194,15 +194,14 @@ def test_coordinator_has_no_apply_settings_method():
 
 def test_coordinator_has_no_cached_pacing_fields():
     """The coordinator does not store `fade_seconds`,
-    `hold_seconds`, `intro_seconds`, `lookback_days`, or
-    `selector_algorithm` as instance attributes — those are read
-    from the manager on demand. (`idle_seconds` was promoted to
-    a module-level constant `IDLE_SECONDS_AFTER_HOLD` per the
-    user's behavioral-knobs-in-code rule; the selection
-    algorithm is resolved freshly via `make_selector(...)` on
-    every pick.)"""
+    `hold_seconds`, `intro_seconds`, `idle_seconds`,
+    `lookback_days`, or `selector_algorithm` as instance
+    attributes — those are read from the manager on demand.
+    (`idle_seconds` is the post-hold gap config field, read live
+    from `effects_settings`; the selection algorithm is resolved
+    freshly via `make_selector(...)` on every pick.)"""
     coord, _, _, _ = _build_bound()
-    for field in ("fade_seconds", "hold_seconds", "intro_seconds", "lookback_days", "selector_algorithm"):
+    for field in ("fade_seconds", "hold_seconds", "intro_seconds", "idle_seconds", "lookback_days", "selector_algorithm"):
         assert not hasattr(coord, field), (
             f"EffectsCoordinator should not cache {field!r} — " f"it lives on message_manager.config.effects_settings"
         )
@@ -343,13 +342,13 @@ def test_out_to_in_rebuilds_rotation_from_manager():
     clock = [1000.0]
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
     msg = _make_view("m1", "hi", "2026-01-01T00:00:00Z")
     mgr = _make_manager(
         effects_settings=EffectsSettings(
             intro_seconds=0.0,
             fade_seconds=0.05,
             hold_seconds=0.05,
+            idle_seconds=0.05,
             effects=[{"name": "Fireworks", "enabled": True}],
         ),
         messages=[msg],
@@ -363,6 +362,7 @@ def test_out_to_in_rebuilds_rotation_from_manager():
         intro_seconds=0.0,
         fade_seconds=0.05,
         hold_seconds=0.05,
+        idle_seconds=0.05,
         effects=[{"name": "NightSky", "enabled": True}],
     )
 
@@ -393,13 +393,13 @@ def test_out_to_in_applies_scroller_color_and_speed():
     clock = [1000.0]
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
     msg = _make_view("m1", "hi", "2026-01-01T00:00:00Z")
     mgr = _make_manager(
         effects_settings=EffectsSettings(
             intro_seconds=0.0,
             fade_seconds=0.05,
             hold_seconds=0.05,
+            idle_seconds=0.05,
         ),
         text_settings=TextSettings(color=0x00FF00, speed=5),
         messages=[msg],
@@ -412,7 +412,7 @@ def test_out_to_in_applies_scroller_color_and_speed():
     assert scroller.set_speed_calls == []
 
     # Drive JUST past the FIRST out→in transition. With
-    # IDLE_SECONDS_AFTER_HOLD=0.05 and fade_seconds=0.05, the
+    # idle_seconds=0.05 and fade_seconds=0.05, the
     # first out→in lands at t≈0.10s after start. 15 ticks at
     # 0.01s each = 0.15s — well past the first out→in, not yet
     # at the second one.
