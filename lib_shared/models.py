@@ -666,6 +666,13 @@ class TextSettings:
     # /settings page sets it.
     DEFAULT_TEXT_SCRIM = 0.0
 
+    # Message visibility master toggle. When False, the scrolling text is
+    # suppressed on the display but the background patterns keep cycling —
+    # a "patterns only" mode. Default True (text shows). The Pi honors it
+    # at the cycle boundary by staging empty text (see EffectsCoordinator);
+    # empty text also skips the scrim band, so no dark box lingers.
+    DEFAULT_MESSAGES_ENABLED = True
+
     @staticmethod
     def _clamp_scrim(value) -> float:
         """Coerce an arbitrary scrim input to a float in [0.0, 1.0]."""
@@ -695,6 +702,7 @@ class TextSettings:
         text_effect: str = "scroll",
         name_display_format: Optional[str] = None,
         text_scrim: float = DEFAULT_TEXT_SCRIM,
+        messages_enabled: bool = DEFAULT_MESSAGES_ENABLED,
     ):
         """Initialize TextSettings.
 
@@ -706,6 +714,8 @@ class TextSettings:
                 Default `None` falls through to DEFAULT_NAME_DISPLAY_FORMAT.
             text_scrim: 0.0..1.0 darkness of the band behind the scrolling
                 text (0.0 = off). Clamped into range.
+            messages_enabled: when False, the display shows patterns only
+                (the scrolling text is suppressed). Default True.
         """
         self.speed = speed
         self.color = color
@@ -714,6 +724,7 @@ class TextSettings:
             name_display_format if name_display_format is not None else self.DEFAULT_NAME_DISPLAY_FORMAT
         )
         self.text_scrim = self._clamp_scrim(text_scrim)
+        self.messages_enabled = bool(messages_enabled)
 
     @classmethod
     def from_dict(cls, d):
@@ -753,6 +764,8 @@ class TextSettings:
             name_display_format=name_display_format,
             # Optional / additive: pre-scrim configs omit it → default off.
             text_scrim=cls._clamp_scrim(d.get("text_scrim", cls.DEFAULT_TEXT_SCRIM)),
+            # Optional / additive: pre-toggle configs omit it → default on.
+            messages_enabled=bool(d.get("messages_enabled", cls.DEFAULT_MESSAGES_ENABLED)),
         )
 
     def to_dict(self):
@@ -763,6 +776,7 @@ class TextSettings:
             "text_effect": self.text_effect,
             "name_display_format": self.name_display_format,
             "text_scrim": self.text_scrim,
+            "messages_enabled": self.messages_enabled,
         }
 
     def validate(self):
