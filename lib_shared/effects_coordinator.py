@@ -1381,6 +1381,12 @@ class EffectsCoordinator:
                     self.current.set_brightness(0.0)
 
                 text = self._compose_scrolled_text(self.current_message) if self.current_message is not None else ""
+                # Message visibility master toggle (text_settings.messages_enabled):
+                # when off, stage empty text so the patterns keep cycling with no
+                # scrolling message. Empty text also skips the scrim band, so no
+                # dark box lingers behind the (absent) text.
+                if not getattr(self.text_settings, "messages_enabled", True):
+                    text = ""
                 if text:
                     scroller.set_text(text, display.width)
                     scroller.set_brightness(0.0)

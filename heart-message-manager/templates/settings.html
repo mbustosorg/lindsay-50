@@ -236,6 +236,13 @@
     <h3 class="font-heading font-semibold text-dark text-lg mb-4 flex items-center gap-2">
       <span>✍️</span> Text
     </h3>
+    <div class="mb-6">
+      <label class="block text-sm font-medium text-slate-600 mb-1">
+        <input type="checkbox" name="text_settings_messages_enabled" value="1"{% if cfg.text_settings.messages_enabled %} checked{% endif %} class="mr-2 align-middle">
+        Show messages
+      </label>
+      <p class="text-xs text-slate-500">When unchecked, the display shows background patterns only — the scrolling text is hidden. Patterns keep cycling as usual.</p>
+    </div>
     <div class="grid grid-cols-2 gap-6">
       <div>
         <label class="block text-sm font-medium text-slate-600 mb-2">Speed</label>

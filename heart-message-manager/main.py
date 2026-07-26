@@ -1269,6 +1269,12 @@ def _build_sign_config_from_request(data: dict) -> tuple:
                 jsonify({"error": "text_settings.text_scrim: must be a number in 0.0..1.0"}),
                 400,
             )
+        messages_enabled = ts.get("messages_enabled")
+        if messages_enabled is not None and not isinstance(messages_enabled, bool):
+            return None, (
+                jsonify({"error": "text_settings.messages_enabled: must be a boolean"}),
+                400,
+            )
 
     # All checks passed; construct the SignConfig (from_dict runs migrate()
     # again as defense-in-depth, which is a no-op for an already-migrated dict).
@@ -1560,6 +1566,11 @@ def settings():
                 ts_form.text_scrim = TextSettings._clamp_scrim(int(scrim_raw) / 100.0)
             except ValueError:
                 logger.warning("[settings] text_settings_scrim: dropped non-numeric value %r", scrim_raw)
+        # Message visibility master toggle. Checkbox lands as "1" when
+        # ticked; absent (unchecked) means patterns-only mode. This runs
+        # only on a settings POST where the whole Text block is submitted,
+        # so treating absent as False is safe (not a partial-form hazard).
+        ts_form.messages_enabled = request.form.get("text_settings_messages_enabled") == "1"
         # `name_display_format` (issue #6): one of the four valid
         # display formats. Unknown / missing values fall back to the
         # default (`first_initial_if_duplicates`) so a partial form
