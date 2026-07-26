@@ -947,7 +947,7 @@ def test_background_suppression_log_fires_once_per_fresh_id(tmp_path, caplog):
     # Reset phase_start to the current monotonic clock so the
     # background-branch idle_elapsed check stays False across all
     # the ticks in this test (otherwise real-time elapses past
-    # IDLE_SECONDS_AFTER_HOLD and mode flips to "out" before the
+    # idle_seconds and mode flips to "out" before the
     # fresh-id check can run).
     coord.phase_start = time.monotonic()
 
@@ -1098,12 +1098,10 @@ def test_hold_replaces_on_deck_for_new_mms(tmp_path):
         clock.advance(0.02)
         coord.tick()  # text_out → background
         assert coord.mode == "background"
-        # Drive past IDLE_SECONDS_AFTER_HOLD (3.0 by default) so
+        # Drive past idle_seconds (0.05, configured above) so
         # background → out fires and the subsequent out→in consumes
         # on_deck.
-        from lib_shared.effects_coordinator import IDLE_SECONDS_AFTER_HOLD
-
-        clock.advance(IDLE_SECONDS_AFTER_HOLD + 0.05)
+        clock.advance(0.05 + 0.05)
         coord.tick()  # background → out
         clock.advance(0.02)
         coord.tick()  # out → in (consumes on_deck as current_message)

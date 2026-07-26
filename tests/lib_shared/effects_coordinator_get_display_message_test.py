@@ -200,11 +200,10 @@ def test_tick_picks_at_out_to_in_only():
     mgr.config.effects_settings.fade_seconds = 0.05
     mgr.config.effects_settings.hold_seconds = 0.05
     mgr.config.effects_settings.text_out_seconds = 0.05
-    # IDLE_SECONDS_AFTER_HOLD is a module constant (3.0 default); the
-    # test patches it down so background→out → out→in cycles complete
-    # within the 2-second window. The new design ignores settings.toml
-    # idle_seconds here — that's the behavioral knob move.
-    monkey.setattr("lib_shared.effects_coordinator.IDLE_SECONDS_AFTER_HOLD", 0.05)
+    # idle_seconds is the post-hold gap config field (300.0 default);
+    # the test sets it down so background→out → out→in cycles complete
+    # within the 2-second window.
+    mgr.config.effects_settings.idle_seconds = 0.05
     coord, _ = _build(message_manager=mgr, lookback_days=14)
 
     display = _StubDisplay()

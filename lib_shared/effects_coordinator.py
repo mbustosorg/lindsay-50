@@ -66,15 +66,6 @@ from lib_shared.selector import (
 
 log = logging.getLogger("heart")
 
-# Behavioral knob: the post-hold idle gap. Per the project's
-# behavioral-knobs-in-code rule (scoring weights, decay windows, and
-# rollout flags live as module-level constants alongside the
-# algorithm — NOT in settings.toml), this is a code constant.
-# 3 seconds is the post-hold gap before the next message fades in —
-# short enough that the operator sees quick rotation after a held
-# message fades out, long enough to let the background effect breathe.
-IDLE_SECONDS_AFTER_HOLD: float = 3.0
-
 
 def build_effects(
     effects_settings: EffectsSettings | None,
@@ -1537,7 +1528,7 @@ class EffectsCoordinator:
             self._maybe_fall_back_to_rotation()
             # Fresh-id replacement during background — silent slot
             # swap, no immediate `_begin_out`. The next
-            # background→out transition (after `IDLE_SECONDS_AFTER_HOLD`)
+            # background→out transition (after `idle_seconds`)
             # consumes whatever `on_deck` is at that moment,
             # possibly the fresh SMS that arrived mid-background.
             fresh = self._fresh_id_in_buffer()
@@ -1548,12 +1539,13 @@ class EffectsCoordinator:
                     fresh.id,
                 )
 
-            idle_elapsed = now - self.phase_start >= IDLE_SECONDS_AFTER_HOLD
+            idle_seconds = effects_settings.idle_seconds
+            idle_elapsed = now - self.phase_start >= idle_seconds
             if idle_elapsed:
                 log.info(
                     "Coordinator background→out (idle): waited=%.1fs idle_seconds=%.1f on_deck=%s",
                     now - self.phase_start,
-                    IDLE_SECONDS_AFTER_HOLD,
+                    idle_seconds,
                     self.on_deck.id if self.on_deck is not None else "<none>",
                 )
                 self._begin_out(now)  # → out → out→in consumes on_deck
