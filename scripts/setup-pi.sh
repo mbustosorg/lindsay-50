@@ -1,61 +1,45 @@
 #!/usr/bin/env bash
-# One-time Pi bootstrap for the self-upgrading matrix controller (issue #49).
+# One-time Pi bootstrap for the matrix controller.
 #
-# Converts a fresh clone of lindsay-50 into a fully-running install:
-#   - Installs system packages (apt) and Python requirements (pip) if missing
-#   - Converts the clone into a bare repo with per-SHA worktrees
-#   - Creates a `current` symlink pointing at the active version
-#   - Verifies settings.toml is in place (hard-stops if not — the sign won't boot)
-#   - Installs the systemd unit and starts the service
+# Fresh-clones (or refreshes) the lindsay-50 repo at /srv/lindsay-50,
+# installs system + Python deps, copies settings.toml from the existing
+# /home/mauricio/lindsay-50 install if present, and installs the
+# systemd unit. To pick up new commits later, re-run this script.
 #
 # Usage (as root on the Pi):
 #   sudo /srv/lindsay-50/scripts/setup-pi.sh
 #
-# Idempotent: re-running on an already-bootstrapped repo is mostly a no-op.
-# Existing apt packages, pip packages, settings.toml, and worktrees are
-# detected and skipped.
+# Idempotent:
+#   - apt packages: skipped if already installed
+#   - pip (rgbmatrix C build): skipped if rgbmatrix is already importable
+#   - repo: re-runs `git fetch && git reset --hard origin/<branch>` to grab latest
+#   - settings.toml: only copied if missing at the canonical path
+#   - systemd unit: overwritten if changed
 #
-# Expected downtime on a fresh Pi: 5–10 minutes (rgbmatrix C build is slow).
+# Prerequisite (one-time, manual): if you're CONVERTING a Pi that already
+# has the sign running from a different path (e.g. /home/mauricio/lindsay-50),
+# stop and disable the OLD systemd unit first:
+#
+#   sudo systemctl stop lindsay_50
+#   sudo systemctl disable lindsay_50
+#   sudo rm /etc/systemd/system/lindsay_50.service
+#   sudo systemctl daemon-reload
+#
+# Then run this script. It will not touch the old install path.
+#
+# Expected downtime on a fresh Pi: 5-10 minutes (rgbmatrix C build).
 # On an already-bootstrapped Pi: < 5 seconds.
-#
-# --------------------------------------------------------------------------
-# settings.toml — operator-provided, NOT in the repo
-# --------------------------------------------------------------------------
-# settings.toml is the one file the operator drops onto the Pi by hand:
-# MQTT creds, panel geometry, log level. It is .gitignore'd (so git
-# never sees it) and lives at the canonical path:
-#
-#     $REPO_DIR/heart-matrix-controller/settings.toml
-#
-# (root-owned, since systemd runs as root). This script does NOT
-# handle the canonical copy — the operator runs `scp` once from their
-# laptop. On every subsequent `git worktree add`, the chain
-#
-#     hooks/post-checkout → scripts/sync_settings.sh
-#
-# auto-copies the canonical file into the new v-<sha>/worktree, so
-# a version bump does not require another scp. See
-# heart-matrix-controller/README.md#pi-deployment for the scp
-# one-liner. If Phase 4 below hard-stops, the canonical file is
-# missing; scp it in and re-run this script.
 
 set -euo pipefail
 
 REPO_DIR="${REPO_DIR:-/srv/lindsay-50}"
+REPO_URL="${REPO_URL:-https://github.com/mbustosorg/lindsay-50.git}"
+OLD_REPO_DIR="${OLD_REPO_DIR:-/home/mauricio/lindsay-50}"
 SERVICE_NAME="lindsay_50"
 UNIT_SRC="$REPO_DIR/scripts/lindsay_50.service"
 UNIT_DST="/etc/systemd/system/$SERVICE_NAME.service"
 
 echo "==> setup-pi: bootstrapping $REPO_DIR"
-
-# Sanity check: repo must exist
-if [ ! -d "$REPO_DIR/.git" ] && [ ! -d "$REPO_DIR" ]; then
-    echo "ERROR: $REPO_DIR does not exist. Clone the repo first:" >&2
-    echo "  sudo git clone https://github.com/mbustosorg/lindsay-50.git $REPO_DIR" >&2
-    exit 1
-fi
-
-cd "$REPO_DIR"
 
 # ---------------------------------------------------------------------------
 # Phase 1: System packages (apt) — idempotent
@@ -106,184 +90,55 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 3: Bare-repo + worktree layout — idempotent
+# Phase 3: Git repo — clone fresh or pull latest
 # ---------------------------------------------------------------------------
-
-# install_post_checkout_hook: wire up the post-checkout hook so
-# `git worktree add` (whether in this script now, or in loader.py on
-# a future upgrade) auto-copies settings.toml into the new
-# worktree via scripts/sync_settings.sh.
 #
-# Background: git only fires hooks from <gitdir>/hooks/ (i.e.
-# /srv/lindsay-50/.git/hooks/). The hook we care about ships in
-# the repo at hooks/post-checkout (a regular tracked file). Without
-# the symlink, git falls back to post-checkout.sample (disabled),
-# the hook silently no-ops, and Phase 4 below hard-stops on missing
-# settings.toml. ln -sfn is idempotent — re-running just re-points.
-install_post_checkout_hook() {
-    if [ -d "$REPO_DIR/.git/hooks" ] && [ -f "$REPO_DIR/hooks/post-checkout" ]; then
-        ln -sfn "$REPO_DIR/hooks/post-checkout" "$REPO_DIR/.git/hooks/post-checkout"
-        echo "==> setup-pi: installed hooks/post-checkout → .git/hooks/post-checkout"
-    fi
-}
+# First run: `git clone` into $REPO_DIR.
+# Re-run:    `git fetch && git reset --hard origin/<current-branch>` so the
+#            working tree tracks the remote's HEAD. `reset --hard` is
+#            acceptable because this is a single-purpose Pi — the operator
+#            should not be making local commits here. If they want to
+#            preserve local changes, they should not be re-running this
+#            script.
 
-# Three valid bootstrap states (only valid when the repo IS BARE):
-#   (a) bare + current symlink -> valid v-<sha>/ worktree: fully bootstrapped, skip
-#   (b) bare + no current symlink: partial bootstrap — finish without
-#       re-running the conversion (worktree-add itself is idempotent)
-#   (c) non-bare clone (or non-bare with an orphan `current` left over
-#       from a previous attempt): full conversion
-#
-# Note: `git clone --bare` produces a *directory* (not a file) at the
-# target path — it just has no working tree. So `[ -f .git ]` is the wrong
-# bare-detector; use `git rev-parse --is-bare-repository`.
-
-CURRENT_TARGET=""
-if [ -L "$REPO_DIR/current" ]; then
-    CURRENT_TARGET=$(readlink "$REPO_DIR/current")
-fi
-
-IS_BARE="false"
 if [ -d "$REPO_DIR/.git" ]; then
-    IS_BARE=$(git -C "$REPO_DIR" rev-parse --is-bare-repository 2>/dev/null || echo "false")
-fi
-
-# Refresh the bare repo's remote refs so re-running setup-pi.sh actually sees
-# commits the operator pushed after the original clone. Without this the
-# bare repo's HEAD stays pinned at whatever the initial `git clone` carried
-# in — every subsequent push was invisible to this script. No-op (exit 0)
-# on offline or already-current repos. We tolerate failure so a Pi that's
-# briefly offline during bootstrap isn't blocked.
-if [ "$IS_BARE" = "true" ]; then
-    if git -C "$REPO_DIR" remote >/dev/null 2>&1; then
-        git -C "$REPO_DIR" fetch origin '+refs/heads/*:refs/remotes/origin/*' \
-            >/dev/null 2>&1 || true
-    fi
-fi
-
-# Pre-flight cleanup: prune stale worktree metadata (bare repo only) and
-# remove orphan v-<sha>/ directories that would block `git worktree add`
-# on retry. An "orphan" here means "either (1) `current` doesn't point
-# at it or (2) the repo is non-bare so it's not a real worktree at all."
-# A bare repo's `current` keeps its target dir; any other v-<sha>/ is
-# stripped. This was the issue #49 retry failure mode — without the
-# non-bare treatment, an orphan dir from a previous attempt would
-# survive into the conversion path and fight `worktree add`.
-if [ "$IS_BARE" = "true" ]; then
-    git -C "$REPO_DIR" worktree prune 2>/dev/null || true
-fi
-for stale in "$REPO_DIR"/v-*/; do
-    if [ -d "$stale" ]; then
-        if [ "$CURRENT_TARGET" = "$(basename "$stale")" ] && [ "$IS_BARE" = "true" ]; then
-            continue
-        fi
-        echo "==> setup-pi: removing stale/orphan worktree dir $(basename "$stale")"
-        rm -rf "$stale"
-        # If `current` pointed at this dir on a non-bare repo, the symlink
-        # was lying — it's an orphan, not a worktree. Clear it too so the
-        # state machine below sees an honest (no current) repo.
-        if [ "$CURRENT_TARGET" = "$(basename "$stale")" ]; then
-            rm -f "$REPO_DIR/current"
-            CURRENT_TARGET=""
-        fi
-    fi
-done
-
-if [ -n "$CURRENT_TARGET" ] && [ -d "$REPO_DIR/$CURRENT_TARGET" ] && [ "$IS_BARE" = "true" ]; then
-    echo "==> setup-pi: repo already bootstrapped (current -> $CURRENT_TARGET); skipping conversion"
-    # The basename of `current`'s target IS the short SHA — derive it
-    # directly. The previous implementation called `git rev-parse
-    # v-<sha>` here but the result wasn't used downstream, and the
-    # call fataled on a non-bare repo with a stale `current` symlink.
-    HEAD_SHA_SHORT="${CURRENT_TARGET#v-}"
-    # Self-heal: make sure the post-checkout hook is wired for future
-    # worktree-adds (e.g. loader.py upgrade flow). Idempotent.
-    install_post_checkout_hook
-elif [ "$IS_BARE" = "true" ]; then
-    # Partial bootstrap — finish without re-converting.
-    echo "==> setup-pi: bare repo detected, bootstrap incomplete; finishing"
-    HEAD_SHA=$(git -C "$REPO_DIR" rev-parse HEAD)
-    HEAD_SHA_SHORT=$(git -C "$REPO_DIR" rev-parse --short=7 HEAD)
-    echo "    HEAD at $HEAD_SHA (v-$HEAD_SHA_SHORT)"
-
-    # Wire the post-checkout hook before worktree-add so the just-
-    # created worktree receives its settings.toml copy.
-    install_post_checkout_hook
-
-    echo "==> setup-pi: creating v-$HEAD_SHA_SHORT worktree"
-    git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA_SHORT" "$HEAD_SHA"
-
-    ln -sfn "v-$HEAD_SHA_SHORT" "$REPO_DIR/current"
-    echo "==> setup-pi: current -> v-$HEAD_SHA_SHORT"
+    echo "==> setup-pi: pulling latest into existing $REPO_DIR"
+    cd "$REPO_DIR"
+    git fetch origin
+    BRANCH=$(git symbolic-ref --short HEAD)
+    git reset --hard "origin/$BRANCH"
+    echo "==> setup-pi: $REPO_DIR is now at $(git rev-parse --short=7 HEAD)"
 else
-    # Non-bare clone (with or without a stale `current` symlink; any
-    # orphans were cleared by the pre-flight loop above).
-    echo "==> setup-pi: converting .git/ to bare .git/..."
-    HEAD_SHA=$(git rev-parse HEAD)
-    HEAD_SHA_SHORT=$(git rev-parse --short=7 HEAD)
-    echo "    HEAD at $HEAD_SHA (v-$HEAD_SHA_SHORT)"
-
-    # Capture the origin URL before the mv destroys .git/config.
-    # `git clone --bare <local-path> <target>` rewrites origin to the
-    # local source path; we then rm -rf that path — leaving the new
-    # bare repo with a broken origin pointing at .git.tmp. Every
-    # subsequent `git fetch origin` (loader.py upgrades, re-running
-    # provision-pi.sh) would fatal. We restore the original URL after
-    # the conversion so future fetches hit GitHub, not a deleted path.
-    ORIGIN_URL=$(git -C "$REPO_DIR/.git" config remote.origin.url 2>/dev/null || true)
-
-    mv "$REPO_DIR/.git" "$REPO_DIR/.git.tmp"
-    git clone --bare "$REPO_DIR/.git.tmp" "$REPO_DIR/.git" >/dev/null
-    rm -rf "$REPO_DIR/.git.tmp"
-
-    if [ -n "$ORIGIN_URL" ]; then
-        git -C "$REPO_DIR/.git" remote set-url origin "$ORIGIN_URL"
-    fi
-
-    # The bare .git/ now exists; install the hook before worktree-add
-    # so settings.toml lands in the just-created worktree.
-    install_post_checkout_hook
-
-    echo "==> setup-pi: creating v-$HEAD_SHA_SHORT worktree"
-    git -C "$REPO_DIR" worktree add "$REPO_DIR/v-$HEAD_SHA_SHORT" "$HEAD_SHA"
-
-    ln -sfn "v-$HEAD_SHA_SHORT" "$REPO_DIR/current"
-    echo "==> setup-pi: current -> v-$HEAD_SHA_SHORT"
-fi
-
-# Resolve the active worktree (where settings.toml must live)
-WORKTREE_DIR="$REPO_DIR/$(readlink "$REPO_DIR/current")"
-if [ ! -d "$WORKTREE_DIR" ]; then
-    echo "ERROR: $WORKTREE_DIR does not exist after bootstrap" >&2
-    exit 1
+    echo "==> setup-pi: cloning $REPO_URL to $REPO_DIR"
+    git clone "$REPO_URL" "$REPO_DIR"
 fi
 
 # ---------------------------------------------------------------------------
-# Phase 4: settings.toml — HARD-STOP if missing
+# Phase 4: settings.toml — copy from old install, or hard-stop
 # ---------------------------------------------------------------------------
+#
+# settings.toml is .gitignore'd, so the freshly-cloned repo doesn't have
+# one. If the operator is converting from $OLD_REPO_DIR (e.g.
+# /home/mauricio/lindsay-50), copy the canonical file in. Otherwise
+# hard-stop with scp instructions — the sign won't boot without it.
 
-SETTINGS="$WORKTREE_DIR/heart-matrix-controller/settings.toml"
-SETTINGS_EXAMPLE="$WORKTREE_DIR/heart-matrix-controller/settings.toml.example"
+SETTINGS="$REPO_DIR/heart-matrix-controller/settings.toml"
+OLD_SETTINGS="$OLD_REPO_DIR/heart-matrix-controller/settings.toml"
 
 if [ ! -f "$SETTINGS" ]; then
-    if [ ! -f "$SETTINGS_EXAMPLE" ]; then
-        echo "ERROR: $SETTINGS is missing AND $SETTINGS_EXAMPLE does not exist." >&2
-        echo "The repo checkout is corrupted. Re-clone and re-run." >&2
+    if [ -f "$OLD_SETTINGS" ]; then
+        echo "==> setup-pi: copying settings.toml from $OLD_SETTINGS"
+        cp "$OLD_SETTINGS" "$SETTINGS"
+    else
+        echo "ERROR: $SETTINGS is missing." >&2
+        echo "The sign will not boot without it (no MQTT creds, no panel geometry)." >&2
+        echo "" >&2
+        echo "Either re-run after copying it from a previous install, or scp it in:" >&2
+        echo "  sudo scp <local-settings.toml> root@<this-pi>:$SETTINGS" >&2
+        echo "" >&2
+        echo "Then re-run: sudo $0" >&2
         exit 1
     fi
-    echo "ERROR: $SETTINGS is missing." >&2
-    echo "The sign will not boot without it (no MQTT creds, no panel geometry)." >&2
-    echo "" >&2
-    echo "The canonical copy lives at the bare repo's parent dir:" >&2
-    echo "  $REPO_DIR/heart-matrix-controller/settings.toml" >&2
-    echo "" >&2
-    echo "On your laptop, scp it from wherever you keep the canonical copy:" >&2
-    echo "  sudo scp <local-settings.toml> \\" >&2
-    echo "      root@<this-pi>:$REPO_DIR/heart-matrix-controller/settings.toml" >&2
-    echo "" >&2
-    echo "Then re-run: sudo $0" >&2
-    echo "(see heart-matrix-controller/README.md#pi-deployment for details)" >&2
-    exit 1
 fi
 echo "==> setup-pi: settings.toml present"
 
