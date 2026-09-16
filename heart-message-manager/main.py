@@ -873,6 +873,36 @@ def _resolve_boot_config() -> BootConfig:
     return _boot_config_from_heroku_or_git(repo_root)
 
 
+def _resolve_flask_config_sha(cfg) -> str:
+    """Resolve the dashboard's "Flask / Config" cell value.
+
+    Falls through three layers:
+    1. The most-recent per-save ``config_sha`` stamped by
+       ``_save_and_publish`` (always concrete after the operator's
+       first /settings save post-v186).
+    2. The operator-pinned ``sign_settings.target_version``,
+       truncated to 7 chars — same logic as ``/api/sign/settings``
+       returns on the wire.
+    3. Flask's own running short SHA — what the Pi targets when no
+       override is set and no per-save hash exists.
+
+    Returns "" when every layer is empty (template renders "—").
+    Never raises — caller wraps in ``str()`` for the jsonify path
+    so a MagicMock test stub doesn't crash jsonify.
+    """
+    saved = getattr(cfg, "config_sha", "") or ""
+    if saved:
+        return saved
+    target = (
+        (cfg.sign_settings.target_version or "")
+        if cfg.sign_settings
+        else ""
+    )
+    if target:
+        return _short_sha(target) or ""
+    return _resolve_boot_config().short_sha or ""
+
+
 # Log the deployed commit SHA at startup so deploy verification is
 # a one-line `heroku logs --tail | grep 'Flask app starting'` away.
 # On Heroku, HEROKU_SLUG_COMMIT is set; on local dev, falls back
@@ -1520,16 +1550,19 @@ def dashboard():
         format_from_iso=format_from_iso,
         # Issue #71 — Versions & Config card on the dashboard.
         # `flask_config_sha` is the per-save content hash stamped by
-        # `_save_and_publish` on every `/settings` POST; empty on a
-        # fresh install with no saves yet (template renders "—").
-        # `deployed_sha_short` (also used in base.html's APP_CONFIG
-        # as `flaskVersion`) is reused for the Browser / Code cell —
-        # the browser runs the same Python as Flask via PyScript, so
-        # Browser / Code === Flask / Code on a fresh load. The
-        # JS-side `sign_status.js` overrides Browser / Code with
+        # `_save_and_publish` on every `/settings` POST; on a fresh
+        # install with no saves yet, the helper falls back to the
+        # operator-pinned `target_version` and finally to Flask's
+        # own running short SHA, so the cell is never perpetually
+        # "—" after the operator's first save. `deployed_sha_short`
+        # (also used in base.html's APP_CONFIG as `flaskVersion`)
+        # is reused for the Browser / Code cell — the browser runs
+        # the same Python as Flask via PyScript, so Browser / Code
+        # === Flask / Code on a fresh load. The JS-side
+        # `sign_status.js` overrides Browser / Code with
         # `window._loaded_python_short_sha` when set and different
         # (caches may pin to an older build).
-        flask_config_sha=getattr(cfg, "config_sha", "") or "",
+        flask_config_sha=_resolve_flask_config_sha(cfg),
         deployed_sha_short=_resolve_boot_config().short_sha or "",
     )
 
@@ -2401,7 +2434,7 @@ def _inject_app_config():
             # page-load jsonify path. Real SignConfig values are
             # already strings, so this is a no-op in production.
             "FLASK_CONFIG_SHA": str(
-                getattr(sqlite.get_config(), "config_sha", "") or ""
+                _resolve_flask_config_sha(sqlite.get_config())
             ),
         },
     }
