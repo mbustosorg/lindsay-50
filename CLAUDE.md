@@ -347,3 +347,24 @@ To add a new visual pattern, drop a module in `heart-matrix-controller/patterns/
 
 - **Palette-based** (e.g. `fireworks`, `nightsky`, `hyperspace`): set `self.bitmap` (a `Bitmap`), `self.palette` (a `Palette`), and optionally `self.scale`, call `self._init_render()` once the palette is populated, and implement `tick()` to update the bitmap. `Effect` supplies `set_brightness(b)` (fades by scaling the palette) and the default `render(canvas)`. Note: `self.scale` is reserved — `Effect.render()` reads it as an integer pixel-doubling factor (each lit pixel becomes a `scale × scale` block, default 1), so don't reuse the name for an unrelated "scale" of your own (give it a distinct name like `proj_scale`).
 - **Full-color** (e.g. `video_display`, `honeycomb`): override `render(canvas)` to blit a whole RGB frame with `canvas.SetImage(pil_image)` — far faster than per-pixel `SetPixel` and not limited to 256 colors. Override `set_brightness(b)` to store a factor and apply it when blitting (the palette pipeline is bypassed). `png_display` is a hybrid: palette-based but overrides `render` to draw every pixel.
+
+## Design decisions require operator approval
+
+When a task involves picking between multiple plausible approaches —
+new wire fields vs. persistence-path changes, "fix the broker" vs.
+"fix the receiver", etc. — STOP and surface the options before
+implementing. Use `AskUserQuestion` to lay out the choices with
+trade-offs, OR if the question has come up organically in conversation,
+write up the options in chat and wait for the operator to pick.
+
+This rule covers ALL design decisions, not just the big ones: shape
+of a new config field, where in the call graph to add a check, how
+to handle a wire-shape mismatch between Flask and the Pi, whether
+to publish-resolved-vs-raw to a downstream, etc.
+
+The bar is "is there more than one reasonable way to do this?" — if
+yes, ask. The operator's preferred posture: weigh the options
+briefly, recommend one, but never pick unilaterally when there's a
+real choice. Implementation is fine to do without asking when the
+path is unambiguous (typo fixes, refactors with no behavior change,
+adding a test for existing behavior).

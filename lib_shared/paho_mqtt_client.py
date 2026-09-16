@@ -19,6 +19,7 @@ raise in one does not affect the other. The envelope publish path is
 unchanged.
 """
 
+import json
 import logging
 import threading
 import time
@@ -306,6 +307,29 @@ class PahoMqttClient:
                 client.loop_stop()
                 client.disconnect()
                 return False
+            # Wire-level diagnostic (issue #71 follow-up): log the exact
+            # bytes handed to paho so we can correlate "Flask sent X"
+            # with "browser WS saw Y" / "AIO logs show Z" when the
+            # config envelope goes missing end-to-end. Without this, a
+            # silent broker-side fan-out drop leaves no trace of what
+            # we asked the broker to deliver.
+            try:
+                payload_bytes = payload.encode()
+                wire_first16 = " ".join(
+                    f"{b:02x}" for b in payload_bytes[:16]
+                )
+                wire_type = "?"
+                try:
+                    wire_type = json.loads(payload).get("type", "?")
+                except Exception:
+                    pass
+                logger.info(
+                    "PahoMqttClient wire-level publish topic=%s len=%d "
+                    "type=%s retain=%s first16=%s",
+                    topic, len(payload_bytes), wire_type, retain, wire_first16,
+                )
+            except Exception as log_exc:
+                logger.warning("PahoMqttClient wire-level log failed: %s", log_exc)
             result = client.publish(topic, payload.encode(), qos=1, retain=retain)
             result.wait_for_publish(timeout=5)
             client.loop_stop()

@@ -352,7 +352,9 @@ export function createMqttWsClient({
       // JSON.parse succeeded). This is the upstream of that chain.
       console.log(
         "[mqtt-ws] PUBLISH received flags=" + flags + " qos=" + qos +
-        " bytes_len=" + bytes.length
+        " bytes_len=" + bytes.length +
+        " frame_first16=" + Array.from(bytes.slice(0, 16))
+          .map(b => b.toString(16).padStart(2, '0')).join(' ')
       );
       let parsed = null;
       try {
@@ -364,6 +366,21 @@ export function createMqttWsClient({
             .map((b) => b.toString(16).padStart(2, "0")).join(" ")
         );
       }
+      if (parsed) {
+        // Issue #71 follow-up: log the parsed wire-topic BEFORE the
+        // JSON parse / type extraction. This is the very first moment
+        // we know a PUBLISH frame addressed to our subscription arrived
+        // intact — if downstream JSON.parse fails or `_handle_config`
+        // throws, the operator can still confirm "the wire frame
+        // landed on the right topic." Operators searching the console
+        // for "topic=mbustosorg/feeds/lindsay50" (NOT "/get", NOT
+        // "-status") will see every envelope delivered to our
+        // subscription, including config ones — past logs only show
+        // the post-parse type field, which masks broker fan-out drops.
+        console.log(
+          "[mqtt-ws] PUBLISH wire-topic=" + parsed.topic +
+          " payload_len=" + (parsed.payload ? parsed.payload.length : 0)
+        );
       if (parsed) {
         // Diagnostic: decode the payload as JSON at this layer so we
         // can see whether the wire shape is what `_handle_config`
@@ -537,9 +554,20 @@ export function createMqttWsClient({
     } catch (e) {
       payloadStr = "<decode-error: " + (e && e.message) + ">";
     }
+    // Issue #71 follow-up: extended chunk log so a config envelope
+    // that fails to surface anywhere downstream is still visible at the
+    // WS byte boundary. The 16-byte window covers the full MQTT fixed
+    // header (1 byte) + remaining length (1-4 bytes) + 2-byte topic
+    // length + first few topic bytes — enough to identify the wire
+    // frame type (PUBLISH=0x32-0x3e with QoS 0/1/2 and DUP/RETAIN bits)
+    // and the start of the topic name (operator can correlate against
+    // "mbustosorg/feeds/lindsay50" vs "/get").
+    const first16Hex = Array.from(chunk.slice(0, 16))
+      .map(b => b.toString(16).padStart(2, '0')).join(' ');
     console.log(
       "[mqtt-ws] ingest chunk bytes_len=" + chunk.length +
-      " first_hex=" + Array.from(chunk.slice(0, 8)).map(b => b.toString(16).padStart(2, '0')).join(' ') +
+      " first16=" + first16Hex +
+      " buffer_before=" + buffer.length +
       " raw_payload=" + JSON.stringify(payloadStr)
     );
     const next = new Uint8Array(buffer.length + chunk.length);
@@ -553,13 +581,25 @@ export function createMqttWsClient({
         // Need more bytes to finish the remaining-length field, or it's
         // malformed (>4 bytes, which the broker never produces).
         if (buffer.length >= 5) {
-          console.warn("[mqtt-ws] malformed remaining length, dropping");
+          console.warn(
+            "[mqtt-ws] malformed remaining length, dropping bytes=" + buffer.length +
+            " first16=" + Array.from(buffer.slice(0, 16))
+              .map(b => b.toString(16).padStart(2, '0')).join(' ')
+          );
           buffer = new Uint8Array(0);
         }
         break;
       }
       const total = decoded.bytesUsed + decoded.value;
-      if (buffer.length < total) break; // partial frame, wait for more
+      if (buffer.length < total) {
+        // Partial frame — log so an operator can correlate "chunk
+        // arrived but no PUBLISH yet" with "still waiting on N bytes."
+        console.log(
+          "[mqtt-ws] partial frame wait buffer=" + buffer.length +
+          " need_total=" + total + " remaining_len=" + decoded.value
+        );
+        break; // partial frame, wait for more
+      }
       const frame = buffer.slice(0, total);
       buffer = buffer.slice(total);
       handleFrame(frame);
