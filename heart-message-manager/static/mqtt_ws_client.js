@@ -451,28 +451,24 @@ export function createMqttWsClient({
       // ONLY way to recover state across a WS reconnect or an AIO
       // fan-out drop, since retain doesn't work.
       //
-      // Skip on the FIRST SUBSCRIBE — the page-load `seed()` already
-      // fetched the canonical config from REST. Sending /get there
-      // would race the seed and cause a redundant config envelope
-      // mid-hydrate. On REconnects (lastConnectedAt !== null when
-      // we got SUBACK) the in-memory config may be stale (WS dropped
-      // a config envelope during the disconnect window), so we ask
-      // AIO for the last seen value.
-      if (lastConnectedAt !== null) {
-        const getTopic = topic + "/get";
-        try {
-          ws && ws.send(buildPublish(getTopic, 0x0002, "", 1));
-          console.log(
-            "[mqtt-ws] /get fetch published to " + getTopic +
-            " (AIO retains-last-value workaround — see AIO MQTT docs)"
-          );
-        } catch (e) {
-          console.warn("[mqtt-ws] /get fetch publish failed:", e);
-        }
-      } else {
+      // Round 10 (operator confirmation): the in-browser seed() also
+      // races AIO's MQTT queue — if the operator saves a config BEFORE
+      // the page finishes loading, the in-memory state at seed-time
+      // is stale even on first connect. The /get fetch on EVERY SUBACK
+      // (including the first) covers this case: AIO replays its last
+      // stored value, which is the most recent published config.
+      // The seed itself still runs (and is still the primary path),
+      // but the /get fetch is now a self-healing overlay that catches
+      // anything the seed missed.
+      const getTopic = topic + "/get";
+      try {
+        ws && ws.send(buildPublish(getTopic, 0x0002, "", 1));
         console.log(
-          "[mqtt-ws] first SUBACK — skipping /get fetch (REST seed already populated config)"
+          "[mqtt-ws] /get fetch published to " + getTopic +
+          " (AIO retains-last-value workaround — see AIO MQTT docs)"
         );
+      } catch (e) {
+        console.warn("[mqtt-ws] /get fetch publish failed:", e);
       }
     } else if (type === 4) {
       // PUBACK — broker acknowledgement of one of our QoS-1 PUBLISH

@@ -23,6 +23,14 @@ still subscribes via WS, the publish still goes via MQTT, the
 change fan-out still runs through `_emit_change`. We're fixing
 delivery, not the receiver.
 
+Round 10 (operator confirmation): the SUBACK /get fetch fires on
+EVERY SUBACK, including the first. The round-9 gate
+(`lastConnectedAt !== null`) was dead code — `lastConnectedAt` is
+set in `socket.onopen` before SUBACK arrives, so the "skip first
+SUBACK" branch never skipped anything. The seed() REST hydrate is
+the primary path; the /get fetch is a self-healing overlay that
+catches anything the seed missed.
+
 These tests pin that contract via static-source assertions — we
 inspect the source files directly so we don't need a live broker.
 The end-to-end publish flow is exercised by the integration tests
@@ -219,11 +227,14 @@ def test_browser_get_fetch_builder_exists():
 
 
 def test_browser_get_fetch_fires_on_reconnect_suback():
-    """On SUBACK after a reconnect (lastConnectedAt !== null), the
-    browser MUST publish to `<topic>/get` to fetch AIO's last value.
+    """On every SUBACK (including reconnects), the browser MUST
+    publish to `<topic>/get` to fetch AIO's last value.
 
-    The FIRST SUBACK skips the /get fetch (REST seed already
-    populated config). Every SUBACK after the first fires it.
+    Round 10: the /get fetch fires on EVERY SUBACK. The
+    `lastConnectedAt` gate was dead code (it's set in onopen
+    before SUBACK) and was removed. The fetch is a self-healing
+    overlay on top of the REST seed — it catches any save that
+    landed during the page-load race window.
     """
     src = (_PROJECT_ROOT / "heart-message-manager" / "static" / "mqtt_ws_client.js").read_text()
     # Find the SUBACK branch by scanning for the SUBACK log line.
@@ -239,34 +250,46 @@ def test_browser_get_fetch_fires_on_reconnect_suback():
     assert "buildPublish" in window, (
         "SUBACK branch must call buildPublish to send the /get fetch"
     )
-    # The first-connect skip must reference lastConnectedAt — that's
-    # the discriminator between first SUBACK and reconnect SUBACK.
-    assert "lastConnectedAt" in window, (
-        "SUBACK branch must gate the /get fetch on lastConnectedAt "
-        "(skip on first connect — REST seed handled it)"
-    )
 
 
-def test_browser_get_fetch_skips_on_first_connect():
-    """The /get fetch MUST be skipped on the first SUBACK so it
-    doesn't race the page-load `seed()` REST hydrate.
+def test_browser_get_fetch_fires_on_every_suback():
+    """The /get fetch MUST fire on EVERY SUBACK, including the first.
 
-    The previous test verified the /get fetch exists in the
-    SUBACK branch; this one verifies the skip path is gated by
-    `lastConnectedAt !== null` (so first-connect stays clean).
+    Round 10 (operator confirmation): the in-browser seed() races
+    AIO's MQTT queue — if a config save lands BEFORE the page
+    finishes loading, the in-memory state at seed-time is stale
+    even on first connect. The /get fetch on every SUBACK is the
+    self-healing overlay that catches this.
+
+    The previous round asserted the fetch was gated by
+    `lastConnectedAt !== null` (skipping the first SUBACK). That
+    gate doesn't actually work — `lastConnectedAt` is set in
+    `socket.onopen`, which always fires before SUBACK — so the
+    "first SUBACK skip" never skipped anything. Round 10 removes
+    the gate entirely and lets the fetch fire on every SUBACK.
+    The seed() REST hydrate is still the primary path; the /get
+    fetch is the backstop.
     """
     src = (_PROJECT_ROOT / "heart-message-manager" / "static" / "mqtt_ws_client.js").read_text()
     suback_idx = src.find('[mqtt-ws] SUBACK')
     window = src[suback_idx : suback_idx + 4000]
-    # The skip path must mention lastConnectedAt and indicate it
-    # is the discriminator. We accept either "lastConnectedAt !== null"
-    # or "first SUBACK — skipping" — both indicate the gate.
+    # The skip path is gone — there should be NO conditional gating
+    # the /get fetch. We assert that the "skip on first connect"
+    # branch was removed (round 9 → round 10 correction).
     assert (
-        "lastConnectedAt !== null" in window
-    ), "SUBACK branch must check `lastConnectedAt !== null` to skip first-connect /get"
-    assert (
-        "first SUBACK" in window or "skipping /get fetch" in window
+        "first SUBACK — skipping" not in window
     ), (
-        "SUBACK branch must log a skip message when lastConnectedAt "
-        "is null (first SUBACK, REST seed already populated)"
+        "round 10: SUBACK branch must NOT skip the /get fetch on "
+        "first SUBACK — the gate never fired anyway (lastConnectedAt "
+        "is set in onopen before SUBACK) and removing it makes the "
+        "fetch self-healing across race conditions"
     )
+    assert (
+        "lastConnectedAt !== null" not in window
+    ), (
+        "round 10: SUBACK branch must NOT gate the /get fetch on "
+        "lastConnectedAt — the gate is dead code now"
+    )
+    # And the fetch itself must still be present in the branch.
+    assert "/get" in window, "SUBACK branch must publish to <topic>/get"
+    assert "buildPublish" in window, "SUBACK branch must call buildPublish"
