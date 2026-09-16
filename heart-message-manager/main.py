@@ -1363,28 +1363,44 @@ def _save_and_publish(cfg: SignConfig) -> None:
     # what they last applied.
     cfg.config_sha = new_sha
     cfg.updated_at = datetime.now().astimezone().isoformat()
-    # Re-resolve the wire form with the stamps in place. Without the
-    # second call the S3 snapshot and MQTT envelope would carry a
-    # raw empty target_version even though the hash above was
-    # computed against the resolved form.
-    cfg_dict = _wire_sign_settings(cfg.to_dict())
+    # Build two distinct dicts from here on:
+    #   - `cfg_raw`    : the on-disk SignConfig form, with the
+    #                    operator's raw `target_version` preserved
+    #                    (empty string means "inherit Flask version").
+    #                    Goes to SQLite and S3 — these are the long-term
+    #                    storage layers and must round-trip the
+    #                    operator's intent across restarts.
+    #   - `cfg_wire`   : the resolved wire form, with empty
+    #                    `target_version` filled in to Flask's running
+    #                    short SHA. Goes to MQTT — the consumer (Pi /
+    #                    browser) needs a concrete value, not the
+    #                    "inherit" sentinel.
+    # Round 11 (operator confirmation, issue #71): the previous code
+    # wrote `cfg_wire` to S3 too, which meant a Flask restart would
+    # load back the resolved Flask SHA from S3 and persist it as the
+    # new operator-pinned value — silently converting "inherit"
+    # intent into a hard pin to whichever Flask SHA was current at
+    # the time of the last save. SQLite and S3 MUST keep the raw
+    # form; only the MQTT envelope needs the resolved form.
+    cfg_raw = cfg.to_dict()
+    cfg_wire = _wire_sign_settings(cfg_raw)
     sqlite.put_config(cfg)
     try:
-        s3.save_config_snapshot(cfg_dict)
+        s3.save_config_snapshot(cfg_raw)
     except Exception as e:
         logger.warning("Config S3 snapshot failed: %s", e)
     logger.info(
         "[flask] _save_and_publish: publishing config envelope "
         "config_sha=%s updated_at=%s rotation=%s text=(speed=%d, color=#%06x) pacing=(fade=%s, hold=%s)",
-        cfg_dict.get("config_sha", ""),
-        cfg_dict.get("updated_at", ""),
-        [(e["name"], e["enabled"]) for e in cfg_dict["effects_settings"]["effects"]],
-        cfg_dict["text_settings"]["speed"],
-        cfg_dict["text_settings"]["color"],
-        cfg_dict["effects_settings"]["fade_seconds"],
-        cfg_dict["effects_settings"]["hold_seconds"],
+        cfg_wire.get("config_sha", ""),
+        cfg_wire.get("updated_at", ""),
+        [(e["name"], e["enabled"]) for e in cfg_wire["effects_settings"]["effects"]],
+        cfg_wire["text_settings"]["speed"],
+        cfg_wire["text_settings"]["color"],
+        cfg_wire["effects_settings"]["fade_seconds"],
+        cfg_wire["effects_settings"]["hold_seconds"],
     )
-    _mqtt_client_publish_config(cfg_dict)
+    _mqtt_client_publish_config(cfg_wire)
 
 
 # Canonical set of effect class names the device knows about. Mirrors
