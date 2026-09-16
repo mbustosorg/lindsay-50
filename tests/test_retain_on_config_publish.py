@@ -1,26 +1,35 @@
-"""Regression test for the retain flag on config publishes.
+"""Regression tests for config-envelope delivery without broker-side retain.
 
-Round 8, issue #71 follow-up: the dashboard's "Current config" modal
-and messages list depend on `_handle_config` running on the in-browser
-MessageManager. When the WS envelope is missed (broker fan-out drop
-per `feedback_clean_session_aio_fan_out.md`, WS reconnect race), the
-in-memory state stays stale until the next page reload — which
-forces `seed()` to repopulate from REST.
+Round 9 (issue #71 follow-up): the dashboard's "Current config"
+modal and messages list depend on `_handle_config` running on the
+in-browser MessageManager. When the WS envelope is missed (broker
+fan-out drop per `feedback_clean_session_aio_fan_out.md`, WS
+reconnect race), the in-memory state stays stale until the next
+page reload — which forces `seed()` to repopulate from REST.
 
-Fix: `_mqtt_client_publish_config` now passes `retain=True` to
-`publish_envelope`, so the broker stores the latest config as the
-"last retained message" on the envelope topic. New and reconnecting
-subscribers receive the retained config immediately on SUBSCRIBE —
-covers the WS-reconnect race without introducing an API fallback.
-Message and command envelopes MUST stay non-retained (they're events,
-not state).
+Round 8 attempt (the v191 fix) passed `retain=True` to the broker,
+which is correct MQTT 3.1.1 semantics but is silently ignored by
+Adafruit IO. Per io.adafruit.com/api/docs/mqtt.html: "we don't
+actually store data in the broker but at a lower level and can't
+support PUBLISH retain directly". The advertised workaround is the
+`<feed-topic>/get` publish-and-replay pattern: subscriber publishes
+an empty payload to `<feed>/get` and AIO republishes the last
+value of that feed back to the subscriber on the original feed
+topic.
+
+Round 9 implements that pattern in the BROWSER (mqtt_ws_client.js
+SUBACK handler), so the WS-only contract is preserved: the browser
+still subscribes via WS, the publish still goes via MQTT, the
+change fan-out still runs through `_emit_change`. We're fixing
+delivery, not the receiver.
 
 These tests pin that contract via static-source assertions — we
 inspect the source files directly so we don't need a live broker.
 The end-to-end publish flow is exercised by the integration tests
 in `tests/settings_post_handler_test.py` etc., which only assert
 that publish_envelope is called; this file is the SPECIFIC contract
-that config retains and messages don't.
+that the /get-fetch-on-reconnect works correctly and that the
+server-side retain claim was removed.
 """
 
 from __future__ import annotations
@@ -39,40 +48,60 @@ sys.path.insert(0, str(_PROJECT_ROOT))
 def test_publish_envelope_accepts_retain_kwarg():
     """`PahoMqttClient.publish_envelope` MUST accept a `retain` kwarg.
 
-    Default value should be False (events are not state — only
-    config is).
+    Even though AIO doesn't honor it, the flag is correct MQTT 3.1.1
+    semantics and is forwarded to paho for standards-compliant
+    brokers (Heroku Mosquitto, local dev, any non-AIO deployment).
+    Default value is False — events are not state, only the wire
+    envelope is; the round 9 /get-fetch pattern is what recovers
+    state on the browser side.
     """
     src = (_PROJECT_ROOT / "lib_shared" / "paho_mqtt_client.py").read_text()
     assert "def publish_envelope(self, envelope, retain: bool = False)" in src, (
         "PahoMqttClient.publish_envelope signature must accept "
-        "retain: bool = False — config callers pass True, all "
-        "other callers leave it at the default."
+        "retain: bool = False — the kwarg is correct MQTT semantics "
+        "for standards-compliant brokers even though AIO ignores it."
     )
-    # And the parameter must actually flow through to paho's publish
-    # call (otherwise the broker never sees retain=True).
     assert "client.publish(topic, payload.encode(), qos=1, retain=retain)" in src, (
         "publish_envelope must forward the retain kwarg to "
         "client.publish() — otherwise the broker never sees the flag."
     )
 
 
-# --- Config publishes are retained ------------------------------------------
+# --- Server does NOT pass retain on config publishes -----------------------
+#
+# AIO silently ignores retain=True, so passing it gives a false sense of
+# broker-side state recovery. Round 9 strips it from the server-side
+# publish; the real fix is on the browser (mqtt_ws_client.js /get fetch).
 
 
-def test_mqtt_client_publish_config_passes_retain_true():
-    """`_mqtt_client_publish_config` MUST pass `retain=True` so the
-    broker keeps the latest config for reconnecting subscribers.
+def test_mqtt_client_publish_config_does_not_pass_retain_true():
+    """`_mqtt_client_publish_config` MUST NOT pass `retain=True`.
 
-    Static-source check: read the source file directly and confirm
-    the call site carries the retain=True kwarg.
+    Round 9 correction: the previous test (round 8) asserted the
+    OPPOSITE — that retain=True was passed — because we believed
+    AIO honored the flag. It does not (per AIO docs). The server
+    side now passes no retain flag; recovery from a missed config
+    envelope happens on the BROWSER side via the /get fetch on WS
+    reconnect.
+
+    We scan the function BODY (not the docstring) so narrative
+    text mentioning retain=True doesn't false-positive the
+    assertion. Body starts at the first non-docstring line.
     """
     src = (_PROJECT_ROOT / "heart-message-manager" / "main.py").read_text()
     fn_idx = src.find("def _mqtt_client_publish_config")
     assert fn_idx != -1, "_mqtt_client_publish_config must be defined"
     fn_section = src[fn_idx : fn_idx + 2000]
-    assert "publish_envelope(" in fn_section
-    assert "retain=True" in fn_section, (
-        "_mqtt_client_publish_config must pass retain=True to publish_envelope"
+    # Skip the docstring (find the next non-docstring line).
+    body_start = fn_section.find('"""', fn_section.find("def "))
+    if body_start != -1:
+        body_start = fn_section.find('"""', body_start + 3) + 3
+    body = fn_section[body_start:] if body_start != -1 else fn_section
+    assert "publish_envelope(" in body
+    assert "retain=True" not in body, (
+        "_mqtt_client_publish_config body must NOT pass retain=True — "
+        "AIO ignores the flag, so passing it suggests recovery that "
+        "doesn't happen. Recovery is via the browser-side /get fetch."
     )
 
 
@@ -159,3 +188,85 @@ def test_command_publish_does_not_retain():
         assert not retained, (
             f"command publish must not pass retain=True: {call!r}"
         )
+
+
+# --- Browser-side /get fetch on WS reconnect -------------------------------
+
+
+def test_browser_get_fetch_builder_exists():
+    """mqtt_ws_client.js MUST expose a buildPublish frame builder.
+
+    The /get-fetch-on-reconnect pattern (round 9) sends a QoS-1
+    PUBLISH to `<feed-topic>/get` so AIO replays the last value
+    of the feed. That's a client PUBLISH from the WS shim, which
+    didn't exist before — only the inbound-PUBLISH parser did.
+    The builder is a thin wrapper over the existing `packet()`
+    helper but must be present and use QoS-1 flags (0x02) so the
+    broker hands us a PUBACK and doesn't drop the publish.
+    """
+    src = (_PROJECT_ROOT / "heart-message-manager" / "static" / "mqtt_ws_client.js").read_text()
+    assert "function buildPublish" in src, (
+        "mqtt_ws_client.js must define buildPublish — the /get-fetch "
+        "pattern (round 9) needs a client→broker PUBLISH builder"
+    )
+    # The QoS-1 flags byte is 0x02 (DUP=0, QoS=01, RETAIN=0).
+    # AIO requires QoS 1 on the SUBSCRIBE per the existing comment,
+    # and the /get fetch must also be QoS 1 so we get a PUBACK.
+    assert "0x02" in src, (
+        "buildPublish must use the QoS-1 flags byte (0x02) — AIO "
+        "drops QoS-0 PUBLISH frames silently on this broker."
+    )
+
+
+def test_browser_get_fetch_fires_on_reconnect_suback():
+    """On SUBACK after a reconnect (lastConnectedAt !== null), the
+    browser MUST publish to `<topic>/get` to fetch AIO's last value.
+
+    The FIRST SUBACK skips the /get fetch (REST seed already
+    populated config). Every SUBACK after the first fires it.
+    """
+    src = (_PROJECT_ROOT / "heart-message-manager" / "static" / "mqtt_ws_client.js").read_text()
+    # Find the SUBACK branch by scanning for the SUBACK log line.
+    suback_idx = src.find('[mqtt-ws] SUBACK')
+    assert suback_idx != -1, "SUBACK handler must be present"
+    # Look for the /get fetch within a reasonable window after SUBACK.
+    # Window is generous so we don't miss the surrounding branch.
+    window = src[suback_idx : suback_idx + 4000]
+    assert "/get" in window, (
+        "SUBACK branch must publish to <topic>/get so AIO replays "
+        "the last config to the browser (round 9 /get-fetch pattern)"
+    )
+    assert "buildPublish" in window, (
+        "SUBACK branch must call buildPublish to send the /get fetch"
+    )
+    # The first-connect skip must reference lastConnectedAt — that's
+    # the discriminator between first SUBACK and reconnect SUBACK.
+    assert "lastConnectedAt" in window, (
+        "SUBACK branch must gate the /get fetch on lastConnectedAt "
+        "(skip on first connect — REST seed handled it)"
+    )
+
+
+def test_browser_get_fetch_skips_on_first_connect():
+    """The /get fetch MUST be skipped on the first SUBACK so it
+    doesn't race the page-load `seed()` REST hydrate.
+
+    The previous test verified the /get fetch exists in the
+    SUBACK branch; this one verifies the skip path is gated by
+    `lastConnectedAt !== null` (so first-connect stays clean).
+    """
+    src = (_PROJECT_ROOT / "heart-message-manager" / "static" / "mqtt_ws_client.js").read_text()
+    suback_idx = src.find('[mqtt-ws] SUBACK')
+    window = src[suback_idx : suback_idx + 4000]
+    # The skip path must mention lastConnectedAt and indicate it
+    # is the discriminator. We accept either "lastConnectedAt !== null"
+    # or "first SUBACK — skipping" — both indicate the gate.
+    assert (
+        "lastConnectedAt !== null" in window
+    ), "SUBACK branch must check `lastConnectedAt !== null` to skip first-connect /get"
+    assert (
+        "first SUBACK" in window or "skipping /get fetch" in window
+    ), (
+        "SUBACK branch must log a skip message when lastConnectedAt "
+        "is null (first SUBACK, REST seed already populated)"
+    )

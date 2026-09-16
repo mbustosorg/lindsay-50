@@ -366,20 +366,19 @@ def _mqtt_client_publish_config(cfg_dict: dict) -> None:
     `mqtt_publisher` lambda can forward to it on the fresh-install path
     (which fires the publisher before the rest of the file is loaded).
 
-    `retain=True` (round 8, issue #71 follow-up): the broker stores
-    this as the last retained message on the envelope topic. New
-    subscribers (and reconnecting subscribers whose WS dropped
-    during the publish) receive the retained config immediately on
-    SUBSCRIBE — covers the broker fan-out drop scenario documented
-    in `feedback_clean_session_aio_fan_out.md` and the WS-reconnect
-    race. Message and command envelopes are NOT retained; only
-    config — the latest config is state, individual events are
-    not. See `lib_shared/paho_mqtt_client.py:publish_envelope` for
-    the full rationale.
+    Round 9 (issue #71 follow-up): AIO does NOT honor the MQTT
+    `retain` flag (per io.adafruit.com/api/docs/mqtt.html — "we
+    don't actually store data in the broker but at a lower level
+    and can't support PUBLISH retain directly"). The previous
+    `retain=True` here was a no-op against AIO and gave a false
+    sense of broker-side state recovery. Real recovery is via the
+    browser-side `/get` fetch on WS reconnect (mqtt_ws_client.js
+    SUBACK handler), which uses AIO's documented "publish to
+    `<feed>/get` to fetch the last value" pattern.
     """
     assert _mqtt_client is not None
     ok = _mqtt_client.publish_envelope(
-        MessageEnvelope("config", cfg_dict), retain=True
+        MessageEnvelope("config", cfg_dict)
     )
     logger.info("[flask] _mqtt_client_publish_config: publish_envelope returned %s", ok)
 

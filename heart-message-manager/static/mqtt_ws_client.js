@@ -137,6 +137,22 @@ function buildPubAck(packetId) {
   return packet(4, 0, vh);
 }
 
+function buildPublish(topic, packetId, payload, qos) {
+  // QoS-1 client→broker PUBLISH. Variable header: topic name +
+  // packet ID (required because QoS>0). Flags byte: 0x02 = QoS 1,
+  // no retain, no dup. Payload is the raw UTF-8 bytes of the JSON
+  // string (or empty for /get fetch).
+  const flags = qos === 1 ? 0x02 : 0x00;
+  const vh = concat(
+    encodeString(topic),
+    new Uint8Array([(packetId >> 8) & 0xff, packetId & 0xff]),
+  );
+  const pl = payload === undefined
+    ? new Uint8Array(0)
+    : new TextEncoder().encode(String(payload));
+  return packet(3, flags, vh, pl);
+}
+
 function buildPingReq() {
   return packet(12, 0);
 }
@@ -424,6 +440,56 @@ export function createMqttWsClient({
       console.log("[mqtt-ws] SUBACK granted_qos=" + JSON.stringify(granted));
       if (granted.indexOf(0x80) !== -1) {
         console.warn("[mqtt-ws] SUBACK rejected by broker (granted_qos=0x80)");
+      }
+      // Issue #71 follow-up (round 9): AIO does NOT honor the MQTT
+      // `retain` flag — they store data at a lower layer and the
+      // broker simply ignores the retain bit on PUBLISH. The published
+      // workaround (per io.adafruit.com/api/docs/mqtt.html §"Get Last
+      // Value") is: publish an empty payload to `<feed-topic>/get`
+      // and AIO will republish the last value of that feed back to
+      // the subscriber on the original feed topic. This is the
+      // ONLY way to recover state across a WS reconnect or an AIO
+      // fan-out drop, since retain doesn't work.
+      //
+      // Skip on the FIRST SUBSCRIBE — the page-load `seed()` already
+      // fetched the canonical config from REST. Sending /get there
+      // would race the seed and cause a redundant config envelope
+      // mid-hydrate. On REconnects (lastConnectedAt !== null when
+      // we got SUBACK) the in-memory config may be stale (WS dropped
+      // a config envelope during the disconnect window), so we ask
+      // AIO for the last seen value.
+      if (lastConnectedAt !== null) {
+        const getTopic = topic + "/get";
+        try {
+          ws && ws.send(buildPublish(getTopic, 0x0002, "", 1));
+          console.log(
+            "[mqtt-ws] /get fetch published to " + getTopic +
+            " (AIO retains-last-value workaround — see AIO MQTT docs)"
+          );
+        } catch (e) {
+          console.warn("[mqtt-ws] /get fetch publish failed:", e);
+        }
+      } else {
+        console.log(
+          "[mqtt-ws] first SUBACK — skipping /get fetch (REST seed already populated config)"
+        );
+      }
+    } else if (type === 4) {
+      // PUBACK — broker acknowledgement of one of our QoS-1 PUBLISH
+      // packets (currently only the /get fetch). Just log the packet
+      // ID so we can confirm the QoS handshake closes. We don't store
+      // anything keyed on it — the only outbound QoS-1 PUBLISH today
+      // is the /get fetch (packet ID 0x0002), so the logged ID is
+      // mostly diagnostic.
+      try {
+        const decoded = decodeRemainingLength(bytes);
+        const off = decoded ? decoded.bytesUsed : 0;
+        const ackPacketId = (bytes[off] << 8) | bytes[off + 1];
+        console.log(
+          "[mqtt-ws] PUBACK received packet_id=" + ackPacketId
+        );
+      } catch (e) {
+        console.warn("[mqtt-ws] PUBACK decode failed:", e);
       }
     } else if (type === 13) {
       // PINGRESP — no action

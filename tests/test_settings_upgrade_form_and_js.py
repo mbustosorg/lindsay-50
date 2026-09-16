@@ -548,11 +548,12 @@ class TestSettingsPostPublishesCheckForUpdate:
         captured = {"envelopes": []}
 
         def _capture_publish_envelope(envelope, retain=False):
-            # Accept `retain` so the new config-envelope publish
-            # call site (which passes retain=True for broker-side
-            # state retention) doesn't TypeError here. The test
-            # itself doesn't care about retain — it only inspects
-            # the captured envelope sequence.
+            # Accept `retain` so the publish_envelope signature
+            # stays compatible with both round-8 callers (which
+            # passed retain=True) and round-9 callers (which
+            # don't, after we confirmed AIO ignores the flag).
+            # The test itself doesn't care about retain — it
+            # only inspects the captured envelope sequence.
             captured["envelopes"].append(envelope)
             return True
 
