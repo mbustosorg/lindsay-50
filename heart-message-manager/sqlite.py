@@ -167,7 +167,7 @@ def _create_schema(db: Path) -> None:
         """)
         # sign_status_log: append-only log of every validated
         # StatusSnapshot Flask has seen over MQTT. The operator
-        # dashboard's "Versions & Config" pill (issue #71) reads
+        # dashboard's "Versions" pill (issue #71) reads
         # the most-recent row on startup so the in-memory
         # LatestSignStatus comes up pre-populated and the
         # `/api/sign-status` endpoint serves the Pi's last-known

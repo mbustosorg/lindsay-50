@@ -55,7 +55,7 @@
       configApiUrl:     {{ config.CONFIG_API_URL | tojson }},
       apiKey:           {{ auth.API_SECRET_KEY | tojson }},
       mqttLongDisconnectMs: {{ mqtt_ws.MQTT_LONG_DISCONNECT_MS | tojson }},
-      // Issue #71 — Versions & Config card on the dashboard.
+      // Issue #71 — Versions card on the dashboard.
       // `flaskVersion` is the running Flask binary's 7-char short
       // SHA; `flaskConfigSha` is the per-save content hash of the
       // most-recent `/settings` save (empty on a fresh install).
@@ -99,8 +99,12 @@
     Loaded on every authenticated page (decision 4.3 in openspec/changes/
     add-sign-status-reports/design.md). The script is a no-op on pages
     that have neither #sign-live-pill nor [data-sign-status-field].
+    v3: refresh Browser/Config from the in-browser receipt on every
+    5s renderAll tick (safety net for missing on_change events) +
+    module-level `_browserConfigSha` cache so the per-column
+    comparison reads the same value the cell DOM shows.
   -->
-  <script src="{{ url_for('static', filename='sign_status.js') }}?v=2"></script>
+  <script src="{{ url_for('static', filename='sign_status.js') }}?v=3"></script>
   <!--
     pi_upgrade_settings.js — Settings-page Pi Upgrade Control section
     (issue #51). Loaded on every authenticated page; the script is a

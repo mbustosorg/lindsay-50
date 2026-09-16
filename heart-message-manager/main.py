@@ -1074,7 +1074,7 @@ def api_sign_status():
     re-hydrated from the `sign_status_log` SQLite row on Flask
     startup (broker hasn't said anything new since boot). The
     dashboard uses this to render the "Last seen T ago" amber
-    badge on the Versions & Config card. Flips back to `"live"`
+    badge on the Versions card. Flips back to `"live"`
     automatically on the first WS message after startup.
     """
     # Module-level `latest_status` was instantiated near the top of
@@ -1548,7 +1548,7 @@ def dashboard():
         sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         timezone=cfg.sign_settings.timezone,
         format_from_iso=format_from_iso,
-        # Issue #71 — Versions & Config card on the dashboard.
+        # Issue #71 — Versions card on the dashboard.
         # `flask_config_sha` is the per-save content hash stamped by
         # `_save_and_publish` on every `/settings` POST; on a fresh
         # install with no saves yet, the helper falls back to the
@@ -2416,7 +2416,7 @@ def _inject_app_config():
         "auth": {
             "API_SECRET_KEY": _cfg.if_exists("API_SECRET_KEY") or "",
         },
-        # Issue #71 — Versions & Config card. `flaskVersion` is the
+        # Issue #71 — Versions card. `flaskVersion` is the
         # running Flask binary's 7-char short SHA (HEROKU_SLUG_COMMIT
         # preferred, `git rev-parse HEAD` fallback via
         # `_resolve_boot_config`). `flaskConfigSha` is the per-save

@@ -1,6 +1,6 @@
 """Tests for `_resolve_flask_config_sha` — issue #71 dashboard fallback.
 
-The Versions & Config card's "Flask / Config" cell renders the
+The Versions card's "Flask / Config" cell renders the
 per-save content hash stamped by `_save_and_publish`. Before the
 operator's first /settings save after v186 deploys, that field is
 empty in SQLite — the cell would render "—" forever. The helper

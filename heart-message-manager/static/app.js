@@ -101,11 +101,11 @@
 
   // Issue #71: return the SHA of the most-recent config envelope
   // the in-browser MessageManager applied. Used by the dashboard's
-  // "Versions & Config" pill to surface drift between Flask's
-  // saved version and what the browser actually received.
-  // Returns `{"sha": ""}` before the first config envelope lands
-  // — the renderer treats an empty SHA as "we don't know yet"
-  // (cold start, neutral cell, no red).
+  // "Versions" pill to surface drift between Flask's saved
+  // version and what the browser actually received. Returns
+  // `{"sha": ""}` before the first config envelope lands — the
+  // renderer treats an empty SHA as "we don't know yet" (cold
+  // start, neutral cell, no red).
   async function getLastConfigReceipt() {
     if (!window._message_manager) return { sha: "" };
     try {
@@ -186,8 +186,8 @@
     getConfig: getConfigNow,
     // Issue #71: SHA of the most-recent config envelope the
     // in-browser MessageManager applied. Used by the dashboard's
-    // "Versions & Config" pill (sign_status.js) to surface drift
-    // between Flask's saved version and what the browser actually
+    // "Versions" pill (sign_status.js) to surface drift between
+    // Flask's saved version and what the browser actually
     // received. Returns `{"sha": ""}` on cold start / before any
     // config envelope has landed — renderer treats that as
     // "we don't know yet" (neutral cell, no red).

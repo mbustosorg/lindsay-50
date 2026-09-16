@@ -1,4 +1,4 @@
-"""Tests for the Versions & Config card (issue #71).
+"""Tests for the Versions card (issue #71).
 
 The renderer logic in ``sign_status.js:applyVersionDriftRender``
 encodes a column-disagreement rule: for each column (code, config),
@@ -106,7 +106,7 @@ def _read(path: str) -> str:
 
 
 def test_dashboard_template_emits_version_drift_table():
-    """The dashboard HTML must include the Versions & Config table
+    """The dashboard HTML must include the Versions table
     with the 6 expected cell markers (flask-code, flask-config,
     pi-code, pi-config, browser-code, browser-config)."""
     html = _read("heart-message-manager/templates/dashboard.html")
@@ -214,3 +214,59 @@ def test_status_snapshot_carries_applied_config_sha():
     blob = json.dumps(snapshot)
     parsed = json.loads(blob)
     assert parsed["applied_config_sha"] == "abc1234"
+
+
+# --- Browser/Config receipt wiring (issue #71, follow-up) ---------
+
+
+def test_render_all_refreshes_browser_config_cell():
+    """`renderAll()` MUST call `applyBrowserConfigReceipt()` so the
+    5s setInterval tick keeps the Browser/Config cell populated
+    even when the `on_change` fan-out missed the seed-complete or
+    config-envelope events (PyScript race during cold start, broker
+    fan-out drop — see feedback_clean_session_aio_fan_out.md).
+
+    The user complaint that drove this test: after a /settings save,
+    Flask/Config (server-rendered) shows the new sha but
+    Browser/Config stays at "—" indefinitely. The 5s tick refresh
+    is the safety net that gets the cell populated within ~5s of
+    page load regardless of why the on_change hook missed."""
+    src = _read("heart-message-manager/static/sign_status.js")
+    # Find the renderAll function body and verify applyBrowserConfigReceipt
+    # is called inside it. Simple substring check — the function is
+    # short and the call is unique enough to grep for.
+    m = re.search(
+        r"function\s+renderAll\s*\([^)]*\)\s*\{([\s\S]*?)\n\}",
+        src,
+    )
+    assert m is not None, "renderAll function not found"
+    body = m.group(1)
+    assert "applyBrowserConfigReceipt(" in body, (
+        "renderAll must call applyBrowserConfigReceipt() on every tick "
+        "as the safety net for missed on_change events"
+    )
+
+
+def test_browser_config_sha_module_cache_exists():
+    """The per-column disagreement comparison reads the latest
+    browser-applied config_sha from a module-level cache
+    (`_browserConfigSha`) rather than from the cell DOM. This keeps
+    the comparison deterministic: applyBrowserConfigReceipt writes
+    the cell ASYNCHRONOUSLY (PyScript proxy await), but the
+    synchronous comparison must not race with that write."""
+    src = _read("heart-message-manager/static/sign_status.js")
+    assert "let _browserConfigSha" in src, (
+        "_browserConfigSha module-level cache not declared"
+    )
+    # The comparison site reads the cache, not readCell("browser", "config")
+    # — the readCell call for browser-config should be GONE (replaced by
+    # the cache read) to prevent the async-write/sync-read race.
+    assert re.search(
+        r'const\s+browserConfig\s*=\s*_browserConfigSha',
+        src,
+    ), "applyVersionDriftRender must read _browserConfigSha for browser-config"
+    # And the original cell-DOM read should be replaced (no
+    # `browserConfig = readCell("browser", "config")` left).
+    assert 'readCell("browser", "config")' not in src, (
+        "browser-config comparison must come from cache, not cell DOM"
+    )

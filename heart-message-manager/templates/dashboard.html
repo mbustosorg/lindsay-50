@@ -141,12 +141,12 @@
        (see static/sign_status.js). The pill renders even before
        the first snapshot arrives — initial state is "Offline"
        with a grey dot. #}
-    {# Issue #71 — Versions & Config card. Sits above the Sign
-       Health card; surfaces code + config drift across Flask /
-       Pi / Browser as a 3-row × 2-column comparison table. Rows
-       = Flask / Pi / Browser; columns = Code / Config. Every cell
-       uses font-mono + the same fixed width so SHAs line up
-       vertically — scanning down a single column tells the
+    {# Issue #71 — Versions card. Sits above the Sign Health card;
+       surfaces code + config drift across Flask / Pi / Browser as
+       a 3-row × 2-column comparison table. Rows = Flask / Pi /
+       Browser; columns = Code / Config. Every cell uses font-mono
+       + the same fixed width so SHAs line up vertically —
+       scanning down a single column tells the
        operator whether the three surfaces agree on Code (or
        Config). Per-column disagreement flips the offending cell
        red (sign_status.js's `applyVersionDriftRender`); empty
@@ -173,7 +173,7 @@
     <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6 lg:flex-1 lg:flex lg:flex-col">
       <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
         <h3 class="font-heading font-semibold text-dark text-lg flex items-center gap-2">
-          <span>🧭</span> Versions &amp; Config
+          <span>🧭</span> Versions
         </h3>
         {# Persisted-row badge — issue #71. Shown when /api/sign-status
            returned source="persisted" (the in-memory snapshot was

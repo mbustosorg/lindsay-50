@@ -234,7 +234,7 @@ function applyFieldsRender(snapshot, rendered) {
 }
 
 // -----------------------------------------------------------------------------
-// Versions & Config card (issue #71)
+// Versions card (issue #71)
 // -----------------------------------------------------------------------------
 
 // Cell labels — the keys the template emits in `data-version-drift-cell`
@@ -287,7 +287,13 @@ function applyVersionDriftRender(snapshot) {
   const piConfig =
     (snapshot && snapshot.applied_config_sha) || readCell("pi", "config");
   const browserCode = readCell("browser", "code");
-  const browserConfig = readCell("browser", "config");
+  // Browser/Config is read from the module cache (`_browserConfigSha`)
+  // rather than the cell DOM — applyBrowserConfigReceipt writes the
+  // cell ASYNCHRONOUSLY (via PyScript proxy await), but the comparison
+  // below runs synchronously. Reading the cache keeps the comparison
+  // deterministic regardless of which tick of applyBrowserConfigReceipt
+  // has completed.
+  const browserConfig = _browserConfigSha || "";
 
   const cellsByColumn = {
     code: { flask: flaskCode, pi: piCode, browser: browserCode },
@@ -323,21 +329,41 @@ function applyVersionDriftRender(snapshot) {
   }
 }
 
+// Module-level cache of the most-recent browser-applied config_sha.
+// Written by `applyBrowserConfigReceipt()` and read by
+// `applyVersionDriftRender` so the per-column disagreement logic
+// runs against the same value the cell DOM shows — without an
+// async-read race against the cell write. Initialized to "" so
+// cold start reads as "we don't know yet" (treated as empty by
+// the column-agreement rule).
+let _browserConfigSha = "";
+
 // Pull the most-recent browser-applied config_sha from the in-browser
-// MessageManager and write it into the Browser/Config cell. Called on
-// every on_change fan-out (config envelope arrival). Returns a Promise
-// — the caller (sign_status.js's on_change hook) doesn't need to await.
+// MessageManager and write it into the Browser/Config cell + module
+// cache. Called on every on_change fan-out (config envelope arrival)
+// AND on every 5s renderAll tick — the tick path is the safety net
+// for cases where the change hook missed (PyScript race during cold
+// start, broker fan-out drop, etc.). Returns a Promise — the callers
+// are fire-and-forget (the cell DOM update runs in a microtask).
 async function applyBrowserConfigReceipt() {
   const cell = document.querySelector(
     '[data-version-drift-cell="browser-config"]'
   );
   if (!cell) return;
+  // Write the cached value synchronously first so the next synchronous
+  // `applyVersionDriftRender` (if scheduled) sees the latest receipt —
+  // keeps the cell DOM and the comparison logic in lockstep.
+  if (_browserConfigSha.length > 0) {
+    cell.textContent = _browserConfigSha;
+  }
   if (typeof window.App === "undefined" || !window.App.getLastConfigReceipt) {
+    if (_browserConfigSha.length === 0) cell.textContent = VERSION_DRIFT_DASH;
     return;
   }
   try {
     const receipt = await window.App.getLastConfigReceipt();
     const sha = (receipt && receipt.sha) || "";
+    _browserConfigSha = sha;
     if (sha && sha.length > 0) {
       cell.textContent = sha;
     } else {
@@ -377,6 +403,13 @@ function renderAll(snapshot) {
   applyPillRender(rendered);
   applyFieldsRender(snapshot, rendered);
   applyVersionDriftRender(snapshot);
+  // Fire-and-forget refresh of the Browser/Config cell from the
+  // in-browser receipt. The 5s tick is the safety net for cases
+  // where the on_change hook missed the seed-complete or config-
+  // envelope events (PyScript race during cold start, broker
+  // fan-out drop). `applyBrowserConfigReceipt` is async; this
+  // call doesn't block renderAll.
+  applyBrowserConfigReceipt();
 }
 
 // -----------------------------------------------------------------------------
