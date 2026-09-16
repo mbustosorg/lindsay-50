@@ -786,6 +786,18 @@ def _resolve_boot_config() -> BootConfig:
     return _boot_config_from_heroku_or_git(repo_root)
 
 
+# Log the deployed commit SHA at startup so deploy verification is
+# a one-line `heroku logs --tail | grep 'Flask app starting'` away.
+# On Heroku, HEROKU_SLUG_COMMIT is set; on local dev, falls back
+# to git rev-parse HEAD; if both fail, short_sha is empty and the
+# `/api/sign/settings` endpoint will 500 with a clear error.
+logger.info(
+    "Flask app starting at short_sha=%s (expected_sha=%s)",
+    _resolve_boot_config().short_sha or "(unresolved)",
+    _resolve_boot_config().expected_sha or "(unresolved)",
+)
+
+
 @app.route("/api/sign/boot-config", methods=["GET"])
 @api_login_required
 def api_sign_boot_config():
