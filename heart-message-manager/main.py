@@ -832,9 +832,18 @@ def web_unsuppress(msg_id):
 @app.route("/api/config", methods=["GET"])
 @api_login_required
 def api_get_config():
-    """Return current config as JSON."""
+    """Return current config as JSON.
+
+    Wire form: ``sign_settings.target_version`` is resolved to a
+    concrete 7-char short SHA when empty (operator-pinned value
+    otherwise), so observers (Pi, browser preview, the dashboard's
+    "Current Config" modal) see what's *actually desired* without
+    having to interpret the empty-vs-pinned semantics. The
+    in-memory ``SignConfig`` and SQLite row keep the operator's
+    raw value — see ``_wire_sign_settings``.
+    """
     cfg = sqlite.get_config()
-    return jsonify(cfg.to_dict())
+    return jsonify(_wire_sign_settings(cfg.to_dict()))
 
 
 @app.route("/api/config", methods=["PUT"])
@@ -901,6 +910,51 @@ def _resolve_flask_config_sha(cfg) -> str:
     if target:
         return _short_sha(target) or ""
     return _resolve_boot_config().short_sha or ""
+
+
+def _wire_sign_settings(cfg_dict: dict) -> dict:
+    """Return a wire form of the config dict with
+    ``sign_settings.target_version`` resolved to a concrete 7-char
+    short SHA.
+
+    Operators can leave the field empty (or trim it down to "") to
+    mean "inherit whatever Flask is currently running" — that
+    choice is preserved on disk + in the /settings input as the raw
+    empty value so the operator can see what's pinned vs. inherited.
+    But on the WIRE (MQTT envelope to the Pi, /api/config GET
+    response, S3 snapshot) the resolved value lands verbatim, so
+    observers never have to interpret empty-vs-pinned intent.
+
+    The in-memory ``SignConfig`` and the SQLite ``config`` row
+    keep the operator's raw value (empty = inherited). Only the
+    wire form is rewritten. This means a fresh `/api/config`
+    response after the operator clears the field still shows the
+    canonical resolved SHA on the wire, while the /settings input
+    placeholder keeps showing the Flask version in grey.
+
+    Returns the input dict unchanged when the operator has pinned
+    a non-empty value (the common case once the operator has
+    visited /settings) — no allocation overhead for the hot path.
+    Returns a NEW shallow-copied tree when an empty target_version
+    is resolved to keep the caller's dict (and the SignConfig
+    instance behind it) untouched.
+    """
+    ss = cfg_dict.get("sign_settings")
+    if not isinstance(ss, dict):
+        return cfg_dict
+    target = (ss.get("target_version") or "").strip()
+    if target:
+        return cfg_dict  # operator-pinned: leave as-is
+    flask_config = _resolve_boot_config()
+    if not flask_config.short_sha:
+        return cfg_dict  # can't resolve — caller keeps raw ""
+    return {
+        **cfg_dict,
+        "sign_settings": {
+            **ss,
+            "target_version": flask_config.short_sha,
+        },
+    }
 
 
 # Log the deployed commit SHA at startup so deploy verification is
@@ -1262,7 +1316,13 @@ def _save_and_publish(cfg: SignConfig) -> None:
     to something different. Chicken-and-egg loop avoided.
     """
     # Snapshot the body BEFORE stamping so the hash excludes its own value.
-    body_for_hash = cfg.to_dict()
+    # `body_for_hash` (and the published `cfg_dict` below) come through
+    # `_wire_sign_settings` so an empty `sign_settings.target_version`
+    # becomes the resolved Flask short SHA — observers (Pi MQTT
+    # subscriber, browser preview) see what's actually desired without
+    # interpreting empty-vs-pinned semantics. The on-disk SignConfig
+    # and SQLite row keep the operator's raw value.
+    body_for_hash = _wire_sign_settings(cfg.to_dict())
     body_for_hash.pop("config_sha", None)
     body_for_hash.pop("updated_at", None)
     # sort_keys=True + tight separators gives us a deterministic,
@@ -1291,7 +1351,11 @@ def _save_and_publish(cfg: SignConfig) -> None:
     # what they last applied.
     cfg.config_sha = new_sha
     cfg.updated_at = datetime.now().astimezone().isoformat()
-    cfg_dict = cfg.to_dict()
+    # Re-resolve the wire form with the stamps in place. Without the
+    # second call the S3 snapshot and MQTT envelope would carry a
+    # raw empty target_version even though the hash above was
+    # computed against the resolved form.
+    cfg_dict = _wire_sign_settings(cfg.to_dict())
     sqlite.put_config(cfg)
     try:
         s3.save_config_snapshot(cfg_dict)
