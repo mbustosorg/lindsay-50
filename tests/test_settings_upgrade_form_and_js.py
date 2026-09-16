@@ -547,7 +547,12 @@ class TestSettingsPostPublishesCheckForUpdate:
         """
         captured = {"envelopes": []}
 
-        def _capture_publish_envelope(envelope):
+        def _capture_publish_envelope(envelope, retain=False):
+            # Accept `retain` so the new config-envelope publish
+            # call site (which passes retain=True for broker-side
+            # state retention) doesn't TypeError here. The test
+            # itself doesn't care about retain — it only inspects
+            # the captured envelope sequence.
             captured["envelopes"].append(envelope)
             return True
 

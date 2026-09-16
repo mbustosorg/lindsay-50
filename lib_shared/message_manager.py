@@ -267,12 +267,31 @@ class MessageManager:
         are gone; the on-disk Flask store (SQLite + S3) remains
         the canonical source of truth for everything the
         dashboard re-seeds on each new generation.
+
+        Round 8 (live-bug triage): mirror the emit to the
+        browser console so the operator can see whether the
+        `_on_change` PyProxy is actually invoked on the
+        browser-side MessageManager. The Pi-side rAF loop and
+        any non-Pyodide runtime skip this — `js` isn't importable.
         """
         if self._on_change is not None:
+            try:
+                from js import console as _js_console  # type: ignore[import-not-found]
+
+                _js_console.log("[mm-bridge] emit_change firing")
+            except Exception:
+                # Non-browser runtime — Pi / tests have no `js`.
+                pass
             try:
                 self._on_change()
             except Exception as e:
                 logger.warning("MessageManager on_change callback raised: %s", e)
+                try:
+                    from js import console as _js_console2  # type: ignore[import-not-found]
+
+                    _js_console2.error("[mm-bridge] emit_change threw: " + str(e))
+                except Exception:
+                    pass
 
     @property
     def config(self) -> SignConfig:
@@ -622,6 +641,33 @@ class MessageManager:
             len(self._messages._msgs),
             post_suppressed,
         )
+        # Round 8 (live-bug triage): mirror the CONFIG_APPLIED line to
+        # the browser console so the operator can correlate the
+        # PyScript-side handle path with the WS envelope receipt
+        # (`[mm-bridge] envelope_received type=config` from
+        # `_on_envelope_py`). If both fire, the chain is alive and the
+        # bug is downstream (in the change fan-out, JS-side proxy, or
+        # render path). Server-side hosts without `js` simply skip
+        # this — non-Pyodide runtimes (Pi, tests) keep using the
+        # logger alone.
+        try:
+            from js import console as _js_console  # type: ignore[import-not-found]
+
+            _js_console.log(
+                "[mm-bridge] config_applied sender_added="
+                + str(sender_added)
+                + " sender_removed="
+                + str(sender_removed)
+                + " suppressed_after="
+                + str(post_suppressed)
+                + " buffer_size="
+                + str(len(self._messages._msgs))
+            )
+        except Exception:
+            # Non-browser runtime (Pi, tests) — `js.console` isn't
+            # available. Silent fallback, the logger line above is the
+            # canonical server-side record.
+            pass
         logger.info(
             "[debug-dispatch] HANDLE_CONFIG_DONE filter_count=%d filter_ids=%s suppressed_in_buffer=%d buffer_size=%d",
             len(post_filters),

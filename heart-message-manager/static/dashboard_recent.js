@@ -652,6 +652,16 @@
     }
     if (typeof App.registerOnChange === "function") {
       App.registerOnChange(function () {
+        // Round 8 (live-bug triage): log every dispatchChange-driven
+        // reload attempt. Pairs with `[mm-bridge] dispatchChange
+        // fan-out` from app.js — if the fan-out log says "1
+        // listener" but this log never fires, App.registerOnChange
+        // and the dispatchChange loop are using different arrays
+        // (e.g., a re-installed `App` overwrote the closure-local
+        // `onChangeCallbacks` mid-session).
+        try {
+          console.log("[mm-bridge] dashboard_recent reload from change");
+        } catch (_) { /* never block reload on the diagnostic */ }
         reload();
       });
     }

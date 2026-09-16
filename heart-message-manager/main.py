@@ -365,9 +365,22 @@ def _mqtt_client_publish_config(cfg_dict: dict) -> None:
     Defined here (before the `migrate_on_startup` call) so the migration's
     `mqtt_publisher` lambda can forward to it on the fresh-install path
     (which fires the publisher before the rest of the file is loaded).
+
+    `retain=True` (round 8, issue #71 follow-up): the broker stores
+    this as the last retained message on the envelope topic. New
+    subscribers (and reconnecting subscribers whose WS dropped
+    during the publish) receive the retained config immediately on
+    SUBSCRIBE — covers the broker fan-out drop scenario documented
+    in `feedback_clean_session_aio_fan_out.md` and the WS-reconnect
+    race. Message and command envelopes are NOT retained; only
+    config — the latest config is state, individual events are
+    not. See `lib_shared/paho_mqtt_client.py:publish_envelope` for
+    the full rationale.
     """
     assert _mqtt_client is not None
-    ok = _mqtt_client.publish_envelope(MessageEnvelope("config", cfg_dict))
+    ok = _mqtt_client.publish_envelope(
+        MessageEnvelope("config", cfg_dict), retain=True
+    )
     logger.info("[flask] _mqtt_client_publish_config: publish_envelope returned %s", ok)
 
 

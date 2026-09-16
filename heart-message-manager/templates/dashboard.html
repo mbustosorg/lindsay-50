@@ -533,7 +533,7 @@
 <py-config
     src="{{ url_for('static', filename='preview/py-config.toml') }}?v=15"></py-config>
 <py-script
-    src="{{ url_for('static', filename='preview/heart-message-manager/app_main.py') }}?v=26"></py-script>
+    src="{{ url_for('static', filename='preview/heart-message-manager/app_main.py') }}?v=27"></py-script>
 <py-script
     src="{{ url_for('static', filename='preview/heart-message-manager/preview_main.py') }}?v=13"></py-script>
 <script src="{{ url_for('static', filename='preview/preview.js') }}?v=17"></script>
@@ -547,5 +547,5 @@
    by `base.html`) owns the rest, including the MQTT pill wiring
    that's now in `preview/heart-message-manager/dashboard_runtime.py`. #}
 <script src="{{ url_for('static', filename='dashboard_modals.js') }}?v=15"></script>
-<script src="{{ url_for('static', filename='dashboard_recent.js') }}?v=11"></script>
+<script src="{{ url_for('static', filename='dashboard_recent.js') }}?v=12"></script>
 {% endblock %}

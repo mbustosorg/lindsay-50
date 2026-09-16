@@ -69,6 +69,19 @@
   }
 
   function dispatchChange() {
+    // Round 8 (live-bug triage): mirror the fan-out to the browser
+    // console so the operator can see whether the PyProxy-driven
+    // `_on_change_js → _dispatchChange` chain actually reaches JS-land.
+    // Pair with `[mm-bridge] emit_change firing` from Python: if
+    // that fires but this one doesn't, the PyProxy call is the
+    // broken link (PyScript bridge drop, proxy destroyed, etc.).
+    try {
+      console.log(
+        "[mm-bridge] dispatchChange fan-out to "
+          + onChangeCallbacks.length
+          + " listener(s)"
+      );
+    } catch (_) { /* never block dispatch on the diagnostic */ }
     for (const cb of onChangeCallbacks) {
       try {
         cb();

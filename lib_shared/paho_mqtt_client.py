@@ -239,7 +239,7 @@ class PahoMqttClient:
         self._thread.start()
         logger.info("PahoMqttClient started for feed %s", self._topic)
 
-    def publish_envelope(self, envelope) -> bool:
+    def publish_envelope(self, envelope, retain: bool = False) -> bool:
         """Publish a MessageEnvelope to the broker. Returns True on success.
 
         Waits for the MQTT CONNACK (rc==0) before publishing, then blocks
@@ -248,6 +248,36 @@ class PahoMqttClient:
         the broker has acknowledged the connection, not when the socket
         opens. Without loop_start() the paho network thread never runs and
         the queued publish dies in the outgoing buffer.
+
+        Args:
+            envelope: The MessageEnvelope to publish.
+            retain: When True, the broker stores this as the
+                "last retained message on this topic". New and
+                reconnecting subscribers receive the retained
+                message immediately on SUBSCRIBE — covers the
+                browser-WS reconnect race where the publish lands
+                during the gap between disconnect and SUBSCRIBE.
+                Defaults to False — message/command events should
+                NOT be retained (they're individual events, not
+                state). Config envelopes pass True: the latest
+                config IS the state a new subscriber needs.
+
+                Why this matters (round 8, issue #71 follow-up):
+                the dashboard's "Current config" modal and
+                messages list depend on `_handle_config` running
+                on the in-browser MessageManager. If the WS
+                envelope is missed (broker fan-out drop, AIO
+                behavior reported in
+                `feedback_clean_session_aio_fan_out.md`, or a
+                WS reconnect race), the in-memory state stays
+                stale. retain=True makes the broker hold the
+                message so the browser's next SUBSCRIBE (e.g.
+                after a WS reconnect) gets the latest config
+                without an API fallback. The WS-only contract
+                is preserved: the browser still subscribes via
+                WS, the publish still goes via MQTT, the
+                change fan-out still runs through `_emit_change`.
+                We're fixing delivery, not the receiver.
         """
         topic = self._topic
         payload = envelope.to_json()
@@ -276,7 +306,7 @@ class PahoMqttClient:
                 client.loop_stop()
                 client.disconnect()
                 return False
-            result = client.publish(topic, payload.encode(), qos=1)
+            result = client.publish(topic, payload.encode(), qos=1, retain=retain)
             result.wait_for_publish(timeout=5)
             client.loop_stop()
             client.disconnect()
@@ -290,7 +320,11 @@ class PahoMqttClient:
                         result.mid,
                     )
                 return False
-            logger.info("PahoMqttClient confirmed publish to %s", topic)
+            logger.info(
+                "PahoMqttClient confirmed publish to %s retain=%s",
+                topic,
+                retain,
+            )
             return True
         except Exception as e:
             logger.warning("PahoMqttClient publish failed: %s", e)

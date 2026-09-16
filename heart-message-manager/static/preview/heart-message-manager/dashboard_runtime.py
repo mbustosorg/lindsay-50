@@ -90,14 +90,49 @@ def _app_config() -> dict:
 
 
 def _on_envelope_py(raw: Any) -> None:
-    """MQTT-WS shim → MessageManager: forward the envelope string."""
+    """MQTT-WS shim → MessageManager: forward the envelope string.
+
+    Round 8 (live-bug triage): surfaces a browser-console log on every
+    config-envelope arrival so the operator can confirm whether the
+    WS→PyScript→dispatch chain reaches Python at all. Pair these with
+    the `[mm-bridge] config_applied` log inside `_handle_config`'s
+    post-update block: if the former fires but the latter does not,
+    the dispatcher is dropping or mis-routing the envelope. If
+    neither fires, the WS→PyScript bridge is the broken link (broker
+    fan-out drop, WS reconnect race, or PyProxy dispatch failure).
+    """
     try:
+        # Lightweight diagnostic — only logs the first 80 chars of the
+        # envelope plus the parsed type so the operator can grep one
+        # keyword (`[mm-bridge]`) and see every WS-driven update.
+        # PII-safe: only the envelope type field is surfaced, not body.
+        try:
+            import json as _json
+            _env_type = _json.loads(str(raw)).get("type", "?")
+        except Exception:
+            _env_type = "?"
+        log.info("[mm-bridge] envelope_received type=%s", _env_type)
+        try:
+            js.console.log(
+                "[mm-bridge] envelope_received type=" + str(_env_type)
+            )
+        except Exception:
+            pass
+
         mm = getattr(js.window, "_message_manager", None)
         if mm is None:
+            try:
+                js.console.warn("[mm-bridge] _message_manager missing; envelope dropped")
+            except Exception:
+                pass
             return
         mm.dispatch(str(raw))
     except Exception as e:
         log.warning("dispatch failed: %r", e)
+        try:
+            js.console.error("[mm-bridge] dispatch threw: " + str(e))
+        except Exception:
+            pass
 
 
 def _on_status_py(state: Any, detail: Any) -> None:
