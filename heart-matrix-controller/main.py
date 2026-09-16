@@ -43,18 +43,28 @@ from event_log import EventLog
 from status import StatusSnapshot, make_status_writer
 from status_publisher import StatusPublisher
 
+# LINDSAY50_ACTIVE_SHA is the SHA the loader started us with.
+# `check_for_update` reads it; we also include it in status.json.
+_ACTIVE_SHA = os.environ.get("LINDSAY50_ACTIVE_SHA", "")
 # LINDSAY50_REPO_DIR lets us know where the repo lives. Default
 # to the conventional Pi path so a manual `python3 main.py` run
 # works for development.
 _REPO_DIR = Path(os.environ.get("LINDSAY50_REPO_DIR", "/srv/lindsay-50"))
+_STARTED_AT_MONOTONIC = time.monotonic()
+_STARTED_AT_ISO = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()) or ""
 
 
-def _resolve_active_sha() -> str:
+def _resolve_active_sha_for_status() -> str:
     """Best-effort resolve the working tree's HEAD SHA via git.
 
-    Returns the empty string if git is missing or the lookup fails
-    (e.g. running from a non-git directory). Never raises — the
-    status snapshot must build even when git is unavailable.
+    Used ONLY by `_build_status_snapshot` as a fallback when the
+    loader-supplied `LINDSAY50_ACTIVE_SHA` env var is empty
+    (e.g. an operator ran `python3 main.py` directly without going
+    through loader.py). The canonical `_ACTIVE_SHA` used by
+    `check_for_update.py` is NOT affected — it stays at the empty
+    string in that case, which is the honest signal that no loader
+    flow has run. Never raises — the status snapshot must build even
+    when git is unavailable.
     """
     try:
         import subprocess
@@ -66,15 +76,6 @@ def _resolve_active_sha() -> str:
         ).strip()
     except Exception:
         return ""
-
-
-# LINDSAY50_ACTIVE_SHA — kept for status snapshot compatibility
-# (the Flask admin UI surfaces it on the Sign Health section).
-# Falls back to the working tree's HEAD when unset, which is the
-# operator's typical state after `setup-pi.sh`.
-_ACTIVE_SHA = os.environ.get("LINDSAY50_ACTIVE_SHA") or _resolve_active_sha()
-_STARTED_AT_MONOTONIC = time.monotonic()
-_STARTED_AT_ISO = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()) or ""
 
 
 def _on_change():
@@ -92,6 +93,70 @@ def _on_change():
     return None
 
 
+def _on_check_for_update() -> None:
+    """Handle a `command=check-for-update` envelope.
+
+    Compares the SHA the loader started us with (LINDSAY50_ACTIVE_SHA)
+    to Flask's expected SHA. On mismatch, `os.execvpe`s into the loader
+    — the loader then stages the new SHA, probes via status.json,
+    swaps, and execs us again with a fresh env. Same env vars, new
+    SHA. No MQTT logic needed in the loader.
+    """
+    from check_for_update import check_for_update as _cfu
+
+    _cfu(
+        api_url=cfg.MESSAGES_API_URL,
+        api_key=cfg.API_SECRET_KEY,
+    )
+
+
+def _register_command_handlers(manager: "MessageManager") -> None:
+    """Wire the four command-action handlers into the manager.
+
+    Issue #51: register `force-upgrade`, `restart`, `shutdown`, and
+    (for transitional compatibility) `check-for-update` via the new
+    `MessageManager.register_handler(action, fn)` registry. Each
+    handler is a zero-arg callable; the dispatcher catches and logs
+    any exception so a faulty handler never breaks the paho loop.
+
+    The four handlers live in two modules:
+      - `check_for_update.check_for_update` — legacy, retained.
+      - `command_handlers.{force_upgrade,restart,shutdown}` — new.
+
+    Import is local because `command_handlers` is a sibling module
+    that pulls in `subprocess` / `os.execvpe` only on the Pi — the
+    browser preview's `MessageManager` doesn't need them and we want
+    to keep that surface area clean.
+    """
+    from check_for_update import check_for_update as _cfu
+    from command_handlers import force_upgrade, restart, shutdown
+
+    def _force_upgrade() -> None:
+        force_upgrade()
+
+    def _restart() -> None:
+        restart()
+
+    def _shutdown() -> None:
+        shutdown()
+
+    def _check_for_update() -> None:
+        _cfu(
+            api_url=cfg.MESSAGES_API_URL,
+            api_key=cfg.API_SECRET_KEY,
+        )
+
+    manager.register_handler("force-upgrade", _force_upgrade)
+    manager.register_handler("restart", _restart)
+    manager.register_handler("shutdown", _shutdown)
+    # `check-for-update` registration is RETAINED (transitional
+    # compat — the dispatcher also honors the v2
+    # `on_check_for_update` kwarg as a fallback for any pre-#51 Pi
+    # build that never reached this `register_handler` call).
+    manager.register_handler("check-for-update", _check_for_update)
+    logging.info("Registered command handlers: force-upgrade, restart, shutdown, check-for-update")
+
+
 # Build the manager first — the coordinator needs it as a constructor
 # arg, and the manager doesn't depend on the display.
 manager = MessageManager(
@@ -99,7 +164,15 @@ manager = MessageManager(
     config_api_url=cfg.CONFIG_API_URL,
     api_key=cfg.API_SECRET_KEY,
     on_change=_on_change,
+    on_check_for_update=_on_check_for_update,
 )
+
+# Wire the post-#51 command handlers (force-upgrade, restart, shutdown)
+# alongside the legacy check-for-update path. The dispatcher honors
+# BOTH the registry AND the `on_check_for_update` kwarg, so a
+# transitional period where one or the other is wired still routes
+# correctly.
+_register_command_handlers(manager)
 
 asyncio.run(manager.seed())
 
@@ -223,10 +296,13 @@ def _build_status_snapshot() -> StatusSnapshot:
     for the 7-char truncation).
     """
     now_monotonic = time.monotonic()
+    # Loader-supplied SHA is authoritative; fall back to git HEAD only
+    # for the manual-run case (no LINDSAY50_ACTIVE_SHA env var).
+    active_sha = _ACTIVE_SHA or _resolve_active_sha_for_status()
     return StatusSnapshot(
         schema_version=1,
-        active_sha=_ACTIVE_SHA,
-        short_sha=short_sha(_ACTIVE_SHA),
+        active_sha=active_sha,
+        short_sha=short_sha(active_sha),
         started_at=_STARTED_AT_ISO,
         updated_at=time.strftime("%Y-%m-%dT%H:%M:%S%z", time.localtime()) or "",
         uptime_seconds=int(now_monotonic - _STARTED_AT_MONOTONIC),

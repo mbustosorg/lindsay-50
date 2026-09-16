@@ -3,8 +3,11 @@
 #
 # Fresh-clones (or refreshes) the lindsay-50 repo at /srv/lindsay-50,
 # installs system + Python deps, copies settings.toml from the existing
-# /home/mauricio/lindsay-50 install if present, and installs the
-# systemd unit. To pick up new commits later, re-run this script.
+# /home/mauricio/lindsay-50 install if present, creates the `current/`
+# symlink the auto-upgrade loader requires, and installs the systemd
+# unit. To pick up new commits later, re-run this script (or rely on
+# the auto-upgrade machinery in heart-matrix-controller/loader.py to
+# pull them in via MQTT).
 #
 # Usage (as root on the Pi):
 #   sudo /srv/lindsay-50/scripts/setup-pi.sh
@@ -13,6 +16,7 @@
 #   - apt packages: skipped if already installed
 #   - pip (rgbmatrix C build): skipped if rgbmatrix is already importable
 #   - repo: re-runs `git fetch && git reset --hard origin/<branch>` to grab latest
+#   - current/ symlink: `ln -sfn . current` always points at the working tree
 #   - settings.toml: only copied if missing at the canonical path
 #   - systemd unit: overwritten if changed
 #
@@ -111,7 +115,28 @@ if [ -d "$REPO_DIR/.git" ]; then
 else
     echo "==> setup-pi: cloning $REPO_URL to $REPO_DIR"
     git clone "$REPO_URL" "$REPO_DIR"
+    cd "$REPO_DIR"
 fi
+
+# The auto-upgrade machinery (heart-matrix-controller/loader.py) reads
+# "$REPO_DIR/current" as the symlink that names the working tree it
+# should exec — the main repo on first install, or a v-<sha>/ worktree
+# after a successful upgrade. We start by pointing `current` at `.`
+# (this very clone) and let `loader.atomic_swap` redirect it after a
+# staged-and-probed upgrade. `ln -sfn` is idempotent: re-runs that
+# happen to land on a stale `current → v-<sha>` worktree get a clean
+# baseline. `cd` was already done above; `.` resolves to $REPO_DIR.
+ln -sfn . current
+
+# Install the post-checkout hook so new worktrees (created by the
+# loader's `git worktree add v-<sha> <target>` calls) inherit
+# settings.toml. The hook copies the .gitignore'd settings.toml
+# from the main checkout into the new worktree via
+# scripts/sync_settings.sh. Without it, an upgraded worktree would
+# have no MQTT creds and the loader's `execvpe main.py` would crash
+# at config_reader.get_config() time. Idempotent.
+mkdir -p "$REPO_DIR/.git/hooks"
+ln -sfn "$REPO_DIR/hooks/post-checkout" "$REPO_DIR/.git/hooks/post-checkout"
 
 # ---------------------------------------------------------------------------
 # Phase 4: settings.toml — copy from old install, or hard-stop

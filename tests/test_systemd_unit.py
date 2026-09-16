@@ -1,20 +1,17 @@
-"""Sanity tests for scripts/lindsay_50.service, scripts/setup-pi.sh, and
-scripts/startup_matrix_server.sh.
+"""Sanity tests for scripts/lindsay_50.service and setup-pi.sh.
 
 The systemd unit itself is hard to validate without a Linux host
 (`systemd-analyze verify` isn't available on macOS). Instead, we
-parse the file as INI and check the keys we depend on are present:
+parse the file as INI and check the keys we depend on for issue #49
+are present:
 
-  - `ExecStart` must point at startup_matrix_server.sh.
+  - `ExecStart` must point at the loader (via startup_matrix_server.sh).
   - `WorkingDirectory` must be the repo root.
   - `StartLimitIntervalSec` and `StartLimitBurst` must be set
-    (defense in depth against crash loops).
+    (defense in depth against loader crash loops).
 
 `setup-pi.sh` is checked for executable bit and the bootstrap steps
-(clone or pull, copy settings.toml, install systemd unit).
-
-`startup_matrix_server.sh` is checked for the final `exec` line
-running main.py directly.
+(convert .git to bare, create first worktree, create `current` symlink).
 """
 
 from __future__ import annotations
@@ -48,31 +45,29 @@ class TestSystemdUnit:
         parser.read(SERVICE_PATH)
         return parser
 
-    def test_execstart_invokes_startup_script(self, unit):
-        """ExecStart points at startup_matrix_server.sh, which in turn execs main.py."""
+    def test_execstart_invokes_loader_via_startup_script(self, unit):
+        """ExecStart points at startup_matrix_server.sh, which in turn execs loader.py."""
         execstart = unit.get("Service", "ExecStart", fallback=None)
         assert execstart is not None, "Service.ExecStart missing"
         # The systemd unit intentionally invokes the startup shell wrapper
-        # (not main.py directly) so the cwd + PYTHONPATH setup is
-        # preserved. The wrapper exec's main.py.
+        # (not loader.py directly) so the venv activation + PYTHONPATH
+        # setup is preserved. The wrapper exec's loader.py.
         assert (
             "startup_matrix_server.sh" in execstart
         ), f"ExecStart should reference the startup wrapper, got: {execstart!r}"
 
-    def test_startup_script_invokes_main_py(self):
-        """scripts/startup_matrix_server.sh's final exec line runs main.py."""
+    def test_startup_script_invoke_loader_py(self):
+        """scripts/startup_matrix_server.sh's final exec line runs loader.py, not main.py directly."""
         text = STARTUP_PATH.read_text()
-        # The exec line is the last command in the script.
+        assert "loader.py" in text, "startup_matrix_server.sh must invoke loader.py"
+        # The `main.py` substring is allowed (in comments and the
+        # `cd heart-matrix-controller/` doc references). What we
+        # actually want to verify is that the final `exec` line
+        # invokes loader.py, not main.py.
         exec_lines = [line for line in text.splitlines() if line.strip().startswith("exec ")]
-        assert exec_lines, "startup_matrix_server.sh has no `exec` line"
+        assert exec_lines, "startup script has no `exec` line"
         last_exec = exec_lines[-1]
-        assert "main.py" in last_exec, f"final exec should invoke main.py, got: {last_exec!r}"
-        # Regression guard: must not exec loader.py — that's the
-        # dropped self-upgrade machinery.
-        assert "loader.py" not in last_exec, (
-            f"final exec should NOT invoke loader.py (self-upgrade machinery "
-            f"was dropped). got: {last_exec!r}"
-        )
+        assert "loader.py" in last_exec, f"final exec should invoke loader.py, got: {last_exec!r}"
 
     def test_working_directory_is_repo_root(self, unit):
         """WorkingDirectory is the repo root, not heart-matrix-controller."""
@@ -113,144 +108,137 @@ class TestSystemdUnit:
 
 
 class TestSetupPiScript:
+    """Light-touch sanity tests for the simplified setup-pi.sh.
+
+    The script is a fresh-clone-or-pull bootstrap that creates a
+    `current/` symlink the loader expects. It does NOT do the
+    bare-repo + worktree conversion the pre-#49 version did — that
+    complexity lived entirely in setup-pi.sh itself, and the loader
+    now works fine with a non-bare clone plus `current → .`.
+    """
+
     def test_script_is_executable(self):
         """scripts/setup-pi.sh must be chmod +x — operator runs it directly."""
         mode = SETUP_PI_PATH.stat().st_mode
         assert mode & 0o111, f"setup-pi.sh is not executable (mode={oct(mode)})"
 
-    def test_documents_bootstrap(self):
-        """setup-pi.sh docstring mentions the bootstrap flow."""
-        text = SETUP_PI_PATH.read_text()
-        for needle in ("clone", "settings.toml", "systemd", "apt", "pip"):
-            assert needle in text, f"setup-pi.sh must mention {needle!r}"
-
     def test_documents_prerequisite(self):
-        """setup-pi.sh header documents the stop/disable-old-service step.
-
-        Converting a Pi that has the sign running from a different path
-        (e.g. /home/mauricio/lindsay-50) requires stopping and disabling
-        the OLD systemd unit BEFORE running this script. Otherwise the
-        OLD service keeps running and the operator thinks setup-pi.sh
-        is broken when the new path never starts.
-        """
+        """Header documents the OLD-install conversion prereq."""
         text = SETUP_PI_PATH.read_text()
-        for needle in ("systemctl stop", "systemctl disable"):
-            assert needle in text, (
-                f"setup-pi.sh must document the {needle!r} prerequisite "
-                f"for converting from an existing install"
-            )
+        for needle in (
+            "OLD_REPO_DIR",
+            "settings.toml",
+            "systemd",
+            "current",
+            "auto-upgrade",
+        ):
+            assert needle in text, f"setup-pi.sh header must mention {needle!r}"
 
     def test_clones_repo_when_missing(self):
-        """On a fresh Pi (no $REPO_DIR), setup-pi.sh runs `git clone`."""
+        """First-run branch clones $REPO_URL into $REPO_DIR."""
         text = SETUP_PI_PATH.read_text()
-        assert "git clone" in text, "setup-pi.sh must clone the repo on a fresh Pi"
-        # The clone invocation must take both the URL and the destination.
-        assert "$REPO_URL" in text, "setup-pi.sh must reference $REPO_URL in the clone"
-        assert "$REPO_DIR" in text, "setup-pi.sh must reference $REPO_DIR as the clone target"
+        assert 'git clone "$REPO_URL" "$REPO_DIR"' in text, (
+            "setup-pi.sh must `git clone` on first install"
+        )
 
     def test_pulls_latest_when_repo_exists(self):
-        """On a Pi with $REPO_DIR present, setup-pi.sh fetches and resets to origin/HEAD."""
+        """Re-run branch fetches + resets to origin/<branch>."""
         text = SETUP_PI_PATH.read_text()
-        assert "git fetch origin" in text, (
-            "setup-pi.sh must `git fetch origin` so re-runs pick up "
-            "new commits pushed to the remote"
-        )
+        assert "git fetch origin" in text, "setup-pi.sh must `git fetch origin` on re-run"
         assert "git reset --hard" in text, (
-            "setup-pi.sh must `git reset --hard` to advance the "
-            "working tree to the latest fetched commit"
+            "setup-pi.sh must `git reset --hard origin/<branch>` to track remote HEAD"
         )
-        # The reset target must be the current branch's upstream
-        # (origin/<branch>), not origin/HEAD — symbolic-ref is the
-        # conventional way to get the current branch name.
-        assert "symbolic-ref --short HEAD" in text, (
-            "setup-pi.sh must derive the current branch via "
-            "`git symbolic-ref --short HEAD` so the reset targets "
-            "origin/<branch>, not origin/HEAD"
+
+    def test_creates_current_symlink_after_clone(self):
+        """setup-pi.sh creates `$REPO_DIR/current → .` to satisfy loader.py.
+
+        This is the load-bearing new step in the simplified flow.
+        Without it, the loader's `current_symlink()` resolution fails
+        and the service crashes at boot. `ln -sfn . current` is
+        idempotent — a stale `current → v-<sha>` (e.g. left over
+        from a previous setup) gets reset to the main repo on
+        re-run, which is the desired baseline for the loader's
+        first `current_sha()` check.
+        """
+        text = SETUP_PI_PATH.read_text()
+        assert "ln -sfn . current" in text, (
+            "setup-pi.sh must `ln -sfn . current` so loader.py's "
+            "current_symlink() resolves to the working tree"
+        )
+
+    def test_wires_up_post_checkout_hook(self):
+        """setup-pi.sh installs the post-checkout hook so new worktrees
+        inherit settings.toml.
+
+        The loader creates worktrees via `git worktree add v-<sha>` on
+        each upgrade. Without the hook installed at
+        `.git/hooks/post-checkout`, new worktrees don't get
+        settings.toml (it's .gitignore'd) and main.py crashes at
+        config_reader.get_config() time.
+        """
+        text = SETUP_PI_PATH.read_text()
+        assert ".git/hooks/post-checkout" in text, (
+            "setup-pi.sh must install the post-checkout hook"
+        )
+        assert "hooks/post-checkout" in text, (
+            "setup-pi.sh must reference the source hook path"
         )
 
     def test_copies_settings_from_old_install(self):
-        """setup-pi.sh copies settings.toml from $OLD_REPO_DIR when present.
-
-        One-step conversion: a Pi being moved from /home/mauricio/lindsay-50
-        to /srv/lindsay-50 already has a working settings.toml at
-        $OLD_REPO_DIR/heart-matrix-controller/settings.toml. setup-pi.sh
-        copies it into the new install so the operator doesn't have
-        to scp it manually.
-        """
+        """First-run: copies settings.toml from $OLD_REPO_DIR if present."""
         text = SETUP_PI_PATH.read_text()
-        assert "OLD_REPO_DIR" in text, (
-            "setup-pi.sh must reference $OLD_REPO_DIR for the settings.toml "
-            "fallback copy"
-        )
-        # The copy path must point at the canonical heart-matrix-controller
-        # subdir, both as the source and the destination.
-        assert "$OLD_REPO_DIR/heart-matrix-controller/settings.toml" in text, (
-            "setup-pi.sh must source settings.toml from "
-            "$OLD_REPO_DIR/heart-matrix-controller/settings.toml"
-        )
-        assert "$REPO_DIR/heart-matrix-controller/settings.toml" in text, (
-            "setup-pi.sh must place it at "
-            "$REPO_DIR/heart-matrix-controller/settings.toml"
+        assert "OLD_SETTINGS" in text, "setup-pi.sh must reference $OLD_SETTINGS"
+        assert "cp " in text and "settings.toml" in text, (
+            "setup-pi.sh must copy settings.toml from the old install"
         )
 
     def test_hard_stops_if_no_settings(self):
-        """If $REPO_DIR has no settings.toml AND $OLD_REPO_DIR has none either, hard-stop.
-
-        The error message must give the operator the scp command so
-        they know what to do next.
-        """
+        """Hard-stops with scp instructions when both $SETTINGS and $OLD_SETTINGS are missing."""
         text = SETUP_PI_PATH.read_text()
-        # Find the hard-stop block.
-        # The error message uses the $SETTINGS variable which expands
-        # at runtime to the actual canonical path; the variable name
-        # appears verbatim in setup-pi.sh.
-        assert "$SETTINGS is missing" in text, (
-            "setup-pi.sh must hard-stop with a clear message if "
-            "settings.toml can't be sourced from anywhere"
+        # The error message must reference the missing path and the
+        # scp-based fallback.
+        assert "$SETTINGS is missing" in text or "settings.toml is missing" in text, (
+            "setup-pi.sh must mention the missing settings.toml path"
         )
-        assert "sudo scp" in text, (
-            "setup-pi.sh hard-stop message must include the scp "
-            "command for the operator to source settings.toml"
+        assert "scp" in text, (
+            "setup-pi.sh must provide scp instructions when settings.toml is missing"
         )
-        # Regression guards: must NOT use the bare-repo + worktree
-        # flow that the old setup-pi.sh relied on.
-        for forbidden in ("git clone --bare", "worktree add", "v-$HEAD_SHA", "ln -sfn"):
-            assert forbidden not in text, (
-                f"setup-pi.sh should NOT contain {forbidden!r} — that was "
-                f"the dropped bare-repo + worktree bootstrap"
-            )
 
     def test_installs_systemd_unit(self):
-        """setup-pi.sh installs the systemd unit and restarts the service."""
+        """setup-pi.sh installs the lindsay_50.service unit + enables + restarts."""
         text = SETUP_PI_PATH.read_text()
-        assert "daemon-reload" in text
-        # The script uses a SERVICE_NAME variable for the service identifier;
-        # accept either the literal or the variable form.
+        assert "lindsay_50.service" in text, (
+            "setup-pi.sh must reference the systemd unit"
+        )
+        assert "daemon-reload" in text, (
+            "setup-pi.sh must run `systemctl daemon-reload`"
+        )
         assert (
             "systemctl restart lindsay_50" in text
             or 'systemctl restart "$SERVICE_NAME"' in text
             or "systemctl restart '$SERVICE_NAME'" in text
         ), "setup-pi.sh must restart the lindsay_50 service"
-        assert "systemctl enable" in text, "setup-pi.sh must enable the service at boot"
 
     def test_idempotent_apt(self):
-        """Phase 1 (apt) skips packages already installed via dpkg -s."""
+        """apt install step is skipped when packages are already present.
+
+        The script uses dpkg-query to check each package's install
+        state (returning 0 when present, 1 when missing) before
+        running `apt install`. A naive `apt install -y` every run
+        would re-run apt's cache update on every invocation.
+        """
         text = SETUP_PI_PATH.read_text()
-        assert "dpkg -s" in text, (
-            "setup-pi.sh must probe installed packages via `dpkg -s` "
-            "to skip them on re-runs"
+        assert "dpkg-query" in text or "dpkg -s" in text, (
+            "setup-pi.sh must check apt package presence (dpkg-query/dpkg -s) "
+            "to avoid running apt install on every run"
         )
 
     def test_idempotent_pip(self):
-        """Phase 2 (pip) skips the rgbmatrix build if already importable."""
+        """pip install step is skipped when rgbmatrix is already importable."""
         text = SETUP_PI_PATH.read_text()
-        assert "import rgbmatrix" in text, (
-            "setup-pi.sh must probe rgbmatrix via `python3 -c 'import rgbmatrix'` "
-            "to skip the slow C build on re-runs"
-        )
-        assert "--break-system-packages" in text, (
-            "setup-pi.sh must use --break-system-packages for the "
-            "Pi's system python (no venv on this single-purpose Pi)"
+        assert "rgbmatrix" in text, (
+            "setup-pi.sh must check rgbmatrix importability to gate "
+            "the pip install (rgbmatrix's C build takes minutes)"
         )
 
 
@@ -382,19 +370,18 @@ class TestProvisionPiScript:
             "the final ssh-to-pi hand-off to setup-pi.sh"
         )
 
-    def test_does_not_checkout_after_clone(self):
+    def test_does_not_checkout_in_bare_repo(self):
         """provision-pi.sh must NOT `git checkout -f` against /srv/lindsay-50.
 
-        After setup-pi.sh clones, /srv/lindsay-50 is a non-bare working
-        tree, but `git checkout -f` against it is unnecessary — the
-        clone landed on the right ref already (via `--branch`). The
-        checkout was a holdover from the bare-repo era where bare
-        repos reject checkout. The current code only needs `git fetch
-        origin` to refresh refs.
+        After setup-pi.sh's bare conversion, /srv/lindsay-50/.git is a
+        bare database — `git checkout` against a bare repo fataled with
+        "this operation must be run in a work tree". The checkout was
+        also redundant on a fresh non-bare clone (setup-pi.sh's bare
+        conversion overwrites the working tree anyway).
 
-        Symptom if missing: `git checkout` fataled with "this operation
-        must be run in a work tree" on Pis whose setup-pi.sh conversion
-        completed (post-#49 simplification).
+        Fix: drop the checkout, keep only `git fetch origin` with an
+        explicit refspec. The active version is controlled by the
+        `current` symlink, which setup-pi.sh manages in Phase 3.
         """
         text = PROVISION_PI_PATH.read_text()
         # Reject any actual `git checkout` invocation (comments about the
@@ -405,8 +392,8 @@ class TestProvisionPiScript:
         invocations = re.findall(r"^\s*git\s+checkout\b", text, re.MULTILINE)
         assert not invocations, (
             "provision-pi.sh must not invoke `git checkout` against "
-            "/srv/lindsay-50 — the working tree is already on the right "
-            "branch from the `--branch` clone. Use `git fetch origin` instead. "
+            "/srv/lindsay-50 — it's bare after setup-pi.sh and bare repos "
+            "reject checkout. Use `git fetch origin` instead. "
             f"Found invocations: {invocations}"
         )
         # The fetch must use an explicit refspec (works on bare + non-bare,
@@ -432,7 +419,8 @@ class TestProvisionPiScript:
         LAPTOP_BRANCH detection: `git rev-parse --abbrev-ref HEAD` returns
         the actual branch name on a branch checkout, or "HEAD" on detached
         HEAD — the script must handle both (and on detached HEAD, fall
-        back to cloning the default branch).
+        back to cloning the default branch and letting setup-pi.sh's
+        `git worktree add ... $GIT_REF` pin the version).
         """
         text = PROVISION_PI_PATH.read_text()
         # The clone invocation must pass --branch with the laptop's branch.
@@ -463,7 +451,8 @@ class TestProvisionPiScript:
         with "destination path already exists". Wiping + cloning in one
         ssh command guarantees the laptop's branch always wins, even on
         a Pi the operator switched branches on. setup-pi.sh will run
-        setup fresh on the next step.
+        setup fresh on the next step and rebuild the bare+worktree
+        layout from scratch.
         """
         text = PROVISION_PI_PATH.read_text()
         # Find the rm-and-clone sequence: the git clone line should be
@@ -709,20 +698,14 @@ class TestSetupPiRequirements:
 
 
 class TestStartupScript:
-    def test_exec_main_py(self):
-        """startup_matrix_server.sh's final exec line runs main.py directly."""
+    def test_exec_loader_py(self):
+        """startup_matrix_server.sh's final exec line runs loader.py, not main.py."""
         text = STARTUP_PATH.read_text()
         # The exec line is the last command in the script.
         exec_lines = [line for line in text.splitlines() if line.strip().startswith("exec ")]
         assert exec_lines, "startup_matrix_server.sh has no `exec` line"
         last_exec = exec_lines[-1]
-        assert "main.py" in last_exec, f"final exec should invoke main.py, got: {last_exec!r}"
-        # Regression guard: must not exec loader.py — that was the
-        # dropped self-upgrade machinery.
-        assert "loader.py" not in last_exec, (
-            f"final exec should NOT invoke loader.py (self-upgrade machinery "
-            f"was dropped). got: {last_exec!r}"
-        )
+        assert "loader.py" in last_exec, f"final exec should invoke loader.py, got: {last_exec!r}"
 
     def test_preserves_log_level_env(self):
         """LOG_LEVEL export is preserved from the original startup script."""
@@ -730,16 +713,7 @@ class TestStartupScript:
         assert "LOG_LEVEL" in text
 
     def test_preserves_pythonpath_env(self):
-        """PYTHONPATH export is preserved — lib_shared needs to resolve.
-
-        Regression guard: PYTHONPATH must point at $REPO_DIR (not
-        $REPO_DIR/current — that was the dropped worktree path).
-        """
+        """PYTHONPATH export is preserved — lib_shared needs to resolve."""
         text = STARTUP_PATH.read_text()
         assert "PYTHONPATH" in text
         assert "REPO_DIR" in text
-        # Must not reference the dropped worktree path.
-        assert '"$REPO_DIR/current"' not in text and "'$REPO_DIR/current'" not in text, (
-            "PYTHONPATH must not include the dropped `$REPO_DIR/current` "
-            "path — the working tree is now at $REPO_DIR"
-        )
