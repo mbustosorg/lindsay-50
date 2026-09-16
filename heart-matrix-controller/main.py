@@ -188,6 +188,7 @@ _mqtt_client = PahoMqttClient(
 )
 logging.info("Starting MQTT client at boot...")
 _mqtt_client.start()
+logging.info("auto-upgrade smoke test marker (commit %s)", _ACTIVE_SHA or "(unresolved)")
 
 
 display = MatrixDisplay()
