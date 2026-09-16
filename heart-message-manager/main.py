@@ -7,11 +7,13 @@ publishes to Adafruit IO, and serves the admin UI.
 from __future__ import annotations
 
 import functools
+import hashlib
 import html
 import json
 import logging
 import threading
 import uuid
+from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import sys
@@ -156,6 +158,13 @@ def _on_status_payload(raw_payload: str) -> None:
     and dropped (the store is not replaced). Required-keys list lives
     in `lib_shared.sign_status.REQUIRED_SNAPSHOT_KEYS` (one source
     of truth for the snapshot schema).
+
+    Issue #71: after a successful in-memory update, the validated
+    payload is appended to the `sign_status_log` SQLite table so
+    Flask can recover the Pi's last-known state on the next restart.
+    SQLite failures are swallowed (logged WARN, WS path keeps
+    working) — persistence is best-effort diagnostic, not a
+    correctness gate.
     """
     try:
         parsed = json.loads(raw_payload)
@@ -187,8 +196,79 @@ def _on_status_payload(raw_payload: str) -> None:
             exc,
         )
         return
+    # Persist a copy to sign_status_log so the next Flask restart can
+    # re-hydrate the in-memory store. Source=received_at_iso is the
+    # wall-clock time Flask accepted the payload (independent of the
+    # snapshot's own `updated_at`, which is the Pi's wall-clock).
+    # `received_at_wallclock()` is guaranteed non-None after a
+    # successful `latest_status.update()` (it sets it inside the same
+    # lock acquisition), but Pyright doesn't know that — coerce to
+    # str explicitly so we don't pass None through.
+    received_at_iso = str(latest_status.received_at_wallclock() or "")
+    try:
+        sqlite.put_last_status_payload(json.dumps(parsed), received_at_iso)
+    except Exception as exc:
+        logger.warning(
+            "[flask] _on_status_payload: sign_status_log insert failed (continuing): %s",
+            exc,
+        )
     logger.debug(
         "[flask] _on_status_payload: stored snapshot updated_at=%s",
+        parsed.get("updated_at"),
+    )
+
+
+def _restore_last_known_status() -> None:
+    """Re-hydrate `latest_status` from sign_status_log on Flask startup.
+
+    Reads the most-recent row, re-validates against
+    REQUIRED_SNAPSHOT_KEYS via the SAME `latest_status.update(...)`
+    code path the WS callback uses, and tags the snapshot
+    `source="persisted"` so the dashboard renders the "Last seen
+    T ago" amber badge until the first live WS message arrives.
+
+    No-op (returns silently) if the table is empty (fresh install,
+    no Pi status messages ever) or the persisted row is malformed.
+    Both are diagnostic-only conditions; failing to restore must
+    not break startup.
+    """
+    try:
+        row = sqlite.get_latest_status_payload()
+    except Exception as exc:
+        logger.warning(
+            "[flask] _restore_last_known_status: SQLite read failed (continuing with empty store): %s",
+            exc,
+        )
+        return
+    if row is None:
+        logger.debug("[flask] _restore_last_known_status: no persisted status row")
+        return
+    received_at, payload_json = row
+    try:
+        parsed = json.loads(payload_json)
+    except (ValueError, TypeError) as exc:
+        logger.warning(
+            "[flask] _restore_last_known_status: malformed persisted JSON (continuing): %s",
+            exc,
+        )
+        return
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "[flask] _restore_last_known_status: persisted payload is not a dict: %r",
+            parsed,
+        )
+        return
+    try:
+        latest_status.update(parsed, source="persisted")
+    except ValueError as exc:
+        logger.warning(
+            "[flask] _restore_last_known_status: store rejected persisted payload: %s",
+            exc,
+        )
+        return
+    logger.info(
+        "[flask] _restore_last_known_status: re-hydrated snapshot received_at=%s updated_at=%s",
+        received_at,
         parsed.get("updated_at"),
     )
 
@@ -232,6 +312,13 @@ _mqtt_client = PahoMqttClient(
     status_topic=_mqtt_status_topic,
     status_dispatch_callback=_on_status_payload,
 )
+# Issue #71: re-hydrate the in-memory LatestSignStatus from the
+# persisted SQLite row BEFORE the MQTT client starts, so the very
+# first /api/sign-status request (from a freshly-loaded browser tab)
+# can already see the Pi's last-known state. The first live WS
+# message that arrives later will flip `source` from "persisted" to
+# "live" automatically — no second-stage bookkeeping needed.
+_restore_last_known_status()
 logger.info("Starting MQTT client at boot...")
 _mqtt_client.start()
 
@@ -950,6 +1037,15 @@ def api_sign_status():
     `state` field — state is browser-side (the Flask store has no
     notion of "live / unknown / offline"; it just holds the latest
     payload).
+
+    Issue #71: a `source` field is now returned alongside
+    `snapshot` and `received_at` — `"live"` when the held snapshot
+    came from the MQTT WS callback, `"persisted"` when it was
+    re-hydrated from the `sign_status_log` SQLite row on Flask
+    startup (broker hasn't said anything new since boot). The
+    dashboard uses this to render the "Last seen T ago" amber
+    badge on the Versions & Config card. Flips back to `"live"`
+    automatically on the first WS message after startup.
     """
     # Module-level `latest_status` was instantiated near the top of
     # this file — it's a `LatestSignStatus` instance, with a lock-
@@ -958,6 +1054,7 @@ def api_sign_status():
         {
             "snapshot": latest_status.snapshot(),
             "received_at": latest_status.received_at_wallclock(),
+            "source": latest_status.source(),
         }
     )
 
@@ -1123,7 +1220,47 @@ def api_s3_object():
 
 
 def _save_and_publish(cfg: SignConfig) -> None:
-    """Save config to SQLite, snapshot S3, publish to Adafruit IO."""
+    """Save config to SQLite, snapshot S3, publish to Adafruit IO.
+
+    Stamps a per-save ``config_sha`` (short SHA-style hash of the
+    pre-stamp config body) and ``updated_at`` ISO timestamp BEFORE
+    persisting, so the Pi and browser can compare their currently-
+    applied config against Flask's saved version (issue #71).
+    The hash is computed against the to_dict() snapshot taken
+    BEFORE the stamp fields are set on the SignConfig instance —
+    otherwise the next to_dict() would echo the field and re-hash
+    to something different. Chicken-and-egg loop avoided.
+    """
+    # Snapshot the body BEFORE stamping so the hash excludes its own value.
+    body_for_hash = cfg.to_dict()
+    body_for_hash.pop("config_sha", None)
+    body_for_hash.pop("updated_at", None)
+    # sort_keys=True + tight separators gives us a deterministic,
+    # content-addressable hash that survives a JSON round-trip.
+    try:
+        canonical_body = json.dumps(body_for_hash, sort_keys=True, separators=(",", ":"))
+    except TypeError as exc:
+        # A real SignConfig always produces JSON-serializable values,
+        # but a malformed test mock (e.g. MagicMock fields) can fall
+        # through here. Falling back to an empty hash keeps the save
+        # path alive — the Pi and browser just see "unknown SHA" and
+        # render the cell in red rather than crashing the dashboard
+        # or refusing to save. The genuine fix is on the test side.
+        logger.warning(
+            "[flask] _save_and_publish: to_dict() returned non-JSON values (%s); "
+            "config_sha will be empty for this save",
+            exc,
+        )
+        canonical_body = "{}"
+    new_sha = _short_sha(
+        hashlib.sha256(canonical_body.encode("utf-8")).hexdigest()
+    )
+    # Now stamp the in-memory SignConfig; the hash is computed against
+    # the prior body, NOT the post-stamp body. The Pi / browser receive
+    # the stamped version (via the MQTT envelope) and can compare it to
+    # what they last applied.
+    cfg.config_sha = new_sha
+    cfg.updated_at = datetime.now().astimezone().isoformat()
     cfg_dict = cfg.to_dict()
     sqlite.put_config(cfg)
     try:
@@ -1132,7 +1269,9 @@ def _save_and_publish(cfg: SignConfig) -> None:
         logger.warning("Config S3 snapshot failed: %s", e)
     logger.info(
         "[flask] _save_and_publish: publishing config envelope "
-        "rotation=%s text=(speed=%d, color=#%06x) pacing=(fade=%s, hold=%s)",
+        "config_sha=%s updated_at=%s rotation=%s text=(speed=%d, color=#%06x) pacing=(fade=%s, hold=%s)",
+        cfg_dict.get("config_sha", ""),
+        cfg_dict.get("updated_at", ""),
         [(e["name"], e["enabled"]) for e in cfg_dict["effects_settings"]["effects"]],
         cfg_dict["text_settings"]["speed"],
         cfg_dict["text_settings"]["color"],
@@ -1379,6 +1518,19 @@ def dashboard():
         sign_name=cfg.sign_settings.sign_name if cfg.sign_settings else "Lindsay's Heart",
         timezone=cfg.sign_settings.timezone,
         format_from_iso=format_from_iso,
+        # Issue #71 — Versions & Config card on the dashboard.
+        # `flask_config_sha` is the per-save content hash stamped by
+        # `_save_and_publish` on every `/settings` POST; empty on a
+        # fresh install with no saves yet (template renders "—").
+        # `deployed_sha_short` (also used in base.html's APP_CONFIG
+        # as `flaskVersion`) is reused for the Browser / Code cell —
+        # the browser runs the same Python as Flask via PyScript, so
+        # Browser / Code === Flask / Code on a fresh load. The
+        # JS-side `sign_status.js` overrides Browser / Code with
+        # `window._loaded_python_short_sha` when set and different
+        # (caches may pin to an older build).
+        flask_config_sha=getattr(cfg, "config_sha", "") or "",
+        deployed_sha_short=_resolve_boot_config().short_sha or "",
     )
 
 
@@ -2198,7 +2350,7 @@ def _mqtt_long_disconnect_ms() -> int:
 
 @app.context_processor
 def _inject_app_config():
-    """Inject `mqtt_ws`, `mqtt`, `config`, and `auth` into every template."""
+    """Inject `mqtt_ws`, `mqtt`, `config`, `auth`, and `version` into every template."""
     return {
         "mqtt_ws": {
             "MQTT_WS_URL": _derive_mqtt_ws_url(),
@@ -2230,6 +2382,27 @@ def _inject_app_config():
         },
         "auth": {
             "API_SECRET_KEY": _cfg.if_exists("API_SECRET_KEY") or "",
+        },
+        # Issue #71 — Versions & Config card. `flaskVersion` is the
+        # running Flask binary's 7-char short SHA (HEROKU_SLUG_COMMIT
+        # preferred, `git rev-parse HEAD` fallback via
+        # `_resolve_boot_config`). `flaskConfigSha` is the per-save
+        # content hash of the most-recent config save (set by
+        # `_save_and_publish`); empty string on a fresh install with
+        # no saves yet. Both are inlined server-side so the dashboard
+        # JS doesn't need a fetch to render the static Flask/Code and
+        # Flask/Config cells — only the Pi/Browser cells need live
+        # updates.
+        "version": {
+            "FLASK_VERSION": _resolve_boot_config().short_sha or "",
+            # `str(...)` coerces a MagicMock-valued test stub into a
+            # JSON-serializable string rather than letting it leak
+            # through the Jinja `| tojson` filter and crash the
+            # page-load jsonify path. Real SignConfig values are
+            # already strings, so this is a no-op in production.
+            "FLASK_CONFIG_SHA": str(
+                getattr(sqlite.get_config(), "config_sha", "") or ""
+            ),
         },
     }
 

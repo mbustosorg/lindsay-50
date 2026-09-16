@@ -141,6 +141,105 @@
        (see static/sign_status.js). The pill renders even before
        the first snapshot arrives — initial state is "Offline"
        with a grey dot. #}
+    {# Issue #71 — Versions & Config card. Sits above the Sign
+       Health card; surfaces code + config drift across Flask /
+       Pi / Browser as a 3-row × 2-column comparison table. Rows
+       = Flask / Pi / Browser; columns = Code / Config. Every cell
+       uses font-mono + the same fixed width so SHAs line up
+       vertically — scanning down a single column tells the
+       operator whether the three surfaces agree on Code (or
+       Config). Per-column disagreement flips the offending cell
+       red (sign_status.js's `applyVersionDriftRender`); empty
+       cells render "—" without red (cold start, not drift).
+
+       Cells:
+         - Flask/Code = data-flask-version (rendered server-side
+           from `deployed_sha_short`, also in window.APP_CONFIG
+           as `flaskVersion`).
+         - Pi/Code = data-sign-status-field="short_sha" (existing
+           field pattern, updated at the 5s status cadence).
+         - Browser/Code = data-browser-version (rendered
+           server-side from `deployed_sha_short`). sign_status.js
+           overrides with window._loaded_python_short_sha if set
+           and different (PyScript cache pin).
+         - Flask/Config = data-flask-config-sha (rendered
+           server-side from `flask_config_sha`, also in
+           window.APP_CONFIG as `flaskConfigSha`).
+         - Pi/Config = data-sign-status-field="applied_config_sha"
+           (new v2 snapshot field, updated at 5s cadence).
+         - Browser/Config = data-browser-config-sha, written by
+           sign_status.js from `App.getLastConfigReceipt().sha`
+           on every on_change fan-out. #}
+    <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6 lg:flex-1 lg:flex lg:flex-col">
+      <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
+        <h3 class="font-heading font-semibold text-dark text-lg flex items-center gap-2">
+          <span>🧭</span> Versions &amp; Config
+        </h3>
+        {# Persisted-row badge — issue #71. Shown when /api/sign-status
+           returned source="persisted" (the in-memory snapshot was
+           re-hydrated from sign_status_log on Flask startup, no
+           fresh WS message since). sign_status.js's
+           `applyPersistenceBadge` controls visibility + the amber
+           styling. #}
+        <span data-version-drift-persisted-badge
+              style="display: none;"
+              class="px-3 py-1.5 rounded-full bg-amber-100 text-amber-800 text-xs font-semibold"
+              title="Snapshot loaded from sign_status_log on Flask startup — broker hasn't sent a fresh message yet">
+          Last seen <span data-version-drift-persisted-age>—</span> ago
+        </span>
+      </div>
+      <p class="text-sm text-slate-500 mb-4">
+        Code and config drift across Flask / Pi / Browser. SHAs are
+        7-char short hex (the same visual style for both). When
+        three cells in a column disagree, the offending cell flips
+        red — empty cells mean "we don't know yet" and stay neutral.
+      </p>
+      <table class="w-full" data-version-drift-table>
+        <thead>
+          <tr class="text-xs uppercase tracking-wider text-slate-500">
+            <th class="text-left px-4 py-2 w-32"></th>
+            <th class="text-left px-4 py-2 font-medium">Code</th>
+            <th class="text-left px-4 py-2 font-medium">Config</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-indigo-50">
+          <tr>
+            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Flask</th>
+            <td class="px-4 py-2 font-mono text-sm w-24"
+                data-version-drift-cell="flask-code"
+                data-flask-version="{{ deployed_sha_short or '' }}">
+              {{ deployed_sha_short or "—" }}
+            </td>
+            <td class="px-4 py-2 font-mono text-sm w-24"
+                data-version-drift-cell="flask-config"
+                data-flask-config-sha="{{ flask_config_sha or '' }}">
+              {{ flask_config_sha or "—" }}
+            </td>
+          </tr>
+          <tr>
+            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Pi</th>
+            <td class="px-4 py-2 font-mono text-sm w-24"
+                data-version-drift-cell="pi-code"
+                data-sign-status-field="short_sha">—</td>
+            <td class="px-4 py-2 font-mono text-sm w-24"
+                data-version-drift-cell="pi-config"
+                data-sign-status-field="applied_config_sha">—</td>
+          </tr>
+          <tr>
+            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Browser</th>
+            <td class="px-4 py-2 font-mono text-sm w-24"
+                data-version-drift-cell="browser-code"
+                data-browser-version="{{ deployed_sha_short or '' }}">
+              {{ deployed_sha_short or "—" }}
+            </td>
+            <td class="px-4 py-2 font-mono text-sm w-24"
+                data-version-drift-cell="browser-config"
+                data-browser-config-sha="">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
     <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 lg:flex-1 lg:flex lg:flex-col">
       <div class="flex items-center justify-between gap-3 mb-3 flex-wrap">
         <h3 class="font-heading font-semibold text-dark text-lg flex items-center gap-2">

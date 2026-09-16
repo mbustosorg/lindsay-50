@@ -50,9 +50,10 @@ class TestStatusSnapshot:
             uptime_seconds=60,
             mqtt_connected=True,
             last_error=None,
+            applied_config_sha="def5678",
         )
         d = snap.to_dict()
-        # The 8 spec keys are present.
+        # The 9 spec keys are present (issue #71 added applied_config_sha).
         expected_keys = {
             "schema_version",
             "active_sha",
@@ -62,6 +63,7 @@ class TestStatusSnapshot:
             "uptime_seconds",
             "mqtt_connected",
             "last_error",
+            "applied_config_sha",
         }
         assert set(d.keys()) == expected_keys
         assert d["active_sha"] == "abc1234"

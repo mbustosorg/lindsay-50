@@ -187,6 +187,14 @@ class MessageManager:
         """
         self._config = SignConfig()
         self._messages = InMemoryMessages(self._config, maxlen=100)
+        # Last config_sha the most-recent config envelope applied
+        # to `self._config` (issue #71). Set in `_handle_config` after
+        # `update_from_dict`; read by `get_last_config_receipt()` (for
+        # the browser's `App.getLastConfigReceipt()`) and by the Pi's
+        # `_build_status_snapshot` to populate
+        # `StatusSnapshot.applied_config_sha`. Empty until the first
+        # config envelope lands (e.g. on the very first WS connect).
+        self._last_applied_config_sha: str = ""
         # Round 4 (queue redesign): FIFO of fresh arrivals that
         # arrived over MQTT but haven't been picked yet. The
         # coordinator's `_pick_next` drains one entry off this
@@ -571,6 +579,16 @@ class MessageManager:
                 "applying raw (no _v2_to_v3 migration runs here — Flask should never publish v2)"
             )
         self._config.update_from_dict(payload or {})
+        # Capture the just-applied config_sha for the next StatusSnapshot
+        # (Pi side) and for `App.getLastConfigReceipt()` (browser side).
+        # We read it from the post-update in-memory SignConfig rather than
+        # the raw payload, so the value is always whatever SignConfig has
+        # accepted — defense-in-depth against a malformed envelope carrying
+        # a `config_sha` field that didn't round-trip. Issue #71: surfaces
+        # drift between Flask's saved version and what the Pi/browser are
+        # actually running. NOT a timestamp — see plan, `applied_config_at`
+        # was rejected as too slippery to define honestly.
+        self._last_applied_config_sha = getattr(self._config, "config_sha", "") or ""
         self._messages._enrich_messages(list(self._messages._msgs))
         post_filters = list(self._config.filters)
         post_suppressed = sum(1 for m in self._messages._msgs if getattr(m, "suppressed", False))
@@ -764,6 +782,28 @@ class MessageManager:
 
     def get_config(self) -> SignConfig:
         return self._config
+
+    def get_last_config_receipt(self) -> dict:
+        """Return the SHA of the most-recent config envelope this
+        MessageManager applied, plus a defensive copy.
+
+        Returns a plain dict (NOT a live reference) so JS-side
+        `App.getLastConfigReceipt()` and PyScript marshalling don't
+        leak PyProxies across runtimes. The shape is
+        ``{"sha": str}`` — no timestamp, by design (issue #71).
+        The "when did we apply it" question is too slippery to
+        define honestly without a persistent per-config record on
+        the Pi/browser.
+
+        Falls back to ``self._config.config_sha`` (the wire-stamped
+        value) when no config envelope has been seen yet (e.g. on
+        the very first WS connect, before any save). Both are
+        empty strings on a fresh install — JS treats that as
+        "we don't know yet" (cold start) and renders "—" with no
+        red highlight.
+        """
+        sha = self._last_applied_config_sha or (getattr(self._config, "config_sha", "") or "")
+        return {"sha": str(sha)}
 
     def get_effects_settings(self) -> EffectsSettings:
         """Live reference to the effects-settings block (rotation + pacing)."""

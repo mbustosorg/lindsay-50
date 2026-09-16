@@ -54,7 +54,15 @@
       messagesApiUrl:   {{ config.MESSAGES_API_URL | tojson }},
       configApiUrl:     {{ config.CONFIG_API_URL | tojson }},
       apiKey:           {{ auth.API_SECRET_KEY | tojson }},
-      mqttLongDisconnectMs: {{ mqtt_ws.MQTT_LONG_DISCONNECT_MS | tojson }}
+      mqttLongDisconnectMs: {{ mqtt_ws.MQTT_LONG_DISCONNECT_MS | tojson }},
+      // Issue #71 — Versions & Config card on the dashboard.
+      // `flaskVersion` is the running Flask binary's 7-char short
+      // SHA; `flaskConfigSha` is the per-save content hash of the
+      // most-recent `/settings` save (empty on a fresh install).
+      // Inlined server-side so the JS doesn't need a fetch to render
+      // the static Flask/Code and Flask/Config cells.
+      flaskVersion:     {{ version.FLASK_VERSION | tojson }},
+      flaskConfigSha:   {{ version.FLASK_CONFIG_SHA | tojson }}
     };
     console.log("[DEBUG base.html] APP_CONFIG =", JSON.stringify(window.APP_CONFIG, null, 2));
   </script>
@@ -92,7 +100,7 @@
     add-sign-status-reports/design.md). The script is a no-op on pages
     that have neither #sign-live-pill nor [data-sign-status-field].
   -->
-  <script src="{{ url_for('static', filename='sign_status.js') }}?v=1"></script>
+  <script src="{{ url_for('static', filename='sign_status.js') }}?v=2"></script>
   <!--
     pi_upgrade_settings.js — Settings-page Pi Upgrade Control section
     (issue #51). Loaded on every authenticated page; the script is a

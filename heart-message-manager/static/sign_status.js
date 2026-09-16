@@ -31,9 +31,9 @@ const UNKNOWN_THRESHOLD_S = 30;
 const RERENDER_INTERVAL_MS = 5000;
 
 // REQUIRED_SNAPSHOT_KEYS mirrors lib_shared.sign_status.REQUIRED_SNAPSHOT_KEYS —
-// both ends validate against the same 8-key set so the wire shape and
+// both ends validate against the same 9-key set so the wire shape and
 // the docs stay in lockstep. If this list changes on the Flask side,
-// mirror it here.
+// mirror it here. v2 / issue #71 adds `applied_config_sha`.
 const REQUIRED_SNAPSHOT_KEYS = [
   "schema_version",
   "active_sha",
@@ -43,6 +43,7 @@ const REQUIRED_SNAPSHOT_KEYS = [
   "uptime_seconds",
   "mqtt_connected",
   "last_error",
+  "applied_config_sha",
 ];
 
 function isValidSnapshot(obj) {
@@ -172,7 +173,15 @@ function applyFieldsRender(snapshot, rendered) {
   const fieldsContainer = document.querySelector("[data-sign-status-fields]");
   const placeholder = document.querySelector("[data-sign-status-placeholder]");
   const degradedBanner = document.querySelector("[data-sign-status-degraded-banner]");
-  if (!fieldsContainer && !placeholder) return; // settings page not loaded
+  // Issue #71: also bail if there are no per-cell slots at all. The
+  // Settings page (`templates/settings.html`) uses a single bare
+  // `[data-sign-status-field="short_sha"]` cell with NO wrapper and
+  // NO placeholder — the prior guard `!fieldsContainer && !placeholder`
+  // would short-circuit before populating that cell. Always write to
+  // any per-field cells that DO exist; the wrapper is purely a
+  // show/hide toggle for the placeholder layout.
+  const hasAnyFieldCell = document.querySelector("[data-sign-status-field]");
+  if (!fieldsContainer && !placeholder && !hasAnyFieldCell) return;
 
   if (rendered.state === "offline" || !snapshot) {
     if (fieldsContainer) fieldsContainer.style.display = "none";
@@ -197,6 +206,11 @@ function applyFieldsRender(snapshot, rendered) {
       ? snapshot.last_error
       : "—",
     received_at_browser: formatBrowserTimestamp(snapshot._receivedAtMs || now),
+    // Issue #71: applied_config_sha is the SHA of the most-recent
+    // config envelope the Pi applied to its in-memory SignConfig.
+    // Empty string on cold start (no envelope yet) — the dashboard
+    // renders that as "—" with no red highlight.
+    applied_config_sha: snapshot.applied_config_sha || "",
   };
   for (const [key, val] of Object.entries(populated)) {
     const el = document.querySelector(`[data-sign-status-field="${key}"]`);
@@ -219,11 +233,150 @@ function applyFieldsRender(snapshot, rendered) {
   }
 }
 
+// -----------------------------------------------------------------------------
+// Versions & Config card (issue #71)
+// -----------------------------------------------------------------------------
+
+// Cell labels — the keys the template emits in `data-version-drift-cell`
+// and the per-column disagreement buckets. Two COLUMNS (code, config),
+// three ROWS (flask, pi, browser). Each column has up to 3 values; if
+// any pair of non-empty values disagrees, every populated cell in that
+// column flips red. Empty ("") cells stay neutral — cold start is not
+// drift.
+const VERSION_DRIFT_COLUMNS = ["code", "config"];
+const VERSION_DRIFT_ROWS = ["flask", "pi", "browser"];
+const VERSION_DRIFT_DASH = "—";
+
+function applyVersionDriftRender(snapshot) {
+  const table = document.querySelector("[data-version-drift-table]");
+  if (!table) return; // page doesn't host the card
+
+  const cfg = window.APP_CONFIG || {};
+
+  // Read the live cell values. The Flask row is static (server-rendered
+  // into the cell text + data-attrs; the JS reads them so the comparison
+  // is from the same source as the rendered text). Pi cells are populated
+  // by `applyFieldsRender` above (writes to [data-sign-status-field]). The
+  // Browser/Code cell is server-rendered to Flask's SHA by default; we
+  // override with `window._loaded_python_short_sha` if the PyScript
+  // runtime has reported a different value (caches may pin to an older
+  // build). The Browser/Config cell is filled by
+  // `applyBrowserConfigReceipt()` on every on_change fan-out.
+  function readCell(row, col) {
+    const el = table.querySelector(
+      `[data-version-drift-cell="${row}-${col}"]`
+    );
+    if (!el) return "";
+    let v = (el.textContent || "").trim();
+    if (v === VERSION_DRIFT_DASH) v = "";
+    return v;
+  }
+
+  // Override Browser/Code if PyScript reported a different loaded SHA.
+  const browserCodeCell = table.querySelector(
+    '[data-version-drift-cell="browser-code"]'
+  );
+  if (browserCodeCell && typeof window._loaded_python_short_sha === "string"
+      && window._loaded_python_short_sha.length > 0) {
+    browserCodeCell.textContent = window._loaded_python_short_sha;
+  }
+
+  const flaskCode = cfg.flaskVersion || readCell("flask", "code");
+  const flaskConfig = cfg.flaskConfigSha || readCell("flask", "config");
+  const piCode = (snapshot && snapshot.short_sha) || readCell("pi", "code");
+  const piConfig =
+    (snapshot && snapshot.applied_config_sha) || readCell("pi", "config");
+  const browserCode = readCell("browser", "code");
+  const browserConfig = readCell("browser", "config");
+
+  const cellsByColumn = {
+    code: { flask: flaskCode, pi: piCode, browser: browserCode },
+    config: { flask: flaskConfig, pi: piConfig, browser: browserConfig },
+  };
+
+  // Per-column red-highlight: if any two populated cells disagree,
+  // every populated cell in that column flips red. Empty cells stay
+  // neutral — cold start, not drift.
+  for (const col of VERSION_DRIFT_COLUMNS) {
+    const vals = cellsByColumn[col];
+    const populated = Object.values(vals).filter((v) => v && v.length > 0);
+    // All populated cells agree iff there's at most one unique value.
+    const allAgree =
+      populated.length === 0 ||
+      populated.every((v) => v === populated[0]);
+    for (const row of VERSION_DRIFT_ROWS) {
+      const el = table.querySelector(
+        `[data-version-drift-cell="${row}-${col}"]`
+      );
+      if (!el) continue;
+      const v = vals[row];
+      const isEmpty = !v || v.length === 0;
+      el.classList.remove("text-red-700", "bg-red-100", "text-slate-700");
+      if (!isEmpty && !allAgree) {
+        el.classList.add("text-red-700", "bg-red-100");
+      } else {
+        // Neutral slate when populated-and-agree OR empty. Empty is
+        // explicitly "we don't know yet" — not drift.
+        el.classList.add("text-slate-700");
+      }
+    }
+  }
+}
+
+// Pull the most-recent browser-applied config_sha from the in-browser
+// MessageManager and write it into the Browser/Config cell. Called on
+// every on_change fan-out (config envelope arrival). Returns a Promise
+// — the caller (sign_status.js's on_change hook) doesn't need to await.
+async function applyBrowserConfigReceipt() {
+  const cell = document.querySelector(
+    '[data-version-drift-cell="browser-config"]'
+  );
+  if (!cell) return;
+  if (typeof window.App === "undefined" || !window.App.getLastConfigReceipt) {
+    return;
+  }
+  try {
+    const receipt = await window.App.getLastConfigReceipt();
+    const sha = (receipt && receipt.sha) || "";
+    if (sha && sha.length > 0) {
+      cell.textContent = sha;
+    } else {
+      cell.textContent = VERSION_DRIFT_DASH;
+    }
+  } catch (e) {
+    console.warn("[sign_status.js] applyBrowserConfigReceipt failed:", e);
+  }
+}
+
+// Persisted-row badge — visible only when /api/sign-status returned
+// source="persisted" (Flask restored from sign_status_log on startup,
+// broker hasn't sent anything new since). Shows "Last seen T ago"
+// in amber. Flips to display:none once a live WS message lands.
+function applyPersistenceBadge(payload) {
+  const badge = document.querySelector("[data-version-drift-persisted-badge]");
+  if (!badge) return;
+  const ageEl = badge.querySelector("[data-version-drift-persisted-age]");
+  if (!payload || payload.source !== "persisted" || !payload.received_at) {
+    badge.style.display = "none";
+    return;
+  }
+  const t = Date.parse(payload.received_at);
+  if (!Number.isFinite(t)) {
+    badge.style.display = "none";
+    return;
+  }
+  badge.style.display = "";
+  if (ageEl) {
+    ageEl.textContent = formatBrowserTimestamp(t) + "";
+  }
+}
+
 function renderAll(snapshot) {
   const now = Date.now();
   const rendered = combinedState(snapshot, now);
   applyPillRender(rendered);
   applyFieldsRender(snapshot, rendered);
+  applyVersionDriftRender(snapshot);
 }
 
 // -----------------------------------------------------------------------------
@@ -232,6 +385,7 @@ function renderAll(snapshot) {
 
 let _latestSnapshot = null;
 let _latestReceivedAt = 0; // browser's clock at moment of receipt
+let _latestStatusSource = ""; // issue #71 — last /api/sign-status source field
 
 function maybeAcceptSnapshot(parsed) {
   if (!isValidSnapshot(parsed)) {
@@ -273,6 +427,11 @@ async function hydrateFromServer() {
       // Only accept if not older than what WS already delivered.
       maybeAcceptSnapshot(payload.snapshot);
     }
+    // Issue #71: persist the source field so applyPersistenceBadge
+    // can render the "Last seen T ago" amber pill until the first
+    // live WS message lands.
+    _latestStatusSource = (payload && payload.source) || "";
+    applyPersistenceBadge(payload);
     // `null` snapshot is expected (Flask hasn't received anything yet) —
     // do NOT replace the in-memory snapshot with null.
   } catch (e) {
@@ -338,6 +497,13 @@ function openStatusWs() {
         return;
       }
       maybeAcceptSnapshot(parsed);
+      // Issue #71: the first live WS message flips source from
+      // "persisted" to "live" — hide the "Last seen T ago" amber
+      // badge. Re-render once more so the badge element updates.
+      if (_latestStatusSource !== "live") {
+        _latestStatusSource = "live";
+        applyPersistenceBadge({ source: "live" });
+      }
     },
     onStatus: (state, detail) => {
       // The WS connection state for the status topic is surfaced
@@ -357,6 +523,17 @@ function init() {
     // Page has no pill or settings slots — no-op. Lets the script
     // be included globally via base.html without side effects.
     return;
+  }
+  // Issue #71: register a change hook so the Browser/Config cell
+  // is repopulated every time a new config envelope lands (the
+  // `_dispatchChange` fan-out from app.js runs after every
+  // MessageManager mutation, including config-envelope apply).
+  // `applyBrowserConfigReceipt` is async — we don't await; the
+  // 5s tick will catch up if the promise hasn't resolved.
+  if (typeof window.App !== "undefined" && typeof window.App.registerOnChange === "function") {
+    window.App.registerOnChange(() => {
+      applyBrowserConfigReceipt();
+    });
   }
   // Render once with the empty snapshot so the placeholder text
   // ("Offline") shows before any fetch or WS resolves.

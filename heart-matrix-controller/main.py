@@ -294,14 +294,17 @@ def _build_status_snapshot() -> StatusSnapshot:
     the `_LAST_TICK_MONOTONIC` global and the `_msgs` deque read were
     dropped too. `short_sha` is derived once at write time from
     `lib_shared.boot_config.short_sha` (the single source of truth
-    for the 7-char truncation).
+    for the 7-char truncation). v2 (issue #71) adds a 9th field,
+    `applied_config_sha`, populated from
+    `MessageManager._last_applied_config_sha` (set by
+    `_handle_config` after the most-recent config envelope applied).
     """
     now_monotonic = time.monotonic()
     # Loader-supplied SHA is authoritative; fall back to git HEAD only
     # for the manual-run case (no LINDSAY50_ACTIVE_SHA env var).
     active_sha = _ACTIVE_SHA or _resolve_active_sha_for_status()
     return StatusSnapshot(
-        schema_version=1,
+        schema_version=2,
         active_sha=active_sha,
         short_sha=short_sha(active_sha),
         started_at=_STARTED_AT_ISO,
@@ -309,6 +312,7 @@ def _build_status_snapshot() -> StatusSnapshot:
         uptime_seconds=int(now_monotonic - _STARTED_AT_MONOTONIC),
         mqtt_connected=_is_mqtt_connected(),
         last_error=None,
+        applied_config_sha=getattr(manager, "_last_applied_config_sha", "") or "",
     )
 
 

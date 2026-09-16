@@ -45,7 +45,13 @@ logger = logging.getLogger(__name__)
 
 # Schema version. Bump on any breaking change to the on-disk shape
 # so old/new readers can detect "I'm seeing a format I don't know".
-SCHEMA_VERSION = 1
+# v2 (issue #71): added `applied_config_sha` — the SHA of the most-
+# recent config envelope the Pi applied to its in-memory SignConfig.
+# Lets the operator's dashboard surface drift between Flask's saved
+# version and what the Pi is actually running. v1 Pis write v1
+# snapshots that the v2 validator (read_status) rejects — auto-
+# upgrade pushes the new binary in <30s so the window is brief.
+SCHEMA_VERSION = 2
 
 # Default throttle interval. SD-card write amplification at 60 Hz
 # would wear the card; 5s is the unified cadence for both the
@@ -70,10 +76,12 @@ class StatusSnapshot:
 
     Final shape (Decision 10): schema_version, active_sha, short_sha,
     started_at, updated_at, uptime_seconds (int), mqtt_connected,
-    last_error. Three previously-published fields (pid,
-    messages_rendered, last_tick_age_ms) have no consumer and were
-    dropped across the whole system — both the `.status.json` file
-    write and the MQTT wire payload use this same field set.
+    last_error. v2 (issue #71) adds `applied_config_sha` — the SHA
+    of the most-recent config envelope the Pi applied. No timestamp
+    field: "when did the Pi apply this" is too slippery to define
+    honestly without a persistent per-config record on the Pi (the
+    value would churn every status tick if we used `now`, or echo
+    Flask's `updated_at` if we used that — neither is honest).
     """
 
     schema_version: int = SCHEMA_VERSION
@@ -84,6 +92,7 @@ class StatusSnapshot:
     uptime_seconds: int = 0
     mqtt_connected: bool = False
     last_error: Optional[str] = None
+    applied_config_sha: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to a plain dict for JSON serialization.

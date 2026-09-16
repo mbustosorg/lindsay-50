@@ -165,6 +165,28 @@ def _create_schema(db: Path) -> None:
                 value TEXT NOT NULL
             )
         """)
+        # sign_status_log: append-only log of every validated
+        # StatusSnapshot Flask has seen over MQTT. The operator
+        # dashboard's "Versions & Config" pill (issue #71) reads
+        # the most-recent row on startup so the in-memory
+        # LatestSignStatus comes up pre-populated and the
+        # `/api/sign-status` endpoint serves the Pi's last-known
+        # state even after Flask restarts. Schema is shaped for a
+        # future ring buffer (autoincrement id + descending
+        # received_at index); the current code only ever reads the
+        # most-recent row, but a future trim can drop old rows
+        # without a migration.
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS sign_status_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                received_at  TEXT NOT NULL,
+                payload_json TEXT NOT NULL
+            )
+        """)
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS sign_status_log_received_at_idx "
+            "ON sign_status_log (received_at DESC)"
+        )
         # Index for time-ordered retrieval
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_received_at " "ON messages(received_at)")
         conn.commit()
@@ -332,6 +354,56 @@ def put_config(cfg: SignConfig) -> None:
     )
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# sign_status_log (Pi status persistence, issue #71)
+# ---------------------------------------------------------------------------
+
+
+def put_last_status_payload(raw_json: str, received_at: str) -> None:
+    """Append a validated StatusSnapshot payload to sign_status_log.
+
+    Always inserts a fresh row — never UPDATES — so the table is an
+    append-only log. Callers always read the most-recent row by
+    received_at; a future ring-buffer trim can drop older rows
+    without a migration (the autoincrement id is monotonic).
+
+    Args:
+        raw_json: the validated, post-Python-roundtrip JSON string
+            that the WS subscriber accepted (NOT the raw MQTT
+            payload — that may have been mutated by ``json.loads``
+            + dict reconstruction before reaching this point).
+        received_at: ISO-8601 wall-clock time at which the payload
+            was received (separate from the snapshot's own
+            ``updated_at`` field, which is the Pi's wall-clock at
+            snapshot-write time).
+    """
+    conn = sqlite3.connect(_db_path())
+    conn.execute(
+        "INSERT INTO sign_status_log (received_at, payload_json) VALUES (?, ?)",
+        (received_at, raw_json),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_latest_status_payload() -> tuple[str, str] | None:
+    """Return (received_at, payload_json) for the most-recent row, or None.
+
+    Most-recent is determined by the descending ``received_at`` index
+    (then by autoincrement id as a tie-breaker for payloads received
+    within the same second). Returns None if the table is empty.
+    """
+    conn = sqlite3.connect(_db_path())
+    row = conn.execute(
+        "SELECT received_at, payload_json FROM sign_status_log "
+        "ORDER BY received_at DESC, id DESC LIMIT 1"
+    ).fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return row[0], row[1]
 
 
 # ---------------------------------------------------------------------------

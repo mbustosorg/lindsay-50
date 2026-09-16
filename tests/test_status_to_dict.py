@@ -22,7 +22,10 @@ from status import StatusSnapshot, read_status
 
 
 class TestToDictFieldSet:
-    def test_field_set_is_exactly_eight_keys(self):
+    def test_field_set_is_exactly_nine_keys(self):
+        """v2 (issue #71) adds `applied_config_sha` to the wire shape.
+        A future regression that drops the field would silence the
+        version-drift diagnostic — assert it stays present."""
         d = StatusSnapshot().to_dict()
         expected = {
             "schema_version",
@@ -33,6 +36,7 @@ class TestToDictFieldSet:
             "uptime_seconds",
             "mqtt_connected",
             "last_error",
+            "applied_config_sha",
         }
         assert set(d.keys()) == expected
 
@@ -60,7 +64,7 @@ class TestToDictFieldSet:
     def test_to_dict_round_trip_through_json(self):
         """The wire shape must survive JSON encode → decode unchanged."""
         snap = StatusSnapshot(
-            schema_version=1,
+            schema_version=2,
             active_sha="abc1234",
             short_sha="abc1234",
             started_at="2026-07-08T10:00:00+00:00",
@@ -68,6 +72,7 @@ class TestToDictFieldSet:
             uptime_seconds=90,
             mqtt_connected=True,
             last_error=None,
+            applied_config_sha="def5678",
         )
         round_tripped = json.loads(json.dumps(snap.to_dict()))
         # No field went missing on the wire.
@@ -78,6 +83,7 @@ class TestToDictFieldSet:
         assert isinstance(round_tripped["uptime_seconds"], int)
         assert round_tripped["mqtt_connected"] is True
         assert round_tripped["last_error"] is None
+        assert round_tripped["applied_config_sha"] == "def5678"
 
 
 class TestReadStatusAfterReshape:

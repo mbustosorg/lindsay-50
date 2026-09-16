@@ -840,6 +840,8 @@ class SignConfig:
         version: int = CURRENT_VERSION,
         effects_settings: "EffectsSettings | dict | None" = None,
         text_settings: "TextSettings | dict | None" = None,
+        config_sha: str = "",
+        updated_at: str = "",
     ) -> None:
         """Initialize a SignConfig.
 
@@ -857,6 +859,23 @@ class SignConfig:
             text_settings: TextSettings instance or dict (default built
                 from empty dict — name_display_format=
                 "first_initial_if_duplicates" by default).
+            config_sha: Per-save content hash (7-char short hex) of the
+                pre-stamp ``to_dict()`` body. Assigned by Flask's
+                ``_save_and_publish`` before persisting; round-trips
+                through ``update_from_dict`` so the Pi / browser can
+                report "which config version am I running?" without a
+                separate timestamp.
+            updated_at: ISO-8601 wall-clock time the config was last
+                saved. Set by Flask's ``_save_and_publish``; for
+                operator-visible diagnostic only. Not the same as
+                "when the Pi applied it" — that's deliberately NOT
+                tracked (would require a per-config record on the Pi
+                and isn't worth the complexity right now).
+
+        Note: ``config_sha`` is computed from a ``to_dict()`` snapshot
+        taken BEFORE the field is set on this instance, so the hash
+        doesn't include its own value (chicken-and-egg loop). See
+        ``_save_and_publish`` in ``heart-message-manager/main.py``.
         """
         self.filters = filters or []
         self.senders = senders if senders is not None else {}
@@ -872,6 +891,8 @@ class SignConfig:
         self.text_settings = (
             text_settings if isinstance(text_settings, TextSettings) else TextSettings.from_dict(text_settings or {})
         )
+        self.config_sha = config_sha
+        self.updated_at = updated_at
         self._lock = threading.RLock()
 
     def _with_lock(self, fn):
@@ -944,6 +965,8 @@ class SignConfig:
             version=data.get("version", cls.CURRENT_VERSION),
             effects_settings=data.get("effects_settings"),
             text_settings=data.get("text_settings"),
+            config_sha=data.get("config_sha", ""),
+            updated_at=data.get("updated_at", ""),
         )
 
     def to_dict(self):
@@ -951,9 +974,15 @@ class SignConfig:
 
         Returns:
             dict with keys: filters, senders, sign_settings, effects_settings,
-            text_settings, version. No top-level `sign`, `timezone`,
-            `enforce_allowed_senders`, or `name_display_format` keys (all
-            live inside their respective nested settings blocks).
+            text_settings, version, config_sha, updated_at. No top-level
+            `sign`, `timezone`, `enforce_allowed_senders`, or
+            `name_display_format` keys (all live inside their respective
+            nested settings blocks).
+
+        Note: ``config_sha`` is the per-save content hash stamped by
+        Flask's ``_save_and_publish``. Empty string on the first save
+        (before any hash has been computed); round-trips through
+        ``update_from_dict`` so the Pi/browser can compare versions.
         """
         return self._with_lock(
             lambda: {
@@ -969,6 +998,8 @@ class SignConfig:
                 "version": self.version,
                 "effects_settings": self.effects_settings.to_dict(),
                 "text_settings": self.text_settings.to_dict(),
+                "config_sha": self.config_sha,
+                "updated_at": self.updated_at,
             }
         )
 
@@ -985,6 +1016,8 @@ class SignConfig:
             self.version = other.version
             self.effects_settings = other.effects_settings
             self.text_settings = other.text_settings
+            self.config_sha = other.config_sha
+            self.updated_at = other.updated_at
 
         self._with_lock(_do)
 
@@ -1057,5 +1090,11 @@ class SignConfig:
             if "text_settings" in data:
                 ts = data["text_settings"]
                 self.text_settings = ts if isinstance(ts, TextSettings) else TextSettings.from_dict(ts or {})
+            # config_sha / updated_at are diagnostic-only wire fields.
+            # They carry Flask's per-save stamp and round-trip so the Pi /
+            # browser can compare against Flask's value. Accept whatever
+            # the wire provides (no migration required).
+            self.config_sha = data.get("config_sha", self.config_sha)
+            self.updated_at = data.get("updated_at", self.updated_at)
 
         self._with_lock(_do)

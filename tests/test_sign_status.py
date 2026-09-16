@@ -20,7 +20,7 @@ from lib_shared.sign_status import REQUIRED_SNAPSHOT_KEYS, LatestSignStatus
 def _healthy_snapshot() -> dict:
     """Build a fully-populated, spec-compliant snapshot dict for tests."""
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "active_sha": "b5e191c5df481d51c4e7d1cced51cf7c656f1ead",
         "short_sha": "b5e191c",
         "started_at": "2026-07-08T10:00:00+00:00",
@@ -28,11 +28,19 @@ def _healthy_snapshot() -> dict:
         "uptime_seconds": 90,
         "mqtt_connected": True,
         "last_error": None,
+        # issue #71 — v2 schema gain.
+        "applied_config_sha": "abc1234",
     }
 
 
-def test_required_snapshot_keys_constant_lists_eight_keys():
-    """Schema-versioned field set must contain exactly the 8 spec keys."""
+def test_required_snapshot_keys_constant_lists_nine_keys():
+    """Schema-versioned field set must contain exactly the 9 spec keys.
+
+    v2 (issue #71) adds `applied_config_sha` to the validator's
+    required-keys list so a v1 Pi binary that writes an 8-key payload
+    is rejected by the loader's read_status() probe (the right
+    behavior — auto-upgrade pushes the new binary in <30s).
+    """
     expected = {
         "schema_version",
         "active_sha",
@@ -42,9 +50,10 @@ def test_required_snapshot_keys_constant_lists_eight_keys():
         "uptime_seconds",
         "mqtt_connected",
         "last_error",
+        "applied_config_sha",
     }
     assert set(REQUIRED_SNAPSHOT_KEYS) == expected
-    assert len(REQUIRED_SNAPSHOT_KEYS) == 8
+    assert len(REQUIRED_SNAPSHOT_KEYS) == 9
 
 
 class TestLatestSignStatusBasics:
@@ -252,3 +261,48 @@ class TestConcurrentUpdates:
         stop.set()
         r.join(timeout=5)
         assert not errors
+
+
+class TestSourceTracking:
+    """Issue #71: track whether the held snapshot came from a live
+    WS message or was re-hydrated from the persisted SQLite row on
+    Flask startup. Defaults to "live" on update(); explicit "persisted"
+    on the startup-restore path. Flips back to "live" automatically on
+    the next update() (whether explicit source or default)."""
+
+    def test_source_returns_empty_string_when_empty(self):
+        store = LatestSignStatus()
+        assert store.source() == ""
+
+    def test_default_update_records_source_live(self):
+        store = LatestSignStatus()
+        store.update(_healthy_snapshot())
+        assert store.source() == "live"
+
+    def test_explicit_source_persisted_recorded(self):
+        store = LatestSignStatus()
+        store.update(_healthy_snapshot(), source="persisted")
+        assert store.source() == "persisted"
+
+    def test_subsequent_live_update_overrides_persisted(self):
+        """The startup-restore tag must be replaced by the first live
+        WS message that arrives later — operator should not see the
+        amber "Last seen T ago" badge forever."""
+        store = LatestSignStatus()
+        store.update(_healthy_snapshot(), source="persisted")
+        assert store.source() == "persisted"
+        store.update(_healthy_snapshot())
+        assert store.source() == "live"
+
+    def test_rejected_update_does_not_change_source(self):
+        """A malformed payload that fails validation must leave the
+        existing source untouched (the WS path drops the payload
+        anyway, but we don't want a half-applied state)."""
+        store = LatestSignStatus()
+        store.update(_healthy_snapshot(), source="persisted")
+        assert store.source() == "persisted"
+        bad = _healthy_snapshot()
+        del bad["applied_config_sha"]
+        with pytest.raises(ValueError):
+            store.update(bad)
+        assert store.source() == "persisted"

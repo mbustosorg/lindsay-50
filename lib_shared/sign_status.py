@@ -26,11 +26,12 @@ import threading
 from datetime import datetime
 from typing import Any, Optional
 
-# The 8 keys every StatusSnapshot must carry — see heart-matrix-controller/
+# The 9 keys every StatusSnapshot must carry — see heart-matrix-controller/
 # status.py:StatusSnapshot. Both the .status.json file write and the MQTT
 # wire payload use the same shape; this constant is the canonical list
 # for any consumer that wants to validate against the schema.
-# (Decision 10 in openspec/changes/archive/2026-07-09-add-sign-status-reports/design.md.)
+# (Decision 10 in openspec/changes/archive/2026-07-09-add-sign-status-reports/design.md;
+# v2 / issue #71 adds `applied_config_sha`.)
 REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "schema_version",
     "active_sha",
@@ -40,30 +41,51 @@ REQUIRED_SNAPSHOT_KEYS: tuple[str, ...] = (
     "uptime_seconds",
     "mqtt_connected",
     "last_error",
+    "applied_config_sha",
 )
 
 
 class LatestSignStatus:
     """Thread-safe in-memory holder for the most recent status snapshot.
 
-    Stateful methods (`update`, `snapshot`, `received_at_wallclock`) all
-    take the same internal RLock so concurrent reads and writes do not
-    tear the payload. The store is reset to empty on construction — the
-    Flask subscriber populates it on the first incoming MQTT message.
+    Stateful methods (`update`, `snapshot`, `received_at_wallclock`,
+    `source`) all take the same internal RLock so concurrent reads and
+    writes do not tear the payload. The store is reset to empty on
+    construction — the Flask subscriber populates it on the first
+    incoming MQTT message.
+
+    `source` (issue #71): tracks whether the held snapshot was loaded
+    from the persisted SQLite row on startup (Flask booted with no
+    recent WS message — `source == "persisted"`) or from a live MQTT
+    status payload (`source == "live"`). The dashboard's
+    "/api/sign-status" response surfaces this so the operator can
+    tell "we have data, but the broker hasn't said anything new
+    since boot" apart from "we have data, fresh and live". Flips
+    back to "live" automatically on the first WS message after
+    startup.
     """
 
     def __init__(self) -> None:
         self._lock = threading.RLock()
         self._snapshot: Optional[dict[str, Any]] = None
         self._received_at: Optional[str] = None
+        # "live" | "persisted" — empty string before the first
+        # update() so callers can detect "never seen anything" (no
+        # payload, not even a persisted one).
+        self._source: str = ""
 
-    def update(self, snapshot_dict: dict[str, Any]) -> None:
+    def update(self, snapshot_dict: dict[str, Any], *, source: str = "live") -> None:
         """Replace the held snapshot with `snapshot_dict`.
 
         Validates required keys; raises `ValueError` on any missing key
         without replacing the existing snapshot. The caller (Flask's
         status_dispatch_callback) is responsible for handling the
         ValueError (typically by logging WARN and dropping the payload).
+
+        `source` (issue #71): defaults to `"live"` for the WS callback
+        path. The startup-restore path passes `"persisted"` so the
+        dashboard can render the "Last seen T ago" amber badge until
+        the first WS message lands.
         """
         missing = [k for k in REQUIRED_SNAPSHOT_KEYS if k not in snapshot_dict]
         if missing:
@@ -75,6 +97,7 @@ class LatestSignStatus:
             # own updated_at (which is the Pi's wall-clock time).
             self._snapshot = copy.deepcopy(snapshot_dict)
             self._received_at = datetime.now().astimezone().isoformat()
+            self._source = source
 
     def snapshot(self) -> Optional[dict[str, Any]]:
         """Return a defensive copy of the held snapshot, or None if empty.
@@ -98,3 +121,18 @@ class LatestSignStatus:
         """
         with self._lock:
             return self._received_at
+
+    def source(self) -> str:
+        """Return `"live"` | `"persisted"` | `""` for the held snapshot.
+
+        `""` means no snapshot has been received and no persisted row
+        has been restored yet (the operator's first page load on a
+        fresh Flask install with no Pi status messages ever). After
+        the first successful `update()`, the value is either `"live"`
+        (from the WS callback) or `"persisted"` (from the startup
+        restore). Once the first WS message lands after startup,
+        `source()` flips back to `"live"` automatically — the live
+        signal always wins.
+        """
+        with self._lock:
+            return self._source

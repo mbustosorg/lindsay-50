@@ -231,7 +231,7 @@ def client(app):
 
 def _healthy_snapshot() -> dict:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "active_sha": "b5e191c5df481d51c4e7d1cced51cf7c656f1ead",
         "short_sha": "b5e191c",
         "started_at": "2026-07-08T10:00:00+00:00",
@@ -239,6 +239,8 @@ def _healthy_snapshot() -> dict:
         "uptime_seconds": 90,
         "mqtt_connected": True,
         "last_error": None,
+        # Issue #71 — v2 schema gain.
+        "applied_config_sha": "abc1234",
     }
 
 
@@ -305,14 +307,17 @@ class TestSignStatusEndpoint:
         assert "health" not in (body.get("snapshot") or {})
 
     def test_response_keys_top_level(self, app, client, monkeypatch):
-        """Only `snapshot` and `received_at` at the top level — nothing else."""
+        """`snapshot`, `received_at`, and (issue #71) `source` at the top level."""
         _, captured = app
         main_mod = captured["main_mod"]
         store = LatestSignStatus()
+        store.update(_healthy_snapshot())
         monkeypatch.setattr(main_mod, "latest_status", store)
 
         resp = client.get("/api/sign-status")
         assert resp.status_code == 200
         body = resp.get_json()
         assert body is not None
-        assert set(body.keys()) == {"snapshot", "received_at"}
+        assert set(body.keys()) == {"snapshot", "received_at", "source"}
+        # Default source is "live" after a default update().
+        assert body["source"] == "live"

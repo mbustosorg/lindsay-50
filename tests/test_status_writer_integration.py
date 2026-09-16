@@ -25,6 +25,7 @@ def _snap() -> StatusSnapshot:
         uptime_seconds=90,
         mqtt_connected=True,
         last_error=None,
+        applied_config_sha="def5678",
     )
 
 
@@ -42,7 +43,8 @@ class TestStatusWriterFileAndMqtt:
         publisher.assert_called_once()
         published_payload = publisher.call_args[0][0]
         assert published_payload == payload_on_disk
-        # The published payload has the 8-key shape
+        # The published payload has the 9-key v2 shape (issue #71
+        # added `applied_config_sha` to the wire).
         assert set(published_payload.keys()) == {
             "schema_version",
             "active_sha",
@@ -52,6 +54,7 @@ class TestStatusWriterFileAndMqtt:
             "uptime_seconds",
             "mqtt_connected",
             "last_error",
+            "applied_config_sha",
         }
 
     def test_tick_is_noop_within_throttle_window(self, tmp_path):
