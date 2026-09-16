@@ -131,17 +131,39 @@ class StageError(Exception):
 def resolve_repo_dir() -> Path:
     """Return the absolute path to the repo root.
 
-    Defaults to `<repo_root>/` by walking three parents up from this
-    script: `heart-matrix-controller/loader.py` → `heart-matrix-controller/`
-    → `current/` → `<repo_root>/`. The `current` symlink makes the
-    first hop name-resolve to `v-<sha>/`, so we have to walk through
-    it explicitly. Override via the `LINDSAY50_REPO_DIR` env var for
-    tests + non-standard deployments.
+    Three-tier resolution:
+    1. `LINDSAY50_REPO_DIR` env var (authoritative; set by the systemd
+       startup script and by `_build_exec_env` for child processes).
+    2. `git rev-parse --show-toplevel` from this file's directory —
+       works for both the bare-repo + worktree layout (where loader.py
+       lives at `$REPO_DIR/v-<sha>/heart-matrix-controller/`) AND the
+       simplified non-bare layout (where it lives at
+       `$REPO_DIR/heart-matrix-controller/`).
+    3. Walk three parents up from this file. This was the original
+       fallback calibrated for the bare-repo + worktree layout (where
+       the symlink `current → v-<sha>/` adds one extra level of depth
+       compared to a plain clone). It returns the WRONG answer for
+       the simplified non-bare layout — that's a real bug if no env
+       var is set AND git is unavailable. Kept as the last resort for
+       environments that have neither.
+
+    The systemd startup script always sets `LINDSAY50_REPO_DIR`, so
+    tier 1 covers production. Tier 2 covers `python3 loader.py` runs
+    from a shell. Tier 3 is a defensive backstop.
     """
     env = os.environ.get(ENV_REPO_DIR)
     if env:
         return Path(env).resolve()
-    return Path(__file__).resolve().parent.parent.parent
+    try:
+        return Path(
+            subprocess.check_output(
+                ["git", "-C", str(Path(__file__).resolve().parent), "rev-parse", "--show-toplevel"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            ).strip()
+        )
+    except Exception:
+        return Path(__file__).resolve().parent.parent.parent
 
 
 def worktree_dir(repo_dir: Path, sha: str) -> Path:

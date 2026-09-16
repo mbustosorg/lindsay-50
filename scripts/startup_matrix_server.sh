@@ -32,6 +32,19 @@ cd "$REPO_DIR/current/heart-matrix-controller"
 # LOG_LEVEL is read by both loader.py and main.py.
 export PYTHONPATH="$REPO_DIR/current"
 export LOG_LEVEL="${LOG_LEVEL:-INFO}"
+# LINDSAY50_REPO_DIR is the loader's anchor: it tells loader.py the
+# absolute path of the repo root so its `resolve_repo_dir()` returns
+# the right thing regardless of how deep loader.py's parent dirs go.
+# In the bare-repo + worktree layout loader.py lived at
+# $REPO_DIR/v-<sha>/heart-matrix-controller/loader.py (3 levels deep),
+# so the env-var fallback was correct. In the simplified non-bare
+# layout loader.py lives at $REPO_DIR/heart-matrix-controller/loader.py
+# (only 2 levels deep), so the fallback math is off by one — without
+# this export the loader resolves repo_dir as $REPO_DIR's PARENT (e.g.
+# /srv instead of /srv/lindsay-50). systemd's Environment= line is the
+# alternative; we use the script-side export so manual `python3
+# loader.py` invocations also work.
+export LINDSAY50_REPO_DIR="$REPO_DIR"
 
 # System Python with rgbmatrix installed via setup-pi.sh. (No venv on this
 # single-purpose Pi — keeps the install trivial.)
