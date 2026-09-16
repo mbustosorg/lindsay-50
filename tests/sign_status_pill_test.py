@@ -270,3 +270,54 @@ def test_browser_config_sha_module_cache_exists():
     assert 'readCell("browser", "config")' not in src, (
         "browser-config comparison must come from cache, not cell DOM"
     )
+
+
+def test_browser_config_hard_fallback_exists():
+    """When `App.getLastConfigReceipt()` returns empty (PyScript
+    marshalling slow/broken, or `window._message_manager` not yet
+    installed), the Browser/Config cell stays "—" indefinitely.
+    The hard fallback (`fetchConfigShaFallback`) hits /api/config
+    directly to populate the cell with the wire-stamped SHA within
+    ~50ms of page load. The receipt path overrides if a later WS
+    envelope carries a different value — drift detection still
+    works. Without this fallback, the cell is stuck "—" on any
+    browser where the PyScript receipt round-trip fails."""
+    src = _read("heart-message-manager/static/sign_status.js")
+    assert "function fetchConfigShaFallback" in src, (
+        "fetchConfigShaFallback function not declared"
+    )
+    # It must hit /api/config directly — that's the canonical
+    # source for the wire-stamped SHA before any WS envelope lands.
+    assert re.search(
+        r'fetch\([\'"]/api/config[\'"]',
+        src,
+    ), "hard fallback must fetch /api/config directly"
+    # It must guard against re-entry so the 5s tick doesn't hammer.
+    assert "_configFallbackInFlight" in src, (
+        "hard fallback must guard against re-entry on 5s tick"
+    )
+    # It must write to _browserConfigSha AND the cell DOM so the
+    # comparison logic and the rendered text are in lockstep.
+    assert re.search(
+        r"_browserConfigSha\s*=\s*sha",
+        src,
+    ), "hard fallback must update _browserConfigSha cache"
+    # applyBrowserConfigReceipt must INVOKE the fallback when the
+    # receipt path returns empty (or App isn't installed yet).
+    assert src.count("fetchConfigShaFallback(") >= 3, (
+        "fetchConfigShaFallback must be called from at least 3 sites "
+        "(App-missing branch, receipt-empty branch, receipt-error branch)"
+    )
+
+
+def test_base_template_sign_status_js_bumped_v4():
+    """The sign_status.js cache-buster must be ?v=4 or later so
+    browsers pin to the new hard-fallback code. Memory rule:
+    bump ?v=N when shipping static JS changes
+    (feedback_bump_cache_buster_with_static_js.md)."""
+    html = _read("heart-message-manager/templates/base.html")
+    m = re.search(r"sign_status\.js[^>]*\?v=(\d+)", html)
+    assert m is not None, "sign_status.js not loaded with cache-buster"
+    assert int(m.group(1)) >= 4, (
+        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=4"
+    )

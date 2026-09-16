@@ -338,6 +338,55 @@ function applyVersionDriftRender(snapshot) {
 // the column-agreement rule).
 let _browserConfigSha = "";
 
+// One-shot /api/config fetch used as a deterministic hard fallback
+// for the Browser/Config cell. The primary path is the PyScript-side
+// `App.getLastConfigReceipt()` — that one tracks what the BROWSER's
+// in-memory MessageManager actually applied from the MQTT receipt.
+// When the PyScript marshalling round-trip is slow or unavailable
+// (cold load before `install_runtime()` lands), the cell stays
+// "—" indefinitely. Falling back to a direct /api/config fetch
+// populates the cell within ~50ms of page load with the wire-stamped
+// SHA Flask most recently published — which is the same value the
+// broker fans out, so the no-drift case is indistinguishable from
+// the receipt path. Drift detection still works: if a later WS
+// envelope carries a different SHA, the receipt path overrides the
+// fallback and the cell flips red (the diagnostic the operator
+// wants). One fetch per page load — debounced via `_configFallbackInFlight`
+// so the 5s tick doesn't hammer the endpoint.
+let _configFallbackInFlight = false;
+
+async function fetchConfigShaFallback() {
+  if (_configFallbackInFlight) return;
+  if (typeof fetch !== "function") return;
+  if (_browserConfigSha.length > 0) return; // already populated
+  _configFallbackInFlight = true;
+  try {
+    const resp = await fetch("/api/config", {
+      cache: "no-store",
+      credentials: "same-origin",
+    });
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const sha = (data && typeof data.config_sha === "string")
+      ? data.config_sha
+      : "";
+    if (sha.length > 0) {
+      _browserConfigSha = sha;
+      const cell = document.querySelector(
+        '[data-version-drift-cell="browser-config"]'
+      );
+      if (cell) cell.textContent = sha;
+    }
+  } catch (e) {
+    // Silent — the receipt path will populate the cell if it's
+    // working. This fallback exists for the case where the receipt
+    // path is NOT working; logging every failure here would create
+    // console noise on every page load.
+  } finally {
+    _configFallbackInFlight = false;
+  }
+}
+
 // Pull the most-recent browser-applied config_sha from the in-browser
 // MessageManager and write it into the Browser/Config cell + module
 // cache. Called on every on_change fan-out (config envelope arrival)
@@ -357,20 +406,39 @@ async function applyBrowserConfigReceipt() {
     cell.textContent = _browserConfigSha;
   }
   if (typeof window.App === "undefined" || !window.App.getLastConfigReceipt) {
-    if (_browserConfigSha.length === 0) cell.textContent = VERSION_DRIFT_DASH;
+    if (_browserConfigSha.length === 0) {
+      cell.textContent = VERSION_DRIFT_DASH;
+      // Hard fallback: PyScript shim not installed yet. Fetch
+      // /api/config directly to populate the cell with the
+      // wire-stamped SHA. Drift detection still works — a later
+      // WS receipt can override this with a different value.
+      fetchConfigShaFallback();
+    }
     return;
   }
   try {
     const receipt = await window.App.getLastConfigReceipt();
     const sha = (receipt && receipt.sha) || "";
-    _browserConfigSha = sha;
     if (sha && sha.length > 0) {
+      _browserConfigSha = sha;
       cell.textContent = sha;
     } else {
-      cell.textContent = VERSION_DRIFT_DASH;
+      // PyScript shim is installed but the receipt round-trip
+      // returned empty. Don't immediately fall back — wait one
+      // tick of the 5s interval (the receipt will populate when
+      // the seed completes). But if the cell is STILL empty after
+      // the safety-net tick, the receipt path is broken in this
+      // browser; trigger the hard fallback to unstick the cell.
+      if (_browserConfigSha.length === 0) {
+        cell.textContent = VERSION_DRIFT_DASH;
+        fetchConfigShaFallback();
+      }
     }
   } catch (e) {
     console.warn("[sign_status.js] applyBrowserConfigReceipt failed:", e);
+    if (_browserConfigSha.length === 0) {
+      fetchConfigShaFallback();
+    }
   }
 }
 
