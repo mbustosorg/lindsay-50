@@ -544,16 +544,20 @@ export function createMqttWsClient({
 
   function ingest(chunk) {
     // Concatenate chunk onto the buffer; try to parse out any full frames.
-    // Per-chunk log suppressed (round 12 — was drowning out the
-    // actually-interesting `[diag] PUBLISH wire-topic=...` line on the
-    // PUBLISH branch below; status messages fire this every 5s).
-    // The `[diag]` lines still log on:
-    //   - partial-frame waits (operator can correlate "chunk arrived but
-    //     no PUBLISH yet")
-    //   - malformed-length drops
-    //   - PUBLISH wire-topic (the topic name + payload_len — the one
-    //     piece of info that distinguishes "got a config envelope" from
-    //     "got a status envelope")
+    // [diag] per-chunk log fires on EVERY WS frame so the operator can
+    // correlate "chunk arrived but no PUBLISH yet" — the absolute
+    // earliest evidence the WS layer got bytes. Status messages
+    // (every 5s) make this noisy; filter `-diag` in Chrome DevTools
+    // console to silence. Keep it ON by default — the operator's
+    // "are we sure it isn't arriving at all?" question demands
+    // confirmation at the byte boundary, not trust downstream parse
+    // success.
+    console.log(
+      "[diag] mqtt-ws ingest chunk bytes_len=" + chunk.length +
+      " first16=" + Array.from(chunk.slice(0, 16))
+        .map(b => b.toString(16).padStart(2, '0')).join(' ') +
+      " buffer_before=" + buffer.length
+    );
     const next = new Uint8Array(buffer.length + chunk.length);
     next.set(buffer, 0);
     next.set(chunk, buffer.length);
