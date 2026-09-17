@@ -260,25 +260,30 @@ class PahoMqttClient:
                 during the gap between disconnect and SUBSCRIBE.
                 Defaults to False — message/command events should
                 NOT be retained (they're individual events, not
-                state). Config envelopes pass True: the latest
-                config IS the state a new subscriber needs.
-
-                Why this matters (round 8, issue #71 follow-up):
-                the dashboard's "Current config" modal and
-                messages list depend on `_handle_config` running
-                on the in-browser MessageManager. If the WS
-                envelope is missed (broker fan-out drop, AIO
-                behavior reported in
-                `feedback_clean_session_aio_fan_out.md`, or a
-                WS reconnect race), the in-memory state stays
-                stale. retain=True makes the broker hold the
-                message so the browser's next SUBSCRIBE (e.g.
-                after a WS reconnect) gets the latest config
-                without an API fallback. The WS-only contract
-                is preserved: the browser still subscribes via
-                WS, the publish still goes via MQTT, the
-                change fan-out still runs through `_emit_change`.
-                We're fixing delivery, not the receiver.
+                state). Config envelopes ALSO default to False at
+                the call site (`main.py:_mqtt_client_publish_config`)
+                because Adafruit IO does not honor the MQTT
+                retain flag (per io.adafruit.com/api/docs/mqtt.html
+                — "we don't actually store data in the broker but
+                at a lower level and can't support PUBLISH retain
+                directly"). This docstring previously said "Config
+                envelopes pass True" — that was the pre-AIO-
+                discovery intent. The call site was reverted to
+                retain=False once the AIO behavior was confirmed
+                (issue #71 follow-up); this docstring is now
+                updated to match. Recovery from a missed WS
+                envelope (broker fan-out drop, AIO behavior
+                recorded in `feedback_clean_session_aio_fan_out.md`,
+                or a WS reconnect race) is handled by the browser-
+                side `/get` fetch on WS reconnect (mqtt_ws_client.js
+                SUBACK handler), which uses AIO's documented
+                "publish to `<feed>/get` to fetch the last value"
+                pattern. The WS-only contract is preserved: the
+                browser still subscribes via WS, the publish
+                still goes via MQTT, the change fan-out still
+                runs through `_emit_change`. We're not fixing
+                delivery here — we're describing what callers
+                actually pass.
         """
         topic = self._topic
         payload = envelope.to_json()
