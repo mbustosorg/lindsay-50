@@ -49,7 +49,6 @@
   // ------------------------------------------------------------------
 
   function init() {
-    console.log("[preview-js] init() entered; canvas=" + !!document.getElementById("sign-canvas"));
     const canvas = document.getElementById("sign-canvas");
     if (!canvas) { console.error("[preview-js] #sign-canvas not found; aborting"); return; }
     setupFuzzyRendering(canvas);
@@ -106,20 +105,18 @@
     let renderLoopStarted = false;
     const onReady = () => {
       if (renderLoopStarted) {
-        // Already running — the first event won. Logging here
-        // would be noise (3 lines per cold load); stay quiet.
+        // Already running — the first event won. The dispatch fires
+        // 3-4 times per cold load (`py:done` per element + `py:all-done`
+        // + `pyodideReady`); staying quiet avoids 3 lines of "ready"
+        // noise on every page load.
         return;
       }
       renderLoopStarted = true;
-      console.log("[preview-js] onReady fired; starting render loop");
       startRenderLoop(canvas);
     };
-    document.addEventListener("py:done", () => console.log("[preview-js] received py:done event"));
     document.addEventListener("py:done", onReady);
-    document.addEventListener("py:all-done", () => console.log("[preview-js] received py:all-done event"));
     document.addEventListener("py:all-done", onReady);
     // Backwards-compat for older PyScript releases.
-    document.addEventListener("pyodideReady", () => console.log("[preview-js] received pyodideReady event"));
     document.addEventListener("pyodideReady", onReady);
     // Surface PyScript module-eval failures (the reason py:done
     // never fires). PyScript dispatches a CustomEvent with the
@@ -258,42 +255,10 @@
   // ------------------------------------------------------------------
 
   function startRenderLoop(canvas) {
-    console.log("[preview-js] startRenderLoop entered");
     const ctx = canvas.getContext("2d");
     const mediaImg = document.getElementById("browser-media-image");
     const mediaVideo = document.getElementById("browser-media-video");
     let lastMediaKey = "";
-    // Throttle variable for the "python returned" diagnostic log.
-    // Distinct from `lastMediaKey` (which `applyMedia` owns and
-    // updates AFTER the src swap) — updating `lastMediaKey` from
-    // the diagnostic path would race the swap check and silently
-    // skip the first media of every cycle.
-    let lastLoggedMediaKey = "";
-    // Tracks whether Python last returned empty media (no key/url).
-    // The empty-state log fires only on the transition INTO empty
-    // — once we're empty, stay quiet until Python produces a real
-    // key again. Same pattern as `[preview-state]` (state-change
-    // only). The 1s-throttle approach it replaced was useful while
-    // diagnosing one specific bug, but is just noise during normal
-    // text-only display where Python correctly returns empty for
-    // every frame.
-    let lastMediaWasEmpty = false;
-    // Coordinator-state heartbeat: lets the developer console
-    // show the live state-machine values (mode, scroller brightness,
-    // media opacity, phase elapsed) at 1 Hz so you can correlate
-    // what's on screen with what's happening in the fade ramp.
-    // Set `window.__PREVIEW_DEBUG__ = false` to silence these logs.
-    let lastDiagnosticsAt = 0;
-    let lastDiagnosticsKey = "";
-
-    // Diagnostic flag — set to `false` in devtools or by overriding
-    // `window.__PREVIEW_DEBUG__ = false` to silence the overlay
-    // trace. Logs only fire on STATE CHANGES (effect name swap,
-    // media key swap, overlay hide, "python returned empty"
-    // transition), so the rAF loop at 30 FPS doesn't spam the
-    // console while the coordinator sits on a text-only message.
-    const PREVIEW_DEBUG = (typeof window.__PREVIEW_DEBUG__ === "undefined")
-      ? true : !!window.__PREVIEW_DEBUG__;
 
     function applyMedia(media) {
       // Browser-side media overlay (issue #38). `preview_main.py`
@@ -321,18 +286,6 @@
         // No active media — hide both, leave the canvas alone.
         if (!mediaImg.hidden) mediaImg.hidden = true;
         if (!mediaVideo.hidden) mediaVideo.hidden = true;
-        if (PREVIEW_DEBUG && !lastMediaWasEmpty) {
-          // Log only on the transition INTO the empty state.
-          // Once we're empty we stay quiet until Python produces
-          // a real key again — a steady "hiding overlay" line
-          // every frame (or every 1s) is just noise during
-          // normal text-only display.
-          console.log(
-            "[preview-media] hiding overlay: url=%s kind=%s key=%s (no picked media, or BrowserMediaOverlay returned empty url)",
-            url, kind, key,
-          );
-        }
-        lastMediaWasEmpty = true;
         lastMediaKey = "";
         return;
       }
@@ -341,11 +294,6 @@
       // the same URL forces a re-decode in some browsers and creates
       // a flash. The S3 key (`media.key`) is the stable identifier.
       if (key !== lastMediaKey) {
-        if (PREVIEW_DEBUG) {
-          console.log(
-            `[preview-media] swapping ${kind} src: key=${key} url=${url} opacity=${Number(opacity || 0).toFixed(2)}`,
-          );
-        }
         if (kind === "image") {
           if (!mediaImg.hidden) mediaImg.hidden = true;
           mediaImg.src = url;
@@ -427,60 +375,6 @@
           // match. No-ops cleanly for SMS-only messages.
           if (typeof window.get_current_media === "function") {
             const media = window.get_current_media();
-            if (PREVIEW_DEBUG) {
-              // Two distinct log paths so the diagnostic actually
-              // fires in the case we care about:
-              //
-              //   1. Non-empty payload (key/url present): log on
-              //      every key change — the rAF loop at 30 FPS
-              //      would otherwise spam the console during a
-              //      15s hold. This is the "happy path" diagnostic
-              //      that confirms the overlay is producing a real
-              //      URL.
-              //
-              //   2. Empty payload (key/url are ""): log only on
-              //      the transition INTO empty — once we're empty,
-              //      stay quiet until Python produces a real key
-              //      again. The previous 1s-throttle implementation
-              //      surfaced a steady "Python returned empty"
-              //      stream during normal text-only display, which
-              //      was useful for diagnosing one specific bug
-              //      but is just noise for everyday operation.
-              if (media && (media.key || media.url)) {
-                if (media.key !== lastLoggedMediaKey) {
-                  console.log(
-                    `[preview-media] python returned: key=${media.key} kind=${media.kind} url=${media.url} opacity=${Number(media.opacity || 0).toFixed(2)}`,
-                  );
-                  // Throttle the log via `lastLoggedMediaKey`
-                  // (distinct from `lastMediaKey`, which `applyMedia`
-                  // owns and updates AFTER the src swap). Updating
-                  // `lastMediaKey` from this diagnostic path would
-                  // race the swap check inside `applyMedia` and
-                  // silently skip the very first media of every
-                  // cycle (key was `""`, becomes the S3 key, then
-                  // `applyMedia` sees them equal and returns
-                  // without swapping).
-                  lastLoggedMediaKey = media.key;
-                }
-                lastMediaWasEmpty = false;
-              } else if (!lastMediaWasEmpty) {
-                const shape = media === null
-                  ? "null"
-                  : media === undefined
-                    ? "undefined"
-                    : `{key=${JSON.stringify(media.key)} url=${JSON.stringify(media.url)} kind=${JSON.stringify(media.kind)} opacity=${media.opacity}}`;
-                console.log(
-                  "[preview-media] python returned empty: %s — image will NOT render this frame (no BrowserMediaOverlay active, or overlay returned empty url)",
-                  shape,
-                );
-                lastMediaWasEmpty = true;
-                // Reset the throttle so the next non-empty key
-                // produces a "python returned" line even if it
-                // happens to match the key we logged before the
-                // empty window.
-                lastLoggedMediaKey = "";
-              }
-            }
             applyMedia(media);
           }
 
@@ -491,54 +385,6 @@
             // object. Render it as fuzzy LED circles (see blitFuzzy).
             const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
             blitFuzzy(ctx, view);
-          }
-
-          // Coordinator-state heartbeat: log mode + brightness once
-          // per second so we can correlate what's on screen with the
-          // fade ramp's values. The combination of mode + brightness
-          // explains most "where did the text go?" regressions:
-          // - `mode=hold & scroller_brightness=1.0` is the healthy
-          //   full-text state.
-          // - `mode=text_out & scroller_brightness≈0.5` means the
-          //   coordinator is mid-fade-out after hold ended.
-          // - `mode=in & scroller_brightness≈0.2` means the in-phase
-          //   fade-in is partway through.
-          // - `media_opacity=0` while mode=hold means the
-          //   BrowserMediaOverlay hasn't been swapped in as `current`
-          //   (the picked message's `media` list was empty, or the
-          //   cycler was never constructed).
-          if (PREVIEW_DEBUG && typeof window.get_diagnostics === "function") {
-            const nowMs = Date.now();
-            if (nowMs - lastDiagnosticsAt > 1000) {
-              lastDiagnosticsAt = nowMs;
-              let diag = {};
-              try { diag = window.get_diagnostics(); } catch (e) { /* ignore */ }
-              // Dedup key: includes everything that constitutes a
-              // material state change EXCEPT `phase_elapsed`
-              // (monotonically increments every frame) and the
-              // raw brightness values (numeric jitter between
-              // frames produces spurious keys). Two-decimal
-              // rounding smooths jitter without losing meaning.
-              // Without this, the throttled 1s-tick log fires on
-              // EVERY second regardless of state.
-              const key = `${diag.mode || "?"}|${diag.effect_name || "?"}|` +
-                `${Number(diag.scroller_brightness || 0).toFixed(2)}|` +
-                `${Number(diag.media_opacity || 0).toFixed(2)}|` +
-                `${diag.showing_text ? "y" : "n"}|` +
-                `${diag.scroller_text || ""}`;
-              if (key !== lastDiagnosticsKey) {
-                console.log(
-                  `[preview-state] mode=${diag.mode || "?"} effect=${diag.effect_name || "?"} ` +
-                  `scroller_b=${Number(diag.scroller_brightness || 0).toFixed(2)} ` +
-                  `media_opacity=${Number(diag.media_opacity || 0).toFixed(2)} ` +
-                  `showing_text=${diag.showing_text ? "yes" : "no"} ` +
-                  `phase_elapsed=${Number(diag.phase_elapsed || 0).toFixed(1)}s ` +
-                  `fade_progress=${Number(diag.fade_progress || 0).toFixed(2)} ` +
-                  `text=${JSON.stringify(diag.scroller_text || "")}`,
-                );
-                lastDiagnosticsKey = key;
-              }
-            }
           }
         } catch (e) {
           console.error("Frame error:", e);

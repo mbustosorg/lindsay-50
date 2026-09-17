@@ -75,9 +75,7 @@ py-config.toml declared packages).
 from pyodide.ffi import to_js  # type: ignore[import-not-found]  (used by `_install_js_api`, `get_current_media`; Pyodide FFI for JS interop)
 from pyodide_js import loadPackage  # type: ignore[reportGeneralTypeIssues]  # noqa: F401  (top-level await: PyScript 2024.9.x runs via `eval_code_async`)
 
-print("[preview-py] module evaluation START (line 69)")
 await loadPackage(["micropip", "numpy", "Pillow"])  # type: ignore[reportGeneralTypeIssues]  # top-level await — see note above
-print("[preview-py] loadPackage complete (line 72)")
 
 import sys
 
@@ -104,14 +102,10 @@ from preview_scroller import PreviewScroller  # noqa: E402
 from lib_shared.effects_coordinator import build_effects  # noqa: E402
 from lib_shared.models import EffectsSettings, TextSettings  # noqa: E402
 
-print("[preview-py] preview_display/preview_scroller/effects_coordinator/models imported")
-
 # Standard bitmap patterns the browser preview can run (no filesystem
 # assets, no OpenCV). PngDisplay / VideoDisplay stay Pi-only; the
 # shared `build_effects` factory filters them out by name.
 from lib_shared.patterns.heartbeat import Heartbeat  # noqa: E402
-
-print("[preview-py] heartbeat pattern imported")
 
 # The 64x64 logical panel — source of truth matches the device.
 PANEL_WIDTH = 64
@@ -153,7 +147,6 @@ def _get_app_coordinator():
 
 _web_canvas = WebCanvas(PANEL_WIDTH, PANEL_HEIGHT)
 _display = WebDisplay(_web_canvas)
-print(f"[preview-py] canvas built: {PANEL_WIDTH}x{PANEL_HEIGHT}")
 
 # Boot-time defaults. The app-scoped MessageManager is the source of
 # truth for the SignConfig; once the seed completes (called by app.js
@@ -171,7 +164,6 @@ _scroller = PreviewScroller(
     speed=_text_settings.speed,
 )
 _heart = Heartbeat(_display)
-print("[preview-py] heart effect built")
 
 
 import asyncio  # noqa: E402
@@ -189,14 +181,12 @@ async def _wait_for_coordinator(timeout_s: float = 15.0, poll_ms: int = 20) -> N
     its top-level statements first. This waiter closes that
     race without requiring a JS-side event hook.
     """
-    print(f"[preview-py] _wait_for_coordinator START (timeout={timeout_s}s, poll={poll_ms}ms)")
     deadline = asyncio.get_event_loop().time() + timeout_s
     poll_s = poll_ms / 1000.0
     attempts = 0
     while True:
         coord = getattr(js.window, "_coordinator", None)
         if coord is not None:
-            print(f"[preview-py] coordinator appeared after {attempts} polls ({attempts * poll_s:.2f}s)")
             return
         if asyncio.get_event_loop().time() >= deadline:
             has_app = getattr(js.window, "_message_manager", None) is not None
@@ -207,8 +197,6 @@ async def _wait_for_coordinator(timeout_s: float = 15.0, poll_ms: int = 20) -> N
                 f"_message_manager present={has_app}, _seed present={has_seed}"
             )
         attempts += 1
-        if attempts % 25 == 0:  # every 500 ms
-            print(f"[preview-py] still waiting for _coordinator after {attempts} polls ({attempts * poll_s:.2f}s)")
         await asyncio.sleep(poll_s)
 
 
@@ -223,7 +211,6 @@ async def _bootstrap() -> None:
     app-scoped manager's buffer.
     """
     await _wait_for_coordinator()
-    print("[preview-py] _bootstrap: coordinator available, proceeding to bind")
 
     # --- Bind the render layer to the app-scoped coordinator ---
     # The coordinator is already wired to the app-scoped
@@ -233,29 +220,24 @@ async def _bootstrap() -> None:
     # call `_sync_render_layer()` and read the manager's
     # current config into the rotation + scroller.
     coord = _get_app_coordinator()
-    print(f"[preview-py] _bootstrap: got coordinator id={id(coord)}; calling coord.bind()")
     coord.bind(
         display=_display,
         scroller=_scroller,
         effects=_effects,
         heart=_heart,
     )
-    print("[preview-py] _bootstrap: coord.bind() returned")
     _coord_ref["coord"] = coord
 
     # Begin the boot splash. The first pulled message (from the
     # app-scoped manager's buffer) plays once the heart fades out
     # — mirroring the device's "show the last seeded message at
     # startup" behavior.
-    print("[preview-py] _bootstrap: calling coord.start()")
     coord.start()
-    print("[preview-py] _bootstrap: coord.start() returned")
 
     # Install the JS surface last, once the coordinator is bound
     # and the boot has been kicked. Any `tick()` call that lands
     # after this returns is safe.
     _install_js_api()
-    print("[preview-py] _bootstrap: complete; JS surface installed. py:done should fire.")
 
 
 async def _bootstrap_with_logging():
@@ -309,9 +291,6 @@ def _install_js_api() -> None:
     js.window.get_frame_rgba = get_frame_rgba
     js.window.get_current_media = get_current_media
     js.window.get_diagnostics = get_diagnostics
-    print(
-        "[preview-py] _install_js_api: window.tick, get_frame_rgba, get_current_media, get_diagnostics all installed"
-    )
 
 
 def tick():
@@ -377,18 +356,6 @@ def get_current_media():
         key = current.current_media_key
         opacity = current.current_opacity
         brightness = current.current_brightness
-        # Source logging (issue #26 follow-up): the browser preview
-        # has no Python-side fetch — the JS `<img>` / `<video>` element
-        # does its own GET against `url`. The ground truth for "did
-        # the image actually get requested" lives on the Flask side
-        # (`/api/media/<key>` logs every 302 with `requester=browser`),
-        # but it also helps to see here what URL we're handing back
-        # to JS — if `url` is empty while `key` is set, something is
-        # wrong in the overlay's `current_media_url` property
-        # (probably `api_base_url` not bound). The log is throttled
-        # so the 30 FPS rAF loop doesn't spam the console.
-        if key:
-            _preview_media_info(key, url, kind, opacity)
         return to_js(
             {
                 "url": url,
@@ -550,41 +517,6 @@ def get_diagnostics():
 import time as _time  # noqa: E402  (local import keeps module top tidy)
 
 _preview_media_warn_last: dict = {"ts": 0.0, "key": None}
-_preview_media_info_last: dict = {"ts": 0.0, "key": None}
-
-
-def _preview_media_info(key: str, url: str, kind: str, opacity: float) -> None:
-    """Throttled `console.log` for the browser-side source trace.
-
-    Logs once per second per key (the S3 key is the stable identifier
-    across cycles). The line shows what URL `BrowserMediaOverlay` is
-    handing back to the JS `<img>` / `<video>` element on each frame,
-    plus the opacity — when the operator reports "fade logs fire but
-    no network call appears", this log + the Flask `/api/media/<key>`
-    log together pin down whether the URL was constructed but never
-    fetched (no Flask log, no Network tab request) or constructed and
-    fetched but the response failed (Flask log shows the 302 but the
-    `<img>`/`<video>` `error` event fires in the browser).
-    """
-    try:
-        import js  # type: ignore[import-not-found]
-
-        now = _time.monotonic()
-        if key == _preview_media_info_last["key"] and now - _preview_media_info_last["ts"] < 1.0:
-            return
-        _preview_media_info_last["ts"] = now
-        _preview_media_info_last["key"] = key
-        source = "browser-proxy" if url else "<empty url — overlay not bound>"
-        js.console.log(
-            "[preview-media-source] key=%s source=%s url=%s kind=%s opacity=%s",
-            key,
-            source,
-            url,
-            kind,
-            f"{opacity:.2f}",
-        )
-    except Exception:
-        pass
 
 
 def _preview_media_warn(fmt: str, *args: object) -> None:

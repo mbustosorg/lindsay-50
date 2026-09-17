@@ -35,9 +35,7 @@ import to read `APP_CONFIG`.
 
 from pyodide_js import loadPackage  # type: ignore[reportGeneralTypeIssues]  # noqa: F401  (top-level await: PyScript 2024.9.x runs via `eval_code_async`)
 
-print("[app-py] module evaluation START (line 47)")
 await loadPackage(["micropip", "tzdata"])  # type: ignore[reportGeneralTypeIssues]  # top-level await — see note above
-print("[app-py] loadPackage complete (line 49)")
 
 import sys
 
@@ -63,8 +61,6 @@ import js
 # lib_shared.message_manager). They are imported inside
 # `dashboard_runtime.py` so this module stays lightweight.
 from dashboard_runtime import install_runtime
-
-print("[app-py] dashboard_runtime imported")
 
 
 # ---------------------------------------------------------------------------
@@ -132,12 +128,9 @@ _logging.getLogger().setLevel(_logging.INFO)
 # dashboard page's `app.js` awaits it once `_message_manager` is
 # installed so the operator lands on a populated table.
 
-print("[app-py] calling install_runtime")
 install_runtime()
-print("[app-py] install_runtime RETURNED; window globals ready")
 
 # Module evaluation complete — the singleton runtime is up. The
 # dashboard's rAF loop starts when `preview_main.py` runs (since
 # that owns the canvas-bind step) and the in-memory buffer is
 # seeded by `app.js` calling `window._seed()`.
-print("[app-py] module evaluation COMPLETE; runtime installed")

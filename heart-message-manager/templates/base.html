@@ -64,7 +64,6 @@
       flaskVersion:     {{ version.FLASK_VERSION | tojson }},
       flaskConfigSha:   {{ version.FLASK_CONFIG_SHA | tojson }}
     };
-    console.log("[DEBUG base.html] APP_CONFIG =", JSON.stringify(window.APP_CONFIG, null, 2));
   </script>
   <!-- Native JS shim for MQTT-over-WebSocket. The `?v=N` query string
        is a cache-buster — bump it whenever the shim changes so

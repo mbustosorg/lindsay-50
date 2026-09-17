@@ -92,33 +92,16 @@ def _app_config() -> dict:
 def _on_envelope_py(raw: Any) -> None:
     """MQTT-WS shim → MessageManager: forward the envelope string.
 
-    Round 8 (live-bug triage): surfaces a browser-console log on every
-    config-envelope arrival so the operator can confirm whether the
-    WS→PyScript→dispatch chain reaches Python at all. Pair these with
-    the `[mm-bridge] config_applied` log inside `_handle_config`'s
-    post-update block: if the former fires but the latter does not,
-    the dispatcher is dropping or mis-routing the envelope. If
-    neither fires, the WS→PyScript bridge is the broken link (broker
-    fan-out drop, WS reconnect race, or PyProxy dispatch failure).
+    No per-envelope logging here — the consolidated
+    `Coordinator: showing ...` info line in `effects_coordinator`
+    surfaces the picking outcome (one per cycle), which is the
+    operator-facing signal that the WS→PyScript→dispatch chain
+    is alive. Per-envelope `[mm-bridge] envelope_received` was a
+    diagnostic only useful during the broker-fan-out-drop
+    investigation (issue #71); kept that line out by design so
+    the console stays quiet during normal operation.
     """
     try:
-        # Lightweight diagnostic — only logs the first 80 chars of the
-        # envelope plus the parsed type so the operator can grep one
-        # keyword (`[mm-bridge]`) and see every WS-driven update.
-        # PII-safe: only the envelope type field is surfaced, not body.
-        try:
-            import json as _json
-            _env_type = _json.loads(str(raw)).get("type", "?")
-        except Exception:
-            _env_type = "?"
-        log.info("[mm-bridge] envelope_received type=%s", _env_type)
-        try:
-            js.console.log(
-                "[mm-bridge] envelope_received type=" + str(_env_type)
-            )
-        except Exception:
-            pass
-
         mm = getattr(js.window, "_message_manager", None)
         if mm is None:
             try:
@@ -244,10 +227,8 @@ def install_runtime() -> None:
     global _envelope_proxy, _status_proxy
     cfg = _app_config()
 
-    log.info("install_runtime: constructing EventLog")
     event_log = EventLog(max_entries=DEFAULT_EVENT_LOG_MAX_ENTRIES)
 
-    log.info("install_runtime: constructing MessageManager")
     # The on_change callback fans out to JS-side listeners via
     # the universal dispatcher (`window.App._dispatchChange`).
     # Built lazily because `app.js` may not have installed it yet
@@ -268,7 +249,6 @@ def install_runtime() -> None:
         on_change=create_proxy(_on_change_js),
     )
 
-    log.info("install_runtime: constructing EffectsCoordinator")
     coordinator = EffectsCoordinator(
         message_manager=mm,
         media_api_base_url=str(js.window.location.origin),
@@ -281,7 +261,6 @@ def install_runtime() -> None:
     mqtt_ws_client: Optional[Any] = None
     mqtt_url = str(cfg.get("mqttWsUrl") or "")
     if mqtt_url:
-        log.info("install_runtime: creating MQTT-WS client url=%s", mqtt_url)
         _envelope_proxy = create_proxy(_on_envelope_py)
         _status_proxy = create_proxy(_on_status_py)
         client_opts = {
