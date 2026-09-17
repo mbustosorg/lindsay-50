@@ -381,6 +381,7 @@ export function createMqttWsClient({
           "[mqtt-ws] PUBLISH wire-topic=" + parsed.topic +
           " payload_len=" + (parsed.payload ? parsed.payload.length : 0)
         );
+      }
       if (parsed) {
         // Diagnostic: decode the payload as JSON at this layer so we
         // can see whether the wire shape is what `_handle_config`
