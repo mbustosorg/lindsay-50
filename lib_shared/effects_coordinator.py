@@ -1359,6 +1359,26 @@ class EffectsCoordinator:
                         )
                     except Exception as exc:
                         log.warning("Coordinator event-log append failed: %s", exc)
+
+                # Round 4 (debug-visibility): the consolidated
+                # per-cycle `Coordinator: showing ...` log fires at the
+                # pick site — here at `out→in` (NOT at `intro→out` only).
+                # `_last_picked_entry` is updated to point at the
+                # just-consumed message (`self.current_message`), so the
+                # log reads "now showing X, next is Y" where Y is
+                # `self.on_deck` (the freshly-staged pick for the next
+                # cycle). The `_resolve_next_effect_name()` helper reads
+                # `entry.message.media` to decide between BrowserMediaOverlay
+                # / MediaCycler / rotation entry — accurate because
+                # `entry.message` IS `current_message` here.
+                if self.current_message is not None:
+                    self._last_picked_entry = SimpleNamespace(
+                        message=self.current_message,
+                        source="selector",
+                        suppressed=False,
+                    )
+                self._emit_selected_log(self._resolve_next_effect_name())
+
                 self.mode = "in"
                 self.fade_start = now
                 self.last_step = 0.0

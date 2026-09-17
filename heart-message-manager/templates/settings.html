@@ -65,8 +65,10 @@
          text (handled by JS click-to-edit on focus).
        - Apply button below the columns, disabled by default, enabled
          when the input differs from its saved value.
-       - Running Pi column is auto-populated by sign_status.js via
-         `data-sign-status-field="short_sha"`.
+       - The Running Pi version column was removed (issue #71 follow-up):
+         the short SHA already lives in the dashboard's Versions &
+         Config card, so duplicating it here was noise. The settings
+         page now shows Flask version + Target Pi version only.
    #}
   <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6"
        data-upgrade-settings-field>
@@ -79,7 +81,7 @@
       default when no override is set.
     </p>
 
-    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
       <div>
         <label class="block text-xs font-medium text-slate-500 mb-1">
           Flask version
@@ -105,16 +107,6 @@
         <p class="text-xs text-slate-500 mt-1">
           Empty = inherit Flask version (placeholder shown).
         </p>
-      </div>
-      <div>
-        <label class="block text-xs font-medium text-slate-500 mb-1">
-          Running Pi version
-        </label>
-        <div class="px-3 py-2 rounded-xl border border-indigo-200 font-mono text-sm text-slate-700 truncate"
-             title="Live short SHA from the Pi's status publisher (updates every ~5s)"
-             data-sign-status-field="short_sha">
-          —
-        </div>
       </div>
     </div>
 

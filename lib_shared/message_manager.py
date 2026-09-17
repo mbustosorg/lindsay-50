@@ -801,6 +801,20 @@ class MessageManager:
             try:
                 cfg_dict = await self._fetch(self._config_api_url)
                 self._config.update_from_dict(cfg_dict)
+                # Capture the just-applied config_sha for the
+                # StatusSnapshot — the MQTT path does this in
+                # `_handle_config`, but the REST seed path
+                # (`update_from_dict` directly) bypasses that
+                # helper, so without this line the status payload's
+                # `applied_config_sha` stays at "" until the next
+                # MQTT config envelope arrives. The bug was: the Pi
+                # boots, seeds config from `/api/config`, the SHA
+                # lands on `_config.config_sha`, but the status
+                # field stays empty — operator sees Pi/Config blank
+                # in the Versions pill. Issue #71.
+                self._last_applied_config_sha = (
+                    getattr(self._config, "config_sha", "") or ""
+                )
                 logger.info("MessageManager seeded config")
             except Exception as e:
                 logger.warning("MessageManager config seed failed: %s", e)

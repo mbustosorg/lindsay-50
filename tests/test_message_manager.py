@@ -90,6 +90,15 @@ def seed_messages():
 
 @pytest.fixture
 def seed_config():
+    # Issue #71 regression: the REST seed path must capture
+    # `config_sha` onto `_last_applied_config_sha` so the Pi's
+    # status payload surfaces the SHA it last applied via the
+    # REST seed (not just via MQTT envelopes). Without this,
+    # the Pi-side `applied_config_sha` field stayed empty until
+    # the next MQTT envelope arrived, leaving the dashboard's
+    # Pi/Config cell blank even though `/api/config` had the
+    # SHA. We include a stamped SHA in the seed payload to
+    # exercise the capture path.
     return {
         "filters": [],
         "senders": [{"phone": "+15551111111", "name": "Test", "allowed": True}],
@@ -109,6 +118,8 @@ def seed_config():
         },
         "sign_settings": {"sign_name": "Test Sign", "timezone": "US/Pacific"},
         "version": 3,
+        "config_sha": "abcd123",
+        "updated_at": "2026-09-17T19:11:09-07:00",
     }
 
 
@@ -220,6 +231,13 @@ class TestSeedServer:
         # Config is populated
         assert mgr.config.sign_settings.timezone == "US/Pacific"
         assert mgr.config.sign_settings.sign_name == "Test Sign"
+        # Issue #71 regression: the REST seed path must stamp
+        # `_last_applied_config_sha` from the wire's `config_sha`
+        # so the status payload surfaces the SHA even before the
+        # first MQTT config envelope arrives. Pre-fix, the Pi-side
+        # `applied_config_sha` field stayed "" until an envelope
+        # landed, leaving the dashboard's Pi/Config cell blank.
+        assert mgr._last_applied_config_sha == "abcd123"
 
     def test_seed_preserves_media_from_rest_payload(self, messages_api_url, config_api_url, api_key):
         """REST seed must carry `media` through to the in-memory Message.

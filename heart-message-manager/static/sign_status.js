@@ -283,9 +283,16 @@ function applyVersionDriftRender(snapshot) {
 
   const flaskCode = cfg.flaskVersion || readCell("flask", "code");
   const flaskConfig = cfg.flaskConfigSha || readCell("flask", "config");
+  // Always prefer the live snapshot values when present, falling back to
+  // whatever the cell currently shows. The cell text is owned by
+  // `applyFieldsRender` (writes on every WS tick when state != "offline")
+  // and is NOT cleared on offline transitions — so when the Pi drops off
+  // the cell keeps the last-seen SHA. That's the right diagnostic: the
+  // operator wants to see "Pi was running 86537d5 when it went offline"
+  // alongside Flask's current 12abcde, and the per-column comparison
+  // flips the mismatch red.
   const piCode = (snapshot && snapshot.short_sha) || readCell("pi", "code");
-  const piConfig =
-    (snapshot && snapshot.applied_config_sha) || readCell("pi", "config");
+  const piConfig = (snapshot && snapshot.applied_config_sha) || readCell("pi", "config");
   const browserCode = readCell("browser", "code");
   // Browser/Config is read from the module cache (`_browserConfigSha`)
   // rather than the cell DOM — applyBrowserConfigReceipt writes the
