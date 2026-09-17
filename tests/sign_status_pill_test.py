@@ -324,6 +324,131 @@ def test_apply_browser_config_receipt_writes_both_cells():
     )
 
 
+def test_pi_cell_only_live_with_snapshot():
+    """The Pi's Code/Config cells must only be treated as LIVE signals
+    when a snapshot is present. When the Pi is offline (no snapshot
+    yet), reading the cell's stale textContent — which `applyFieldsRender`
+    leaves populated from the last online session — would surface an
+    OLD Pi SHA alongside Flask's current SHA and Browser's current
+    SHA, and the column rule would flip red on a phantom "drift" that
+    is really just "Pi is offline."
+
+    Without this guard, every dashboard reload while the Pi is
+    rebooting or on flaky wifi shows the column red even though Flask
+    and Browser agree. The cell text is still rendered (so the
+    operator can see the last-known Pi SHA), but the comparison logic
+    treats Pi as "we don't know yet."
+    """
+    src = _read("heart-message-manager/static/sign_status.js")
+    # The `piHasLiveSnapshot` / `piHasLiveAppliedConfig` locals gate
+    # Pi on snapshot presence. Without them, the cell DOM fallback
+    # would feed stale data into the comparison.
+    assert "piHasLiveSnapshot" in src, (
+        "applyVersionDriftRender must gate Pi code on snapshot presence — "
+        "falling back to stale cell textContent creates phantom drift "
+        "when the Pi is offline"
+    )
+    assert "piHasLiveAppliedConfig" in src, (
+        "applyVersionDriftRender must gate Pi config on snapshot presence"
+    )
+    # The Pi values used in the comparison must be EMPTY when no
+    # snapshot exists — verify by checking that the comparison-side
+    # piCode / piConfig are derived from `snapshot && ...` only,
+    # not from readCell as a fallback.
+    apply_match = re.search(
+        r"function\s+applyVersionDriftRender\s*\([^)]*\)\s*\{([\s\S]*?)\n\}",
+        src,
+    )
+    assert apply_match is not None, "applyVersionDriftRender not found"
+    body = apply_match.group(1)
+    assert re.search(
+        r"const\s+piCode\s*=\s*\(?\s*snapshot\s*&&\s*snapshot\.short_sha\s*\)?\s*\|\|\s*\"\"",
+        body,
+    ), (
+        "piCode must be `(snapshot && snapshot.short_sha) || \"\"` — no "
+        "readCell fallback, which would surface stale offline SHA"
+    )
+    assert re.search(
+        r"const\s+piConfig\s*=\s*\(?\s*snapshot\s*&&\s*snapshot\.applied_config_sha\s*\)?\s*\|\|\s*\"\"",
+        body,
+    ), (
+        "piConfig must be `(snapshot && snapshot.applied_config_sha) || \"\"` — "
+        "no readCell fallback"
+    )
+
+
+def test_live_only_drift_comparison():
+    """The per-column red rule must only flip cells whose backing
+    source is LIVE — never cells whose backing source is offline.
+
+    Cells are LIVE when backed by a fresh signal:
+      - Flask: always live (server-rendered at page load).
+      - Browser: always live (page-rendered + receipt cache).
+      - Pi: live ONLY when a snapshot is present.
+
+    A column with two LIVE cells that disagree flips both red; a
+    column with one LIVE cell + offline Pi stays neutral (we don't
+    know if Pi agrees or disagrees yet — wait for it to come back).
+    """
+    src = _read("heart-message-manager/static/sign_status.js")
+    apply_match = re.search(
+        r"function\s+applyVersionDriftRender\s*\([^)]*\)\s*\{([\s\S]*?)\n\}",
+        src,
+    )
+    assert apply_match is not None, "applyVersionDriftRender not found"
+    body = apply_match.group(1)
+    # The liveByColumn map must exist and gate Pi on snapshot presence.
+    assert "liveByColumn" in body, (
+        "applyVersionDriftRender must build a liveByColumn map gating "
+        "Pi on snapshot presence — without this, stale Pi cells flip red"
+    )
+    # The red-highlight predicate must check isLive, not just !isEmpty.
+    assert re.search(
+        r"isLive\s*&&\s*!isEmpty\s*&&\s*!\w*[Aa]gree",
+        body,
+    ), (
+        "red-highlight predicate must require isLive — without it, "
+        "stale Pi cells with textContent from a prior online session "
+        "flip red even when the Pi is offline"
+    )
+
+
+def test_offline_pi_diagnostic_text_preserved():
+    """When the Pi goes offline, the cell text MUST keep the last-known
+    SHA so the operator can see "Pi was running 86537d5 when it went
+    offline." The drift-comparison fix (test_pi_cell_only_live_with_snapshot)
+    only gates the comparison logic — `applyFieldsRender` still writes
+    to `[data-sign-status-field]` on every WS tick, and the offline
+    branch (state="offline") does NOT clear the cell.
+
+    If the cell text were cleared on offline transitions, the operator
+    would lose the diagnostic signal — "Pi was running X" becomes
+    "Pi is offline" with no last-known value to compare against.
+    """
+    src = _read("heart-message-manager/static/sign_status.js")
+    # applyFieldsRender's offline branch must NOT clear the cell DOM.
+    apply_fields_match = re.search(
+        r"function\s+applyFieldsRender\s*\([^)]*\)\s*\{([\s\S]*?)\n\}",
+        src,
+    )
+    assert apply_fields_match is not None, "applyFieldsRender not found"
+    body = apply_fields_match.group(1)
+    # The offline branch must be a guarded early-return that does NOT
+    # touch the per-field cell textContent. We check the early-return
+    # shape — there must be NO `el.textContent = ""` clearing the
+    # field cells in the offline branch.
+    offline_block = body.split('rendered.state === "offline"')[1]
+    # Take only up to the next unconditional block (the next `if` that
+    # isn't part of the early-return pattern). Restrict the search to
+    # the first ~30 lines after the offline check.
+    offline_window = offline_block.split("\n}\n")[0] if "}\n" in offline_block else offline_block[:1500]
+    assert "textContent = \"\"" not in offline_window, (
+        "applyFieldsRender's offline branch must NOT clear the cell "
+        "textContent — the operator wants to see the last-known SHA "
+        "even after the Pi goes offline"
+    )
+
+
 def test_browser_config_hard_fallback_removed():
     """The /api/config hard fallback was REMOVED. The browser's
     Browser/Config and Flask/Config cells now trust the WS receipt
@@ -359,16 +484,18 @@ def test_browser_config_hard_fallback_removed():
     )
 
 
-def test_base_template_sign_status_js_bumped_v7():
-    """The sign_status.js cache-buster must be ?v=7 or later so
-    browsers pin to the new receipt-driven Flask/Config update path
-    (behavior change: Flask/Config no longer requires a page refresh
-    after a /settings save). Memory rule: bump ?v=N when shipping
-    static JS changes (feedback_bump_cache_buster_with_static_js.md).
+def test_base_template_sign_status_js_bumped_v8():
+    """The sign_status.js cache-buster must be ?v=8 or later so
+    browsers pin to the per-column live-snapshot gating fix (Code
+    column was flipping red when the Pi was offline because the
+    comparison rule used the cell's stale textContent from a prior
+    online session as if it were a live signal). Memory rule: bump
+    ?v=N when shipping static JS changes
+    (feedback_bump_cache_buster_with_static_js.md).
     """
     html = _read("heart-message-manager/templates/base.html")
     m = re.search(r"sign_status\.js[^>]*\?v=(\d+)", html)
     assert m is not None, "sign_status.js not loaded with cache-buster"
-    assert int(m.group(1)) >= 7, (
-        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=7"
+    assert int(m.group(1)) >= 8, (
+        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=8"
     )

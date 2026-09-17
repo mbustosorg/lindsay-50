@@ -290,16 +290,21 @@ function applyVersionDriftRender(snapshot) {
   // the dashboard after a /settings save to see Flask's new SHA.
   const flaskConfig =
     _flaskConfigSha || cfg.flaskConfigSha || readCell("flask", "config");
-  // Always prefer the live snapshot values when present, falling back to
-  // whatever the cell currently shows. The cell text is owned by
-  // `applyFieldsRender` (writes on every WS tick when state != "offline")
-  // and is NOT cleared on offline transitions — so when the Pi drops off
-  // the cell keeps the last-seen SHA. That's the right diagnostic: the
-  // operator wants to see "Pi was running 86537d5 when it went offline"
-  // alongside Flask's current 12abcde, and the per-column comparison
-  // flips the mismatch red.
-  const piCode = (snapshot && snapshot.short_sha) || readCell("pi", "code");
-  const piConfig = (snapshot && snapshot.applied_config_sha) || readCell("pi", "config");
+  // Pi cells: ONLY use the snapshot's live values when we have a
+  // snapshot. Reading the cell's stale textContent as a fallback
+  // would surface the last-known-good Pi SHA from a prior online
+  // session as if it were a live signal — Flask and Browser might
+  // agree on the current code while the Pi cell carries the
+  // previous build's SHA, and the column rule would (correctly per
+  // its own logic) flip red. That's a false positive: the Pi is
+  // OFFLINE, not running different code. The cell text below
+  // still renders the last-known SHA so the operator can see
+  // "Pi was running 86537d5 when it went offline" — we just don't
+  // use it for the drift comparison.
+  const piHasLiveSnapshot = Boolean(snapshot && snapshot.short_sha);
+  const piHasLiveAppliedConfig = Boolean(snapshot && snapshot.applied_config_sha);
+  const piCode = (snapshot && snapshot.short_sha) || "";
+  const piConfig = (snapshot && snapshot.applied_config_sha) || "";
   const browserCode = readCell("browser", "code");
   // Browser/Config is read from the module cache (`_browserConfigSha`)
   // rather than the cell DOM — applyBrowserConfigReceipt writes the
@@ -313,30 +318,45 @@ function applyVersionDriftRender(snapshot) {
     code: { flask: flaskCode, pi: piCode, browser: browserCode },
     config: { flask: flaskConfig, pi: piConfig, browser: browserConfig },
   };
+  // Per-column "which rows are backed by a live signal" map. Pi is
+  // live ONLY when the snapshot carries short_sha / applied_config_sha;
+  // Flask and Browser are always live (page-rendered + receipt-driven).
+  // The drift rule only compares LIVE signals — a stale Pi cell is
+  // treated as "we don't know yet" even though its textContent carries
+  // a SHA from a prior online session.
+  const liveByColumn = {
+    code: { flask: true, pi: piHasLiveSnapshot, browser: true },
+    config: { flask: true, pi: piHasLiveAppliedConfig, browser: true },
+  };
 
-  // Per-column red-highlight: if any two populated cells disagree,
-  // every populated cell in that column flips red. Empty cells stay
-  // neutral — cold start, not drift.
+  // Per-column red-highlight: if any two LIVE cells disagree, every
+  // LIVE cell in that column flips red. Empty cells AND cells whose
+  // backing source is offline stay neutral — "we don't know yet" is
+  // not drift.
   for (const col of VERSION_DRIFT_COLUMNS) {
     const vals = cellsByColumn[col];
-    const populated = Object.values(vals).filter((v) => v && v.length > 0);
-    // All populated cells agree iff there's at most one unique value.
-    const allAgree =
-      populated.length === 0 ||
-      populated.every((v) => v === populated[0]);
+    const live = liveByColumn[col];
+    const liveVals = Object.entries(vals)
+      .filter(([row, v]) => live[row] && v && v.length > 0)
+      .map(([, v]) => v);
+    const liveAllAgree =
+      liveVals.length === 0 ||
+      liveVals.every((v) => v === liveVals[0]);
     for (const row of VERSION_DRIFT_ROWS) {
       const el = table.querySelector(
         `[data-version-drift-cell="${row}-${col}"]`
       );
       if (!el) continue;
       const v = vals[row];
+      const isLive = live[row];
       const isEmpty = !v || v.length === 0;
       el.classList.remove("text-red-700", "bg-red-100", "text-slate-700");
-      if (!isEmpty && !allAgree) {
+      if (isLive && !isEmpty && !liveAllAgree) {
         el.classList.add("text-red-700", "bg-red-100");
       } else {
-        // Neutral slate when populated-and-agree OR empty. Empty is
-        // explicitly "we don't know yet" — not drift.
+        // Neutral slate when LIVE+agree, LIVE+empty (shouldn't happen),
+        // or NOT-LIVE (Pi offline). The cell's textContent is unchanged
+        // when not-live — the operator still sees the last-known SHA.
         el.classList.add("text-slate-700");
       }
     }
