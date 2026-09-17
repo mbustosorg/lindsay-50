@@ -664,22 +664,41 @@ export function createMqttWsClient({
       emitStatus("connected", detail);
     };
     socket.onmessage = (event) => {
-      console.log("[mqtt-ws] socket.onmessage fired, data type=" + (event.data && event.data.constructor && event.data.constructor.name));
+      console.log(
+        "[mqtt-ws] socket.onmessage fired, data type=" +
+        (event.data && event.data.constructor && event.data.constructor.name)
+      );
+      console.log("[mqtt-ws] POINT_1 reached: onmessage entered");
       let data;
       if (event.data instanceof ArrayBuffer) {
+        console.log(
+          "[mqtt-ws] POINT_2 reached: ArrayBuffer branch; bytes=" + event.data.byteLength +
+          " first8=" + Array.from(new Uint8Array(event.data).slice(0, 8))
+            .map(b => b.toString(16).padStart(2, '0')).join(' ')
+        );
         data = new Uint8Array(event.data);
       } else if (event.data instanceof Blob) {
+        console.log("[mqtt-ws] POINT_2 reached: Blob branch");
         // Some browsers deliver Blob — convert via FileReader.
         const reader = new FileReader();
-        reader.onload = () => ingest(new Uint8Array(reader.result));
+        reader.onload = () => {
+          console.log("[mqtt-ws] POINT_2b reached: Blob FileReader onload");
+          ingest(new Uint8Array(reader.result));
+        };
         reader.readAsArrayBuffer(event.data);
         return;
       } else {
+        console.log(
+          "[mqtt-ws] POINT_2 reached: text frame branch; preview=" +
+          String(event.data).slice(0, 80)
+        );
         // Text frame — treat as envelope payload directly.
         emitEnvelope(String(event.data));
         return;
       }
+      console.log("[mqtt-ws] POINT_3 reached: about to call ingest()");
       ingest(data);
+      console.log("[mqtt-ws] POINT_4 reached: ingest() returned");
     };
     socket.onerror = (event) => {
       // The WebSocket `error` event doesn't carry detail in browsers, but
