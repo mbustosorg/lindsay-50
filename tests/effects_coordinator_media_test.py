@@ -314,11 +314,14 @@ def test_out_to_in_installs_browser_overlay_during_tick():
 
     mgr = _StubMessageManager(messages=[msg_view])
     # Tight pacing — intro=0, fade=0.05, hold=15 (default enough).
+    # `lookback_days=MAX` keeps the hardcoded 2026-07-10 message in
+    # the eligible set (the default 14-day window would filter it out).
     mgr.config.effects_settings = EffectsSettings(
         fade_seconds=0.05,
         intro_seconds=0.0,
         hold_seconds=15.0,
         idle_seconds=300.0,
+        lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
     )
 
     display = _StubDisplay()
@@ -1176,6 +1179,7 @@ def test_cycler_complete_does_not_leak_suppress_flag_to_next_mms(tmp_path):
         intro_seconds=0.0,
         hold_seconds=0.1,
         idle_seconds=0.1,
+        lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
     )
 
     display = _StubDisplay()
@@ -1298,6 +1302,7 @@ def test_cycler_complete_suppress_flag_still_fires_for_same_message(tmp_path):
         intro_seconds=0.0,
         hold_seconds=0.1,
         idle_seconds=0.1,
+        lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
     )
 
     display = _StubDisplay()

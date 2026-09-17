@@ -143,19 +143,35 @@ class _StubMessageManager:
         from collections import deque
         from lib_shared.models import EffectsSettings, TextSettings
 
-        # Tests use hardcoded `received_at` values from 2026-01-XX. The
-        # production lookback window (default 14 days from the
-        # `lookback_days` setting) is far narrower than a half-year
-        # gap, so the tests would see an empty eligible set. Default
-        # the stub to the maximum possible lookback (365 days) so
-        # the hardcoded timestamps stay eligible. Tests that
-        # specifically pin the eligibility filter override
-        # `effects_settings=EffectsSettings(lookback_days=...)` to
-        # something narrower.
-        effective_settings = effects_settings or EffectsSettings(
-            lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
-            selector_algorithm="weighted",
-        )
+        # Tests use hardcoded `received_at` values from 2026-01-XX through
+        # 2026-09-XX. The production lookback window (default 14 days from
+        # the `lookback_days` setting) is far narrower than that span, so
+        # the tests would see an empty eligible set. Default the stub to
+        # the maximum possible lookback (365 days) so the hardcoded
+        # timestamps stay eligible.
+        #
+        # When a test passes `effects_settings=EffectsSettings(...)` to
+        # pin specific pacing fields (fade/hold/etc.), the test usually
+        # DOESN'T also pass `lookback_days` — they care about fade timing,
+        # not eligibility. We merge the test's overrides onto a base
+        # that has `lookback_days=MAX_LOOKBACK_DAYS` so the hardcoded
+        # timestamps still qualify unless the test explicitly narrows the
+        # window with `EffectsSettings(lookback_days=...)`.
+        if effects_settings is None:
+            effective_settings = EffectsSettings(
+                lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
+                selector_algorithm="weighted",
+            )
+        else:
+            effective_settings = EffectsSettings(
+                lookback_days=EffectsSettings.MAX_LOOKBACK_DAYS,
+                selector_algorithm=effects_settings.selector_algorithm,
+                fade_seconds=effects_settings.fade_seconds,
+                intro_seconds=effects_settings.intro_seconds,
+                hold_seconds=effects_settings.hold_seconds,
+                idle_seconds=effects_settings.idle_seconds,
+                effects=effects_settings.effects,
+            )
         self.messages = SimpleNamespace(get_messages=self._get_messages)
         self._entries = list(messages or [])
         # Round 4 (queue redesign): mirror production. `add_message`

@@ -272,52 +272,103 @@ def test_browser_config_sha_module_cache_exists():
     )
 
 
-def test_browser_config_hard_fallback_exists():
-    """When `App.getLastConfigReceipt()` returns empty (PyScript
-    marshalling slow/broken, or `window._message_manager` not yet
-    installed), the Browser/Config cell stays "—" indefinitely.
-    The hard fallback (`fetchConfigShaFallback`) hits /api/config
-    directly to populate the cell with the wire-stamped SHA within
-    ~50ms of page load. The receipt path overrides if a later WS
-    envelope carries a different value — drift detection still
-    works. Without this fallback, the cell is stuck "—" on any
-    browser where the PyScript receipt round-trip fails."""
+def test_flask_config_sha_module_cache_exists():
+    """Same caching pattern as `_browserConfigSha`, but for the
+    Flask/Config cell. Flask is the publisher of the config
+    envelope — by definition, the SHA the BROWSER receives IS the
+    SHA Flask just published. `applyBrowserConfigReceipt` mirrors
+    that one value into both cells so the operator doesn't have to
+    hard-refresh after a /settings save to see Flask's new SHA."""
     src = _read("heart-message-manager/static/sign_status.js")
-    assert "function fetchConfigShaFallback" in src, (
-        "fetchConfigShaFallback function not declared"
+    assert "let _flaskConfigSha" in src, (
+        "_flaskConfigSha module-level cache not declared"
     )
-    # It must hit /api/config directly — that's the canonical
-    # source for the wire-stamped SHA before any WS envelope lands.
+    # The comparison site must read the cache (with cfg.flaskConfigSha
+    # as the page-load fallback, and readCell as the last-resort
+    # static textContent). The cache must come FIRST so a fresh
+    # receipt overrides any page-load stale value.
+    assert re.search(
+        r'_flaskConfigSha\s*\|\|\s*cfg\.flaskConfigSha',
+        src,
+    ), (
+        "applyVersionDriftRender must read _flaskConfigSha first, then "
+        "fall back to cfg.flaskConfigSha, then to the cell DOM"
+    )
+
+
+def test_apply_browser_config_receipt_writes_both_cells():
+    """`applyBrowserConfigReceipt` MUST write the same SHA into
+    BOTH the Browser/Config and Flask/Config cells. Flask is the
+    publisher, so a receipt = a Flask publish — there's no scenario
+    where those two values should diverge. A single receipt path
+    drives both cells; the Flask/Config cell is no longer
+    page-load-only.
+    """
+    src = _read("heart-message-manager/static/sign_status.js")
+    # Both cell lookups must exist. Use a broad pattern — both
+    # selectors must appear in the file.
+    assert 'version-drift-cell="browser-config"' in src, (
+        "applyBrowserConfigReceipt must read the browser-config cell"
+    )
+    assert 'version-drift-cell="flask-config"' in src, (
+        "applyBrowserConfigReceipt must also write the flask-config cell — "
+        "Flask is the publisher, so the receipt IS Flask's published SHA"
+    )
+    # The two caches must be set from the same receipt sha, adjacently.
+    assert re.search(
+        r'_browserConfigSha\s*=\s*sha;\s*\n\s*_flaskConfigSha\s*=\s*sha',
+        src,
+    ), (
+        "applyBrowserConfigReceipt must set both _browserConfigSha and "
+        "_flaskConfigSha from the same receipt sha"
+    )
+
+
+def test_browser_config_hard_fallback_removed():
+    """The /api/config hard fallback was REMOVED. The browser's
+    Browser/Config and Flask/Config cells now trust the WS receipt
+    path exclusively (per operator call: don't add complexity, the
+    receipt path is sufficient — Flask publishes, so a receipt IS
+    a Flask publish and the same SHA drives both cells). If the
+    receipt path is broken — broker fan-out drop, PyScript
+    marshalling slow — both cells stay "—" rather than silently
+    masking the underlying issue by polling /api/config. Drift
+    detection is preserved: a populated cell that disagrees with
+    the row's canonical value still flips red via
+    `applyVersionDriftRender`'s per-column rule.
+    """
+    src = _read("heart-message-manager/static/sign_status.js")
+    # The fallback function MUST be gone — if it returns, the receipt
+    # path's staleness will be hidden by a /api/config poll.
+    assert "function fetchConfigShaFallback" not in src, (
+        "fetchConfigShaFallback was removed — trust the WS receipt path only"
+    )
+    # The re-entry guard existed only to throttle the fallback; it
+    # must be gone too.
+    assert "_configFallbackInFlight" not in src, (
+        "_configFallbackInFlight was removed — no fallback to throttle"
+    )
+    # No direct /api/config fetch from the dashboard renderer — the
+    # rule that hid the previous bug.
     assert re.search(
         r'fetch\([\'"]/api/config[\'"]',
         src,
-    ), "hard fallback must fetch /api/config directly"
-    # It must guard against re-entry so the 5s tick doesn't hammer.
-    assert "_configFallbackInFlight" in src, (
-        "hard fallback must guard against re-entry on 5s tick"
-    )
-    # It must write to _browserConfigSha AND the cell DOM so the
-    # comparison logic and the rendered text are in lockstep.
-    assert re.search(
-        r"_browserConfigSha\s*=\s*sha",
-        src,
-    ), "hard fallback must update _browserConfigSha cache"
-    # applyBrowserConfigReceipt must INVOKE the fallback when the
-    # receipt path returns empty (or App isn't installed yet).
-    assert src.count("fetchConfigShaFallback(") >= 3, (
-        "fetchConfigShaFallback must be called from at least 3 sites "
-        "(App-missing branch, receipt-empty branch, receipt-error branch)"
+    ) is None, (
+        "dashboard renderer must not fetch /api/config — that's the WS "
+        "receipt path's job. A direct fetch would hide broker fan-out drops."
     )
 
 
-def test_base_template_sign_status_js_bumped_v4():
-    """The sign_status.js cache-buster must be ?v=4 or later so
-    browsers pin to the new hard-fallback code. Memory rule:
-    bump ?v=N when shipping static JS changes
-    (feedback_bump_cache_buster_with_static_js.md)."""
+def test_base_template_sign_status_js_bumped_v7():
+    """The sign_status.js cache-buster must be ?v=7 or later so
+    browsers pin to the new receipt-driven Flask/Config update path
+    (behavior change: Flask/Config no longer requires a page refresh
+    after a /settings save). Memory rule: bump ?v=N when shipping
+    static JS changes (feedback_bump_cache_buster_with_static_js.md).
+    """
     html = _read("heart-message-manager/templates/base.html")
     m = re.search(r"sign_status\.js[^>]*\?v=(\d+)", html)
     assert m is not None, "sign_status.js not loaded with cache-buster"
-    assert int(m.group(1)) >= 4, (
-        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=4"
+    assert int(m.group(1)) >= 7, (
+        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=7"
     )

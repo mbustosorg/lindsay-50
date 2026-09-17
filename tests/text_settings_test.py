@@ -24,9 +24,18 @@ def test_text_effects_whitelist():
 
 
 def test_to_dict_contains_wire_fields():
-    """to_dict emits the wire fields including name_display_format + text_scrim."""
+    """to_dict emits the wire fields including name_display_format + text_scrim
+    + messages_enabled (the master toggle for whether to render the scroller at
+    all — added so operators can blank the sign with patterns-only cycling)."""
     d = TextSettings().to_dict()
-    assert set(d.keys()) == {"speed", "color", "text_effect", "name_display_format", "text_scrim"}
+    assert set(d.keys()) == {
+        "speed",
+        "color",
+        "text_effect",
+        "name_display_format",
+        "text_scrim",
+        "messages_enabled",
+    }
 
 
 def test_text_scrim_default_off():

@@ -185,12 +185,29 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
             self.speed = kwargs.get("speed", 3)
             self.color = kwargs.get("color", 0xFFFFFF)
             self.text_effect = kwargs.get("text_effect", "scroll")
+            self.name_display_format = kwargs.get(
+                "name_display_format", "first_initial_if_duplicates"
+            )
+            # `text_scrim` is the band-darkness behind scrolling text (0..1).
+            # Added in round 11 — the live `lib_shared.models.TextSettings`
+            # exposes `text_scrim`, and the settings template renders the
+            # slider against `cfg.text_settings.text_scrim`. The fake
+            # needed to mirror the field or Jinja would raise
+            # `UndefinedError` when rendering the page.
+            self.text_scrim = kwargs.get("text_scrim", 0.0)
+            # `messages_enabled` is the master toggle for whether to
+            # render the scroller at all. Same rationale — live model
+            # has it, fake must too.
+            self.messages_enabled = kwargs.get("messages_enabled", True)
 
         def to_dict(self):
             return {
                 "speed": self.speed,
                 "color": self.color,
                 "text_effect": self.text_effect,
+                "name_display_format": self.name_display_format,
+                "text_scrim": self.text_scrim,
+                "messages_enabled": self.messages_enabled,
             }
 
     class _FakeEffectsSettings:
@@ -476,8 +493,14 @@ class TestUpgradeSectionRendered:
         body = resp.data.decode("utf-8")
         # Flask version cell
         assert "data-upgrade-flask-version" in body
-        # Running Pi version cell — auto-populated by sign_status.js.
-        assert 'data-sign-status-field="short_sha"' in body
+        # Note: the Running Pi version column was REMOVED in issue #71
+        # follow-up — the short SHA already lives in the dashboard's
+        # Versions & Config card (heart-message-manager/templates/
+        # dashboard.html), so duplicating it here was noise. The
+        # settings page now shows Flask version + Target Pi version
+        # only. If this assertion ever needs to return, it's because
+        # the running-Pi cell was reinstated in the upgrade section —
+        # check the settings.html comment block (lines ~60-71) first.
 
     def test_force_upgrade_button_renders(self, client):
         resp = client.get("/settings")

@@ -282,7 +282,14 @@ function applyVersionDriftRender(snapshot) {
   }
 
   const flaskCode = cfg.flaskVersion || readCell("flask", "code");
-  const flaskConfig = cfg.flaskConfigSha || readCell("flask", "config");
+  // Flask/Config: prefer the live receipt cache (set by
+  // `applyBrowserConfigReceipt` whenever a new config envelope lands),
+  // fall back to the page-load value baked into APP_CONFIG, fall back
+  // to whatever the cell currently shows. The receipt cache is the
+  // post-save value — the operator no longer needs to hard-refresh
+  // the dashboard after a /settings save to see Flask's new SHA.
+  const flaskConfig =
+    _flaskConfigSha || cfg.flaskConfigSha || readCell("flask", "config");
   // Always prefer the live snapshot values when present, falling back to
   // whatever the cell currently shows. The cell text is owned by
   // `applyFieldsRender` (writes on every WS tick when state != "offline")
@@ -336,90 +343,63 @@ function applyVersionDriftRender(snapshot) {
   }
 }
 
-// Module-level cache of the most-recent browser-applied config_sha.
-// Written by `applyBrowserConfigReceipt()` and read by
-// `applyVersionDriftRender` so the per-column disagreement logic
-// runs against the same value the cell DOM shows — without an
-// async-read race against the cell write. Initialized to "" so
-// cold start reads as "we don't know yet" (treated as empty by
-// the column-agreement rule).
+// Module-level caches of the most-recent config_sha the browser has
+// seen on the wire, captured from the in-browser MessageManager's
+// receipt of Flask's published config envelope. Written by
+// `applyBrowserConfigReceipt()` and read by `applyVersionDriftRender`
+// so the per-column disagreement logic runs against the same value
+// the cells display — without an async-read race against the cell
+// write. Initialized to "" so cold start reads as "we don't know yet"
+// (treated as empty by the column-agreement rule).
+//
+// Two caches, one source. The receipt is the SHA Flask just published
+// — so by definition the SHA the BROWSER received IS the SHA Flask
+// published. We mirror that one value into both the Browser/Config
+// cell AND the Flask/Config cell (the latter was previously page-load
+// only; now it updates from the receipt too, avoiding a hard-refresh
+// after every /settings save). Pi/Config remains driven by the status
+// flow at its own 5s cadence.
+//
+// Source of truth is the MQTT receipt path ONLY. The browser's
+// MessageManager receives the same config envelope Flask publishes;
+// `_last_applied_config_sha` is captured at receipt time and exposed
+// via `App.getLastConfigReceipt()`. If the receipt path is broken,
+// both cells stay "—" — that's the correct diagnostic, not something
+// to paper over with a /api/config fallback that would hide broker
+// fan-out drops. (Operator call: trust the WS path; only refresh on
+// actual broker-side breakage, which the red cell will surface.)
 let _browserConfigSha = "";
-
-// One-shot /api/config fetch used as a deterministic hard fallback
-// for the Browser/Config cell. The primary path is the PyScript-side
-// `App.getLastConfigReceipt()` — that one tracks what the BROWSER's
-// in-memory MessageManager actually applied from the MQTT receipt.
-// When the PyScript marshalling round-trip is slow or unavailable
-// (cold load before `install_runtime()` lands), the cell stays
-// "—" indefinitely. Falling back to a direct /api/config fetch
-// populates the cell within ~50ms of page load with the wire-stamped
-// SHA Flask most recently published — which is the same value the
-// broker fans out, so the no-drift case is indistinguishable from
-// the receipt path. Drift detection still works: if a later WS
-// envelope carries a different SHA, the receipt path overrides the
-// fallback and the cell flips red (the diagnostic the operator
-// wants). One fetch per page load — debounced via `_configFallbackInFlight`
-// so the 5s tick doesn't hammer the endpoint.
-let _configFallbackInFlight = false;
-
-async function fetchConfigShaFallback() {
-  if (_configFallbackInFlight) return;
-  if (typeof fetch !== "function") return;
-  if (_browserConfigSha.length > 0) return; // already populated
-  _configFallbackInFlight = true;
-  try {
-    const resp = await fetch("/api/config", {
-      cache: "no-store",
-      credentials: "same-origin",
-    });
-    if (!resp.ok) return;
-    const data = await resp.json();
-    const sha = (data && typeof data.config_sha === "string")
-      ? data.config_sha
-      : "";
-    if (sha.length > 0) {
-      _browserConfigSha = sha;
-      const cell = document.querySelector(
-        '[data-version-drift-cell="browser-config"]'
-      );
-      if (cell) cell.textContent = sha;
-    }
-  } catch (e) {
-    // Silent — the receipt path will populate the cell if it's
-    // working. This fallback exists for the case where the receipt
-    // path is NOT working; logging every failure here would create
-    // console noise on every page load.
-  } finally {
-    _configFallbackInFlight = false;
-  }
-}
+let _flaskConfigSha = "";
 
 // Pull the most-recent browser-applied config_sha from the in-browser
-// MessageManager and write it into the Browser/Config cell + module
-// cache. Called on every on_change fan-out (config envelope arrival)
-// AND on every 5s renderAll tick — the tick path is the safety net
-// for cases where the change hook missed (PyScript race during cold
-// start, broker fan-out drop, etc.). Returns a Promise — the callers
-// are fire-and-forget (the cell DOM update runs in a microtask).
+// MessageManager and write it into the Browser/Config cell, the
+// Flask/Config cell, and both module caches. Called on every on_change
+// fan-out (config envelope arrival) AND on every 5s renderAll tick —
+// the tick path is the safety net for cases where the change hook
+// missed (PyScript race during cold start). Returns a Promise — the
+// callers are fire-and-forget (the cell DOM updates run in a microtask).
 async function applyBrowserConfigReceipt() {
-  const cell = document.querySelector(
+  const browserCell = document.querySelector(
     '[data-version-drift-cell="browser-config"]'
   );
-  if (!cell) return;
+  const flaskCell = document.querySelector(
+    '[data-version-drift-cell="flask-config"]'
+  );
+  if (!browserCell && !flaskCell) return;
   // Write the cached value synchronously first so the next synchronous
   // `applyVersionDriftRender` (if scheduled) sees the latest receipt —
   // keeps the cell DOM and the comparison logic in lockstep.
   if (_browserConfigSha.length > 0) {
-    cell.textContent = _browserConfigSha;
+    if (browserCell) browserCell.textContent = _browserConfigSha;
+    if (flaskCell) flaskCell.textContent = _browserConfigSha;
   }
   if (typeof window.App === "undefined" || !window.App.getLastConfigReceipt) {
+    // PyScript shim not installed yet — show "—" and wait for the
+    // 5s tick to retry. No fallback: the receipt path is the only
+    // source of truth for both cells.
     if (_browserConfigSha.length === 0) {
-      cell.textContent = VERSION_DRIFT_DASH;
-      // Hard fallback: PyScript shim not installed yet. Fetch
-      // /api/config directly to populate the cell with the
-      // wire-stamped SHA. Drift detection still works — a later
-      // WS receipt can override this with a different value.
-      fetchConfigShaFallback();
+      if (browserCell) browserCell.textContent = VERSION_DRIFT_DASH;
+      if (flaskCell) flaskCell.textContent = VERSION_DRIFT_DASH;
     }
     return;
   }
@@ -428,24 +408,20 @@ async function applyBrowserConfigReceipt() {
     const sha = (receipt && receipt.sha) || "";
     if (sha && sha.length > 0) {
       _browserConfigSha = sha;
-      cell.textContent = sha;
-    } else {
-      // PyScript shim is installed but the receipt round-trip
-      // returned empty. Don't immediately fall back — wait one
-      // tick of the 5s interval (the receipt will populate when
-      // the seed completes). But if the cell is STILL empty after
-      // the safety-net tick, the receipt path is broken in this
-      // browser; trigger the hard fallback to unstick the cell.
-      if (_browserConfigSha.length === 0) {
-        cell.textContent = VERSION_DRIFT_DASH;
-        fetchConfigShaFallback();
-      }
+      _flaskConfigSha = sha;
+      if (browserCell) browserCell.textContent = sha;
+      if (flaskCell) flaskCell.textContent = sha;
+    } else if (_browserConfigSha.length === 0) {
+      // Receipt round-trip returned empty (no envelope yet, or
+      // seed hasn't completed). Show "—" and wait for the 5s tick
+      // or a subsequent on_change to populate. No /api/config
+      // fallback — hiding a broken receipt path would mask broker
+      // fan-out drops.
+      if (browserCell) browserCell.textContent = VERSION_DRIFT_DASH;
+      if (flaskCell) flaskCell.textContent = VERSION_DRIFT_DASH;
     }
   } catch (e) {
     console.warn("[sign_status.js] applyBrowserConfigReceipt failed:", e);
-    if (_browserConfigSha.length === 0) {
-      fetchConfigShaFallback();
-    }
   }
 }
 
