@@ -1096,29 +1096,25 @@ def _info_records(caplog, *substrings):
 import logging  # noqa: E402 — kept at module level for the helpers below
 
 
-def test_begin_out_emits_info_log(caplog):
+def test_begin_out_transitions_intro_to_out(caplog):
     """`_begin_out` fires for boot's intro→out + every new-SMS interrupt
-    during hold/background; both must surface at INFO so the journal shows
-    "the sign just received a message" without flipping LOG_LEVEL."""
+    during hold/background. The transition itself is the behavior under
+    test (the per-transition INFO log was dropped during the
+    fade-noise cleanup; the consolidated per-cycle `Coordinator: showing`
+    log replaces it).
+    """
     clock = _Clock()
     monkey = pytest.MonkeyPatch()
     monkey.setattr(time, "monotonic", clock)
     coord, *_ = _build(intro_seconds=0.0, fade_seconds=0.05)
     coord.start()
 
-    caplog.set_level(logging.INFO)
+    assert coord.mode == "intro", f"setup expected intro mode; got {coord.mode!r}"
     clock.advance(0.001)
     coord.tick()  # intro → out via _begin_out
-
-    # Log shape consolidated in debug-visibility: single
-    # "Coordinator: starting fade out from mode=X effect=Y trigger=Z"
-    # line replaces the old verbose "Coordinator._begin_out:" form.
-    matches = _info_records(caplog, "starting fade out")
-    assert matches, "Expected INFO log line 'starting fade out'; got: " + "; ".join(
-        r.getMessage() for r in caplog.records
+    assert coord.mode == "out", (
+        f"intro → out transition did not fire; got {coord.mode!r}"
     )
-    # The log line carries the from-mode and the active effect for context.
-    assert "from mode=intro" in matches[0].getMessage()
     monkey.undo()
 
 
@@ -1197,7 +1193,9 @@ def test_background_re_rolls_on_idle_timeout(caplog, monkeypatch):
 
     Drive the coordinator through hold → text_out → background and
     advance the clock past `idle_seconds`. The next tick
-    fires `_begin_out` and the log includes `idle_seconds=<value>`.
+    fires `_begin_out` (mode flips to "out") — the consolidated
+    per-cycle `Coordinator: showing` log replaces the old
+    per-transition `Coordinator background→out (idle)` log.
     """
     clock = _Clock()
     monkeypatch.setattr(time, "monotonic", clock)
@@ -1218,7 +1216,6 @@ def test_background_re_rolls_on_idle_timeout(caplog, monkeypatch):
     )
     coord.start()
 
-    caplog.set_level(logging.INFO)
     # Drain past intro → out → in → hold → text_out → background.
     _drive(clock, coord, 0.3)
     assert coord.mode == "background", f"Setup expected to land in background mode; got {coord.mode!r}"
@@ -1227,15 +1224,16 @@ def test_background_re_rolls_on_idle_timeout(caplog, monkeypatch):
     # Each tick advances by ~0.01s; advance 0.5 s to comfortably exceed.
     _drive(clock, coord, 0.5)
 
-    # The idle trigger must have fired at least once.
-    matches = _info_records(caplog, "Coordinator background→out", "(idle)")
-    assert matches, (
-        "Expected at least one 'Coordinator background→out' INFO log with "
-        "the (idle) trigger when the coordinator sat in background past "
-        "idle_seconds. If missing, the post-hold gap isn't wired up."
+    # The idle trigger must have fired at least once — the
+    # coordinator leaves background when `_begin_out` runs.
+    # After 0.5s with idle_seconds=0.05 and the rest of the
+    # cycle, mode may be "out", "in", "hold", or "text_out"
+    # depending on tick timing; what we care about is "not
+    # still sitting in background."
+    assert coord.mode != "background", (
+        f"Expected coordinator to leave background after "
+        f"idle_seconds elapsed; still in mode={coord.mode!r}"
     )
-    msg_log = matches[0].getMessage()
-    assert "0.1" in msg_log, f"Expected idle_seconds=0.05 in the log; got: {msg_log!r}"
 
 
 def test_background_replaces_on_deck_on_fresh_id(caplog):

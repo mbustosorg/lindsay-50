@@ -567,19 +567,9 @@ class EffectsCoordinator:
         trace live config edits in the journal.
         """
         effects_settings = self.effects_settings
-        log.info(
-            "Coordinator rotation refresh at cycle boundary: %s",
-            [e.get("name") for e in effects_settings.effects],
-        )
         self.effects = build_effects(effects_settings, display=display)
 
         text_settings = self.text_settings
-        log.info(
-            "Coordinator scroller settings refresh: color=%s speed=%s scrim=%s",
-            text_settings.color,
-            text_settings.speed,
-            getattr(text_settings, "text_scrim", 0.0),
-        )
         scroller.set_color(text_settings.color)
         scroller.set_speed(text_settings.speed)
         # Text-scrim readability aid (0.0 off). set_scrim exists on
@@ -636,9 +626,6 @@ class EffectsCoordinator:
         # finished) cycler and a NEW cycler is the right answer.
         picked = self.current_message
         if picked is None:
-            log.info(
-                "Coordinator media-cycler: no current message; rotation effect will run instead",
-            )
             return None
         if self._suppress_media_override:
             suppressed_for = self._suppress_for_message_id
@@ -648,10 +635,6 @@ class EffectsCoordinator:
                 # rebuild guard fires. Clear the flag and skip.
                 self._suppress_media_override = False
                 self._suppress_for_message_id = None
-                log.info(
-                    "Coordinator media-cycler: suppressed by cycler fall-back (message_id=%s); rotation effect will run instead",
-                    picked_id,
-                )
                 return None
             # Different message — the cycler that exhausted was for
             # an earlier message whose fade-out is now complete.
@@ -660,28 +643,12 @@ class EffectsCoordinator:
             # a fresh MMS picked during the next cycle would
             # silently fall through to the rotation effect instead
             # of getting its own cycler.
-            log.info(
-                "Coordinator media-cycler: stale suppression flag cleared (suppressed_for=%s picked=%s); building new cycler",
-                suppressed_for,
-                picked_id,
-            )
             self._suppress_media_override = False
             self._suppress_for_message_id = None
         media = getattr(picked, "media", None) or []
         if not media:
-            log.info(
-                "Coordinator media-cycler: current message has empty media; "
-                "rotation effect will run (message_id=%s body=%r)",
-                picked.id,
-                picked.body,
-            )
             return None
         if self.display is None:
-            log.info(
-                "Coordinator media-cycler: no display bound (browser preview, no canvas); "
-                "skipping media override message_id=%s",
-                picked.id,
-            )
             return None
         hold_seconds = self.message_manager.get_effects_settings().hold_seconds
         if self._is_browser:
@@ -740,53 +707,46 @@ class EffectsCoordinator:
         return type(self.effects[next_idx]).__name__
 
     def _emit_selected_log(self, effect_name: str | None = None) -> None:
-        """Emit the `Coordinator: selected` log for the picked body.
+        """Emit the consolidated per-cycle log line for the picked message.
 
-        Round 4 (debug-visibility): the selected log carries the
-        picked message AND the effect that will render it, all in
-        one record. The operator's first journal line for any
-        transition now answers "what is on the sign and how is it
-        being rendered" — `msg_id + body + effect` plus a pretty-
-        printed JSON of the full `Message`. The follow-on `starting
-        fade out` and `starting fade in` lines keep the timeline
-        without repeating the same facts.
+        Shape:
+            Coordinator: showing msg_id=<id> sender=<phone> body=<repr>
+                        effect=<class> media=<count> next=<on_deck_id_or_->
 
-        The `effect_name` argument is optional — when the pick
-        happens with an empty buffer (intro_done + nothing
-        buffered, cycler_complete + nothing buffered) the caller
-        has nothing to log and falls back to the `<no picked
-        entry>` summary. When the caller provides a name, it's the
-        resolved "next effect" via `_resolve_next_effect_name()`.
+        Single line per pick. Replaces the old multi-line
+        `Coordinator: selected` + indented JSON dump, plus the
+        `out→in`, `in→hold`, `hold→text_out`, `background→out`,
+        and per-phase fade-out/fade-in echoes that used to fire on
+        every cycle. Operators now see one line per dispatch — the
+        picked message + its effect + the queued next message
+        (`next=on_deck.id` when the buffer has a follow-up, `next=-`
+        when the queue is empty).
+
+        `effect_name` is optional. When the caller has nothing to
+        log (empty pick path), we still emit a one-shot `<no picked
+        entry>` line so a fully-empty buffer doesn't go silent.
         """
-        import json as _json
-
         entry = self._last_picked_entry
         if entry is None:
-            log.info("Coordinator: selected <no picked entry>")
+            log.info("Coordinator: showing <no picked entry>")
             return
         msg = entry.message
         media_list = list(getattr(msg, "media", []) or [])
-        media_types = ", ".join(sorted({m.get("type", "?") for m in media_list}))
-        type_suffix = f" ({media_types})" if media_types else ""
-        # Round 4: effect name folds into the same summary line. A
-        # missing name (empty pick path) shows `effect=?` so the
-        # line shape is stable for log scrapers — operators grep
-        # for `effect=MediaCycler`, `effect=Honeycomb`, etc., and
-        # see exactly which effect will own the next hold.
-        effect_part = f"effect={effect_name} " if effect_name else "effect=? "
-        summary = (
-            f"Coordinator: selected "
-            f"msg_id={msg.id} "
-            f"sender={msg.sender} "
-            f"{effect_part}"
-            f"media={len(media_list)}{type_suffix} "
-            f"body={msg.body!r}"
+        effect = effect_name if effect_name else "?"
+        # `on_deck` is staged for the NEXT cycle; reading it here
+        # (after the pick has set it) lets operators see the queue
+        # in the same line as the current pick.
+        next_id = self.on_deck.id if self.on_deck is not None else "-"
+        log.info(
+            "Coordinator: showing msg_id=%s sender=%s body=%r "
+            "effect=%s media=%d next=%s",
+            msg.id,
+            msg.sender,
+            msg.body,
+            effect,
+            len(media_list),
+            next_id,
         )
-        json_body = _json.dumps(msg.to_dict(), indent=2, ensure_ascii=False)
-        # Single log call with embedded newlines so the block
-        # appears as one record in journalctl (matches the
-        # round-2 selected-log shape operators are used to).
-        log.info("%s\n  %s", summary, json_body.replace("\n", "\n  "))
 
     def _maybe_fall_back_to_rotation(self) -> None:
         """If `self.current` is a `MediaCycler` or `BrowserMediaOverlay`
@@ -887,13 +847,6 @@ class EffectsCoordinator:
         effects = self.effects
         if not effects:
             return
-        reason = "exhausted" if getattr(current, "exhausted", False) else "complete"  # type: ignore[attr-defined]
-        log.info(
-            "Coordinator media-cycler %s (%s): fading out for rotation effect=%s",
-            reason,
-            "BrowserMediaOverlay" if is_browser_overlay else "MediaCycler",
-            self.current_effect_name,
-        )
         # Trigger the existing fade-out machinery. `out` mode fades
         # `self.current` (the cycler) to 0, advances `self.idx`,
         # swaps to the next rotation effect at brightness 0, and
@@ -1005,7 +958,6 @@ class EffectsCoordinator:
         if int(wrap_count) > self._hold_wait_baseline_wraps:
             return True  # text finished a pass (scrolled off the left)
         if now >= self._hold_wait_deadline:
-            log.info("Coordinator hold: scroll-off wait hit backstop deadline; fading now")
             return True
         return False
 
@@ -1195,20 +1147,9 @@ class EffectsCoordinator:
         # trigger (which transition reason fired).
         #
         # Round 3 dropped the `last_text=` field that used to carry
-        # `self.last_shown_text`. That field was set only when text
-        # was truthy on the out→in transition — for media-only MMS
-        # (body='', the "I sent a pic!" case) it kept the body of
-        # the *previous* message, which leaked into the fade-out
-        # log well after the message had cycled off the sign. The
-        # body of the message that was on the sign is the job of
-        # the previous cycle's `Coordinator: selected` log; the
-        # fade-out log carries effect + trigger only.
-        log.info(
-            "Coordinator: starting fade out from mode=%s effect=%s trigger=%s",
-            self.mode,
-            self.current_effect_name,
-            getattr(self, "_begin_out_trigger", "-"),
-        )
+        # The previous cycle's `Coordinator: showing` log already
+        # carried the message body; the fade-out transition itself
+        # doesn't need to repeat it.
         self.mode = "out"
         self.fade_start = now
         self.last_step = 0.0
@@ -1384,14 +1325,6 @@ class EffectsCoordinator:
                 else:
                     scroller.set_text("", display.width)
 
-                log.info(
-                    "Coordinator out→in: idx=%d effect=%s message_id=%s text=%r media_override=%s",
-                    self.idx,
-                    self.current_effect_name,
-                    self.current_message.id if self.current_message is not None else "<none>",
-                    text if text else "",
-                    "yes" if media_override is not None else "no",
-                )
                 # Issue #26: write a `text_display` event to the
                 # Pi-local log immediately after the picked
                 # message begins rendering. The new on-deck
@@ -1444,12 +1377,6 @@ class EffectsCoordinator:
                 # Fresh hold → clear any latched "wait for scroll-off" state
                 # from the previous message (option b).
                 self._hold_wait_armed = False
-                log.info(
-                    "Coordinator in→%s: effect=%s text=%r",
-                    next_mode,
-                    self.current_effect_name,
-                    self.current_message.body if self.current_message is not None else "",
-                )
                 self.mode = next_mode
 
         elif mode == "hold":
@@ -1468,10 +1395,6 @@ class EffectsCoordinator:
             fresh = self._fresh_id_in_buffer()
             if fresh is not None and not self._current_is_active_media_cycler():
                 self.on_deck = fresh
-                log.info(
-                    "Coordinator hold: fresh SMS replaces on-deck (no interrupt) message_id=%s",
-                    fresh.id,
-                )
             # `self.mode == "hold"` guard: `_maybe_fall_back_to_rotation`
             # above may have already begun the fade-out (mode → "out")
             # for a completed/exhausted media cycler. Re-checking
@@ -1484,13 +1407,6 @@ class EffectsCoordinator:
                 and now - self.phase_start >= effects_settings.hold_seconds
                 and self._ready_to_fade_after_hold(scroller, display, now)
             ):
-                log.info(
-                    "Coordinator hold→text_out: effect=%s held_text=%r held_for=%.1fs hold_seconds=%.1f",
-                    self.current_effect_name,
-                    self.current_message.body if self.current_message is not None else "",
-                    now - self.phase_start,
-                    effects_settings.hold_seconds,
-                )
                 self._hold_wait_armed = False
                 self.mode = "text_out"
                 self.fade_start = now
@@ -1534,20 +1450,10 @@ class EffectsCoordinator:
             fresh = self._fresh_id_in_buffer()
             if fresh is not None and not self._current_is_active_media_cycler():
                 self.on_deck = fresh
-                log.info(
-                    "Coordinator background: fresh SMS replaces on-deck message_id=%s",
-                    fresh.id,
-                )
 
             idle_seconds = effects_settings.idle_seconds
             idle_elapsed = now - self.phase_start >= idle_seconds
             if idle_elapsed:
-                log.info(
-                    "Coordinator background→out (idle): waited=%.1fs idle_seconds=%.1f on_deck=%s",
-                    now - self.phase_start,
-                    idle_seconds,
-                    self.on_deck.id if self.on_deck is not None else "<none>",
-                )
                 self._begin_out(now)  # → out → out→in consumes on_deck
 
         current = self.current

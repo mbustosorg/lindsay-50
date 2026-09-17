@@ -217,11 +217,6 @@ export function createMqttWsClient({
   onEnvelope,
   onStatus,
 }) {
-  console.log(
-    "[DEBUG mqtt_ws_client.js] createMqttWsClient called with url=" + JSON.stringify(url) +
-    " topic=" + JSON.stringify(topic) +
-    " (typeof url=" + typeof url + ", typeof topic=" + typeof(topic) + ")"
-  );
   const threshold = longDisconnectMs || 300000; // 5 minutes default
   let ws = null;
   let pingInterval = null;
@@ -311,9 +306,6 @@ export function createMqttWsClient({
   function handleFrame(bytes) {
     if (bytes.length < 2) return;
     const type = (bytes[0] >> 4) & 0x0f;
-    if (window.__MQTT_WS_DEBUG) {
-      console.log("[mqtt-ws] frame type=" + type + " len=" + bytes.length + " hex=" + Array.from(bytes.slice(0, 32)).map(b => b.toString(16).padStart(2, '0')).join(' '));
-    }
     if (type === 2) {
       // CONNACK
       receivedConnAck = true;
@@ -349,16 +341,6 @@ export function createMqttWsClient({
       // back to the broker so it doesn't requeue + retry.
       const flags = bytes[0] & 0x0f;
       const qos = (flags >> 1) & 0x03;
-      // Diagnostic: log every inbound PUBLISH at the wire level so the
-      // operator can see frame arrival even if downstream parsing fails.
-      // Without this, a frame whose payload becomes invalid JSON after
-      // a v2→v3 migration would silently disappear — only the
-      // Python-side `ENVELOPE_RECEIVED` log would fire (and only if
-      // JSON.parse succeeded). This is the upstream of that chain.
-      console.log(
-        "[diag] mqtt-ws PUBLISH received flags=" + flags + " qos=" + qos +
-        " bytes_len=" + bytes.length
-      );
       let parsed = null;
       try {
         parsed = parsePublish(bytes);
@@ -373,49 +355,12 @@ export function createMqttWsClient({
         // Issue #71 follow-up: log the parsed wire-topic BEFORE the
         // JSON parse / type extraction. This is the very first moment
         // we know a PUBLISH frame addressed to our subscription arrived
-        // intact — if downstream JSON.parse fails or `_handle_config`
-        // throws, the operator can still confirm "the wire frame
-        // landed on the right topic." Operators searching the console
-        // for "topic=mbustosorg/feeds/lindsay50" (NOT "/get", NOT
-        // "-status") will see every envelope delivered to our
-        // subscription, including config ones — past logs only show
-        // the post-parse type field, which masks broker fan-out drops.
-        console.log(
-          "[diag] mqtt-ws PUBLISH wire-topic=" + parsed.topic +
-          " payload_len=" + (parsed.payload ? parsed.payload.length : 0)
-        );
+        // Operators searching the console for
+        // "topic=mbustosorg/feeds/lindsay50" (NOT "/get", NOT
+        // "-status") see every envelope delivered to our
+        // subscription.
       }
       if (parsed) {
-        // Diagnostic: decode the payload as JSON at this layer so we
-        // can see whether the wire shape is what `_handle_config`
-        // expects (`{type: "config", payload: {...}}`). Surface the
-        // envelope type and wire `version` field (when present) so a
-        // v2 envelope dropped into a v3-only handler shows up here
-        // with `wire_version=2` instead of vanishing.
-        let jsonOk = false;
-        let wireType = null;
-        let wireVersion = null;
-        try {
-          const obj = JSON.parse(parsed.payload);
-          jsonOk = true;
-          wireType = obj && obj.type;
-          wireVersion = obj && obj.payload && obj.payload.version;
-        } catch (e) {
-          console.warn(
-            "[mqtt-ws] PUBLISH payload is not valid JSON — type=",
-            typeof parsed.payload,
-            "len=", parsed.payload && parsed.payload.length,
-            "preview=", (parsed.payload || "").slice(0, 200),
-            "parse_err=", e && e.message
-          );
-        }
-        if (jsonOk) {
-          console.log(
-            "[diag] mqtt-ws PUBLISH ok type=" + wireType +
-            " wire_version=" + (wireVersion === undefined ? "missing" : wireVersion) +
-            " topic=" + parsed.topic
-          );
-        }
         emitEnvelope(parsed.payload);
       } else {
         console.warn(
@@ -544,20 +489,6 @@ export function createMqttWsClient({
 
   function ingest(chunk) {
     // Concatenate chunk onto the buffer; try to parse out any full frames.
-    // [diag] per-chunk log fires on EVERY WS frame so the operator can
-    // correlate "chunk arrived but no PUBLISH yet" — the absolute
-    // earliest evidence the WS layer got bytes. Status messages
-    // (every 5s) make this noisy; filter `-diag` in Chrome DevTools
-    // console to silence. Keep it ON by default — the operator's
-    // "are we sure it isn't arriving at all?" question demands
-    // confirmation at the byte boundary, not trust downstream parse
-    // success.
-    console.log(
-      "[diag] mqtt-ws ingest chunk bytes_len=" + chunk.length +
-      " first16=" + Array.from(chunk.slice(0, 16))
-        .map(b => b.toString(16).padStart(2, '0')).join(' ') +
-      " buffer_before=" + buffer.length
-    );
     const next = new Uint8Array(buffer.length + chunk.length);
     next.set(buffer, 0);
     next.set(chunk, buffer.length);
@@ -580,12 +511,6 @@ export function createMqttWsClient({
       }
       const total = decoded.bytesUsed + decoded.value;
       if (buffer.length < total) {
-        // Partial frame — log so an operator can correlate "chunk
-        // arrived but no PUBLISH yet" with "still waiting on N bytes."
-        console.log(
-          "[mqtt-ws] partial frame wait buffer=" + buffer.length +
-          " need_total=" + total + " remaining_len=" + decoded.value
-        );
         break; // partial frame, wait for more
       }
       const frame = buffer.slice(0, total);
@@ -599,9 +524,6 @@ export function createMqttWsClient({
     clearPauseTimer();
     let socket;
     try {
-      console.log(
-        "[DEBUG mqtt_ws_client.js] new WebSocket about to open with url=" + JSON.stringify(url)
-      );
       socket = new WebSocket(url, ["mqtt"]);
     } catch (e) {
       emitStatus("error", { error: String(e) });
@@ -651,15 +573,6 @@ export function createMqttWsClient({
       emitStatus("connected", detail);
     };
     socket.onmessage = (event) => {
-      // [diag] mark every WS-level frame receipt so the operator can
-      // confirm "the WS got bytes" even when nothing downstream fires.
-      // Filter out with Chrome DevTools console filter `-diag` to
-      // silence.
-      console.log(
-        "[diag] mqtt-ws onmessage type=" +
-        (event.data && event.data.constructor && event.data.constructor.name) +
-        " bytes=" + (event.data && event.data.byteLength)
-      );
       let data;
       if (event.data instanceof ArrayBuffer) {
         data = new Uint8Array(event.data);

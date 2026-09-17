@@ -19,7 +19,6 @@ raise in one does not affect the other. The envelope publish path is
 unchanged.
 """
 
-import json
 import logging
 import threading
 import time
@@ -145,32 +144,7 @@ class PahoMqttClient:
             add-sign-status-reports/design.md). We achieve isolation by
             wrapping each callback invocation in its own try/except so
             an exception in one does not propagate to the other.
-
-            Round 7b (live-bug triage, "are the logs upstream?"):
-            every inbound MQTT message fires two INFO records at
-            the broker→app boundary BEFORE any envelope parsing
-            or Python dispatch logic runs:
-              - `[MQTT_INCOMING]` — single keyword grep target
-                carrying topic + payload byte count + first 200
-                bytes. Operator can verify "did the broker
-                deliver this message?" without parsing the
-                paho internals.
-              - `PahoMqttClient received:` — the long-standing
-                record carrying `topic=` and `payload=%r` for
-                backward-compatible log scrapers.
-            Both lines are deterministic per inbound message —
-            same byte count, same first-200 preview — so a
-            network replay or duplicate-deliver detection is
-            possible by inspecting consecutive lines.
             """
-            payload_bytes = len(msg.payload)
-            preview = msg.payload[:200]
-            logger.info(
-                "[MQTT_INCOMING] topic=%s bytes=%d preview=%r",
-                msg.topic,
-                payload_bytes,
-                preview,
-            )
             logger.info(
                 "PahoMqttClient received: topic=%s payload=%r",
                 msg.topic,
@@ -312,29 +286,6 @@ class PahoMqttClient:
                 client.loop_stop()
                 client.disconnect()
                 return False
-            # Wire-level diagnostic (issue #71 follow-up): log the exact
-            # bytes handed to paho so we can correlate "Flask sent X"
-            # with "browser WS saw Y" / "AIO logs show Z" when the
-            # config envelope goes missing end-to-end. Without this, a
-            # silent broker-side fan-out drop leaves no trace of what
-            # we asked the broker to deliver.
-            try:
-                payload_bytes = payload.encode()
-                wire_first16 = " ".join(
-                    f"{b:02x}" for b in payload_bytes[:16]
-                )
-                wire_type = "?"
-                try:
-                    wire_type = json.loads(payload).get("type", "?")
-                except Exception:
-                    pass
-                logger.info(
-                    "PahoMqttClient wire-level publish topic=%s len=%d "
-                    "type=%s retain=%s first16=%s",
-                    topic, len(payload_bytes), wire_type, retain, wire_first16,
-                )
-            except Exception as log_exc:
-                logger.warning("PahoMqttClient wire-level log failed: %s", log_exc)
             result = client.publish(topic, payload.encode(), qos=1, retain=retain)
             result.wait_for_publish(timeout=5)
             client.loop_stop()

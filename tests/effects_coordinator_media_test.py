@@ -900,22 +900,20 @@ def test_out_to_in_picks_up_cycler_for_mms_message(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_background_suppression_log_fires_once_per_fresh_id(tmp_path, caplog):
+def test_background_fresh_id_replace_is_transition_only(tmp_path, caplog):
     """Regression for heroku flood: the background-mode fresh-id
-    replacement log was firing every tick (~5ms cadence) as long as
+    replacement was firing every tick (~5ms cadence) as long as
     the top message stayed unconsumed and the cycler was active.
 
-    Now the log fires only on the TRANSITION between suppressed ids.
-    First tick replaces on_deck → log. Next 10 ticks of the same id
-    → no log (no fresh replacement). New id arrives → log fires once.
+    Behavior under test: `on_deck` is set once per id arrival,
+    not every tick. First tick replaces on_deck (head differs from
+    current_message). Next 10 ticks of the same id → no replacement
+    (slot swap is idempotent when head is already on-deck).
 
-    The architectural change: tick is a pure render; fresh-id arrival
-    is detected only via `_fresh_id_in_buffer()` and the log fires
-    ONCE per id arrival (no per-tick gating needed because the
-    replacement is itself a transition, not a steady state).
+    The log line that fired on each transition was dropped during
+    the fade-noise cleanup; this test pins the underlying state
+    transition instead.
     """
-    import logging
-
     from lib_shared.models import EffectsSettings, Message, MessageView
     from lib_shared.patterns.media_cycler import MediaCycler
 
@@ -944,53 +942,40 @@ def test_background_suppression_log_fires_once_per_fresh_id(tmp_path, caplog):
     )
     coord.current = cycler
     coord.mode = "background"
-    # Reset phase_start to the current monotonic clock so the
-    # background-branch idle_elapsed check stays False across all
-    # the ticks in this test (otherwise real-time elapses past
-    # idle_seconds and mode flips to "out" before the
-    # fresh-id check can run).
+    # Reset phase_start so the background-branch idle_elapsed check
+    # stays False across all the ticks in this test.
     coord.phase_start = time.monotonic()
 
-    caplog.set_level(logging.INFO, logger="heart")
-
-    def _replace_log_count():
-        return sum(1 for r in caplog.records if "fresh SMS replaces on-deck" in r.message)
-
     # First tick: the active cycler suppresses the fresh-id
-    # replacement (silent slot swap is skipped), so no log fires.
+    # replacement (silent slot swap is skipped). on_deck stays None.
     coord.tick()
-    coord.phase_start = time.monotonic()  # reset between ticks
-    # With an active cycler, fresh-id replacement is gated OFF.
-    # The new contract: NO log when the cycler is still playing.
-    assert _replace_log_count() == 0, "active cycler should suppress the fresh-id replace log"
+    coord.phase_start = time.monotonic()
+    assert coord.on_deck is None, (
+        f"active cycler should suppress fresh-id replacement; "
+        f"on_deck={coord.on_deck.id if coord.on_deck is not None else None!r}"
+    )
 
-    # Exhaust the cycler and reset phase_start so the idle_timeout
-    # doesn't immediately fire `_begin_out` (otherwise mode flips
-    # to "out" before the fresh-id check runs).
+    # Exhaust the cycler so the fall-back path arms the suppress
+    # flag and the next tick's fresh-id check sees mA as a fresh id.
     cycler.exhausted = True
     coord.phase_start = time.monotonic()
 
-    # Next tick: cycler exhausted → fall-back path runs and arms
-    # `_suppress_media_override`. Background branch detects mA as
-    # fresh (head differs from current_message=None) and replaces
-    # on_deck — fires the log ONCE.
     coord.tick()
     coord.phase_start = time.monotonic()
-    assert _replace_log_count() == 1, (
-        f"first replacement should log once; got {_replace_log_count()}: "
-        f"{[r.message for r in caplog.records if 'on-deck' in r.message]}"
+    assert coord.on_deck is not None and coord.on_deck.id == "mA", (
+        f"first fresh-id replacement should set on_deck to mA; "
+        f"got on_deck={coord.on_deck.id if coord.on_deck is not None else None!r}"
     )
 
     # Next 10 ticks of the same id (cycler exhausted, fall-back
-    # already armed) — no NEW log lines. The slot replacement is
+    # already armed) — on_deck stays at mA; slot replacement is
     # idempotent when the head is already on-deck.
     for _ in range(10):
         coord.phase_start = time.monotonic()
         coord.tick()
-    assert _replace_log_count() == 1, (
-        f"transition-only gate broken: 10 same-id ticks produced "
-        f"{_replace_log_count()} replace logs (expected 1). "
-        f"Records: {[r.message for r in caplog.records if 'on-deck' in r.message]}"
+    assert coord.on_deck is not None and coord.on_deck.id == "mA", (
+        f"transition-only gate broken: 10 same-id ticks drifted "
+        f"on_deck to {coord.on_deck.id if coord.on_deck is not None else None!r}"
     )
 
 
