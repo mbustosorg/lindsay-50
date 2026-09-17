@@ -161,13 +161,14 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
     sqlite_mod = types.ModuleType("sqlite")
 
     class _FakeSignSettings:
-        """In-memory SignSettings (v3: sign_name/timezone/enforce_allowed_senders/target_version)."""
+        """In-memory SignSettings (round 11: sign_name/timezone/enforce_allowed_senders/pinned_version/target_version)."""
 
         def __init__(self, **kwargs):
             self.sign_name = kwargs.get("sign_name", "Test")
             self.name = self.sign_name  # legacy alias for any pre-v3 callers
             self.timezone = kwargs.get("timezone", "US/Pacific")
             self.enforce_allowed_senders = kwargs.get("enforce_allowed_senders", True)
+            self.pinned_version = kwargs.get("pinned_version", "")
             self.target_version = kwargs.get("target_version", "")
 
         def to_dict(self):
@@ -175,6 +176,7 @@ def _load_app_module(paho_client_ctor, mock_cfg=None):
                 "sign_name": self.sign_name,
                 "timezone": self.timezone,
                 "enforce_allowed_senders": self.enforce_allowed_senders,
+                "pinned_version": self.pinned_version,
                 "target_version": self.target_version,
             }
 
@@ -384,7 +386,7 @@ class TestUpgradeSectionRendered:
         resp = client.get("/settings")
         body = resp.data.decode("utf-8")
         # The input's name attr is the form-name we POST.
-        assert 'name="sign_target_version"' in body
+        assert 'name="sign_pinned_version"' in body
         assert "data-upgrade-target-input" in body
 
     def test_apply_button_renders_disabled_by_default(self, client):
@@ -443,13 +445,13 @@ class TestUpgradeSectionRendered:
             flask_from_input = ph_match.group(1)
         # And the `placeholder=` HTML attribute should carry the same value.
         placeholder_html = re.search(
-            r'name="sign_target_version"[^>]*?placeholder="([^"]+)"',
+            r'name="sign_pinned_version"[^>]*?placeholder="([^"]+)"',
             body,
         )
         # Some templates emit attrs in any order; fall back.
         if placeholder_html is None:
             placeholder_html = re.search(
-                r'placeholder="([^"]+)"[^>]*?name="sign_target_version"',
+                r'placeholder="([^"]+)"[^>]*?name="sign_pinned_version"',
                 body,
             )
         assert placeholder_html is not None, (
@@ -574,7 +576,9 @@ class TestSettingsPostPublishesCheckForUpdate:
     def test_post_publishes_check_for_update_when_target_changed(self, app, client, monkeypatch):
         sqlite_mod = sys.modules["sqlite"]
         original_get = sqlite_mod.get_config
-        existing_cfg = sqlite_mod._FakeSignConfig(sign={"target_version": "abc1234"})
+        existing_cfg = sqlite_mod._FakeSignConfig(
+            sign_settings={"pinned_version": "abc1234", "target_version": "abc1234"}
+        )
         sqlite_mod.get_config = MagicMock(return_value=existing_cfg)
         try:
             captured = self._patch_capture(monkeypatch)
@@ -582,7 +586,7 @@ class TestSettingsPostPublishesCheckForUpdate:
                 "/settings",
                 data={
                     "sign_name": "Test sign",
-                    "sign_target_version": "def5678",  # changed!
+                    "sign_pinned_version": "def5678",  # changed!
                     "timezone": "America/Los_Angeles",
                     "text_settings_speed": "3",
                     "text_settings_color": "#ffffff",
@@ -615,7 +619,9 @@ class TestSettingsPostPublishesCheckForUpdate:
     ):
         sqlite_mod = sys.modules["sqlite"]
         original_get = sqlite_mod.get_config
-        existing_cfg = sqlite_mod._FakeSignConfig(sign={"target_version": "abc1234"})
+        existing_cfg = sqlite_mod._FakeSignConfig(
+            sign_settings={"pinned_version": "abc1234", "target_version": "abc1234"}
+        )
         sqlite_mod.get_config = MagicMock(return_value=existing_cfg)
         try:
             captured = self._patch_capture(monkeypatch)
@@ -623,7 +629,7 @@ class TestSettingsPostPublishesCheckForUpdate:
                 "/settings",
                 data={
                     "sign_name": "Test sign",
-                    "sign_target_version": "abc1234",  # same as before
+                    "sign_pinned_version": "abc1234",  # same as before
                     "timezone": "America/Los_Angeles",
                     "text_settings_speed": "3",
                     "text_settings_color": "#ffffff",
@@ -659,7 +665,9 @@ class TestSettingsPostPublishesCheckForUpdate:
         """
         sqlite_mod = sys.modules["sqlite"]
         original_get = sqlite_mod.get_config
-        existing_cfg = sqlite_mod._FakeSignConfig(sign={"target_version": "abc1234"})
+        existing_cfg = sqlite_mod._FakeSignConfig(
+            sign_settings={"pinned_version": "abc1234", "target_version": "abc1234"}
+        )
         sqlite_mod.get_config = MagicMock(return_value=existing_cfg)
         try:
             captured = self._patch_capture(monkeypatch)
@@ -667,7 +675,7 @@ class TestSettingsPostPublishesCheckForUpdate:
                 "/settings",
                 data={
                     "sign_name": "Test sign",
-                    "sign_target_version": "",  # explicit clear
+                    "sign_pinned_version": "",  # explicit clear
                     "timezone": "America/Los_Angeles",
                     "text_settings_speed": "3",
                     "text_settings_color": "#ffffff",
@@ -694,9 +702,16 @@ class TestSettingsPostPublishesCheckForUpdate:
 
 
 class TestTargetVersionPosts:
-    def test_target_version_short_persists(self, app, client, monkeypatch):
-        """`sign_target_version=<short SHA>` lands on cfg.sign.target_version
-        AND survives across a page reload (SQLite round-trip via get_config)."""
+    def test_pinned_version_short_persists(self, app, client, monkeypatch):
+        """`sign_pinned_version=<short SHA>` lands on cfg.sign_settings.pinned_version
+        AND cfg.sign_settings.target_version resolves to the same value.
+
+        Round 11 (issue #71 follow-up): the form field carries the
+        operator's raw input on `pinned_version`; the resolver in
+        `_save_and_publish` writes the resolved concrete value to
+        `target_version`. For a 7-char input, both fields end up
+        equal.
+        """
         # Capture the post that gets put_config'd.
         captured = {}
         sqlite_mod = sys.modules["sqlite"]
@@ -712,7 +727,7 @@ class TestTargetVersionPosts:
             "/settings",
             data={
                 "sign_name": "Test sign",
-                "sign_target_version": "abc1234",
+                "sign_pinned_version": "abc1234",
                 # Required form fields to satisfy the existing handler.
                 "timezone": "America/Los_Angeles",
                 "text_settings_speed": "3",
@@ -729,26 +744,31 @@ class TestTargetVersionPosts:
         )
         assert resp.status_code in (302, 303)
         assert "cfg" in captured
-        assert captured["cfg"].sign.target_version == "abc1234"
+        # Operator's raw input preserved verbatim — what the operator
+        # put in the UI is exactly what shows on the next page load.
+        assert captured["cfg"].sign_settings.pinned_version == "abc1234"
+        # Resolved to the same 7-char SHA — the Pi reads this.
+        assert captured["cfg"].sign_settings.target_version == "abc1234"
 
-    def test_empty_target_version_saves_empty_string(self, app, client, monkeypatch):
-        """An empty POST ALWAYS writes an empty string, even when the
-        previously-persisted value was non-empty.
+    def test_empty_pinned_version_resolves_to_flask_sha(self, app, client, monkeypatch):
+        """An empty POST writes pinned_version="" on disk. The resolver
+        in `_save_and_publish` writes target_version to Flask's
+        running short SHA — the "inherit" fallback the Pi sees.
 
-        Pre-#51-follow-up behavior was: empty POST preserved the
-        previous saved value (`if target_version_raw:` guard). The new
-        behavior: empty POST clobbers to empty, so the operator's
-        explicit clearing of the pin reflects in `cfg.sign.target_version`
-        — they can then re-pin or leave empty (Flask-version fallback).
-        The change in saved value (was-non-empty, now-empty) IS a real
-        change for the check-for-update nudge.
+        Round 11 (issue #71 follow-up): the empty case splits across
+        the two fields. `pinned_version` reflects the operator's
+        actual clear (empty string); `target_version` resolves to
+        Flask's SHA (so the wire form still has a concrete value
+        to publish to the Pi).
         """
         sqlite_mod = sys.modules["sqlite"]
         original_get = sqlite_mod.get_config
 
-        # Pre-populate sign.target_version in the in-memory config. The
-        # _FakeSignConfig harness exposes nested `sign` via `sign=` kwarg.
-        existing_cfg = sqlite_mod._FakeSignConfig(sign={"target_version": "abc1234"})
+        # Pre-populate the operator's previous pin so we can verify
+        # the empty POST CLDBERS it (not preserve).
+        existing_cfg = sqlite_mod._FakeSignConfig(
+            sign_settings={"pinned_version": "abc1234", "target_version": "abc1234"}
+        )
         sqlite_mod.get_config = MagicMock(return_value=existing_cfg)
         captured = {}
         original_put = sqlite_mod.put_config
@@ -763,7 +783,7 @@ class TestTargetVersionPosts:
                 "/settings",
                 data={
                     "sign_name": "Test sign",
-                    "sign_target_version": "",  # operator explicitly cleared it
+                    "sign_pinned_version": "",  # operator explicitly cleared it
                     "timezone": "America/Los_Angeles",
                     "text_settings_speed": "3",
                     "text_settings_color": "#ffffff",
@@ -778,17 +798,28 @@ class TestTargetVersionPosts:
                 follow_redirects=False,
             )
             assert resp.status_code in (302, 303)
-            # Empty form input clobbers to empty — the operator's clear
-            # is a real edit and persists. The /api/sign/settings route
-            # does the Flask-fallback resolution on the wire.
-            assert captured["cfg"].sign.target_version == ""
+            # Operator's clear IS the new value — the operator's raw
+            # input is the empty string here, not whatever was there.
+            assert captured["cfg"].sign_settings.pinned_version == ""
+            # The resolver falls through to Flask's running short SHA,
+            # NOT to whatever was previously stored — this is the
+            # "inherit" mechanism.
+            # Flask's running SHA in tests is whatever _short_sha returns
+            # from git rev-parse HEAD (or the placeholder short SHA).
+            assert (
+                captured["cfg"].sign_settings.target_version != ""
+            ), "empty pinned must resolve to Flask SHA, not stay empty"
         finally:
             sqlite_mod.get_config = original_get
 
-    def test_full_sha_target_version_persists_verbatim(self, app, client, monkeypatch):
-        """A 40-char full SHA passes through unchanged — truncation to
-        7 chars happens ONLY at the /api/sign/settings serialization
-        point, not at form-save time."""
+    def test_full_sha_pinned_version_truncates_in_target(self, app, client, monkeypatch):
+        """A 40-char full SHA on the form survives on `pinned_version`
+        (the operator's raw input) but is truncated to 7 chars on
+        `target_version` (the concrete short SHA the Pi cares about).
+
+        Round 11: the form input preserves operator intent; the
+        resolver only normalizes to 7 chars on the concrete side.
+        """
         sqlite_mod = sys.modules["sqlite"]
         full = "0123456789abcdef0123456789abcdef01234567"
         captured = {}
@@ -804,7 +835,7 @@ class TestTargetVersionPosts:
             "/settings",
             data={
                 "sign_name": "Test sign",
-                "sign_target_version": full,
+                "sign_pinned_version": full,
                 "timezone": "America/Los_Angeles",
                 "text_settings_speed": "3",
                 "text_settings_color": "#ffffff",
@@ -819,7 +850,10 @@ class TestTargetVersionPosts:
             follow_redirects=False,
         )
         assert resp.status_code in (302, 303)
-        assert captured["cfg"].sign.target_version == full
+        # Operator's raw full SHA preserves verbatim.
+        assert captured["cfg"].sign_settings.pinned_version == full
+        # Resolved to the 7-char short SHA — what the Pi consumes.
+        assert captured["cfg"].sign_settings.target_version == full[:7]
 
 
 # ---------------------------------------------------------------------------

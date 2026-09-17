@@ -95,17 +95,26 @@
       </div>
       <div>
         <label class="block text-xs font-medium text-slate-500 mb-1">
-          Target Pi version
+          Pin Pi version (override Flask)
         </label>
-        <input type="text" name="sign_target_version"
+        <input type="text" name="sign_pinned_version"
                class="w-full px-3 py-2 rounded-xl border border-indigo-200 focus:border-primary focus:ring-2 focus:ring-primary/20 outline-none font-mono text-sm text-dark"
-               value="{{ cfg.sign_settings.target_version or '' }}"
+               value="{{ cfg.sign_settings.pinned_version or '' }}"
                placeholder="{{ deployed_sha_short or 'unknown' }}"
                data-upgrade-target-input
-               data-saved-value="{{ cfg.sign_settings.target_version or '' }}"
+               data-saved-value="{{ cfg.sign_settings.pinned_version or '' }}"
                data-flask-version-placeholder="{{ deployed_sha_short or '' }}">
         <p class="text-xs text-slate-500 mt-1">
-          Empty = inherit Flask version (placeholder shown).
+          Round 11 (issue #71 follow-up): the field carries
+          <span class="font-mono">pinned_version</span> — your raw input.
+          Empty = inherit Flask version (Current Config modal will
+          show <span class="font-mono">target_version</span> resolved
+          to the running Flask SHA).
+        </p>
+        <p class="text-xs text-slate-500 mt-1">
+          Currently targeting:
+          <span class="font-mono">{{ cfg.sign_settings.target_version or '' or 'unknown' }}</span>
+          <span class="text-slate-400">(target_version — what the Pi sees)</span>
         </p>
       </div>
     </div>

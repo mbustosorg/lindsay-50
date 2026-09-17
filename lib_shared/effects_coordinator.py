@@ -273,11 +273,32 @@ class EffectsCoordinator:
         # `_last_picked_entry` is the MessageView-shaped namespace
         # the selected-log reads (`entry.message.id`, etc.) — we
         # write it at every `_pick_message_via_selector` site.
+        # Round 11 (operator feedback, issue #71 follow-up): we
+        # also write `entry.effect_idx` so `_resolve_next_effect_name`
+        # can read back the exact effect idx that was chosen for
+        # the pick, instead of computing it from `self.idx + 1`
+        # (which was off-by-one — see `_resolve_next_effect_name`
+        # docstring for the full story).
         # `_last_display_message` is the body string `_step_fade`
         # reads during the fade-out log. Both default to None so the
         # first-tick code paths don't trip on missing attributes.
         self._last_picked_entry = None
         self._last_display_message = None
+        # Round 11: per-pick random effect (operator feedback
+        # "the first effect chosen always seems to be Hyperspace —
+        # isn't it supposed to be random?"). `current_effect_idx`
+        # is the idx picked for the cycle currently being rendered;
+        # `on_deck_effect_idx` is the idx picked for the next
+        # cycle. The legacy `self.idx` is still kept in sync via
+        # the out→in transition (`self.idx = self.current_effect_idx`),
+        # because the cycler fall-back path and the scroller
+        # writer both read it. None-default is important: tests
+        # that drive the coordinator's first tick without ever
+        # advancing through intro→out land on `self.idx == -1`,
+        # and we want `_pick_effect_idx()` to give us a fresh
+        # random pick rather than reusing the bootstrap value.
+        self.current_effect_idx: int | None = None
+        self.on_deck_effect_idx: int | None = None
         # Two semantic slots replace the legacy `_last_*` shortcut
         # fields. `current_message` is the message currently being
         # rendered (consumed from `on_deck` at out→in, persists through
@@ -689,7 +710,20 @@ class EffectsCoordinator:
             cycler will overlay the rotation effect for the hold:
               - Host (Pi): `MediaCycler`
               - Browser preview: `BrowserMediaOverlay`
-          - Otherwise: the rotation effect at `(self.idx + 1) % len(self.effects)`.
+          - Otherwise: the rotation effect at the idx recorded on
+            the just-staged `_last_picked_entry` (round 11 — was
+            `(self.idx + 1) % len(self.effects)`, which was a one-
+            step-ahead bug: by the time this helper runs at the
+            out→in log site, the new idx has already been advanced
+            into `self.idx`, so the off-by-one shift printed the
+            EFFECT AFTER the one actually fading in).
+
+        Round 11 also moved the per-cycle pick to a uniformly
+        random idx (`_pick_effect_idx()`), so the rotation is no
+        longer deterministic. `entry.effect_idx` carries the
+        choice made at the pick site and is the single source of
+        truth here — `self.idx` only reflects the rendered
+        state, not what the log line should print.
 
         Used at the pick site so the `Coordinator: selected` log
         can carry the effect name on the SAME line as the picked
@@ -703,8 +737,17 @@ class EffectsCoordinator:
             return "BrowserMediaOverlay" if self._is_browser else "MediaCycler"
         if not self.effects:
             return "?"
-        next_idx = (self.idx + 1) % len(self.effects)
-        return type(self.effects[next_idx]).__name__
+        # Prefer the entry-recorded idx (round 11). Fall back to
+        # `self.idx` when the entry was written by a legacy caller
+        # that didn't carry effect_idx — the helper still emits a
+        # reasonable name in that case (it's just one beat late
+        # in the legacy log shape).
+        idx = getattr(entry, "effect_idx", None)
+        if idx is None:
+            idx = self.idx if self.idx >= 0 else 0
+        if not 0 <= idx < len(self.effects):
+            idx = 0
+        return type(self.effects[idx]).__name__
 
     def _emit_selected_log(self, effect_name: str | None = None) -> None:
         """Emit the consolidated per-cycle log line for the picked message.
@@ -1122,6 +1165,36 @@ class EffectsCoordinator:
             fallback = candidates
         return random.choice(fallback) if fallback else None
 
+    def _pick_effect_idx(self) -> int | None:
+        """Pick a uniformly random idx into `self.effects` for the
+        next cycle.
+
+        Returns None when the rotation is empty (heart-only
+        coordinator during the boot splash, or every effect got
+        disabled in `/settings`); callers handle None the same way
+        they handle the legacy `self.idx == -1` bootstrap case
+        (skip the effect swap, fall back to `self.heart` or the
+        existing `current`).
+
+        Round 11 (issue #71 follow-up): drops the legacy
+        deterministic `(self.idx + 1) % len(self.effects)`
+        rotation. The first cycle's pick is now genuinely random
+        rather than always falling on `effects[1]` (Hyperspace
+        in the canonical order); subsequent cycles are random
+        too, so a sign sitting with five messages renders a
+        visibly random effect, not a tracked sweep through the
+        list.
+
+        The random source is `random.randrange(...)` rather than
+        `random.choice(self.effects)` because `random.randrange(n)`
+        returns an int — the effect resolve at the pick site
+        needs the idx, not the effect instance (the instance may
+        have been mutated by the cycler fall-back path).
+        """
+        if not self.effects:
+            return None
+        return random.randrange(len(self.effects)) if self.effects else None
+
     def _step_fade(self, now, fading_out, fade_effect=True, fade_text=True):
         """Advance the active fade one throttled step; return True when complete."""
         progress = (now - self.fade_start) / self.message_manager.config.effects_settings.fade_seconds
@@ -1232,6 +1305,17 @@ class EffectsCoordinator:
             if now - self.phase_start >= effects_settings.intro_seconds:
                 if self.on_deck is None:
                     self.on_deck = self._pick_message_via_selector()
+                    # Round 11 (issue #71 follow-up): also pick the
+                    # effect idx up-front so the intro→out selected-log
+                    # line carries the effect that will actually fade
+                    # in. Pre-r11 we logged the chosen message here but
+                    # the effect name was computed later via the buggy
+                    # `(self.idx + 1) % len` formula, which printed
+                    # the EFFECT AFTER the one about to render.
+                    # We stage the chosen idx on `on_deck_effect_idx`
+                    # — the very first `out→in` consumes it as
+                    # `current_effect_idx`.
+                    self.on_deck_effect_idx = self._pick_effect_idx()
                     # Round 4 (debug-visibility): selected-log fires
                     # at the pick site BEFORE `_begin_out`, so the
                     # operator reads `selected → fade out` rather than
@@ -1242,6 +1326,7 @@ class EffectsCoordinator:
                             message=self.on_deck,
                             source="selector",
                             suppressed=False,
+                            effect_idx=self.on_deck_effect_idx,
                         )
                     self._emit_selected_log(self._resolve_next_effect_name())
                 self._begin_out(now)
@@ -1297,7 +1382,66 @@ class EffectsCoordinator:
                 # the architectural split.
                 self._refresh_render_layer_from_settings(display, scroller)
 
-                self.idx = (self.idx + 1) % len(effects)
+                # Round 11 (issue #71 follow-up): consume
+                # `on_deck_effect_idx` (the upfront random pick from
+                # intro→out or the previous out→in) and pick a FRESH
+                # `on_deck_effect_idx` for the next cycle. The legacy
+                # deterministic `(self.idx + 1) % len` rotation made
+                # the very first cycle always land on
+                # `effects[1]` (Hyperspace in the canonical order);
+                # the operator reported "the first effect chosen
+                # always seems to be Hyperspace". We now randomize
+                # per-pick and store the choice on `current_effect_idx`
+                # — the log line at `_emit_selected_log` (below)
+                # reads it from there so the printed name matches the
+                # fading-in effect, not the next-next one.
+                #
+                # The pick + idx both operate on the LOCAL `effects`
+                # alias (captured at the top of `_tick_inner` BEFORE
+                # `_refresh_render_layer_from_settings` rebuilt the
+                # rotation on `self.effects`). The local list is
+                # what the tick will render this cycle; `self.effects`
+                # is what the NEXT cycle sees after settings landed.
+                # Mixing the two causes random `effects[self.idx]`
+                # IndexErrors when the new list is shorter than the
+                # random idx the old list would have supported
+                # (e.g. tests that pass a 2-stub `effects=[fx_a, fx_b]`
+                # but `effects_settings` defaults to ~10 canonical
+                # effects — the rebuild produces 10 entries on
+                # `self.effects`, but `effects` (local) stays at 2).
+                if self.on_deck_effect_idx is not None and 0 <= self.on_deck_effect_idx < len(effects):
+                    self.current_effect_idx = self.on_deck_effect_idx
+                else:
+                    # Defensive bootstrap: a freshly-constructed
+                    # coordinator or a test path that bypassed
+                    # intro→out lands here with no staged effect. Fall
+                    # back to a fresh random pick rather than the
+                    # legacy `self.idx + 1` advance.
+                    self.current_effect_idx = (
+                        random.randrange(len(effects)) if effects else 0
+                    )
+                # Pick the next cycle's effect now so the
+                # `next=`-style preview the operator can read in the
+                # log always reflects a real choice (never "the idx
+                # we'll look at in 30s when we get there"). Seeded
+                # via `self.effects` (post-refresh) so the very next
+                # cycle's preview reflects what the manager's live
+                # settings say should render.
+                self.on_deck_effect_idx = (
+                    random.randrange(len(self.effects)) if self.effects else None
+                )
+                # Defensive: a freshly-built coordinator, or a sign
+                # with every effect disabled in /settings, may have an
+                # empty rotation. Fall back to the legacy "skip the
+                # swap, keep the cycler/heart in place" behavior.
+                if not effects:
+                    # No rotation effects — leave the current message
+                    # in fade-out completion mode without picking a
+                    # new effect. The next message will re-introduce
+                    # effects when /settings enables them.
+                    self.idx = self.current_effect_idx or 0
+                    return
+                self.idx = self.current_effect_idx
                 self.current = effects[self.idx]
                 self.current.set_brightness(0.0)
                 # MMS media override (issue #38): if the staged
@@ -1376,6 +1520,7 @@ class EffectsCoordinator:
                         message=self.current_message,
                         source="selector",
                         suppressed=False,
+                        effect_idx=self.current_effect_idx,
                     )
                 self._emit_selected_log(self._resolve_next_effect_name())
 

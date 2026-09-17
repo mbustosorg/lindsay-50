@@ -214,6 +214,7 @@ class TestSqliteRoundTrip:
 
         assert loaded.sign_settings.to_dict() == {
             "sign_name": "X",
+            "pinned_version": "",
             "target_version": "abc1234",
             "enforce_allowed_senders": True,
             "timezone": "US/Pacific",

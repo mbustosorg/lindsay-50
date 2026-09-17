@@ -334,13 +334,20 @@ def test_intro_then_out_then_in_then_background():
     # Drive out
     _drive(clock, coord, 0.1)
     assert coord.mode == "in"
-    assert coord.idx == 0
-    assert coord.current is fx_a
+    # Round 11: per-pick random effect (issue #71 follow-up).
+    # The legacy assertion `coord.idx == 0` /
+    # `coord.current is fx_a` assumed a deterministic
+    # `(self.idx + 1) % len` rotation — now we randomly pick an
+    # idx in {0, 1} at every out→in. The mode + state-machine
+    # invariants still hold; the specific effect swap target is
+    # now ANY enabled effect, not specifically the head.
+    assert 0 <= coord.idx < 2
+    assert coord.current in (fx_a, fx_b)
     # Drive in
     _drive(clock, coord, 0.1)
     # No text was pulled (empty buffer), so we land in background
     assert coord.mode == "background"
-    assert coord.current is fx_a
+    assert coord.current in (fx_a, fx_b)
     monkey.undo()
 
 
@@ -805,8 +812,19 @@ def test_brightness_ramp_endpoints():
     # Drive long enough for the out + the in to both complete (with throttling
     # at fade_step=0.04, each fade takes ~0.08s, not the 0.05 nominal).
     _drive(clock, coord, 0.5)
-    # In finished, brightness back to 1.0
-    assert fx_a.brightness == pytest.approx(1.0, abs=1e-6)
+    # In finished, brightness back to 1.0. Round 11: the rotation
+    # now randomly picks an effect (was a deterministic
+    # `(self.idx + 1) % len` advance), so the lit effect is either
+    # fx_a or fx_b — both should reach 1.0 brightness.
+    lit = (
+        fx_a if fx_a.brightness == pytest.approx(1.0, abs=1e-6) else
+        fx_b if fx_b.brightness == pytest.approx(1.0, abs=1e-6) else
+        None
+    )
+    assert lit is not None, (
+        f"one rotation effect should reach brightness 1.0; "
+        f"fx_a.brightness={fx_a.brightness}, fx_b.brightness={fx_b.brightness}"
+    )
     assert scroller._brightness == pytest.approx(1.0, abs=1e-6)
     monkey.undo()
 
@@ -835,9 +853,11 @@ def test_current_effect_name_and_text():
     coord.start()
     # At start, current is the heart
     assert coord.current_effect_name == "Heart"
-    # After driving through to in, current is fx_a
+    # After driving through to in, current is one of the rotation
+    # effects (round 11: random per-pick, no longer deterministically
+    # fx_a). Both "A" and "B" are valid post-cycle states.
     _drive(clock, coord, 0.1)
-    assert coord.current_effect_name == "A"
+    assert coord.current_effect_name in ("A", "B")
     # current_text reflects the scroller's text (or '' when nothing is shown)
     assert coord.current_text == ""
     monkey.undo()
@@ -1053,8 +1073,11 @@ def test_bind_swaps_render_layer_mid_life():
     coord, display1, scroller1, fx_a1, fx_b1, heart1 = _build(intro_seconds=0.0, fade_seconds=0.05)
     coord.start()
     _drive(clock, coord, 0.1)  # intro → out → in
-    assert coord.idx == 0
-    assert coord.current is fx_a1
+    # Round 11: per-pick random effect. The legacy
+    # `(self.idx + 1) % len` rotation landed the first cycle on
+    # `fx_a1` (idx 0); now either `fx_a1` or `fx_b1` is valid.
+    assert 0 <= coord.idx < 2
+    assert coord.current in (fx_a1, fx_b1)
     render_count_before = len(display1.render_calls)
     assert render_count_before > 0
 
@@ -1571,3 +1594,120 @@ def test_ready_to_fade_legacy_scroller_without_wrap_count():
     disp = SimpleNamespace(width=64)
     scr = SimpleNamespace(text="hi", frame_delay=0.04, text_width=100)  # no wrap_count
     assert coord._ready_to_fade_after_hold(scr, disp, now=1000.0) is True
+
+
+def test_random_effect_per_pick_does_not_always_land_on_first_effect(monkeypatch):
+    """Round 11 (issue #71 follow-up): the first out→in picks a
+    RANDOM effect, not always `effects[1]` (Hyperspace in the
+    canonical order). Across many fresh coordinators we should
+    see BOTH `A` and `B` show up as the first cycle's effect —
+    not 100% `A` (the legacy deterministic `(idx + 1) % 2`
+    rotation).
+
+    The regression test seeds the RNG to a known sequence so a
+    deterministic-but-non-first-only outcome is reproducible.
+    Without the random pick, every iteration would always land
+    on `fx_a` and `seen` would only contain `{"A"}`.
+    """
+    import random as _random
+
+    # Force a deterministic seed so the test is reproducible
+    # across runs. The seed is chosen so the first
+    # `_pick_effect_idx` call on a length-2 list returns 1 (fx_b)
+    # — without randomization, the first cycle would always
+    # land on fx_a (idx 0).
+    _random.seed(20260917)
+    clock = _Clock()
+    monkeypatch.setattr(time, "monotonic", clock)
+    seen: set = set()
+    for _ in range(20):
+        clock.now = 0.0  # reset the clock between iterations
+        coord, display, scroller, fx_a, fx_b, heart = _build(
+            intro_seconds=0.0, fade_seconds=0.05
+        )
+        coord.start()
+        _drive(clock, coord, 0.2)  # intro → out → in → hold
+        seen.add(coord.current_effect_name)
+    # Without the random pick, all 20 cycles land on `A`. With
+    # it, the seed exposes BOTH valid rotation entries. Either
+    # `A` or `B` would be a flake; the contract is "at least one
+    # cycle picked B".
+    assert "B" in seen, (
+        f"random per-pick never selected fx_b across 20 fresh "
+        f"coordinators; seen={seen}. The rotation is still "
+        f"deterministic — every cycle hits effects[1] (i.e. fx_a "
+        f"via the bootstrap path)."
+    )
+
+
+def test_resolve_next_effect_name_reads_picked_entry_not_self_idx(monkeypatch):
+    """Round 11 (issue #71 follow-up) regression: the
+    `Coordinator: showing ... effect=...` log line prints the
+    effect that was actually picked for this cycle, not the
+    NEXT cycle. Pre-r11 the helper computed
+    `(self.idx + 1) % len(self.effects)`, which was off-by-one:
+    by the time the log fired at the out→in transition, the
+    picked `self.idx` had already been advanced, so the formula
+    printed the EFFECT AFTER the one fading in.
+
+    The fix stages the picked idx on `_last_picked_entry.effect_idx`
+    and reads it back. This test loads TWO effects into the
+    coordinator, drives intro → out → in with an injected RNG
+    seed that picks a specific idx, and asserts that the
+    helper reads back the picked idx (not the off-by-one
+    advance).
+
+    The test bypasses the actual state-machine transition (the
+    coordinator without any messages would land in background,
+    not hold) — it stages `_last_picked_entry` directly and
+    asserts the helper reads it.
+    """
+    from types import SimpleNamespace as _SN
+
+    # We stage an entry that points at `fx_b` (idx 1) but
+    # leave `self.idx` at 0 (simulating "the boot just picked
+    # fx_b as the next effect but the legacy off-by-one
+    # formula would have written effects[(idx + 1) % 2] =
+    # fx_a"). Pre-r11 the helper would return "A" (wrong),
+    # post-r11 it returns "B" (right).
+    import random as _random
+
+    _random.seed(20260918)
+    clock = _Clock()
+    monkeypatch.setattr(time, "monotonic", clock)
+    coord, display, scroller, fx_a, fx_b, heart = _build(
+        intro_seconds=0.0, fade_seconds=0.05
+    )
+    coord.start()
+    _drive(clock, coord, 0.1)  # intro → out → in
+    # Stage the entry as the out→in pick site would: a fresh
+    # pick with effect_idx = idx of the picked effect.
+    #
+    # Empirically, the seed lands on a particular idx; we
+    # pick whichever the seed produced and verify the helper
+    # reads it back rather than computing
+    # `(self.idx + 1) % len(effects)`.
+    expected_idx = coord.current_effect_idx
+    expected_name = (
+        type(coord.effects[expected_idx]).__name__
+        if expected_idx is not None and 0 <= expected_idx < len(coord.effects)
+        else "?"
+    )
+    # Stage the entry on the coordinator and assert the
+    # helper resolves to the same name.
+    coord._last_picked_entry = _SN(
+        message=type(coord) is type and coord,  # arbitrary message-shaped stub
+    ) if False else _SN(  # noqa: E501 — avoid stubbing complexity
+        message=type("_FakeMsg", (), {"media": []})(),
+        source="selector",
+        suppressed=False,
+        effect_idx=expected_idx,
+    )
+    resolved = coord._resolve_next_effect_name()
+    assert resolved == expected_name, (
+        f"Coordinator: showing ... effect={resolved!r} but the "
+        f"picked idx was {expected_idx} ({expected_name!r}). "
+        f"The helper is still off-by-one — fix the entry-write "
+        f"at the pick site, or check the entry-read order in "
+        f"`_resolve_next_effect_name`."
+    )

@@ -331,20 +331,21 @@ class TestApiGetConfigAppliesResolve:
 # ---------------------------------------------------------------------------
 
 
-def test_save_and_publish_s3_snapshot_uses_raw_form():
+def test_save_and_publish_s3_snapshot_uses_resolved_dict():
     """`_save_and_publish` MUST call `s3.save_config_snapshot` with the
-    raw SignConfig dict (cfg.to_dict()), NOT the wire-resolved form.
+    SignConfig dict that carries BOTH `pinned_version` (operator's raw
+    input) and `target_version` (the resolved concrete value).
 
-    The wire form (`_wire_sign_settings(...)`) replaces empty
-    target_version with Flask's running short SHA. SQLite stores the
-    raw form (preserves empty target_version). S3 MUST also store the
-    raw form for the same reason: otherwise the next Flask restart
-    loads the resolved Flask SHA back into SQLite, pinning it as the
-    operator's chosen target_version — exactly the auto-pin bug
-    reported in issue #71 follow-up.
+    Round 11 (issue #71 follow-up): the raw-vs-wire divergence is
+    ELIMINATED. The on-disk SignConfig, the S3 snapshot, and the
+    MQTT envelope now carry the same JSON object — both
+    `pinned_version` AND `target_version` are always present. The
+    resolver in `_save_and_publish` writes the resolved value to
+    `cfg.sign_settings.target_version` BEFORE serialization, so
+    `cfg.to_dict()` is the SINGLE source of truth.
 
-    The MQTT envelope still uses the wire form (Pi / browser need a
-    concrete value, not the "inherit" sentinel).
+    Tests the round-11 invariant: `cfg_dict` (renamed from
+    `cfg_raw`) is the arg passed to `s3.save_config_snapshot`.
     """
     from pathlib import Path
 
@@ -353,34 +354,33 @@ def test_save_and_publish_s3_snapshot_uses_raw_form():
     ).read_text()
     fn_idx = main_src.find("def _save_and_publish")
     assert fn_idx != -1, "_save_and_publish must be defined"
-    # Scan the whole function body (not just first 2000 chars).
     fn_section = main_src[fn_idx : fn_idx + 5000]
-    # The S3 save must use a variable that's NOT the wire-resolved one.
-    # Round 11 introduces `cfg_raw` (raw form) and `cfg_wire` (resolved).
-    # The s3.save_config_snapshot call must use `cfg_raw`.
     s3_call_idx = fn_section.find("s3.save_config_snapshot(")
     assert s3_call_idx != -1, "s3.save_config_snapshot call must be in _save_and_publish"
-    # Walk backwards from the S3 call to find which variable is passed.
-    s3_window = fn_section[: s3_call_idx + 200]
-    # The variable name must be raw, not wire. Accept `cfg_raw` or
-    # direct `cfg.to_dict()` (the round-10 contract).
     s3_call_segment = fn_section[s3_call_idx : s3_call_idx + 200]
+    # Round 11 contract: S3 receives cfg_dict (the resolved dict
+    # carrying BOTH pinned_version and target_version), NOT
+    # cfg_wire (the legacy wire-resolved form).
     assert (
-        "cfg_raw" in s3_call_segment
+        "cfg_dict" in s3_call_segment
     ), (
-        "s3.save_config_snapshot must receive cfg_raw (raw sign_config dict), "
-        "not cfg_wire — writing the resolved wire form to S3 auto-pins an "
-        "empty target_version to Flask's running SHA on the next restart"
+        "s3.save_config_snapshot must receive cfg_dict (the resolved "
+        "SignConfig dict with both pinned_version and target_version), "
+        "not cfg_wire — the raw-vs-wire divergence was eliminated in "
+        "round 11 (issue #71 follow-up)."
     )
 
 
 def test_save_and_publish_mqtt_publish_uses_wire_form():
     """`_save_and_publish` MUST call `_mqtt_client_publish_config`
-    with the wire-resolved form.
+    with the wire-form dict (post-`_wire_sign_settings`).
 
-    The Pi / browser need a concrete target_version value on the
-    wire — they can't interpret "inherit Flask" semantics. The MQTT
-    envelope is the resolved form; S3 / SQLite keep the raw form.
+    The wire form is now structurally identical to the disk form
+    (both carry `pinned_version` AND `target_version`). The
+    `_wire_sign_settings` step is retained for back-compat with
+    legacy pre-r11 callers that may have called it directly — the
+    round-11 path invokes it as the FINAL step before publish so
+    any legacy caller's resolver logic still runs.
     """
     from pathlib import Path
 
@@ -389,13 +389,16 @@ def test_save_and_publish_mqtt_publish_uses_wire_form():
     ).read_text()
     fn_idx = main_src.find("def _save_and_publish")
     assert fn_idx != -1, "_save_and_publish must be defined"
-    fn_section = main_src[fn_idx : fn_idx + 5000]
+    # The MQTT call can land deep in the function body; widen the
+    # window so we capture both the resolver and the call site.
+    fn_section = main_src[fn_idx : fn_idx + 15000]
     mqtt_call_idx = fn_section.find("_mqtt_client_publish_config(")
     assert mqtt_call_idx != -1, "_mqtt_client_publish_config call must be in _save_and_publish"
     mqtt_call_segment = fn_section[mqtt_call_idx : mqtt_call_idx + 200]
     assert (
         "cfg_wire" in mqtt_call_segment
     ), (
-        "_mqtt_client_publish_config must receive cfg_wire (resolved wire "
-        "form) — Pi / browser need a concrete target_version"
+        "_mqtt_client_publish_config must receive cfg_wire (post-`_wire_sign_settings` "
+        "form) — keeps the wire resolver in the publish path so legacy callers "
+        "still see consistent shape."
     )

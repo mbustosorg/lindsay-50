@@ -284,7 +284,7 @@ class FilterRule:
 class SignSettings:
     """Sign configuration: identity (sign_name), operational metadata
     (timezone), the senders-allowlist master toggle
-    (`enforce_allowed_senders`), and the Pi upgrade pin (`target_version`).
+    (`enforce_allowed_senders`), and the Pi upgrade pin.
 
     v3 layout (issue #6 / implement-senders-filtering):
       - `name` was renamed to `sign_name` (matches the HTML form
@@ -303,6 +303,31 @@ class SignSettings:
         construction-time default falls back to Flask's running short
         SHA (HEROKU_SLUG_COMMIT preferred, `git rev-parse HEAD` fallback).
 
+    Round 11 (issue #71 follow-up): split the upgrade pin into
+    TWO fields so the operator can see what they entered vs.
+    what Flask actually resolved:
+
+      - `pinned_version`: the operator's RAW input from the /settings
+        form. Empty string when the operator cleared the field.
+        Stored verbatim — what the operator put in the UI is exactly
+        what they see again on the next page load. Defaults to "".
+      - `target_version`: the CONCRETE short SHA the Pi cares about.
+        After construction (the legacy path: defaults to Flask's
+        running short SHA when the wire form has no `target_version`)
+        OR after `_save_and_publish` resolves an empty `pinned_version`
+        to the current Flask SHA, `target_version` is always a
+        concrete 7-char short SHA. The Pi's loader reads this via
+        `/api/sign/settings` and never sees an empty value.
+
+    The on-disk SignConfig (SQLite row + S3 snapshot) carries BOTH
+    fields. The wire envelope also carries both — but the
+    pre-resolved `target_version` is what the Pi consumes.
+    The split is what surfaces "I cleared the pin to inherit the
+    Flask version" (`pinned_version=""`, `target_version="<flask>"`
+    on the operator's Current Config modal) vs. "I pinned this
+    specific commit" (`pinned_version="abc1234"`,
+    `target_version="abc1234"`).
+
     The block is renamed `SignSettings` → `SignConfig.sign_settings`
     (was `SignConfig.sign`) to match the `effects_settings` /
     `text_settings` naming convention.
@@ -314,9 +339,13 @@ class SignSettings:
             filter. True (default) means `cfg.senders` governs which
             senders render; False bypasses the filter entirely (every
             message renders, display names still resolve).
-        target_version: The Pi's intended running short SHA (issue #51).
-            Defaults to Flask's running short SHA at construction time
-            when None — the field is never empty on the wire.
+        pinned_version: The operator's raw pin input on the /settings
+            form (round 11). Empty string means "inherit Flask's
+            running short SHA." Defaults to "".
+        target_version: The concrete Pi short SHA the Pi cares
+            about (issue #51). Defaults to Flask's running short
+            SHA at construction time when None — the field is
+            never empty on the wire / disk after a save.
     """
 
     DEFAULT_SIGN_NAME = "Lindsay's Heart"
@@ -328,6 +357,7 @@ class SignSettings:
         sign_name: str = DEFAULT_SIGN_NAME,
         timezone: str = DEFAULT_TIMEZONE,
         enforce_allowed_senders: bool = DEFAULT_ENFORCE_ALLOWED_SENDERS,
+        pinned_version: str = "",
         target_version: Optional[str] = None,
     ) -> None:
         """Initialize SignSettings.
@@ -337,6 +367,8 @@ class SignSettings:
             timezone: IANA timezone string (default "US/Pacific").
             enforce_allowed_senders: Master toggle for the senders
                 allowlist filter (default True).
+            pinned_version: The operator's raw pin input (round 11).
+                Empty string means "inherit." Defaults to "".
             target_version: The Pi's intended running SHA (short form).
                 Defaults to Flask's running short SHA at construction
                 time when None — the field is never empty on the wire.
@@ -344,6 +376,10 @@ class SignSettings:
         self.sign_name = sign_name
         self.timezone = timezone
         self.enforce_allowed_senders = enforce_allowed_senders
+        # Round 11: the operator's raw input. Stored verbatim so
+        # the operator can see what they put in the UI (vs. the
+        # resolved `target_version` next to it).
+        self.pinned_version = pinned_version if pinned_version else ""
         self.target_version = (
             target_version if target_version is not None else self._default_target_version()
         )
@@ -386,17 +422,36 @@ class SignSettings:
             d: dict with optional keys: sign_name (default "Lindsay's Heart"),
                 timezone (default "US/Pacific"),
                 enforce_allowed_senders (default True),
+                pinned_version (default ""; round 11 addition),
                 target_version (default Flask's running short SHA).
                 May also be `None`.
 
         Returns:
             A new SignSettings instance.
+
+        Migration note (round 11): the on-disk + wire forms prior
+        to round 11 carried only `target_version`. The constructor
+        reads `pinned_version` and defaults to "" when absent; the
+        legacy `target_version` resolution still falls back to
+        Flask's running SHA on construction. So a disk row from
+        v186 (with `target_version=""`) round-trips into a
+        SignSettings where `pinned_version=""` and
+        `target_version=<Flask running SHA>` — exactly what the
+        operator would expect after clearing the pin.
         """
         if d is None:
             return cls()
         enforce = d.get("enforce_allowed_senders", cls.DEFAULT_ENFORCE_ALLOWED_SENDERS)
         if not isinstance(enforce, bool):
             raise ValueError(f"enforce_allowed_senders must be a bool, got {type(enforce).__name__}")
+        # Round 11: read `pinned_version` if present; empty
+        # string (or missing) means "inherit" and the Wire/shape
+        # partner `target_version` already carries the resolution.
+        pinned = d.get("pinned_version", "")
+        if pinned is None:
+            pinned = ""
+        if not isinstance(pinned, str):
+            pinned = str(pinned)
         # A pre-#51 Flask publishes payloads without `target_version`.
         # Fall through to the construction-time default (Flask's running
         # short SHA) so the Pi reads a concrete value, not None or "".
@@ -405,6 +460,7 @@ class SignSettings:
             sign_name=d.get("sign_name", cls.DEFAULT_SIGN_NAME),
             timezone=d.get("timezone", cls.DEFAULT_TIMEZONE),
             enforce_allowed_senders=enforce,
+            pinned_version=pinned,
             target_version=target if target is not None else None,
         )
 
@@ -413,6 +469,13 @@ class SignSettings:
             "sign_name": self.sign_name,
             "timezone": self.timezone,
             "enforce_allowed_senders": self.enforce_allowed_senders,
+            # Round 11: emit BOTH fields. `pinned_version` carries
+            # the operator's raw input (empty string means "inherit");
+            # `target_version` carries the concrete 7-char short SHA
+            # the Pi actually tracks. The wire + disk forms are now
+            # symmetric — both fields are present, both round-trip
+            # through `from_dict`.
+            "pinned_version": self.pinned_version,
             "target_version": self.target_version,
         }
 

@@ -929,6 +929,17 @@ def _wire_sign_settings(cfg_dict: dict) -> dict:
     ``sign_settings.target_version`` resolved to a concrete 7-char
     short SHA.
 
+    Round 11 (issue #71 follow-up, `pinned_version` split):
+    the on-disk SignConfig now carries BOTH `pinned_version`
+    (raw operator input) AND `target_version` (concrete resolved
+    value) — so the wire form is no longer a separate shape from
+    the disk form. This helper is retained for backwards
+    compatibility with legacy callers that pre-date the split
+    (the runtime calls `_resolve_pinned_to_target` directly now
+    via `_save_and_publish`); it falls through to the same
+    resolution logic when the input dict carries only the legacy
+    `target_version` field.
+
     Operators can leave the field empty (or trim it down to "") to
     mean "inherit whatever Flask is currently running" — that
     choice is preserved on disk + in the /settings input as the raw
@@ -936,13 +947,6 @@ def _wire_sign_settings(cfg_dict: dict) -> dict:
     But on the WIRE (MQTT envelope to the Pi, /api/config GET
     response, S3 snapshot) the resolved value lands verbatim, so
     observers never have to interpret empty-vs-pinned intent.
-
-    The in-memory ``SignConfig`` and the SQLite ``config`` row
-    keep the operator's raw value (empty = inherited). Only the
-    wire form is rewritten. This means a fresh `/api/config`
-    response after the operator clears the field still shows the
-    canonical resolved SHA on the wire, while the /settings input
-    placeholder keeps showing the Flask version in grey.
 
     Returns the input dict unchanged when the operator has pinned
     a non-empty value (the common case once the operator has
@@ -954,9 +958,27 @@ def _wire_sign_settings(cfg_dict: dict) -> dict:
     ss = cfg_dict.get("sign_settings")
     if not isinstance(ss, dict):
         return cfg_dict
-    target = (ss.get("target_version") or "").strip()
+    # Round 11: prefer `pinned_version` (the operator's raw input)
+    # over `target_version`. The wire form carries the resolved
+    # value of whichever one is set. If both are present and
+    # `target_version` is empty but `pinned_version` has a value,
+    # resolve via `pinned_version`. This keeps legacy callers
+    # working when they pass only `target_version`.
+    pinned = (ss.get("pinned_version") or "").strip()
+    if pinned:
+        target = _resolve_pinned_to_target(pinned)
+    else:
+        target = (ss.get("target_version") or "").strip()
     if target:
-        return cfg_dict  # operator-pinned: leave as-is
+        if target == ss.get("target_version"):
+            return cfg_dict  # already-resolved: identity
+        return {
+            **cfg_dict,
+            "sign_settings": {
+                **ss,
+                "target_version": target,
+            },
+        }
     flask_config = _resolve_boot_config()
     if not flask_config.short_sha:
         return cfg_dict  # can't resolve — caller keeps raw ""
@@ -967,6 +989,38 @@ def _wire_sign_settings(cfg_dict: dict) -> dict:
             "target_version": flask_config.short_sha,
         },
     }
+
+
+def _resolve_pinned_to_target(pinned: str) -> str:
+    """Return the concrete 7-char `target_version` for a given
+    `pinned_version` operator input.
+
+    Round 11 (issue #71 follow-up): when the operator enters a
+    full SHA, we truncate to 7 chars (the standard short form
+    the Pi consumes). When the field is empty, we fall back to
+    Flask's running short SHA. The pre-existing
+    `SignSettings.__init__` already handles the empty-fallback
+    path; this helper centralizes the round-11 save-time
+    resolution so both `_save_and_publish` and `_wire_sign_settings`
+    use the same rule.
+
+    Args:
+        pinned: The operator's raw input from the /settings form
+            (post-`.strip()`). Empty string means "inherit Flask's
+            running short SHA."
+
+    Returns:
+        The 7-char short SHA the Pi should target. Empty when
+        neither the input nor Flask's resolve succeeded (legacy
+        fallback — callers must check and avoid persisting "").
+    """
+    pinned = (pinned or "").strip()
+    if not pinned:
+        flask_config = _resolve_boot_config()
+        return flask_config.short_sha or ""
+    # `short_sha(...)` is `value[:7]` for any string; full SHAs
+    # truncate to 7, any value of 7+ chars survives unchanged.
+    return _short_sha(pinned) or pinned
 
 
 # Log the deployed commit SHA at startup so deploy verification is
@@ -1326,15 +1380,33 @@ def _save_and_publish(cfg: SignConfig) -> None:
     BEFORE the stamp fields are set on the SignConfig instance —
     otherwise the next to_dict() would echo the field and re-hash
     to something different. Chicken-and-egg loop avoided.
+
+    Round 11 (issue #71 follow-up, `pinned_version` split):
+    the legacy save path resolved an empty
+    `sign_settings.target_version` to Flask's running short SHA
+    only on the WIRE (via `_wire_sign_settings`); the on-disk
+    SignConfig kept the operator's empty value. That left a gap:
+    the Current Config modal showed the resolved value (because
+    it JSON-dumps `cfg.to_dict()` and the wire resolver runs
+    against the in-memory dict), but the operator's RAW input
+    was nowhere visible. With the round-11 split we now
+    persist BOTH the raw pin (`pinned_version`, empty for
+    "inherit") AND the resolved concrete value
+    (`target_version`) on disk. The wire form is now the same
+    as the disk form — no resolver needed at save time because
+    `_wire_sign_settings` is the same as identity for a
+    well-formed post-round-11 SignConfig.
     """
-    # Snapshot the body BEFORE stamping so the hash excludes its own value.
-    # `body_for_hash` (and the published `cfg_dict` below) come through
-    # `_wire_sign_settings` so an empty `sign_settings.target_version`
-    # becomes the resolved Flask short SHA — observers (Pi MQTT
-    # subscriber, browser preview) see what's actually desired without
-    # interpreting empty-vs-pinned semantics. The on-disk SignConfig
-    # and SQLite row keep the operator's raw value.
-    body_for_hash = _wire_sign_settings(cfg.to_dict())
+    # Resolve `target_version` from `pinned_version` on the
+    # in-memory SignConfig BEFORE serialization so both the hash
+    # input AND the persisted form reflect the operator's intent.
+    # `_pinned_version_to_target` is shared with the legacy
+    # `_wire_sign_settings` code path so behavior matches.
+    if cfg.sign_settings is not None:
+        cfg.sign_settings.target_version = _resolve_pinned_to_target(
+            cfg.sign_settings.pinned_version
+        )
+    body_for_hash = cfg.to_dict()
     body_for_hash.pop("config_sha", None)
     body_for_hash.pop("updated_at", None)
     # sort_keys=True + tight separators gives us a deterministic,
@@ -1363,37 +1435,30 @@ def _save_and_publish(cfg: SignConfig) -> None:
     # what they last applied.
     cfg.config_sha = new_sha
     cfg.updated_at = datetime.now().astimezone().isoformat()
-    # Build two distinct dicts from here on:
-    #   - `cfg_raw`    : the on-disk SignConfig form, with the
-    #                    operator's raw `target_version` preserved
-    #                    (empty string means "inherit Flask version").
-    #                    Goes to SQLite and S3 — these are the long-term
-    #                    storage layers and must round-trip the
-    #                    operator's intent across restarts.
-    #   - `cfg_wire`   : the resolved wire form, with empty
-    #                    `target_version` filled in to Flask's running
-    #                    short SHA. Goes to MQTT — the consumer (Pi /
-    #                    browser) needs a concrete value, not the
-    #                    "inherit" sentinel.
-    # Round 11 (operator confirmation, issue #71): the previous code
-    # wrote `cfg_wire` to S3 too, which meant a Flask restart would
-    # load back the resolved Flask SHA from S3 and persist it as the
-    # new operator-pinned value — silently converting "inherit"
-    # intent into a hard pin to whichever Flask SHA was current at
-    # the time of the last save. SQLite and S3 MUST keep the raw
-    # form; only the MQTT envelope needs the resolved form.
-    cfg_raw = cfg.to_dict()
-    cfg_wire = _wire_sign_settings(cfg_raw)
+    # `cfg.to_dict()` is now the SINGLE source of truth — it carries
+    # BOTH `pinned_version` (raw operator input) AND `target_version`
+    # (concrete resolved value). The round-11 split eliminates the
+    # legacy "raw vs wire" divergence: the disk form, the S3 snapshot
+    # form, and the MQTT envelope form are all the same JSON object.
+    # `_wire_sign_settings` is still called for back-compat with
+    # any legacy caller that hasn't been updated to read
+    # `pinned_version`, but for round-11+ SignConfigs it's a
+    # no-op (returns the same dict — the resolver finds the
+    # resolved `target_version` already populated).
+    cfg_dict = cfg.to_dict()
+    cfg_wire = _wire_sign_settings(cfg_dict)
     sqlite.put_config(cfg)
     try:
-        s3.save_config_snapshot(cfg_raw)
+        s3.save_config_snapshot(cfg_dict)
     except Exception as e:
         logger.warning("Config S3 snapshot failed: %s", e)
     logger.info(
         "[flask] _save_and_publish: publishing config envelope "
-        "config_sha=%s updated_at=%s rotation=%s text=(speed=%d, color=#%06x) pacing=(fade=%s, hold=%s)",
+        "config_sha=%s updated_at=%s pinned_version=%s target_version=%s rotation=%s text=(speed=%d, color=#%06x) pacing=(fade=%s, hold=%s)",
         cfg_wire.get("config_sha", ""),
         cfg_wire.get("updated_at", ""),
+        (cfg_wire.get("sign_settings") or {}).get("pinned_version", ""),
+        (cfg_wire.get("sign_settings") or {}).get("target_version", ""),
         [(e["name"], e["enabled"]) for e in cfg_wire["effects_settings"]["effects"]],
         cfg_wire["text_settings"]["speed"],
         cfg_wire["text_settings"]["color"],
@@ -1710,17 +1775,35 @@ def _nudge_pi_check_for_update(cfg: SignConfig, prior_target_version: str) -> No
     re-routed through the same SHA reconciliation path. The settings-save
     route now mirrors the startup-publish route: same envelope, same Pi
     handler. Force-upgrade stays reserved for the AUTO_UPDATE-off path.
+
+    Round 11 (issue #71 follow-up): the comparison is now on
+    the OPERATOR'S RAW `pinned_version`, not the resolved
+    `target_version`. The prior argument at function entry
+    captures the operator's previous input verbatim, and the
+    new post-POST value lives at
+    `cfg.sign_settings.pinned_version`. Comparing those tells
+    us "did the operator change their input" — the right
+    signal for whether to nudge a reconcile, since the
+    resolved target_version may shift even when the
+    operator's intent didn't (e.g. Flask just deployed and
+    the empty-pin fallback now points at a different SHA).
     """
-    new_target = (cfg.sign_settings.target_version or "") if cfg.sign_settings else ""
-    if new_target == prior_target_version:
+    new_pinned = (
+        (cfg.sign_settings.pinned_version or "")
+        if cfg.sign_settings
+        and getattr(cfg.sign_settings, "pinned_version", None) is not None
+        else ""
+    )
+    if new_pinned == prior_target_version:
         return
     try:
         envelope = MessageEnvelope("command", {"action": "check-for-update"})
         ok = _mqtt_client.publish_envelope(envelope)
         logger.info(
-            "[settings] nudge_pi_check_for_update: published (prior=%r new=%r publish_ok=%s)",
+            "[settings] nudge_pi_check_for_update: published (prior_pinned=%r new_pinned=%r new_target=%r publish_ok=%s)",
             prior_target_version,
-            new_target,
+            new_pinned,
+            (cfg.sign_settings.target_version or "") if cfg.sign_settings else "",
             ok,
         )
     except Exception as exc:
@@ -1738,9 +1821,15 @@ def settings():
     # nudge on the Pi (operator instruction: "either path should cause
     # the Pi to update"). The empty-vs-empty case is a no-op; a real
     # change to the pin (including clearing it back to empty) is a nudge.
+    # Round 11: snapshot the OPERATOR'S RAW `pinned_version`, not the
+    # resolved `target_version`. The nudge fires on operator intent
+    # (any change to whatever was in the input field), not on the
+    # concrete value the Pi sees. A user clearing the field from
+    # "abc1234" to "" is an intent change that deserves a nudge;
+    # a no-op edit that lands on the same string is not.
     prior_target_version = (
-        (cfg.sign_settings.target_version or "")
-        if cfg.sign_settings and getattr(cfg.sign_settings, "target_version", None) is not None
+        (cfg.sign_settings.pinned_version or "")
+        if cfg.sign_settings and getattr(cfg.sign_settings, "pinned_version", None) is not None
         else ""
     )
 
@@ -1800,16 +1889,20 @@ def settings():
         if sign_name:
             cfg.sign_settings.sign_name = sign_name
 
-        # Issue #51 §6: operator-pinned `sign_settings.target_version`. The pin is
-        # a *string of either length* (full or short); GET /api/sign/settings
-        # truncates to 7 chars before responding. Always write the raw
-        # value — including the empty string when the operator clears
-        # the field — so the post-POST `cfg.sign_settings.target_version`
-        # reflects the form exactly. The `prior_target_version`
-        # snapshot at function entry determines whether the nudge
-        # fires below.
-        target_version_raw = request.form.get("sign_target_version", "").strip()
-        cfg.sign_settings.target_version = target_version_raw
+        # Issue #51 §6 + Round 11 split: the operator's raw
+        # `pinned_version` input. The pin is a *string of either
+        # length* (full or short); `_resolve_pinned_to_target`
+        # truncates to 7 chars when present. Always write the raw
+        # value — including the empty string when the operator
+        # clears the field — so `cfg.sign_settings.pinned_version`
+        # reflects the form exactly. The form input is bound to
+        # `sign_pinned_version` (not `sign_target_version`) so the
+        # operator sees what they entered vs. the resolved
+        # `target_version` next to it. The on-disk SignConfig also
+        # carries the resolved `target_version` (Flask SHA when
+        # pinned is empty) — see `_save_and_publish`.
+        pinned_version_raw = request.form.get("sign_pinned_version", "").strip()
+        cfg.sign_settings.pinned_version = pinned_version_raw
 
         timezone = request.form.get("timezone", "").strip()
         if timezone:

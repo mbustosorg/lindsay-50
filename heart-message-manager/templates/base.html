@@ -110,6 +110,15 @@
     detection still works (the user's actual goal).
   -->
   <script src="{{ url_for('static', filename='sign_status.js') }}?v=5"></script>
+  {# Round 11 (issue #71 follow-up, pinned_version split):
+     unchanged? Nope — pi_apply_settings.js reads the
+     `data-saved-value` attribute on the pinned-version input,
+     which is computed from `cfg.sign_settings.pinned_version`
+     in `settings.html`. The JS itself doesn't name the field
+     (it just reads `data-upgrade-target-input`), so the
+     `?v=N` cache-buster doesn't need to bump here. The
+     settings.html change is server-rendered HTML, which the
+     browser has to refetch on page load. #}
   <!--
     pi_upgrade_settings.js — Settings-page Pi Upgrade Control section
     (issue #51). Loaded on every authenticated page; the script is a
