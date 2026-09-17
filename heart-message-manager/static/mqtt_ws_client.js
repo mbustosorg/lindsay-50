@@ -253,6 +253,11 @@ export function createMqttWsClient({
 
   function emitEnvelope(rawString) {
     const preview = rawString.length > 200 ? rawString.slice(0, 200) + "..." : rawString;
+    // Real wire-level envelope delivery to the application — NOT a
+    // diagnostic. Kept unprefixed so operators can always see "an
+    // envelope actually reached the app layer" even with the [diag]
+    // filter active. (filter `-diag` in Chrome DevTools to silence the
+    // diagnostic chatter without losing this.)
     console.log("[mqtt-ws] emitEnvelope: " + preview);
     if (typeof onEnvelope === "function") {
       try {
@@ -351,10 +356,8 @@ export function createMqttWsClient({
       // Python-side `ENVELOPE_RECEIVED` log would fire (and only if
       // JSON.parse succeeded). This is the upstream of that chain.
       console.log(
-        "[mqtt-ws] PUBLISH received flags=" + flags + " qos=" + qos +
-        " bytes_len=" + bytes.length +
-        " frame_first16=" + Array.from(bytes.slice(0, 16))
-          .map(b => b.toString(16).padStart(2, '0')).join(' ')
+        "[diag] mqtt-ws PUBLISH received flags=" + flags + " qos=" + qos +
+        " bytes_len=" + bytes.length
       );
       let parsed = null;
       try {
@@ -378,7 +381,7 @@ export function createMqttWsClient({
         // subscription, including config ones — past logs only show
         // the post-parse type field, which masks broker fan-out drops.
         console.log(
-          "[mqtt-ws] PUBLISH wire-topic=" + parsed.topic +
+          "[diag] mqtt-ws PUBLISH wire-topic=" + parsed.topic +
           " payload_len=" + (parsed.payload ? parsed.payload.length : 0)
         );
       }
@@ -408,7 +411,7 @@ export function createMqttWsClient({
         }
         if (jsonOk) {
           console.log(
-            "[mqtt-ws] PUBLISH ok type=" + wireType +
+            "[diag] mqtt-ws PUBLISH ok type=" + wireType +
             " wire_version=" + (wireVersion === undefined ? "missing" : wireVersion) +
             " topic=" + parsed.topic
           );
@@ -541,36 +544,16 @@ export function createMqttWsClient({
 
   function ingest(chunk) {
     // Concatenate chunk onto the buffer; try to parse out any full frames.
-    // First entry point after the WebSocket onmessage — log the FULL
-    // raw payload bytes BEFORE any MQTT frame parsing or JSON parsing,
-    // so an inbound envelope that fails to parse downstream is still
-    // visible (no silent drop below this line). Use try/utf8-decode so
-    // text payloads are printable; binary garbage still appears as
-    // best-effort replacement chars. Round 7a/triage — the operator's
-    // "are we sure it isn't arriving at all?" question demands we
-    // confirm at the byte boundary, not trust downstream parse success.
-    let payloadStr = "";
-    try {
-      payloadStr = new TextDecoder("utf-8", { fatal: false }).decode(chunk);
-    } catch (e) {
-      payloadStr = "<decode-error: " + (e && e.message) + ">";
-    }
-    // Issue #71 follow-up: extended chunk log so a config envelope
-    // that fails to surface anywhere downstream is still visible at the
-    // WS byte boundary. The 16-byte window covers the full MQTT fixed
-    // header (1 byte) + remaining length (1-4 bytes) + 2-byte topic
-    // length + first few topic bytes — enough to identify the wire
-    // frame type (PUBLISH=0x32-0x3e with QoS 0/1/2 and DUP/RETAIN bits)
-    // and the start of the topic name (operator can correlate against
-    // "mbustosorg/feeds/lindsay50" vs "/get").
-    const first16Hex = Array.from(chunk.slice(0, 16))
-      .map(b => b.toString(16).padStart(2, '0')).join(' ');
-    console.log(
-      "[mqtt-ws] ingest chunk bytes_len=" + chunk.length +
-      " first16=" + first16Hex +
-      " buffer_before=" + buffer.length +
-      " raw_payload=" + JSON.stringify(payloadStr)
-    );
+    // Per-chunk log suppressed (round 12 — was drowning out the
+    // actually-interesting `[diag] PUBLISH wire-topic=...` line on the
+    // PUBLISH branch below; status messages fire this every 5s).
+    // The `[diag]` lines still log on:
+    //   - partial-frame waits (operator can correlate "chunk arrived but
+    //     no PUBLISH yet")
+    //   - malformed-length drops
+    //   - PUBLISH wire-topic (the topic name + payload_len — the one
+    //     piece of info that distinguishes "got a config envelope" from
+    //     "got a status envelope")
     const next = new Uint8Array(buffer.length + chunk.length);
     next.set(buffer, 0);
     next.set(chunk, buffer.length);
@@ -664,41 +647,30 @@ export function createMqttWsClient({
       emitStatus("connected", detail);
     };
     socket.onmessage = (event) => {
+      // [diag] mark every WS-level frame receipt so the operator can
+      // confirm "the WS got bytes" even when nothing downstream fires.
+      // Filter out with Chrome DevTools console filter `-diag` to
+      // silence.
       console.log(
-        "[mqtt-ws] socket.onmessage fired, data type=" +
-        (event.data && event.data.constructor && event.data.constructor.name)
+        "[diag] mqtt-ws onmessage type=" +
+        (event.data && event.data.constructor && event.data.constructor.name) +
+        " bytes=" + (event.data && event.data.byteLength)
       );
-      console.log("[mqtt-ws] POINT_1 reached: onmessage entered");
       let data;
       if (event.data instanceof ArrayBuffer) {
-        console.log(
-          "[mqtt-ws] POINT_2 reached: ArrayBuffer branch; bytes=" + event.data.byteLength +
-          " first8=" + Array.from(new Uint8Array(event.data).slice(0, 8))
-            .map(b => b.toString(16).padStart(2, '0')).join(' ')
-        );
         data = new Uint8Array(event.data);
       } else if (event.data instanceof Blob) {
-        console.log("[mqtt-ws] POINT_2 reached: Blob branch");
         // Some browsers deliver Blob — convert via FileReader.
         const reader = new FileReader();
-        reader.onload = () => {
-          console.log("[mqtt-ws] POINT_2b reached: Blob FileReader onload");
-          ingest(new Uint8Array(reader.result));
-        };
+        reader.onload = () => ingest(new Uint8Array(reader.result));
         reader.readAsArrayBuffer(event.data);
         return;
       } else {
-        console.log(
-          "[mqtt-ws] POINT_2 reached: text frame branch; preview=" +
-          String(event.data).slice(0, 80)
-        );
         // Text frame — treat as envelope payload directly.
         emitEnvelope(String(event.data));
         return;
       }
-      console.log("[mqtt-ws] POINT_3 reached: about to call ingest()");
       ingest(data);
-      console.log("[mqtt-ws] POINT_4 reached: ingest() returned");
     };
     socket.onerror = (event) => {
       // The WebSocket `error` event doesn't carry detail in browsers, but
