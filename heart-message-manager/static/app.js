@@ -122,7 +122,21 @@
   async function getLastConfigReceipt() {
     if (!window._message_manager) return { sha: "" };
     try {
-      return await window._message_manager.get_last_config_receipt();
+      // PyScript proxies: `await proxy.sync_method()` returns the
+      // proxy itself, not the underlying Python value. The receipt
+      // dict `{"sha": str}` has no proxy wrappers to unwrap — just
+      // read `.sha` directly off the returned object (which is
+      // either the dict or a JsProxy of it; both expose `.sha`).
+      // Awaiting here would yield the proxy back, and the caller
+      // `applyBrowserConfigReceipt` would see `receipt.sha`
+      // undefined → cell stays "—". Symptom observed on v208:
+      // Python-side `_last_applied_config_sha` was set to
+      // `c77bcde`, but Browser/Config never populated.
+      const receipt = window._message_manager.get_last_config_receipt();
+      if (!receipt) return { sha: "" };
+      const sha =
+        typeof receipt === "object" && "sha" in receipt ? receipt.sha : "";
+      return { sha: typeof sha === "string" ? sha : "" };
     } catch (e) {
       console.warn("getLastConfigReceipt failed:", e);
       return { sha: "" };
