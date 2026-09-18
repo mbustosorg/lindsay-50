@@ -122,20 +122,46 @@
   async function getLastConfigReceipt() {
     if (!window._message_manager) return { sha: "" };
     try {
-      // PyScript proxies: `await proxy.sync_method()` returns the
-      // proxy itself, not the underlying Python value. The receipt
-      // dict `{"sha": str}` has no proxy wrappers to unwrap — just
-      // read `.sha` directly off the returned object (which is
-      // either the dict or a JsProxy of it; both expose `.sha`).
-      // Awaiting here would yield the proxy back, and the caller
-      // `applyBrowserConfigReceipt` would see `receipt.sha`
-      // undefined → cell stays "—". Symptom observed on v208:
-      // Python-side `_last_applied_config_sha` was set to
-      // `c77bcde`, but Browser/Config never populated.
+      // PyScript proxies for Python dicts DO NOT expose dict keys
+      // as direct JS properties — `proxy.sha` is `undefined`,
+      // and the only accessor that works is `Object.entries()` /
+      // `proxy.get('sha')` / `proxy.toJs()`. v208 read `.sha`
+      // directly and worked in some Pyodide 0.26 builds; v212
+      // (PyScript 2024.9.1, the version pinned in dashboard.html)
+      // changed the JsProxy surface and broke that path. Symptom:
+      // `_last_applied_config_sha` is populated (`'713ad52'`)
+      // but `App.getLastConfigReceipt()` returns `{sha: ""}`
+      // because `proxy.sha` is undefined.
+      //
+      // Try three unwrap strategies in order of robustness:
+      //   1. Object.fromEntries(Object.entries(receipt)) — works
+      //      when the JsProxy is iterable as a dict (most cases).
+      //   2. receipt.get('sha') — works when the JsProxy exposes
+      //      dict methods (always for a Python dict proxy).
+      //   3. receipt.sha — fallback for plain JS objects (the
+      //      case v208 was written for).
       const receipt = window._message_manager.get_last_config_receipt();
       if (!receipt) return { sha: "" };
-      const sha =
-        typeof receipt === "object" && "sha" in receipt ? receipt.sha : "";
+      let sha = "";
+      try {
+        const unwrapped = Object.fromEntries(Object.entries(receipt));
+        if (unwrapped && typeof unwrapped === "object" && "sha" in unwrapped) {
+          sha = unwrapped.sha;
+        }
+      } catch (_) {
+        // Object.entries not iterable — fall through.
+      }
+      if (!sha && typeof receipt.get === "function") {
+        try {
+          const v = receipt.get("sha");
+          sha = v == null ? "" : String(v);
+        } catch (_) {
+          // fall through
+        }
+      }
+      if (!sha && "sha" in receipt) {
+        sha = receipt.sha;
+      }
       return { sha: typeof sha === "string" ? sha : "" };
     } catch (e) {
       console.warn("getLastConfigReceipt failed:", e);
