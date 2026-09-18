@@ -98,18 +98,16 @@
     Loaded on every authenticated page (decision 4.3 in openspec/changes/
     add-sign-status-reports/design.md). The script is a no-op on pages
     that have neither #sign-live-pill nor [data-sign-status-field].
-    v3: refresh Browser/Config from the in-browser receipt on every
-    5s renderAll tick (safety net for missing on_change events) +
-    module-level `_browserConfigSha` cache so the per-column
-    comparison reads the same value the cell DOM shows.
-    v4: hard fallback — when `App.getLastConfigReceipt` returns
-    empty (PyScript marshalling slow/broken, or hasn't installed
-    yet), fetch /api/config directly to populate Browser/Config
-    with the wire-stamped SHA. The receipt path overrides if a
-    later WS envelope carries a different value, so drift
-    detection still works (the user's actual goal).
+    v9: drop the early-return on `rendered.state === "offline"` in
+    `applyFieldsRender`. A persisted snapshot from `sign_status_log`
+    is by-definition stale, so its `updated_at` always tripped the
+    offline gate — meaning Pi/Code and Pi/Config stayed "—" after a
+    hard refresh even though Flask had the Pi's last-known state.
+    The state machine's job is the freshness pill ("Live / Unknown
+    / Offline"), not a gate on field-cell display; the cells now
+    populate from whatever snapshot is in memory (live or persisted).
   -->
-  <script src="{{ url_for('static', filename='sign_status.js') }}?v=8"></script>
+  <script src="{{ url_for('static', filename='sign_status.js') }}?v=9"></script>
   {# Round 11 (issue #71 follow-up, pinned_version split):
      unchanged? Nope — pi_apply_settings.js reads the
      `data-saved-value` attribute on the pinned-version input,

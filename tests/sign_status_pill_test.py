@@ -418,34 +418,103 @@ def test_offline_pi_diagnostic_text_preserved():
     SHA so the operator can see "Pi was running 86537d5 when it went
     offline." The drift-comparison fix (test_pi_cell_only_live_with_snapshot)
     only gates the comparison logic — `applyFieldsRender` still writes
-    to `[data-sign-status-field]` on every WS tick, and the offline
-    branch (state="offline") does NOT clear the cell.
+    to `[data-sign-status-field]` on every WS tick.
 
-    If the cell text were cleared on offline transitions, the operator
-    would lose the diagnostic signal — "Pi was running X" becomes
-    "Pi is offline" with no last-known value to compare against.
+    Updated for issue #71 round 12: the early-return on
+    `rendered.state === "offline"` was REMOVED. A persisted snapshot
+    from `sign_status_log` is by definition older than 30s (the
+    `OFFLINE_AFTER_MS` cutoff in `stateFromAge`), so the previous
+    guard blocked the per-cell writes — meaning a hard refresh
+    before any live WS message would leave Pi/Code and Pi/Config
+    as "—" even though Flask had the Pi's last-known state. Now
+    `applyFieldsRender` populates the cells from whatever snapshot
+    it has (live OR persisted), so the operator sees the
+    last-known Pi SHA on every dashboard load.
+
+    If the per-cell textContent were cleared on offline transitions,
+    the operator would lose the diagnostic signal — "Pi was running
+    X" becomes "Pi is offline" with no last-known value to compare
+    against.
     """
     src = _read("heart-message-manager/static/sign_status.js")
-    # applyFieldsRender's offline branch must NOT clear the cell DOM.
     apply_fields_match = re.search(
         r"function\s+applyFieldsRender\s*\([^)]*\)\s*\{([\s\S]*?)\n\}",
         src,
     )
     assert apply_fields_match is not None, "applyFieldsRender not found"
     body = apply_fields_match.group(1)
-    # The offline branch must be a guarded early-return that does NOT
-    # touch the per-field cell textContent. We check the early-return
-    # shape — there must be NO `el.textContent = ""` clearing the
-    # field cells in the offline branch.
-    offline_block = body.split('rendered.state === "offline"')[1]
-    # Take only up to the next unconditional block (the next `if` that
-    # isn't part of the early-return pattern). Restrict the search to
-    # the first ~30 lines after the offline check.
-    offline_window = offline_block.split("\n}\n")[0] if "}\n" in offline_block else offline_block[:1500]
-    assert "textContent = \"\"" not in offline_window, (
-        "applyFieldsRender's offline branch must NOT clear the cell "
-        "textContent — the operator wants to see the last-known SHA "
-        "even after the Pi goes offline"
+    # Strip block + line comments before checking for the early-return
+    # — the function body's comment block intentionally references
+    # the old `rendered.state === "offline"` pattern as historical
+    # context, which would false-positive this assertion.
+    code_only = re.sub(r"//[^\n]*", "", body)
+    code_only = re.sub(r"/\*[\s\S]*?\*/", "", code_only)
+    # The early-return on `rendered.state === "offline"` must be GONE
+    # from the executable code — it would short-circuit the per-cell
+    # writes from a persisted snapshot, which is exactly the bug the
+    # operator reported ("is there no stored value for what the Pi
+    # was previously running?").
+    assert 'rendered.state === "offline"' not in code_only, (
+        "applyFieldsRender must NOT short-circuit on offline state — "
+        "a persisted snapshot from /api/sign-status has by-definition "
+        "stale updated_at, so the offline guard would prevent the "
+        "Pi cells from ever being populated from persistence"
+    )
+    # The early-return that DID exist must still exist on `!snapshot`
+    # alone (so a cold start with no persisted row AND no live WS
+    # doesn't try to render empty values).
+    assert "!snapshot" in code_only, (
+        "applyFieldsRender must still short-circuit when there is NO "
+        "snapshot (neither live nor persisted) — cold start means no "
+        "data to render"
+    )
+    # No `textContent = ""` clearing the field cells anywhere in the
+    # function — we never want to erase the last-known Pi SHA.
+    assert "textContent = \"\"" not in code_only, (
+        "applyFieldsRender must NOT clear the cell textContent — the "
+        "operator wants to see the last-known SHA even after the Pi "
+        "goes offline"
+    )
+
+
+def test_pi_cells_populate_from_persisted_snapshot():
+    """On hard refresh before any live WS message has landed,
+    /api/sign-status returns the persisted snapshot from
+    `sign_status_log` (issue #71). `hydrateFromServer` calls
+    `maybeAcceptSnapshot(payload.snapshot)`, which feeds the
+    persisted snapshot into `renderAll`. The Pi cells MUST
+    populate from that snapshot — the operator's complaint
+    ("is there no stored value for what the Pi was previously
+    running?") was that Pi/Code and Pi/Config stayed "—" after
+    a hard refresh, even though Flask had the Pi's last-known
+    state in SQLite.
+
+    The persisted-snapshot path uses the SAME `_latestSnapshot`
+    variable as the live WS path — `maybeAcceptSnapshot` is
+    source-agnostic. The only requirement is that
+    `applyFieldsRender` does NOT short-circuit on `state ===
+    "offline"`, since the persisted snapshot's `updated_at`
+    is by-definition stale.
+    """
+    src = _read("heart-message-manager/static/sign_status.js")
+    # `hydrateFromServer` must call `maybeAcceptSnapshot` on the
+    # persisted snapshot returned by /api/sign-status.
+    hydrate_match = re.search(
+        r"function\s+hydrateFromServer\s*\([^)]*\)\s*\{([\s\S]*?)\n\}",
+        src,
+    )
+    assert hydrate_match is not None, "hydrateFromServer not found"
+    hydrate_body = hydrate_match.group(1)
+    assert "maybeAcceptSnapshot" in hydrate_body, (
+        "hydrateFromServer must call maybeAcceptSnapshot on the "
+        "persisted snapshot so the in-memory state populates"
+    )
+    # The persisted snapshot is consumed via `payload.snapshot`
+    # (the /api/sign-status response shape).
+    assert "payload.snapshot" in hydrate_body, (
+        "hydrateFromServer must read payload.snapshot — that's the "
+        "/api/sign-status response shape (`{snapshot, received_at, "
+        "source}`)"
     )
 
 
@@ -484,18 +553,19 @@ def test_browser_config_hard_fallback_removed():
     )
 
 
-def test_base_template_sign_status_js_bumped_v8():
-    """The sign_status.js cache-buster must be ?v=8 or later so
-    browsers pin to the per-column live-snapshot gating fix (Code
-    column was flipping red when the Pi was offline because the
-    comparison rule used the cell's stale textContent from a prior
-    online session as if it were a live signal). Memory rule: bump
-    ?v=N when shipping static JS changes
-    (feedback_bump_cache_buster_with_static_js.md).
+def test_base_template_sign_status_js_bumped_v9():
+    """The sign_status.js cache-buster must be ?v=9 or later so
+    browsers pin to the persisted-snapshot Pi-cell hydration fix
+    (Pi/Code and Pi/Config were "—" after a hard refresh because
+    `applyFieldsRender` short-circuited on `state === "offline"`,
+    and the persisted snapshot from `sign_status_log` is by-
+    definition stale so its updated_at always tripped the
+    offline gate). Memory rule: bump ?v=N when shipping static JS
+    changes (feedback_bump_cache_buster_with_static_js.md).
     """
     html = _read("heart-message-manager/templates/base.html")
     m = re.search(r"sign_status\.js[^>]*\?v=(\d+)", html)
     assert m is not None, "sign_status.js not loaded with cache-buster"
-    assert int(m.group(1)) >= 8, (
-        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=8"
+    assert int(m.group(1)) >= 9, (
+        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=9"
     )

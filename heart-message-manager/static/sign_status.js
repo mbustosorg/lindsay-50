@@ -183,12 +183,38 @@ function applyFieldsRender(snapshot, rendered) {
   const hasAnyFieldCell = document.querySelector("[data-sign-status-field]");
   if (!fieldsContainer && !placeholder && !hasAnyFieldCell) return;
 
-  if (rendered.state === "offline" || !snapshot) {
+  if (!snapshot) {
     if (fieldsContainer) fieldsContainer.style.display = "none";
     if (placeholder) placeholder.style.display = "";
     if (degradedBanner) degradedBanner.style.display = "none";
+    // No live snapshot AND no persisted snapshot — the Pi cells will
+    // stay "—" (server-rendered). Nothing to populate.
     return;
   }
+
+  // NOTE: we no longer short-circuit the field-cell writes on
+  // `rendered.state === "offline"`. When the snapshot is a
+  // *persisted* one from `sign_status_log` (Flask restored it on
+  // startup before the broker sent anything new), `updated_at` is
+  // the timestamp of the Pi's LAST online status publish — which
+  // is by definition older than 30s. `stateFromAge` flips to
+  // "offline" or "unknown" depending on age, and the prior guard
+  // blocked the per-cell writes — meaning a hard refresh before
+  // the first live WS message would leave Pi/Code and Pi/Config
+  // as "—" even though Flask has the Pi's last-known state.
+  //
+  // The state machine's job is the freshness pill ("Live /
+  // Unknown / Offline"), not a gate on field-cell display. The
+  // Pi cells ALWAYS populate from whatever snapshot we have
+  // (live or persisted); the column-level drift comparison in
+  // `applyVersionDriftRender` separately accounts for stale
+  // Pi data via `liveByColumn`, so a "Pi was running X but is
+  // offline" cell doesn't false-positive the Code/Config column
+  // red rule.
+  //
+  // The placeholder-vs-fieldsContainer visibility toggle below is
+  // the right gate for the "do we show the populated cells or the
+  // placeholder?" question.
 
   if (fieldsContainer) fieldsContainer.style.display = "";
   if (placeholder) placeholder.style.display = "none";
@@ -290,17 +316,19 @@ function applyVersionDriftRender(snapshot) {
   // the dashboard after a /settings save to see Flask's new SHA.
   const flaskConfig =
     _flaskConfigSha || cfg.flaskConfigSha || readCell("flask", "config");
-  // Pi cells: ONLY use the snapshot's live values when we have a
-  // snapshot. Reading the cell's stale textContent as a fallback
-  // would surface the last-known-good Pi SHA from a prior online
-  // session as if it were a live signal — Flask and Browser might
-  // agree on the current code while the Pi cell carries the
-  // previous build's SHA, and the column rule would (correctly per
-  // its own logic) flip red. That's a false positive: the Pi is
-  // OFFLINE, not running different code. The cell text below
-  // still renders the last-known SHA so the operator can see
-  // "Pi was running 86537d5 when it went offline" — we just don't
-  // use it for the drift comparison.
+  // Pi cells: read from the in-memory `_latestSnapshot` if present
+  // (live WS message OR persisted snapshot from /api/sign-status on
+  // page load). The snapshot IS the truth — if it has a non-empty
+  // `short_sha`, that's the value the Pi was running when it last
+  // reported (live or offline-because-of-restart). We do NOT fall
+  // back to reading the cell's textContent: that path would surface
+  // a previous session's SHA as if it were a fresh signal, and the
+  // column drift rule would flip red on stale data. With the fix
+  // above (`applyFieldsRender` no longer short-circuits on
+  // `state === "offline"`), the Pi cell text and the Pi snapshot
+  // value stay in lockstep — when the snapshot has a SHA, the cell
+  // shows it; when the snapshot is empty, the cell stays at its
+  // server-rendered "—".
   const piHasLiveSnapshot = Boolean(snapshot && snapshot.short_sha);
   const piHasLiveAppliedConfig = Boolean(snapshot && snapshot.applied_config_sha);
   const piCode = (snapshot && snapshot.short_sha) || "";
@@ -318,12 +346,13 @@ function applyVersionDriftRender(snapshot) {
     code: { flask: flaskCode, pi: piCode, browser: browserCode },
     config: { flask: flaskConfig, pi: piConfig, browser: browserConfig },
   };
-  // Per-column "which rows are backed by a live signal" map. Pi is
-  // live ONLY when the snapshot carries short_sha / applied_config_sha;
-  // Flask and Browser are always live (page-rendered + receipt-driven).
-  // The drift rule only compares LIVE signals — a stale Pi cell is
-  // treated as "we don't know yet" even though its textContent carries
-  // a SHA from a prior online session.
+  // Per-column "which rows are backed by a snapshot signal" map. Pi is
+  // live when the in-memory snapshot carries short_sha /
+  // applied_config_sha — this is true for both fresh WS messages and
+  // for persisted snapshots restored from `sign_status_log` on Flask
+  // startup. Flask and Browser are always live (page-rendered +
+  // receipt-driven). The drift rule only compares LIVE signals — a
+  // Pi cell with no snapshot stays neutral (cell text is "—").
   const liveByColumn = {
     code: { flask: true, pi: piHasLiveSnapshot, browser: true },
     config: { flask: true, pi: piHasLiveAppliedConfig, browser: true },
@@ -414,13 +443,11 @@ async function applyBrowserConfigReceipt() {
     if (flaskCell) flaskCell.textContent = _browserConfigSha;
   }
   if (typeof window.App === "undefined" || !window.App.getLastConfigReceipt) {
-    // PyScript shim not installed yet — show "—" and wait for the
-    // 5s tick to retry. No fallback: the receipt path is the only
-    // source of truth for both cells.
-    if (_browserConfigSha.length === 0) {
-      if (browserCell) browserCell.textContent = VERSION_DRIFT_DASH;
-      if (flaskCell) flaskCell.textContent = VERSION_DRIFT_DASH;
-    }
+    // PyScript shim not installed yet — the Browser/Config cell has
+    // nothing to write (no cache, no receipt path). The Flask/Config
+    // cell keeps its server-rendered value (from /api/config at page
+    // load) — do NOT overwrite it with "—". The 5s tick retries
+    // until PyScript lands.
     return;
   }
   try {
@@ -431,15 +458,22 @@ async function applyBrowserConfigReceipt() {
       _flaskConfigSha = sha;
       if (browserCell) browserCell.textContent = sha;
       if (flaskCell) flaskCell.textContent = sha;
-    } else if (_browserConfigSha.length === 0) {
-      // Receipt round-trip returned empty (no envelope yet, or
-      // seed hasn't completed). Show "—" and wait for the 5s tick
-      // or a subsequent on_change to populate. No /api/config
-      // fallback — hiding a broken receipt path would mask broker
-      // fan-out drops.
-      if (browserCell) browserCell.textContent = VERSION_DRIFT_DASH;
-      if (flaskCell) flaskCell.textContent = VERSION_DRIFT_DASH;
     }
+    // IMPORTANT: do NOT write "—" when the receipt is empty. The
+    // cells already carry their server-rendered / cache values:
+    //   - Flask/Config cell: server-rendered `{{ flask_config_sha
+    //     or "—" }}` (concrete SHA from /api/config on every page
+    //     load) OR the previous receipt-driven value. Overwriting
+    //     with "—" on receipt-empty would erase a perfectly good
+    //     value just because the receipt path isn't ready yet.
+    //   - Browser/Config cell: server-rendered as "—" (no PyScript
+    //     access at server-render time). Receipt is the only way
+    //     this cell populates; if the receipt is empty, leave the
+    //     existing "—" — the 5s tick or on_change will populate it
+    //     when the receipt lands.
+    // The "wait for receipt" semantics is owned by the 5s tick —
+    // `renderAll()` re-invokes this function every 5s, so a missing
+    // receipt now is just a deferred write, not a destructive reset.
   } catch (e) {
     console.warn("[sign_status.js] applyBrowserConfigReceipt failed:", e);
   }
