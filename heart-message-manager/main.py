@@ -942,9 +942,40 @@ def _resolve_flask_config_sha(cfg) -> str:
     # Compute the SHA from the current body so the cell reflects
     # what Flask is actually serving — not "what was last saved
     # in this process" and not "what's Flask's running git SHA".
+    #
+    # Race-window guard: if a gunicorn sibling worker just booted
+    # and is mid-`rebuild_from_s3` (unlinked SQLite + init_db +
+    # not-yet-loaded-from-S3), a concurrent dashboard render here
+    # reads an empty config table and `sqlite.get_config()` returns
+    # `SignConfig.default()`. Body-hashing the default would surface
+    # a misleading value (the hash of an empty config) as if it were
+    # a real SHA. Detect the default by comparing canonical bodies:
+    # if `cfg.to_dict()` matches `SignConfig.default().to_dict()`,
+    # we know the in-memory cfg is the process default, not a
+    # loaded S3 snapshot — return "" so the cell renders "—"
+    # ("we don't know yet"). Otherwise hash the body honestly.
     body = cfg.to_dict()
     body.pop("config_sha", None)
     body.pop("updated_at", None)
+    # Race-window guard: if the in-memory cfg is the process default
+    # (sqlite row missing because a sibling worker is mid-rebuild),
+    # don't surface a misleading hash of an empty config. Compare via
+    # sorted-key canonical JSON so dict-order differences don't
+    # false-trigger the default detection. Wrapped in try/except so
+    # a test fixture with a mocked SignConfig (no real `.default()`
+    # method) falls through to the body-hash below rather than
+    # crashing the dashboard render.
+    try:
+        default_body = SignConfig.default().to_dict()
+        default_body.pop("config_sha", None)
+        default_body.pop("updated_at", None)
+        if (
+            json.dumps(body, sort_keys=True, separators=(",", ":"))
+            == json.dumps(default_body, sort_keys=True, separators=(",", ":"))
+        ):
+            return ""
+    except (AttributeError, TypeError):
+        pass
     try:
         canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
     except TypeError:
