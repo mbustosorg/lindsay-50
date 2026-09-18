@@ -1500,6 +1500,41 @@ def _save_and_publish(cfg: SignConfig) -> None:
     _mqtt_client_publish_config(cfg_wire)
 
 
+def _boot_refresh_config() -> None:
+    """Boot hook (issue #71 deployment history).
+
+    Re-save and re-publish the current config on every Flask
+    startup so the S3 snapshot's ``target_version`` stays current
+    with Flask's running SHA when ``pinned_version`` is empty
+    (i.e. no operator pin — the canonical case on every fresh
+    deploy). ``_save_and_publish`` re-resolves ``target_version``
+    against Flask's currently-running short SHA at save time, then
+    stamps fresh ``config_sha`` + ``updated_at``, writes S3, and
+    publishes the config envelope. We rarely reboot the dyno
+    unless we're deploying — and on deploys, Flask's running SHA
+    changes, which means an empty ``pinned_version`` will resolve
+    to a NEW ``target_version``. Always-save keeps the deployment
+    history complete in S3. The intent: every deploy creates a
+    fresh S3 snapshot + MQTT envelope so the Versions card's
+    Flask/Config cell reflects "the config this Flask binary
+    shipped with" rather than "whatever config was last saved by
+    an older Flask binary".
+
+    Wrapped in try/except so a transient S3 or MQTT failure at
+    boot can't prevent the server from accepting requests.
+    """
+    try:
+        _save_and_publish(sqlite.get_config())
+    except Exception as e:
+        logger.warning("[flask] boot config refresh failed: %s", e)
+
+
+# Invoke the boot hook immediately after definition. Module-load
+# ordering matters: the hook runs once at import time, AFTER
+# `_save_and_publish` is bound.
+_boot_refresh_config()
+
+
 # Canonical set of effect class names the device knows about. Mirrors
 # the loader-driven `lib_shared/config/effects_settings.json` (the
 # device-side `_EFFECT_CLASSES` map in heart-matrix-controller/main.py is

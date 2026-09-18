@@ -308,14 +308,31 @@ class TestStartupPublishesCheckForUpdate:
         assert "on_connect_callback" not in captured["kwargs"]
 
     def test_publishes_check_for_update_at_startup(self, app):
-        """Flask calls publish_envelope exactly once with a check-for-update envelope."""
+        """Flask calls publish_envelope at startup with the check-for-update envelope.
+
+        Note (issue #71 deployment history): as of the boot-refresh
+        change, Flask ALSO publishes a config envelope at startup
+        (the boot hook runs `_save_and_publish` once at module-load
+        time to refresh the S3 snapshot). So the call count is now
+        >=2 — the check-for-update plus the config envelope. We
+        verify the check-for-update call by inspecting the envelopes.
+        """
         _, captured = app
         instance = captured["instance"]
-        # Exactly one publish at startup.
-        assert instance.publish_envelope.call_count == 1
-        env = instance.publish_envelope.call_args.args[0]
-        assert env.type == "command"
-        assert env.payload == {"action": "check-for-update"}
+        # At least one publish at startup (the check-for-update).
+        assert instance.publish_envelope.call_count >= 1
+        # Find the check-for-update envelope in the call list.
+        envelopes = [
+            call.args[0] for call in instance.publish_envelope.call_args_list
+        ]
+        check_for_update_envs = [
+            env for env in envelopes
+            if env.type == "command" and env.payload == {"action": "check-for-update"}
+        ]
+        assert len(check_for_update_envs) == 1, (
+            "Flask must publish exactly one check-for-update envelope at startup. "
+            f"Got: {[e.type for e in envelopes]}"
+        )
 
     def test_publish_swallows_failure(self, app):
         """A publish failure at startup does not raise — Flask must keep running."""
