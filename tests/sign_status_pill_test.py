@@ -553,110 +553,80 @@ def test_browser_config_hard_fallback_removed():
     )
 
 
-def test_base_template_sign_status_js_bumped_v10():
-    """The sign_status.js cache-buster must be ?v=10 or later so
-    browsers pin to the `fetchLastValue: false` opt-in for the
-    status-topic WS — without it, the status-topic WS would still
-    fire AIO's `<topic>/get` last-value fetch on every SUBACK and
-    the dashboard's Pi cells would populate from a stale cached
-    snapshot even when the Pi is offline. Memory rule: bump ?v=N
-    when shipping static JS changes
+def test_base_template_sign_status_js_bumped_v11():
+    """The sign_status.js cache-buster must be ?v=11 or later so
+    browsers pin to the round-14 /get-fetch removal — without
+    the bump, browsers would still hit the round-13 shim that
+    passes `fetchLastValue: false` to a code path that no
+    longer accepts that option. Memory rule: bump ?v=N when
+    shipping static JS changes
     (feedback_bump_cache_buster_with_static_js.md).
     """
     html = _read("heart-message-manager/templates/base.html")
     m = re.search(r"sign_status\.js[^>]*\?v=(\d+)", html)
     assert m is not None, "sign_status.js not loaded with cache-buster"
-    assert int(m.group(1)) >= 10, (
-        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=10"
+    assert int(m.group(1)) >= 11, (
+        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=11"
     )
 
 
-def test_status_topic_ws_disables_get_fetch():
-    """The status-topic WS opened by `sign_status.js` MUST pass
-    `fetchLastValue: false` so the AIO `<topic>/get` last-value
-    workaround doesn't fire on the status topic. The /get fetch
-    returns the Pi's last published status snapshot — which can
-    be hours/days old if the Pi is offline — and would populate
-    the Pi cells with stale SHAs that (a) make the operator think
-    the Pi is actively reporting and (b) flip the column drift
-    rule red on cached data the operator can't verify. With
-    `fetchLastValue: false`, the cells stay "—" until a fresh
-    live WS publish lands.
+def test_get_fetch_removed_from_mqtt_ws_client():
+    """Round 14 (operator call): the AIO `<topic>/get` last-value
+    workaround was REMOVED from mqtt_ws_client.js entirely. Both
+    the status-topic WS (sign_status.js) and the config-topic WS
+    (dashboard_runtime.py) now rely on real-time broker delivery
+    only.
 
-    The config-topic WS (in `dashboard_runtime.py`) keeps the
-    default `fetchLastValue: true` — config-envelope recovery
-    from broker fan-out drops is the original use case for the
-    /get workaround, and removing it there would hide AIO's
-    documented fan-out-drop behavior behind a slow first-load
-    (no, it would just lose config recovery — different concern).
-    The status topic is the operator-facing diagnostic; the
-    config topic is the data path. Different constraints,
-    different defaults.
-    """
-    src = _read("heart-message-manager/static/sign_status.js")
-    # The status-topic WS must explicitly pass fetchLastValue: false.
-    # Look for the createMqttWsClient call on the status topic
-    # (sign_status.js opens a second client with mqttStatusTopic).
-    open_status_match = re.search(
-        r"function\s+openStatusWs\s*\([^)]*\)\s*\{([\s\S]*?)\n\}",
-        src,
-    )
-    assert open_status_match is not None, "openStatusWs function not found"
-    body = open_status_match.group(1)
-    # Strip comments before checking (the comment block in sign_status.js
-    # explicitly references "fetchLastValue: false" — that's
-    # documentation, not the call we want).
-    code_only = re.sub(r"//[^\n]*", "", body)
-    code_only = re.sub(r"/\*[\s\S]*?\*/", "", code_only)
-    assert "fetchLastValue" in code_only, (
-        "openStatusWs must pass fetchLastValue: false to the status-"
-        "topic WS — without it the /get fetch will populate Pi cells "
-        "from AIO's broker-cached last value"
-    )
-    assert re.search(
-        r"fetchLastValue\s*:\s*false",
-        code_only,
-    ), (
-        "openStatusWs must set fetchLastValue to FALSE for the "
-        "status topic — TRUE would surface stale cached Pi data"
-    )
-
-
-def test_mqtt_ws_client_supports_fetch_last_value_option():
-    """The mqtt_ws_client.js module must accept a `fetchLastValue`
-    option (default true for backwards compatibility) so different
-    callers can opt in or out of the AIO `<topic>/get` last-value
-    workaround. The default keeps the config-topic WS path
-    unchanged (the /get fetch is still needed for config-envelope
-    recovery from broker fan-out drops). Callers that want to
-    suppress the /get fetch pass `fetchLastValue: false`.
+    The /get fetch was originally added in a5d6102 (round 9) to
+    recover from broker fan-out drops, but the actual root cause
+    was the AIO 1KB payload limit with feed history on
+    (feedback_aio_feed_history_payload_limit.md). The /get
+    workaround didn't solve that and added confusion by surfacing
+    AIO's broker-cached last value as if it were live. With it
+    removed:
+      - Pi cells stay "—" until a fresh live WS publish lands
+      - Config cells populate from seed() + WS publishes only
+      - The pill correctly shows freshness state based on real
+        delivery, not broker-cached stale data
     """
     src = _read("heart-message-manager/static/mqtt_ws_client.js")
-    # The function signature must include the option with a default.
-    m = re.search(
-        r"function\s+createMqttWsClient\s*\([^)]*\)\s*\{",
-        src,
+    # Strip comments before checking — the round-14 comment block in
+    # mqtt_ws_client.js intentionally references "/get" as historical
+    # context. The check is for CODE that constructs a `<topic>/get`
+    # destination, not for the comment word.
+    code_only = re.sub(r"//[^\n]*", "", src)
+    code_only = re.sub(r"/\*[\s\S]*?\*/", "", code_only)
+    # The buildPublish call for the /get fetch (topic + "/get",
+    # empty payload, packet ID 0x0002) MUST be gone.
+    assert '"/get"' not in code_only, (
+        "AIO `<topic>/get` last-value fetch must be removed from "
+        "mqtt_ws_client.js — surface stale broker-cached data as if "
+        "the Pi were live misleads the operator"
     )
-    assert m is not None, "createMqttWsClient function not found"
-    sig = src[m.start():m.end()]
-    assert "fetchLastValue" in sig, (
-        "createMqttWsClient must accept a `fetchLastValue` option "
-        "with a default value (true for backwards compatibility)"
-    )
+    # The /get topic construction pattern (topic + "/get") must be gone.
     assert re.search(
-        r"fetchLastValue\s*=\s*true",
-        sig,
-    ), (
-        "createMqttWsClient must default `fetchLastValue` to TRUE "
-        "so existing callers (config-topic WS in dashboard_runtime.py) "
-        "continue to fire the /get fetch without code changes"
+        r"topic\s*\+\s*[\"']/get[\"']",
+        code_only,
+    ) is None, (
+        "The `topic + '/get'` construction must be removed from "
+        "mqtt_ws_client.js — no caller should be able to trigger the "
+        "AIO last-value workaround via this shim"
     )
-    # The /get fetch block must be gated on `fetchLastValue` so it
-    # can be disabled by callers that pass `fetchLastValue: false`.
-    assert re.search(
-        r"if\s*\(\s*fetchLastValue\s*\)\s*\{",
-        src,
-    ), (
-        "The /get fetch block must be gated on `if (fetchLastValue)` "
-        "so callers can suppress it via `fetchLastValue: false`"
+    # The fetchLastValue option must also be gone — round 14 made
+    # the removal unconditional; the round-13 opt-in is obsolete.
+    assert "fetchLastValue" not in src, (
+        "fetchLastValue option must be removed — round 14 made the "
+        "/get removal unconditional, the round-13 opt-in is obsolete"
+    )
+
+
+def test_sign_status_does_not_pass_fetch_last_value():
+    """sign_status.js used to pass `fetchLastValue: false` to opt
+    out of the /get fetch. Round 14 removed the /get fetch entirely
+    (and the option), so sign_status.js must NOT reference
+    `fetchLastValue` anywhere — it was a round-13 shim."""
+    src = _read("heart-message-manager/static/sign_status.js")
+    assert "fetchLastValue" not in src, (
+        "sign_status.js must not reference `fetchLastValue` — round "
+        "14 removed the option from createMqttWsClient"
     )

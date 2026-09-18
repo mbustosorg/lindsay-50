@@ -89,7 +89,7 @@
        drop below the socket boundary). The IndexedDB shim was
        dropped in #39 — persistence is server-side (S3 + SQLite). -->
   <script type="module">
-    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=25";
+    import { createMqttWsClient } from "{{ url_for('static', filename='mqtt_ws_client.js') }}?v=26";
     window.createMqttWsClient = createMqttWsClient;
   </script>
   <script src="{{ url_for('static', filename='app.js') }}?v=21"></script>
@@ -107,7 +107,7 @@
     / Offline"), not a gate on field-cell display; the cells now
     populate from whatever snapshot is in memory (live or persisted).
   -->
-  <script src="{{ url_for('static', filename='sign_status.js') }}?v=10"></script>
+  <script src="{{ url_for('static', filename='sign_status.js') }}?v=11"></script>
   {# Round 11 (issue #71 follow-up, pinned_version split):
      unchanged? Nope — pi_apply_settings.js reads the
      `data-saved-value` attribute on the pinned-version input,

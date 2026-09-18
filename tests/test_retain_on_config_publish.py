@@ -226,70 +226,77 @@ def test_browser_get_fetch_builder_exists():
     )
 
 
-def test_browser_get_fetch_fires_on_reconnect_suback():
-    """On every SUBACK (including reconnects), the browser MUST
-    publish to `<topic>/get` to fetch AIO's last value.
+def test_browser_get_fetch_removed_on_suback():
+    """Round 14 (operator call): the AIO `<topic>/get` last-value
+    workaround is REMOVED from mqtt_ws_client.js entirely. The
+    SUBACK branch must NOT publish to `<topic>/get` anymore.
 
-    Round 10: the /get fetch fires on EVERY SUBACK. The
-    `lastConnectedAt` gate was dead code (it's set in onopen
-    before SUBACK) and was removed. The fetch is a self-healing
-    overlay on top of the REST seed — it catches any save that
-    landed during the page-load race window.
+    The /get fetch was originally added in a5d6102 (round 9) to
+    recover from broker fan-out drops. The actual root cause was
+    the AIO 1KB payload limit with feed history on (per
+    feedback_aio_feed_history_payload_limit.md) — the /get
+    workaround didn't help there. It also surfaces AIO's broker-
+    cached last value as if it were live, which (a) hides real
+    drift behind stale data and (b) tricks the operator into
+    thinking the Pi is actively publishing when it's not.
+
+    Both the status-topic WS (sign_status.js) and the config-topic
+    WS (dashboard_runtime.py) now rely on real-time broker delivery
+    only. Config gets seeded from /api/config on page load; future
+    updates come via MQTT publishes.
     """
     src = (_PROJECT_ROOT / "heart-message-manager" / "static" / "mqtt_ws_client.js").read_text()
-    # Find the SUBACK branch by scanning for the SUBACK log line.
     suback_idx = src.find('[mqtt-ws] SUBACK')
     assert suback_idx != -1, "SUBACK handler must be present"
-    # Look for the /get fetch within a reasonable window after SUBACK.
-    # Window is generous so we don't miss the surrounding branch.
     window = src[suback_idx : suback_idx + 4000]
-    assert "/get" in window, (
-        "SUBACK branch must publish to <topic>/get so AIO replays "
-        "the last config to the browser (round 9 /get-fetch pattern)"
+    # Strip comments before checking — the round-14 comment block in
+    # mqtt_ws_client.js intentionally references "/get" as historical
+    # context. The check is for CODE that calls buildPublish with a
+    # `<topic>/get` destination, not for the comment word.
+    code_only = re.sub(r"//[^\n]*", "", window)
+    code_only = re.sub(r"/\*[\s\S]*?\*/", "", code_only)
+    assert "/get" not in code_only, (
+        "round 14: SUBACK branch must NOT publish to <topic>/get — "
+        "the AIO last-value workaround was removed (operator call). "
+        "Surfacing broker-cached stale data as live misleads the "
+        "operator and doesn't fix the actual root cause (AIO 1KB "
+        "payload limit with feed history on)."
     )
-    assert "buildPublish" in window, (
-        "SUBACK branch must call buildPublish to send the /get fetch"
+    # buildPublish is still present in the file (used elsewhere for
+    # outbound QoS-1 PUBLISH if a future caller needs it), but the
+    # SUBACK branch must not call it for a /get fetch.
+    assert "buildPublish(getTopic" not in code_only, (
+        "round 14: SUBACK branch must NOT call buildPublish with a "
+        "<topic>/get destination — the /get fetch is gone"
     )
 
 
-def test_browser_get_fetch_fires_on_every_suback():
-    """The /get fetch MUST fire on EVERY SUBACK, including the first.
+def test_browser_get_fetch_no_first_suback_skip_gate():
+    """Round 14 supersedes round 10's gate-removal assertion.
 
-    Round 10 (operator confirmation): the in-browser seed() races
-    AIO's MQTT queue — if a config save lands BEFORE the page
-    finishes loading, the in-memory state at seed-time is stale
-    even on first connect. The /get fetch on every SUBACK is the
-    self-healing overlay that catches this.
+    In round 10 the SUBACK branch had a `lastConnectedAt !== null`
+    gate that was supposed to skip the /get fetch on first SUBACK
+    (turned out to be dead code). Round 10 asserted the gate was
+    removed.
 
-    The previous round asserted the fetch was gated by
-    `lastConnectedAt !== null` (skipping the first SUBACK). That
-    gate doesn't actually work — `lastConnectedAt` is set in
-    `socket.onopen`, which always fires before SUBACK — so the
-    "first SUBACK skip" never skipped anything. Round 10 removes
-    the gate entirely and lets the fetch fire on every SUBACK.
-    The seed() REST hydrate is still the primary path; the /get
-    fetch is the backstop.
+    In round 14 the /get fetch itself is gone — so the
+    `lastConnectedAt !== null` reference must be gone too. This
+    test is the round-14 equivalent: the SUBACK branch has neither
+    the fetch NOR the gate that used to guard it.
     """
     src = (_PROJECT_ROOT / "heart-message-manager" / "static" / "mqtt_ws_client.js").read_text()
     suback_idx = src.find('[mqtt-ws] SUBACK')
     window = src[suback_idx : suback_idx + 4000]
-    # The skip path is gone — there should be NO conditional gating
-    # the /get fetch. We assert that the "skip on first connect"
-    # branch was removed (round 9 → round 10 correction).
-    assert (
-        "first SUBACK — skipping" not in window
-    ), (
-        "round 10: SUBACK branch must NOT skip the /get fetch on "
-        "first SUBACK — the gate never fired anyway (lastConnectedAt "
-        "is set in onopen before SUBACK) and removing it makes the "
-        "fetch self-healing across race conditions"
-    )
     assert (
         "lastConnectedAt !== null" not in window
     ), (
-        "round 10: SUBACK branch must NOT gate the /get fetch on "
-        "lastConnectedAt — the gate is dead code now"
+        "round 14: SUBACK branch must NOT reference `lastConnectedAt` "
+        "as a gate — round 10 removed the gate and round 14 made the "
+        "/get fetch itself gone, so the gate is doubly dead"
     )
-    # And the fetch itself must still be present in the branch.
-    assert "/get" in window, "SUBACK branch must publish to <topic>/get"
-    assert "buildPublish" in window, "SUBACK branch must call buildPublish"
+    assert (
+        "first SUBACK — skipping" not in window
+    ), (
+        "round 14: SUBACK branch must NOT have the round-10 skip "
+        "comment — the /get fetch is gone entirely"
+    )
