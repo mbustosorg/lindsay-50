@@ -265,12 +265,12 @@ function applyFieldsRender(snapshot, rendered) {
 
 // Cell labels — the keys the template emits in `data-version-drift-cell`
 // and the per-column disagreement buckets. Two COLUMNS (code, config),
-// three ROWS (flask, pi, browser). Each column has up to 3 values; if
+// three ROWS (flask, pi, preview). Each column has up to 3 values; if
 // any pair of non-empty values disagrees, every populated cell in that
 // column flips red. Empty ("") cells stay neutral — cold start is not
 // drift.
 const VERSION_DRIFT_COLUMNS = ["code", "config"];
-const VERSION_DRIFT_ROWS = ["flask", "pi", "browser"];
+const VERSION_DRIFT_ROWS = ["flask", "pi", "preview"];
 const VERSION_DRIFT_DASH = "—";
 
 function applyVersionDriftRender(snapshot) {
@@ -283,11 +283,11 @@ function applyVersionDriftRender(snapshot) {
   // into the cell text + data-attrs; the JS reads them so the comparison
   // is from the same source as the rendered text). Pi cells are populated
   // by `applyFieldsRender` above (writes to [data-sign-status-field]). The
-  // Browser/Code cell is server-rendered to Flask's SHA by default; we
+  // Preview/Code cell is server-rendered to Flask's SHA by default; we
   // override with `window._loaded_python_short_sha` if the PyScript
   // runtime has reported a different value (caches may pin to an older
-  // build). The Browser/Config cell is filled by
-  // `applyBrowserConfigReceipt()` on every on_change fan-out.
+  // build). The Preview/Config cell is filled by
+  // `applyPreviewConfigReceipt()` on every on_change fan-out.
   function readCell(row, col) {
     const el = table.querySelector(
       `[data-version-drift-cell="${row}-${col}"]`
@@ -298,18 +298,18 @@ function applyVersionDriftRender(snapshot) {
     return v;
   }
 
-  // Override Browser/Code if PyScript reported a different loaded SHA.
-  const browserCodeCell = table.querySelector(
-    '[data-version-drift-cell="browser-code"]'
+  // Override Preview/Code if PyScript reported a different loaded SHA.
+  const previewCodeCell = table.querySelector(
+    '[data-version-drift-cell="preview-code"]'
   );
-  if (browserCodeCell && typeof window._loaded_python_short_sha === "string"
+  if (previewCodeCell && typeof window._loaded_python_short_sha === "string"
       && window._loaded_python_short_sha.length > 0) {
-    browserCodeCell.textContent = window._loaded_python_short_sha;
+    previewCodeCell.textContent = window._loaded_python_short_sha;
   }
 
   const flaskCode = cfg.flaskVersion || readCell("flask", "code");
   // Flask/Config: prefer the live receipt cache (set by
-  // `applyBrowserConfigReceipt` whenever a new config envelope lands),
+  // `applyPreviewConfigReceipt` whenever a new config envelope lands),
   // fall back to the page-load value baked into APP_CONFIG, fall back
   // to whatever the cell currently shows. The receipt cache is the
   // post-save value — the operator no longer needs to hard-refresh
@@ -333,29 +333,29 @@ function applyVersionDriftRender(snapshot) {
   const piHasLiveAppliedConfig = Boolean(snapshot && snapshot.applied_config_sha);
   const piCode = (snapshot && snapshot.short_sha) || "";
   const piConfig = (snapshot && snapshot.applied_config_sha) || "";
-  const browserCode = readCell("browser", "code");
-  // Browser/Config is read from the module cache (`_browserConfigSha`)
-  // rather than the cell DOM — applyBrowserConfigReceipt writes the
+  const previewCode = readCell("preview", "code");
+  // Preview/Config is read from the module cache (`_previewConfigSha`)
+  // rather than the cell DOM — applyPreviewConfigReceipt writes the
   // cell ASYNCHRONOUSLY (via PyScript proxy await), but the comparison
   // below runs synchronously. Reading the cache keeps the comparison
-  // deterministic regardless of which tick of applyBrowserConfigReceipt
+  // deterministic regardless of which tick of applyPreviewConfigReceipt
   // has completed.
-  const browserConfig = _browserConfigSha || "";
+  const previewConfig = _previewConfigSha || "";
 
   const cellsByColumn = {
-    code: { flask: flaskCode, pi: piCode, browser: browserCode },
-    config: { flask: flaskConfig, pi: piConfig, browser: browserConfig },
+    code: { flask: flaskCode, pi: piCode, preview: previewCode },
+    config: { flask: flaskConfig, pi: piConfig, preview: previewConfig },
   };
   // Per-column "which rows are backed by a snapshot signal" map. Pi is
   // live when the in-memory snapshot carries short_sha /
   // applied_config_sha — this is true for both fresh WS messages and
   // for persisted snapshots restored from `sign_status_log` on Flask
-  // startup. Flask and Browser are always live (page-rendered +
+  // startup. Flask and Preview are always live (page-rendered +
   // receipt-driven). The drift rule only compares LIVE signals — a
   // Pi cell with no snapshot stays neutral (cell text is "—").
   const liveByColumn = {
-    code: { flask: true, pi: piHasLiveSnapshot, browser: true },
-    config: { flask: true, pi: piHasLiveAppliedConfig, browser: true },
+    code: { flask: true, pi: piHasLiveSnapshot, preview: true },
+    config: { flask: true, pi: piHasLiveAppliedConfig, preview: true },
   };
 
   // Per-column red-highlight: if any two LIVE cells disagree, every
@@ -395,7 +395,7 @@ function applyVersionDriftRender(snapshot) {
 // Module-level caches of the most-recent config_sha the browser has
 // seen on the wire, captured from the in-browser MessageManager's
 // receipt of Flask's published config envelope. Written by
-// `applyBrowserConfigReceipt()` and read by `applyVersionDriftRender`
+// `applyPreviewConfigReceipt()` and read by `applyVersionDriftRender`
 // so the per-column disagreement logic runs against the same value
 // the cells display — without an async-read race against the cell
 // write. Initialized to "" so cold start reads as "we don't know yet"
@@ -403,7 +403,7 @@ function applyVersionDriftRender(snapshot) {
 //
 // Two caches, one source. The receipt is the SHA Flask just published
 // — so by definition the SHA the BROWSER received IS the SHA Flask
-// published. We mirror that one value into both the Browser/Config
+// published. We mirror that one value into both the Preview/Config
 // cell AND the Flask/Config cell (the latter was previously page-load
 // only; now it updates from the receipt too, avoiding a hard-refresh
 // after every /settings save). Pi/Config remains driven by the status
@@ -417,33 +417,33 @@ function applyVersionDriftRender(snapshot) {
 // to paper over with a /api/config fallback that would hide broker
 // fan-out drops. (Operator call: trust the WS path; only refresh on
 // actual broker-side breakage, which the red cell will surface.)
-let _browserConfigSha = "";
+let _previewConfigSha = "";
 let _flaskConfigSha = "";
 
 // Pull the most-recent browser-applied config_sha from the in-browser
-// MessageManager and write it into the Browser/Config cell, the
+// MessageManager and write it into the Preview/Config cell, the
 // Flask/Config cell, and both module caches. Called on every on_change
 // fan-out (config envelope arrival) AND on every 5s renderAll tick —
 // the tick path is the safety net for cases where the change hook
 // missed (PyScript race during cold start). Returns a Promise — the
 // callers are fire-and-forget (the cell DOM updates run in a microtask).
-async function applyBrowserConfigReceipt() {
-  const browserCell = document.querySelector(
-    '[data-version-drift-cell="browser-config"]'
+async function applyPreviewConfigReceipt() {
+  const previewCell = document.querySelector(
+    '[data-version-drift-cell="preview-config"]'
   );
   const flaskCell = document.querySelector(
     '[data-version-drift-cell="flask-config"]'
   );
-  if (!browserCell && !flaskCell) return;
+  if (!previewCell && !flaskCell) return;
   // Write the cached value synchronously first so the next synchronous
   // `applyVersionDriftRender` (if scheduled) sees the latest receipt —
   // keeps the cell DOM and the comparison logic in lockstep.
-  if (_browserConfigSha.length > 0) {
-    if (browserCell) browserCell.textContent = _browserConfigSha;
-    if (flaskCell) flaskCell.textContent = _browserConfigSha;
+  if (_previewConfigSha.length > 0) {
+    if (previewCell) previewCell.textContent = _previewConfigSha;
+    if (flaskCell) flaskCell.textContent = _previewConfigSha;
   }
   if (typeof window.App === "undefined" || !window.App.getLastConfigReceipt) {
-    // PyScript shim not installed yet — the Browser/Config cell has
+    // PyScript shim not installed yet — the Preview/Config cell has
     // nothing to write (no cache, no receipt path). The Flask/Config
     // cell keeps its server-rendered value (from /api/config at page
     // load) — do NOT overwrite it with "—". The 5s tick retries
@@ -454,9 +454,9 @@ async function applyBrowserConfigReceipt() {
     const receipt = await window.App.getLastConfigReceipt();
     const sha = (receipt && receipt.sha) || "";
     if (sha && sha.length > 0) {
-      _browserConfigSha = sha;
+      _previewConfigSha = sha;
       _flaskConfigSha = sha;
-      if (browserCell) browserCell.textContent = sha;
+      if (previewCell) previewCell.textContent = sha;
       if (flaskCell) flaskCell.textContent = sha;
     }
     // IMPORTANT: do NOT write "—" when the receipt is empty. The
@@ -466,7 +466,7 @@ async function applyBrowserConfigReceipt() {
     //     load) OR the previous receipt-driven value. Overwriting
     //     with "—" on receipt-empty would erase a perfectly good
     //     value just because the receipt path isn't ready yet.
-    //   - Browser/Config cell: server-rendered as "—" (no PyScript
+    //   - Preview/Config cell: server-rendered as "—" (no PyScript
     //     access at server-render time). Receipt is the only way
     //     this cell populates; if the receipt is empty, leave the
     //     existing "—" — the 5s tick or on_change will populate it
@@ -475,7 +475,7 @@ async function applyBrowserConfigReceipt() {
     // `renderAll()` re-invokes this function every 5s, so a missing
     // receipt now is just a deferred write, not a destructive reset.
   } catch (e) {
-    console.warn("[sign_status.js] applyBrowserConfigReceipt failed:", e);
+    console.warn("[sign_status.js] applyPreviewConfigReceipt failed:", e);
   }
 }
 
@@ -508,13 +508,13 @@ function renderAll(snapshot) {
   applyPillRender(rendered);
   applyFieldsRender(snapshot, rendered);
   applyVersionDriftRender(snapshot);
-  // Fire-and-forget refresh of the Browser/Config cell from the
+  // Fire-and-forget refresh of the Preview/Config cell from the
   // in-browser receipt. The 5s tick is the safety net for cases
   // where the on_change hook missed the seed-complete or config-
   // envelope events (PyScript race during cold start, broker
-  // fan-out drop). `applyBrowserConfigReceipt` is async; this
+  // fan-out drop). `applyPreviewConfigReceipt` is async; this
   // call doesn't block renderAll.
-  applyBrowserConfigReceipt();
+  applyPreviewConfigReceipt();
 }
 
 // -----------------------------------------------------------------------------
@@ -671,15 +671,15 @@ function init() {
     // be included globally via base.html without side effects.
     return;
   }
-  // Issue #71: register a change hook so the Browser/Config cell
+  // Issue #71: register a change hook so the Preview/Config cell
   // is repopulated every time a new config envelope lands (the
   // `_dispatchChange` fan-out from app.js runs after every
   // MessageManager mutation, including config-envelope apply).
-  // `applyBrowserConfigReceipt` is async — we don't await; the
+  // `applyPreviewConfigReceipt` is async — we don't await; the
   // 5s tick will catch up if the promise hasn't resolved.
   if (typeof window.App !== "undefined" && typeof window.App.registerOnChange === "function") {
     window.App.registerOnChange(() => {
-      applyBrowserConfigReceipt();
+      applyPreviewConfigReceipt();
     });
   }
   // Render once with the empty snapshot so the placeholder text

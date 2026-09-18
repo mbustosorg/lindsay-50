@@ -2,7 +2,7 @@
 
 Symptom history:
 
-- v208 (round 12): Browser/Config cell stayed "—" even though
+- v208 (round 12): Preview/Config cell stayed "—" even though
   Python-side `_last_applied_config_sha` was set to the correct SHA
   (`c77bcde`). Flask/Config populated correctly because that's
   server-rendered from `{{ flask_config_sha }}`.
@@ -66,7 +66,7 @@ def test_app_js_does_not_await_get_last_config_receipt():
     accessible directly via `proxy.get('sha')` /
     `Object.entries(proxy)` even when direct property access fails.
     Awaiting the proxy would yield the proxy back, and the caller's
-    `receipt.sha` would be undefined → Browser/Config cell stays "—".
+    `receipt.sha` would be undefined → Preview/Config cell stays "—".
 
     Pin: the source for `App.getLastConfigReceipt` must call
     `window._message_manager.get_last_config_receipt()` WITHOUT a
@@ -76,7 +76,7 @@ def test_app_js_does_not_await_get_last_config_receipt():
     assert "await window._message_manager.get_last_config_receipt()" not in body, (
         "App.getLastConfigReceipt must NOT await the PyScript proxy — "
         "awaiting a sync method on a PyScript proxy returns the proxy "
-        "itself, not the underlying dict. Symptom: Browser/Config "
+        "itself, not the underlying dict. Symptom: Preview/Config "
         "cell stayed '—' even though Python-side "
         "_last_applied_config_sha was populated."
     )
@@ -179,7 +179,7 @@ def test_app_js_unwrap_priority_is_proxy_safe_first():
 
 def test_app_js_unwrap_logs_failure():
     """The function must log a warning when the unwrap fails (so
-    the operator can see why a future regression breaks Browser/Config
+    the operator can see why a future regression breaks Preview/Config
     instead of silently returning `{sha: ""}`).
 
     The v208 fix had `console.warn("getLastConfigReceipt failed:", e)`

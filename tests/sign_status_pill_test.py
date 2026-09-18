@@ -47,39 +47,39 @@ def cell_is_red(populated: bool, agrees: bool) -> bool:
 class TestColumnAgreement:
     def test_empty_column_agrees(self):
         """No cells populated → column agrees (nothing to compare)."""
-        assert column_agrees({"flask": "", "pi": "", "browser": ""}) is True
+        assert column_agrees({"flask": "", "pi": "", "preview": ""}) is True
 
     def test_single_populated_cell_agrees(self):
         """Cold start: only Flask has a value yet — column agrees."""
-        assert column_agrees({"flask": "abc1234", "pi": "", "browser": ""}) is True
+        assert column_agrees({"flask": "abc1234", "pi": "", "preview": ""}) is True
 
     def test_all_three_agree(self):
-        """Happy path: Flask / Pi / Browser all on the same SHA."""
+        """Happy path: Flask / Pi / Preview all on the same SHA."""
         assert (
-            column_agrees({"flask": "abc1234", "pi": "abc1234", "browser": "abc1234"})
+            column_agrees({"flask": "abc1234", "pi": "abc1234", "preview": "abc1234"})
             is True
         )
 
-    def test_flask_and_browser_agree_but_pi_behind(self):
+    def test_flask_and_preview_agree_but_pi_behind(self):
         """The classic AIO fan-out-drop scenario: Pi is on the old
-        config while Flask and Browser have the new one."""
+        config while Flask and Preview have the new one."""
         assert (
-            column_agrees({"flask": "abc1234", "pi": "old1234", "browser": "abc1234"})
+            column_agrees({"flask": "abc1234", "pi": "old1234", "preview": "abc1234"})
             is False
         )
 
-    def test_flask_and_pi_agree_but_browser_empty(self):
-        """Browser hasn't reported yet (cold start). Column still
+    def test_flask_and_pi_agree_but_preview_empty(self):
+        """Preview hasn't reported yet (cold start). Column still
         agrees — empty is not drift."""
         assert (
-            column_agrees({"flask": "abc1234", "pi": "abc1234", "browser": ""})
+            column_agrees({"flask": "abc1234", "pi": "abc1234", "preview": ""})
             is True
         )
 
     def test_all_three_different(self):
-        """Three different SHAs across Flask / Pi / Browser."""
+        """Three different SHAs across Flask / Pi / Preview."""
         assert (
-            column_agrees({"flask": "1111111", "pi": "2222222", "browser": "3333333"})
+            column_agrees({"flask": "1111111", "pi": "2222222", "preview": "3333333"})
             is False
         )
 
@@ -108,7 +108,7 @@ def _read(path: str) -> str:
 def test_dashboard_template_emits_version_drift_table():
     """The dashboard HTML must include the Versions table
     with the 6 expected cell markers (flask-code, flask-config,
-    pi-code, pi-config, browser-code, browser-config)."""
+    pi-code, pi-config, preview-code, preview-config)."""
     html = _read("heart-message-manager/templates/dashboard.html")
     assert "data-version-drift-table" in html, "table marker missing"
     expected_cells = {
@@ -116,8 +116,8 @@ def test_dashboard_template_emits_version_drift_table():
         "flask-config",
         "pi-code",
         "pi-config",
-        "browser-code",
-        "browser-config",
+        "preview-code",
+        "preview-config",
     }
     found = set(re.findall(r'data-version-drift-cell="([^"]+)"', html))
     assert expected_cells.issubset(found), f"missing cells: {expected_cells - found}"
@@ -126,7 +126,7 @@ def test_dashboard_template_emits_version_drift_table():
 def test_dashboard_template_uses_monospace_fixed_width():
     """Character alignment matters: cells use font-mono + identical
     width so a SHA in Flask/Code lines up vertically with the same
-    SHA in Pi/Code and Browser/Code. Without this the operator
+    SHA in Pi/Code and Preview/Code. Without this the operator
     can't eyeball agreement across rows."""
     html = _read("heart-message-manager/templates/dashboard.html")
     # Pull out a sample cell + verify font-mono + a fixed width class
@@ -176,14 +176,16 @@ def test_sign_status_js_bumped_cache_buster():
     """Memory rule: bump `?v=N` when shipping static JS changes so
     browsers don't pin to the old copy. The original was `?v=1`;
     this change rewrote the renderer + the applyFieldsRender guard,
-    so we must be on `?v=2` or later."""
+    so we must be on `?v=2` or later. Subsequent changes have
+    bumped further — current expectation is `?v>=12` after the
+    Browser→Preview rename."""
     html = _read("heart-message-manager/templates/base.html")
     # The URL is rendered via Jinja: `{{ url_for('static', filename='sign_status.js') }}?v=N`
     # Match either the raw template fragment or the rendered HTML.
     m = re.search(r"sign_status\.js[^>]*\?v=(\d+)", html)
     assert m is not None, "sign_status.js not loaded with cache-buster"
-    assert int(m.group(1)) >= 2, (
-        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=2"
+    assert int(m.group(1)) >= 12, (
+        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=12"
     )
 
 
@@ -216,23 +218,23 @@ def test_status_snapshot_carries_applied_config_sha():
     assert parsed["applied_config_sha"] == "abc1234"
 
 
-# --- Browser/Config receipt wiring (issue #71, follow-up) ---------
+# --- Preview/Config receipt wiring (issue #71, follow-up) ---------
 
 
-def test_render_all_refreshes_browser_config_cell():
-    """`renderAll()` MUST call `applyBrowserConfigReceipt()` so the
-    5s setInterval tick keeps the Browser/Config cell populated
+def test_render_all_refreshes_preview_config_cell():
+    """`renderAll()` MUST call `applyPreviewConfigReceipt()` so the
+    5s setInterval tick keeps the Preview/Config cell populated
     even when the `on_change` fan-out missed the seed-complete or
     config-envelope events (PyScript race during cold start, broker
     fan-out drop — see feedback_clean_session_aio_fan_out.md).
 
     The user complaint that drove this test: after a /settings save,
     Flask/Config (server-rendered) shows the new sha but
-    Browser/Config stays at "—" indefinitely. The 5s tick refresh
+    Preview/Config stays at "—" indefinitely. The 5s tick refresh
     is the safety net that gets the cell populated within ~5s of
     page load regardless of why the on_change hook missed."""
     src = _read("heart-message-manager/static/sign_status.js")
-    # Find the renderAll function body and verify applyBrowserConfigReceipt
+    # Find the renderAll function body and verify applyPreviewConfigReceipt
     # is called inside it. Simple substring check — the function is
     # short and the call is unique enough to grep for.
     m = re.search(
@@ -241,42 +243,42 @@ def test_render_all_refreshes_browser_config_cell():
     )
     assert m is not None, "renderAll function not found"
     body = m.group(1)
-    assert "applyBrowserConfigReceipt(" in body, (
-        "renderAll must call applyBrowserConfigReceipt() on every tick "
+    assert "applyPreviewConfigReceipt(" in body, (
+        "renderAll must call applyPreviewConfigReceipt() on every tick "
         "as the safety net for missed on_change events"
     )
 
 
-def test_browser_config_sha_module_cache_exists():
+def test_preview_config_sha_module_cache_exists():
     """The per-column disagreement comparison reads the latest
     browser-applied config_sha from a module-level cache
-    (`_browserConfigSha`) rather than from the cell DOM. This keeps
-    the comparison deterministic: applyBrowserConfigReceipt writes
+    (`_previewConfigSha`) rather than from the cell DOM. This keeps
+    the comparison deterministic: applyPreviewConfigReceipt writes
     the cell ASYNCHRONOUSLY (PyScript proxy await), but the
     synchronous comparison must not race with that write."""
     src = _read("heart-message-manager/static/sign_status.js")
-    assert "let _browserConfigSha" in src, (
-        "_browserConfigSha module-level cache not declared"
+    assert "let _previewConfigSha" in src, (
+        "_previewConfigSha module-level cache not declared"
     )
-    # The comparison site reads the cache, not readCell("browser", "config")
-    # — the readCell call for browser-config should be GONE (replaced by
+    # The comparison site reads the cache, not readCell("preview", "config")
+    # — the readCell call for preview-config should be GONE (replaced by
     # the cache read) to prevent the async-write/sync-read race.
     assert re.search(
-        r'const\s+browserConfig\s*=\s*_browserConfigSha',
+        r'const\s+previewConfig\s*=\s*_previewConfigSha',
         src,
-    ), "applyVersionDriftRender must read _browserConfigSha for browser-config"
+    ), "applyVersionDriftRender must read _previewConfigSha for preview-config"
     # And the original cell-DOM read should be replaced (no
-    # `browserConfig = readCell("browser", "config")` left).
-    assert 'readCell("browser", "config")' not in src, (
-        "browser-config comparison must come from cache, not cell DOM"
+    # `previewConfig = readCell("preview", "config")` left).
+    assert 'readCell("preview", "config")' not in src, (
+        "preview-config comparison must come from cache, not cell DOM"
     )
 
 
 def test_flask_config_sha_module_cache_exists():
-    """Same caching pattern as `_browserConfigSha`, but for the
+    """Same caching pattern as `_previewConfigSha`, but for the
     Flask/Config cell. Flask is the publisher of the config
     envelope — by definition, the SHA the BROWSER receives IS the
-    SHA Flask just published. `applyBrowserConfigReceipt` mirrors
+    SHA Flask just published. `applyPreviewConfigReceipt` mirrors
     that one value into both cells so the operator doesn't have to
     hard-refresh after a /settings save to see Flask's new SHA."""
     src = _read("heart-message-manager/static/sign_status.js")
@@ -296,9 +298,9 @@ def test_flask_config_sha_module_cache_exists():
     )
 
 
-def test_apply_browser_config_receipt_writes_both_cells():
-    """`applyBrowserConfigReceipt` MUST write the same SHA into
-    BOTH the Browser/Config and Flask/Config cells. Flask is the
+def test_apply_preview_config_receipt_writes_both_cells():
+    """`applyPreviewConfigReceipt` MUST write the same SHA into
+    BOTH the Preview/Config and Flask/Config cells. Flask is the
     publisher, so a receipt = a Flask publish — there's no scenario
     where those two values should diverge. A single receipt path
     drives both cells; the Flask/Config cell is no longer
@@ -307,19 +309,19 @@ def test_apply_browser_config_receipt_writes_both_cells():
     src = _read("heart-message-manager/static/sign_status.js")
     # Both cell lookups must exist. Use a broad pattern — both
     # selectors must appear in the file.
-    assert 'version-drift-cell="browser-config"' in src, (
-        "applyBrowserConfigReceipt must read the browser-config cell"
+    assert 'version-drift-cell="preview-config"' in src, (
+        "applyPreviewConfigReceipt must read the preview-config cell"
     )
     assert 'version-drift-cell="flask-config"' in src, (
-        "applyBrowserConfigReceipt must also write the flask-config cell — "
+        "applyPreviewConfigReceipt must also write the flask-config cell — "
         "Flask is the publisher, so the receipt IS Flask's published SHA"
     )
     # The two caches must be set from the same receipt sha, adjacently.
     assert re.search(
-        r'_browserConfigSha\s*=\s*sha;\s*\n\s*_flaskConfigSha\s*=\s*sha',
+        r'_previewConfigSha\s*=\s*sha;\s*\n\s*_flaskConfigSha\s*=\s*sha',
         src,
     ), (
-        "applyBrowserConfigReceipt must set both _browserConfigSha and "
+        "applyPreviewConfigReceipt must set both _previewConfigSha and "
         "_flaskConfigSha from the same receipt sha"
     )
 
@@ -329,13 +331,13 @@ def test_pi_cell_only_live_with_snapshot():
     when a snapshot is present. When the Pi is offline (no snapshot
     yet), reading the cell's stale textContent — which `applyFieldsRender`
     leaves populated from the last online session — would surface an
-    OLD Pi SHA alongside Flask's current SHA and Browser's current
+    OLD Pi SHA alongside Flask's current SHA and Preview's current
     SHA, and the column rule would flip red on a phantom "drift" that
     is really just "Pi is offline."
 
     Without this guard, every dashboard reload while the Pi is
     rebooting or on flaky wifi shows the column red even though Flask
-    and Browser agree. The cell text is still rendered (so the
+    and Preview agree. The cell text is still rendered (so the
     operator can see the last-known Pi SHA), but the comparison logic
     treats Pi as "we don't know yet."
     """
@@ -383,7 +385,7 @@ def test_live_only_drift_comparison():
 
     Cells are LIVE when backed by a fresh signal:
       - Flask: always live (server-rendered at page load).
-      - Browser: always live (page-rendered + receipt cache).
+      - Preview: always live (page-rendered + receipt cache).
       - Pi: live ONLY when a snapshot is present.
 
     A column with two LIVE cells that disagree flips both red; a
@@ -518,9 +520,9 @@ def test_pi_cells_populate_from_persisted_snapshot():
     )
 
 
-def test_browser_config_hard_fallback_removed():
+def test_preview_config_hard_fallback_removed():
     """The /api/config hard fallback was REMOVED. The browser's
-    Browser/Config and Flask/Config cells now trust the WS receipt
+    Preview/Config and Flask/Config cells now trust the WS receipt
     path exclusively (per operator call: don't add complexity, the
     receipt path is sufficient — Flask publishes, so a receipt IS
     a Flask publish and the same SHA drives both cells). If the
@@ -553,20 +555,19 @@ def test_browser_config_hard_fallback_removed():
     )
 
 
-def test_base_template_sign_status_js_bumped_v11():
-    """The sign_status.js cache-buster must be ?v=11 or later so
-    browsers pin to the round-14 /get-fetch removal — without
-    the bump, browsers would still hit the round-13 shim that
-    passes `fetchLastValue: false` to a code path that no
-    longer accepts that option. Memory rule: bump ?v=N when
-    shipping static JS changes
+def test_base_template_sign_status_js_bumped_v12():
+    """The sign_status.js cache-buster must be ?v=12 or later so
+    browsers pin to the Browser→Preview rename. Without the bump,
+    browsers would still hit the v11 shim with `data-version-drift-
+    cell="browser-config"` selectors that no longer exist on the
+    template. Memory rule: bump ?v=N when shipping static JS changes
     (feedback_bump_cache_buster_with_static_js.md).
     """
     html = _read("heart-message-manager/templates/base.html")
     m = re.search(r"sign_status\.js[^>]*\?v=(\d+)", html)
     assert m is not None, "sign_status.js not loaded with cache-buster"
-    assert int(m.group(1)) >= 11, (
-        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=11"
+    assert int(m.group(1)) >= 12, (
+        f"sign_status.js cache buster is ?v={m.group(1)}, need ?v>=12"
     )
 
 

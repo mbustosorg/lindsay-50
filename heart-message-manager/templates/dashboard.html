@@ -142,9 +142,9 @@
        the first snapshot arrives — initial state is "Offline"
        with a grey dot. #}
     {# Issue #71 — Versions card. Sits above the Sign Health card;
-       surfaces code + config drift across Flask / Pi / Browser as
+       surfaces code + config drift across Flask / Pi / Preview as
        a 3-row × 2-column comparison table. Rows = Flask / Pi /
-       Browser; columns = Code / Config. Every cell uses font-mono
+       Preview; columns = Code / Config. Every cell uses font-mono
        + the same fixed width so SHAs line up vertically —
        scanning down a single column tells the
        operator whether the three surfaces agree on Code (or
@@ -158,7 +158,7 @@
            as `flaskVersion`).
          - Pi/Code = data-sign-status-field="short_sha" (existing
            field pattern, updated at the 5s status cadence).
-         - Browser/Code = data-browser-version (rendered
+         - Preview/Code = data-preview-version (rendered
            server-side from `deployed_sha_short`). sign_status.js
            overrides with window._loaded_python_short_sha if set
            and different (PyScript cache pin).
@@ -167,7 +167,7 @@
            window.APP_CONFIG as `flaskConfigSha`).
          - Pi/Config = data-sign-status-field="applied_config_sha"
            (new v2 snapshot field, updated at 5s cadence).
-         - Browser/Config = data-browser-config-sha, written by
+         - Preview/Config = data-preview-config-sha, written by
            sign_status.js from `App.getLastConfigReceipt().sha`
            on every on_change fan-out. #}
     <div class="bg-white rounded-2xl shadow-lg shadow-indigo-100 p-6 mb-6 lg:flex-1 lg:flex lg:flex-col">
@@ -189,7 +189,7 @@
         </span>
       </div>
       <p class="text-sm text-slate-500 mb-4">
-        Code and config drift across Flask / Pi / Browser. SHAs are
+        Code and config drift across Flask / Pi / Preview. SHAs are
         7-char short hex (the same visual style for both). When
         three cells in a column disagree, the offending cell flips
         red — empty cells mean "we don't know yet" and stay neutral.
@@ -226,15 +226,15 @@
                 data-sign-status-field="applied_config_sha">—</td>
           </tr>
           <tr>
-            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Browser</th>
+            <th class="text-left px-4 py-2 text-sm font-medium text-slate-500">Preview</th>
             <td class="px-4 py-2 font-mono text-sm w-24"
-                data-version-drift-cell="browser-code"
-                data-browser-version="{{ deployed_sha_short or '' }}">
+                data-version-drift-cell="preview-code"
+                data-preview-version="{{ deployed_sha_short or '' }}">
               {{ deployed_sha_short or "—" }}
             </td>
             <td class="px-4 py-2 font-mono text-sm w-24"
-                data-version-drift-cell="browser-config"
-                data-browser-config-sha="">—</td>
+                data-version-drift-cell="preview-config"
+                data-preview-config-sha="">—</td>
           </tr>
         </tbody>
       </table>
