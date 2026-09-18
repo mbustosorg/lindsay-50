@@ -216,8 +216,21 @@ export function createMqttWsClient({
   longDisconnectMs,
   onEnvelope,
   onStatus,
+  fetchLastValue = true,
 }) {
   const threshold = longDisconnectMs || 300000; // 5 minutes default
+  // `fetchLastValue` defaults to TRUE for backwards compatibility — the
+  // config-topic WS (opened by `app.js` via MessageManager) needs the
+  // AIO `<topic>/get` workaround to recover from broker fan-out drops
+  // on WS reconnect. The status-topic WS (opened by `sign_status.js`)
+  // sets this to FALSE: the operator wants the dashboard's Pi cells
+  // to populate only from live WS publishes, not from AIO's broker-
+  // cached last value (which would surface a stale snapshot as if
+  // the Pi were live and could flip the column red on cached data).
+  // Removing the /get fetch from the status path is the operator's
+  // explicit choice: surface drift only when the Pi is actually
+  // publishing; otherwise the cells stay "—" and the pill shows the
+  // correct freshness state.
   let ws = null;
   let pingInterval = null;
   let backoffIndex = 0;
@@ -426,15 +439,29 @@ export function createMqttWsClient({
       // The seed itself still runs (and is still the primary path),
       // but the /get fetch is now a self-healing overlay that catches
       // anything the seed missed.
-      const getTopic = topic + "/get";
-      try {
-        ws && ws.send(buildPublish(getTopic, 0x0002, "", 1));
-        console.log(
-          "[mqtt-ws] /get fetch published to " + getTopic +
-          " (AIO retains-last-value workaround — see AIO MQTT docs)"
-        );
-      } catch (e) {
-        console.warn("[mqtt-ws] /get fetch publish failed:", e);
+      //
+      // Round 13 (operator call): the /get fetch is now GATED on
+      // `fetchLastValue`. The status-topic WS (sign_status.js) sets
+      // it to FALSE — the operator wants the dashboard's Pi cells to
+      // populate ONLY from live WS publishes, not from AIO's broker-
+      // cached last value. A cached /get payload can be hours or days
+      // old; surfacing it as if the Pi were live would (a) flip the
+      // drift column red on stale data and (b) trick the operator
+      // into thinking the Pi was actively reporting. Removing the
+      // /get fetch from the status path means Pi cells stay "—" until
+      // a fresh WS publish lands — that's the operator's explicit
+      // choice for the diagnostic.
+      if (fetchLastValue) {
+        const getTopic = topic + "/get";
+        try {
+          ws && ws.send(buildPublish(getTopic, 0x0002, "", 1));
+          console.log(
+            "[mqtt-ws] /get fetch published to " + getTopic +
+            " (AIO retains-last-value workaround — see AIO MQTT docs)"
+          );
+        } catch (e) {
+          console.warn("[mqtt-ws] /get fetch publish failed:", e);
+        }
       }
     } else if (type === 4) {
       // PUBACK — broker acknowledgement of one of our QoS-1 PUBLISH

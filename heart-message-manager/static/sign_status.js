@@ -626,6 +626,20 @@ function openStatusWs() {
     username: cfg.mqttUsername || cfg.MQTT_USERNAME || "",
     password: cfg.mqttPassword || cfg.MQTT_PASSWORD || "",
     topic: statusTopic,
+    // Round 13: disable the AIO `<topic>/get` last-value fetch for the
+    // status topic. The /get fetch returns the Pi's last published
+    // status snapshot, which can be hours/days old if the Pi is
+    // offline — surfacing it as if the Pi were actively publishing
+    // would (a) populate the Pi cells with stale SHAs and (b) flip
+    // the column drift rule red on cached data the operator can't
+    // verify. With fetchLastValue=false, the cells stay "—" until a
+    // fresh live WS publish lands; the pill correctly shows the
+    // freshness state (Live/Unknown/Offline) based on whether any
+    // status has been received since the page loaded. The config-
+    // topic WS (in `dashboard_runtime.py`) keeps fetchLastValue=true
+    // — config-envelope recovery from broker fan-out drops is the
+    // original use case for the /get workaround.
+    fetchLastValue: false,
     onEnvelope: (rawString) => {
       let parsed = null;
       try {
