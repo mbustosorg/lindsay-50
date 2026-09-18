@@ -897,31 +897,63 @@ def _resolve_boot_config() -> BootConfig:
 def _resolve_flask_config_sha(cfg) -> str:
     """Resolve the dashboard's "Flask / Config" cell value.
 
-    Falls through three layers:
-    1. The most-recent per-save ``config_sha`` stamped by
-       ``_save_and_publish`` (always concrete after the operator's
-       first /settings save post-v186).
-    2. The operator-pinned ``sign_settings.target_version``,
-       truncated to 7 chars — same logic as ``/api/sign/settings``
-       returns on the wire.
-    3. Flask's own running short SHA — what the Pi targets when no
-       override is set and no per-save hash exists.
+    Always returns the SHA of the *currently-loaded* SignConfig body
+    (the same body the Pi / browser would receive via the config
+    envelope), not the running Flask binary's SHA. This means:
 
-    Returns "" when every layer is empty (template renders "—").
-    Never raises — caller wraps in ``str()`` for the jsonify path
-    so a MagicMock test stub doesn't crash jsonify.
+    - On a fresh install where the operator has never clicked Save
+      on /settings, the SHA reflects whatever config was rebuilt
+      from S3 on boot — typically the last config the operator
+      saved (possibly on a previous deploy, before SQLite was
+      ephemeral).
+    - After every /settings save, the SHA is re-stamped by
+      ``_save_and_publish`` and round-trips through S3 + SQLite +
+      the MQTT envelope.
+    - The cell value is independent of whether /settings has been
+      touched this session — it answers "what config is Flask
+      currently serving?" not "what was the last save?".
+
+    Implementation: if ``cfg.config_sha`` is already stamped (set by
+    ``_save_and_publish``), use it directly. Otherwise compute the
+    SHA from the post-stamp ``to_dict()`` body (chicken-and-egg
+    loop avoided by popping ``config_sha`` + ``updated_at`` from
+    the dict before hashing, mirroring ``_save_and_publish``).
+
+    Returns "" when ``cfg`` is None or empty. Never raises — caller
+    wraps in ``str()`` for the jsonify path so a MagicMock test stub
+    doesn't crash jsonify.
+
+    Layer 2 (operator-pinned target_version) and Layer 3 (Flask's
+    own running SHA) were REMOVED. They conflated "what config is
+    Flask serving" with "what's the latest git SHA" — wrong because
+    the dashboard's Config column is supposed to compare config
+    bodies across Flask / Pi / Browser, not git SHAs. The fallback
+    to Flask's running SHA was the root cause of the operator's
+    "Flask/Config = Flask/Code" complaint: both columns showed the
+    same git SHA on a fresh install (no /settings save had stamped
+    ``cfg.config_sha``), so the drift rule couldn't detect that the
+    config bodies might actually differ.
     """
+    if cfg is None:
+        return ""
     saved = getattr(cfg, "config_sha", "") or ""
     if saved:
         return saved
-    target = (
-        (cfg.sign_settings.target_version or "")
-        if cfg.sign_settings
-        else ""
-    )
-    if target:
-        return _short_sha(target) or ""
-    return _resolve_boot_config().short_sha or ""
+    # Compute the SHA from the current body so the cell reflects
+    # what Flask is actually serving — not "what was last saved
+    # in this process" and not "what's Flask's running git SHA".
+    body = cfg.to_dict()
+    body.pop("config_sha", None)
+    body.pop("updated_at", None)
+    try:
+        canonical = json.dumps(body, sort_keys=True, separators=(",", ":"))
+    except TypeError:
+        # Same fallback as _save_and_publish — a malformed test
+        # mock shouldn't crash the dashboard render.
+        return ""
+    return _short_sha(
+        hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    ) or ""
 
 
 def _wire_sign_settings(cfg_dict: dict) -> dict:
