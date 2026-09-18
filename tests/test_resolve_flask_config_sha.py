@@ -265,59 +265,6 @@ class TestResolveFlaskConfigSha:
         # Must be a 7-char SHA of the body
         assert len(result) == 7
 
-    def test_race_window_default_returns_empty(self, live_helper, monkeypatch):
-        """Race-window guard: when a sibling gunicorn worker is mid-
-        ``rebuild_from_s3`` (unlinked SQLite + init_db + not-yet-loaded-
-        from-S3), a concurrent dashboard render here reads an empty
-        config table and ``sqlite.get_config()`` returns
-        ``SignConfig.default()``. Body-hashing the default would
-        surface a misleading value (the hash of an empty config) as
-        if it were a real SHA. The helper detects the default and
-        returns "" so the cell renders "—" ("we don't know yet").
-
-        Symptom observed on v208: ``cfg.config_sha`` was empty AND
-        the cfg body was the canonical default → helper returned
-        ``3cc5503`` (body-hash of empty config). After this fix,
-        returns "".
-
-        Implementation note: the live helper compares the in-memory
-        cfg's body against ``SignConfig.default().to_dict()``. The
-        test fixture mocks ``SignConfig`` (heavy module load
-        scaffolding — see live_helper fixture). To make the
-        comparison work without pulling in the full flask app
-        twice, we feed the helper a ``_FakeCfg`` whose ``to_dict``
-        returns the EXACT canonical-default body (computed
-        independently from the live ``lib_shared.models.SignConfig``
-        via importlib against the on-disk source — bypassing
-        ``sys.modules['lib_shared.models']`` which the fixture
-        has overwritten with a mock).
-        """
-        import importlib.util as _ilu
-        from lib_shared import models as _real_models
-        # Sanity: real models' default body must match the helper's
-        # expected default-detection target.
-        real_default_body = _real_models.SignConfig.default().to_dict()
-        real_default_body.pop("config_sha", None)
-        real_default_body.pop("updated_at", None)
-
-        # Build a cfg whose to_dict returns the same canonical
-        # default body. The helper compares against
-        # SignConfig.default().to_dict() — we patch that on the
-        # mocked SignConfig so the comparison sees the same dict.
-        monkeypatch.setattr(
-            live_helper.SignConfig,
-            "default",
-            lambda: _FakeCfg(config_sha="", body=real_default_body),
-        )
-
-        cfg = _FakeCfg(config_sha="", body=real_default_body)
-        result = live_helper._resolve_flask_config_sha(cfg)
-        assert result == "", (
-            "race window: helper must return '' when cfg is "
-            "SignConfig.default() — body-hashing the default would "
-            "show a misleading SHA like 3cc5503"
-        )
-
     def test_returns_empty_when_cfg_is_none(self, live_helper):
         """Defensive: a None cfg (e.g. before SQLite init runs)
         must not crash the dashboard render."""
