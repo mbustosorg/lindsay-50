@@ -70,7 +70,7 @@ real_lib_shared_models = importlib.import_module("lib_shared.models")
 sys.modules["lib_shared.models"] = real_lib_shared_models
 
 make_mock = _make_mock
-make_mock("lib_shared")  # no-op parent, real submodules win
+import lib_shared  # keep the real package so unstubbed submodules import
 config_reader_mod = make_mock("lib_shared.config_reader")
 config_reader_mod.get_config = lambda required_keys=None: mock_cfg
 log_setup_mod = make_mock("lib_shared.log_setup")
@@ -87,6 +87,14 @@ paho_mod.PahoMqttClient = MagicMock()
 paho_mod = types.ModuleType("paho_mqtt_client")
 paho_mod.PahoMqttClient = MagicMock()
 sys.modules["paho_mqtt_client"] = paho_mod
+
+# main.py reads S3 at import time (sqlite.rebuild_from_s3,
+# migrate_on_startup), so stub every public s3 function before loading it.
+import s3 as _s3_pre
+
+for _n in [n for n in dir(_s3_pre) if not n.startswith("_") and n.islower() and callable(getattr(_s3_pre, n))]:
+    setattr(_s3_pre, _n, MagicMock(return_value=None))
+_s3_pre.load_messages_from_s3 = MagicMock(return_value=[])
 
 # Load main.py
 _main_path = REPO_ROOT / "heart-message-manager" / "main.py"
@@ -131,19 +139,7 @@ def _get_all_messages():
 # Patch the sqlite functions on the mod's namespace (it's bound to `import sqlite`)
 sqlite_real.get_all_messages = _get_all_messages
 sqlite_real.get_message = lambda mid: next((m for m in _fake_messages if m.id == mid), None)
-sqlite_real.get_config = MagicMock(
-    return_value=type(
-        "Cfg",
-        (),
-        {
-            "sign": type("Sign", (), {"name": "Lindsay's Heart"})(),
-            "timezone": "America/Los_Angeles",
-            "filters": [],
-            "rendering": type("R", (), {"mode": "scroll", "speed": 0.04, "color": 0xFF0000})(),
-            "senders": {},
-        },
-    )()
-)
+sqlite_real.get_config = MagicMock(return_value=real_lib_shared_models.SignConfig())
 sqlite_real.message_count = lambda: len(_fake_messages)
 sqlite_real.put_message = lambda msg: _add_fake_message(msg.body)
 sqlite_real.put_config = MagicMock()

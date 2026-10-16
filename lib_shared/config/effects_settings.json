@@ -3,6 +3,7 @@
   "effects": [
     {"name": "Hyperspace", "module": "lib_shared.patterns.hyperspace", "class_name": "Hyperspace", "enabled": true},
     {"name": "Honeycomb", "module": "lib_shared.patterns.honeycomb", "class_name": "Honeycomb", "enabled": true},
+    {"name": "HoneycombSphere", "module": "lib_shared.patterns.honeycomb_sphere", "class_name": "HoneycombSphere", "enabled": true},
     {"name": "WindFire", "module": "lib_shared.patterns.windfire", "class_name": "WindFire", "enabled": true},
     {"name": "CoronalMassEjection", "module": "lib_shared.patterns.coronal_mass_ejection", "class_name": "CoronalMassEjection", "enabled": true},
     {"name": "Eyeball", "module": "lib_shared.patterns.eyeball", "class_name": "Eyeball", "enabled": true},
