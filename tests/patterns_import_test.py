@@ -35,6 +35,7 @@ class _StubDisplay:
         ("lib_shared.patterns.fireworks", "Fireworks"),
         ("lib_shared.patterns.nightsky", "NightSky"),
         ("lib_shared.patterns.honeycomb", "Honeycomb"),
+        ("lib_shared.patterns.honeycomb_sphere", "HoneycombSphere"),
         ("lib_shared.patterns.windfire", "WindFire"),
         ("lib_shared.patterns.coronal_mass_ejection", "CoronalMassEjection"),
         ("lib_shared.patterns.eyeball", "Eyeball"),

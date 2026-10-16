@@ -44,16 +44,16 @@ def _canonical_entries():
 
 
 def test_default_instantiation_uses_canonical_list():
-    """A no-arg constructor picks up the canonical 10-entry list
+    """A no-arg constructor picks up the canonical 11-entry list
     (PngDisplay/VideoDisplay removed in #38 — those are now inner
     renderers consumed by MediaCycler, not registry entries; Flame
     removed as well; FractalFlower added 2026-07-19, ported from
     Pixelblaze — see commit 0518a89)."""
     s = EffectsSettings()
-    assert len(s.effects) == 10
-    # All ten are enabled by default.
+    assert len(s.effects) == 11
+    # All eleven are enabled by default.
     enabled = [e["name"] for e in s.effects if e["enabled"]]
-    assert len(enabled) == 10
+    assert len(enabled) == 11
     assert "Hyperspace" in enabled
     assert "WindFire" in enabled
     assert "CoronalMassEjection" in enabled
@@ -85,13 +85,14 @@ def test_default_pacing_values():
 
 
 def test_canonical_list_has_known_names():
-    """The canonical list contains exactly the 10 expected effect names
+    """The canonical list contains exactly the 11 expected effect names
     (PngDisplay/VideoDisplay removed in #38; Flame removed;
     FractalFlower added 2026-07-19)."""
     names = {e["name"] for e in _canonical_entries()}
     assert names == {
         "Hyperspace",
         "Honeycomb",
+        "HoneycombSphere",
         "WindFire",
         "CoronalMassEjection",
         "Eyeball",
@@ -134,14 +135,14 @@ def test_round_trip_default():
 def test_from_dict_accepts_empty_dict():
     """An empty dict is valid and yields the canonical defaults."""
     s = EffectsSettings.from_dict({})
-    assert len(s.effects) == 10
+    assert len(s.effects) == 11
     assert s.fade_seconds == 2.0
 
 
 def test_from_dict_none_uses_defaults():
     """from_dict(None) yields the canonical defaults."""
     s = EffectsSettings.from_dict(None)
-    assert len(s.effects) == 10
+    assert len(s.effects) == 11
 
 
 def test_from_dict_with_custom_values():

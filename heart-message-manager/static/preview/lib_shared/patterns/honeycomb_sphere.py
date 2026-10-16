@@ -1,0 +1,1 @@
+../../../../../lib_shared/patterns/honeycomb_sphere.py
